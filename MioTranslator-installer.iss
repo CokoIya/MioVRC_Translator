@@ -6,6 +6,7 @@
 #define AppURL "https://78hejiu.top"
 #define AppExeName "MioTranslator.exe"
 #define SourceDir "dist\MioTranslator"
+#define ModelDir "C:\Users\yueya\.cache\modelscope\hub\models\iic\SenseVoiceSmall"
 
 [Setup]
 AppId={{A3F2C1B4-9E7D-4F6A-8C3E-1D5B0A2F9C8E}
@@ -47,6 +48,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+; SenseVoice モデルをユーザーのキャッシュに展開
+Source: "{#ModelDir}\*"; DestDir: "{%USERPROFILE}\.cache\modelscope\hub\models\iic\SenseVoiceSmall"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
