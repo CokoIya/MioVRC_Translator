@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mio RealTime Translator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #f5f5f7;
+      --bg-dark:   #1d1d1f;
+      --text:      #1d1d1f;
+      --text-sub:  #6e6e73;
+      --text-light:#f5f5f7;
+      --accent:    #0071e3;
+      --accent-h:  #0077ed;
+      --card:      #ffffff;
+      --radius:    18px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                   "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      height: 52px;
+      background: rgba(245,245,247,.82);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid rgba(0,0,0,.08);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px;
+    }
+    nav .logo {
+      font-size: 17px; font-weight: 600; letter-spacing: -.3px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    nav ul {
+      list-style: none; display: flex; gap: 28px;
+    }
+    nav ul li a {
+      font-size: 13px; color: var(--text-sub); text-decoration: none;
+      transition: color .2s;
+    }
+    nav ul li a:hover { color: var(--accent); }
+
+    /* ── SECTIONS ── */
+    section {
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 100px 24px 60px;
+      position: relative;
+    }
+
+    /* ── HERO ── */
+    #hero {
+      background: var(--bg-dark);
+      overflow: hidden;
+    }
+    #hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 80% 60% at 50% 30%,
+                  rgba(99,102,241,.25) 0%, transparent 70%),
+                  radial-gradient(ellipse 60% 50% at 80% 80%,
+                  rgba(58,159,216,.2) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .hero-eyebrow {
+      font-size: 14px; font-weight: 600; letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #86868b; margin-bottom: 18px;
+      opacity: 0; transform: translateY(30px);
+      animation: fadeUp .8s .1s forwards;
+    }
+    .hero-title {
+      font-size: clamp(48px, 8vw, 96px);
+      font-weight: 700; line-height: 1.05;
+      letter-spacing: -2px; text-align: center;
+      color: #f5f5f7;
+      opacity: 0; transform: translateY(40px);
+      animation: fadeUp .8s .25s forwards;
+    }
+    .hero-title span {
+      background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      margin-top: 24px;
+      font-size: clamp(17px, 2.5vw, 21px);
+      color: #86868b; text-align: center; max-width: 620px;
+      line-height: 1.6;
+      opacity: 0; transform: translateY(30px);
+      animation: fadeUp .8s .4s forwards;
+    }
+    .hero-cta {
+      margin-top: 40px; display: flex; gap: 14px; flex-wrap: wrap;
+      justify-content: center;
+      opacity: 0; transform: translateY(20px);
+      animation: fadeUp .8s .55s forwards;
+    }
+    .btn-primary {
+      padding: 14px 32px; border-radius: 980px;
+      background: var(--accent); color: #fff;
+      font-size: 17px; font-weight: 500;
+      border: none; cursor: pointer; text-decoration: none;
+      transition: background .2s, transform .15s;
+      display: inline-block;
+    }
+    .btn-primary:hover { background: var(--accent-h); transform: scale(1.03); }
+    .btn-ghost {
+      padding: 14px 32px; border-radius: 980px;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.18);
+      color: #f5f5f7;
+      font-size: 17px; font-weight: 500;
+      cursor: pointer; text-decoration: none;
+      transition: background .2s, transform .15s;
+      display: inline-block;
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,.14); transform: scale(1.03); }
+
+    .privacy-badge {
+      margin-top: 32px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 18px; border-radius: 980px;
+      background: rgba(46,204,113,.12);
+      border: 1px solid rgba(46,204,113,.3);
+      color: #2ecc71; font-size: 13px;
+      opacity: 0; animation: fadeUp .8s .7s forwards;
+    }
+
+    .scroll-hint {
+      position: absolute; bottom: 36px;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 6px;
+      color: #6e6e73; font-size: 12px;
+      animation: bounce 2s infinite;
+    }
+    .scroll-hint svg { width: 20px; opacity: .6; }
+
+    /* ── FEATURES SECTION ── */
+    #features {
+      background: var(--bg);
+    }
+    .section-eyebrow {
+      font-size: 13px; font-weight: 600; letter-spacing: 2px;
+      text-transform: uppercase; color: var(--accent);
+      margin-bottom: 14px;
+    }
+    .section-title {
+      font-size: clamp(36px, 5vw, 56px);
+      font-weight: 700; line-height: 1.1;
+      letter-spacing: -1.5px; text-align: center;
+      max-width: 800px;
+    }
+    .section-sub {
+      margin-top: 16px; font-size: 19px;
+      color: var(--text-sub); text-align: center;
+      max-width: 580px; line-height: 1.6;
+    }
+
+    .features-grid {
+      margin-top: 64px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px; width: 100%; max-width: 1100px;
+    }
+    .feature-card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      box-shadow: 0 2px 20px rgba(0,0,0,.06);
+      transition: transform .25s, box-shadow .25s;
+      opacity: 0; transform: translateY(40px);
+    }
+    .feature-card.visible {
+      animation: fadeUp .6s forwards;
+    }
+    .feature-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 32px rgba(0,0,0,.1);
+    }
+    .feature-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; margin-bottom: 18px;
+    }
+    .feature-card h3 {
+      font-size: 19px; font-weight: 600;
+      letter-spacing: -.3px; margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 15px; color: var(--text-sub); line-height: 1.6;
+    }
+
+    /* ── GUIDE SECTION ── */
+    #guide {
+      background: var(--bg-dark);
+    }
+    .guide-wrap {
+      width: 100%; max-width: 860px;
+      margin-top: 56px; display: flex;
+      flex-direction: column; gap: 0;
+    }
+    .guide-step {
+      display: flex; gap: 24px; align-items: flex-start;
+      padding: 28px 0;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      opacity: 0; transform: translateX(-30px);
+    }
+    .guide-step.visible { animation: slideIn .55s forwards; }
+    .step-num {
+      flex-shrink: 0;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700; color: #fff;
+    }
+    .step-body h4 {
+      font-size: 19px; font-weight: 600;
+      color: #f5f5f7; margin-bottom: 6px;
+    }
+    .step-body p {
+      font-size: 15px; color: #86868b; line-height: 1.6;
+    }
+    .step-body code {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 16px; border-radius: 10px;
+      background: rgba(255,255,255,.07);
+      font-family: "SF Mono", "Menlo", monospace;
+      font-size: 13px; color: #a5f3fc;
+      letter-spacing: .3px;
+    }
+
+    /* ── DOWNLOAD SECTION ── */
+    #download {
+      background: var(--bg);
+    }
+    .download-card {
+      margin-top: 48px;
+      background: var(--bg-dark);
+      border-radius: 24px;
+      padding: 48px 56px;
+      max-width: 700px; width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,.18);
+      position: relative; overflow: hidden;
+      opacity: 0; transform: translateY(50px);
+    }
+    .download-card.visible { animation: fadeUp .7s forwards; }
+    .download-card::before {
+      content: '';
+      position: absolute; top: -60px; left: -60px;
+      width: 300px; height: 300px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,113,227,.25) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .dl-icon {
+      font-size: 56px; margin-bottom: 16px;
+      display: block;
+    }
+    .download-card h3 {
+      font-size: 28px; font-weight: 700;
+      color: #f5f5f7; letter-spacing: -.5px;
+      margin-bottom: 10px;
+    }
+    .download-card p {
+      font-size: 16px; color: #86868b; margin-bottom: 32px;
+      line-height: 1.6;
+    }
+    .btn-download {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 16px 40px; border-radius: 980px;
+      background: var(--accent); color: #fff;
+      font-size: 17px; font-weight: 600;
+      text-decoration: none;
+      transition: background .2s, transform .15s, box-shadow .2s;
+      box-shadow: 0 4px 24px rgba(0,113,227,.4);
+    }
+    .btn-download:hover {
+      background: var(--accent-h);
+      transform: scale(1.04);
+      box-shadow: 0 8px 32px rgba(0,113,227,.5);
+    }
+    .dl-meta {
+      margin-top: 20px;
+      font-size: 13px; color: #6e6e73;
+    }
+    .privacy-note {
+      margin-top: 40px;
+      padding: 18px 24px; border-radius: 14px;
+      background: rgba(46,204,113,.08);
+      border: 1px solid rgba(46,204,113,.2);
+      text-align: left;
+      max-width: 700px; width: 100%;
+      opacity: 0;
+    }
+    .privacy-note.visible { animation: fadeUp .7s .2s forwards; }
+    .privacy-note h4 {
+      font-size: 14px; font-weight: 600;
+      color: #2ecc71; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .privacy-note p {
+      font-size: 14px; color: var(--text-sub); line-height: 1.7;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--bg-dark);
+      padding: 40px 32px;
+      text-align: center;
+      color: #6e6e73; font-size: 13px;
+    }
+    footer a { color: #86868b; text-decoration: none; }
+    footer a:hover { color: #f5f5f7; }
+
+    /* ── ANIMATIONS ── */
+    @keyframes fadeUp {
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideIn {
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(8px); }
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 600px) {
+      nav ul { display: none; }
+      .download-card { padding: 36px 24px; }
+      .hero-cta { flex-direction: column; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a class="logo" href="#">Mio Translator</a>
+  <ul>
+    <li><a href="#hero">介绍</a></li>
+    <li><a href="#guide">使用说明</a></li>
+    <li><a href="#download">下载</a></li>
+    <li><a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <p class="hero-eyebrow">VRChat 实时翻译工具</p>
+  <h1 class="hero-title">Mio<br><span>RealTime Translator</span></h1>
+  <p class="hero-sub">本地语音识别 + AI 翻译，打破 VRChat 语言壁垒。<br>全程本地处理，零数据上传，开源免费。</p>
+  <div class="hero-cta">
+    <a href="#download" class="btn-primary">立即下载</a>
+    <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" class="btn-ghost">查看源码</a>
+  </div>
+  <div class="privacy-badge">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+    零数据收集 · 聊天内容发送后自动销毁
+  </div>
+  <div class="scroll-hint">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    向下滚动
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <p class="section-eyebrow">功能特性</p>
+  <h2 class="section-title">为 VRChat 玩家量身打造</h2>
+  <p class="section-sub">轻量、快速、隐私优先，让跨语言沟通变得自然流畅。</p>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#dbeafe;">🎙️</div>
+      <h3>本地语音识别</h3>
+      <p>基于 FunASR / SenseVoice Small，全程本地推理，无需联网，低延迟实时转录。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#ede9fe;">🌐</div>
+      <h3>多翻译后端</h3>
+      <p>支持 OpenAI、DeepSeek、Qianwen、Anthropic 及任意 OpenAI 兼容接口，自由切换。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#dcfce7;">💬</div>
+      <h3>VRChat 直发</h3>
+      <p>通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#fef3c7;">🔄</div>
+      <h3>反向翻译悬浮窗</h3>
+      <p>实时监听他人聊天内容并翻译为中文，显示在置顶悬浮窗，随时掌握对话。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#ffe4e6;">✏️</div>
+      <h3>手动翻译面板</h3>
+      <p>Google Translate 风格的双栏布局，输入文字后一键翻译并发送到 VRC 聊天框。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#f0fdf4;">🔒</div>
+      <h3>隐私优先</h3>
+      <p>无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。</p>
+    </div>
+  </div>
+</section>
+
+<!-- GUIDE -->
+<section id="guide">
+  <p class="section-eyebrow" style="color:#60a5fa;">使用说明</p>
+  <h2 class="section-title" style="color:#f5f5f7;">五步开始使用</h2>
+  <p class="section-sub" style="color:#86868b;">从下载到 VRChat 实时翻译，只需几分钟。</p>
+
+  <div class="guide-wrap">
+    <div class="guide-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h4>下载并解压</h4>
+        <p>前往下载页面，下载 <strong style="color:#f5f5f7;">MioTranslator-windows-x64.zip</strong>，解压到任意文件夹。</p>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h4>配置翻译后端</h4>
+        <p>启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key 和翻译模型信息。</p>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h4>在 VRChat 开启 OSC</h4>
+        <p>进入 VRChat，打开 Action Menu，依次点击：</p>
+        <code>Options → OSC → Enable</code>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h4>首次启动自动下载模型</h4>
+        <p>第一次点击「▶ 开始监听」时，会自动下载 SenseVoice Small 模型（约 500 MB），请保持网络畅通并耐心等待。</p>
+      </div>
+    </div>
+    <div class="guide-step" style="border-bottom: none;">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h4>开始实时翻译</h4>
+        <p>模型加载完成后，对着麦克风说话，翻译结果将自动出现在你的 VRChat 聊天框中。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DOWNLOAD -->
+<section id="download">
+  <p class="section-eyebrow">下载</p>
+  <h2 class="section-title">下载即用</h2>
+  <p class="section-sub">无需安装 Python 环境，解压后直接运行。</p>
+
+  <div class="download-card">
+    <span class="dl-icon">⬇️</span>
+    <h3>Mio RealTime Translator</h3>
+    <p>Windows x64 · 含全部运行时依赖 · 解压运行 MioTranslator.exe</p>
+    <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.0.0/MioTranslator-windows-x64.zip"
+       class="btn-download" download>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      下载 Windows 版 (290 MB)
+    </a>
+    <p class="dl-meta">v1.0.0 · Windows 10/11 x64 · 首次运行需下载 SenseVoice 模型 ~500 MB</p>
+  </div>
+
+  <div class="privacy-note">
+    <h4>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+      隐私声明
+    </h4>
+    <p>
+      本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>
+      本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>
+      软件本身不含任何统计、埋点或聊天日志写盘逻辑。
+    </p>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>
+    制作者：VRC 玩家 <strong style="color:#f5f5f7;">酒寄 みお</strong> ·
+    开源项目，禁止任何形式的收费分发 ·
+    <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>
+  </p>
+  <p style="margin-top:8px; color:#444;">
+    本项目无任何数据收集，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。
+  </p>
+</footer>
+
+<script>
+  // Intersection Observer for scroll animations
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        // stagger feature cards
+        if (entry.target.classList.contains('features-grid')) {
+          entry.target.querySelectorAll('.feature-card').forEach((card, i) => {
+            setTimeout(() => card.classList.add('visible'), i * 100);
+          });
+        }
+      }
+    });
+  }, { threshold: 0.15 });
+
+  document.querySelectorAll('.feature-card').forEach(el => observer.observe(el));
+  document.querySelectorAll('.guide-step').forEach(el => observer.observe(el));
+  document.querySelectorAll('.download-card, .privacy-note').forEach(el => observer.observe(el));
+
+  // Smooth nav highlight
+  const sections = document.querySelectorAll('section');
+  const navLinks = document.querySelectorAll('nav ul li a');
+  window.addEventListener('scroll', () => {
+    let current = '';
+    sections.forEach(s => {
+      if (window.scrollY >= s.offsetTop - 80) current = s.id;
+    });
+    navLinks.forEach(a => {
+      a.style.color = a.getAttribute('href') === '#' + current ? '#0071e3' : '';
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,20 +1,31 @@
-# VRC Realtime Translator
+# Mio RealTime Translator
 
-[![zh-CN](https://img.shields.io/badge/README-zh--CN-2ea44f?style=for-the-badge)](../README.md)
-[![ja](https://img.shields.io/badge/README-ja-f39c12?style=for-the-badge)](./README.ja.md)
-[![en](https://img.shields.io/badge/README-en-0366d6?style=for-the-badge)](./README.en.md)
+[![zh-CN](https://img.shields.io/badge/README-中文-2ea44f?style=for-the-badge)](../README.md)
+[![ja](https://img.shields.io/badge/README-日本語-f39c12?style=for-the-badge)](./README.ja.md)
+[![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
+
+> Click badges above to switch language
+
+---
 
 ## Overview
 
-A local real-time translator for VRChat: local ASR (SenseVoice) + switchable AI translation backends + OSC messaging.
+**Mio RealTime Translator** is a local real-time voice translation tool for VRChat players, created by VRC player **酒寄 みお**. Fully open-source — paid redistribution of any kind is prohibited.
+
+Core architecture: local ASR (SenseVoice) + switchable AI translation backends + VRChat OSC communication.
+
+---
 
 ## Features
 
-- Local speech recognition with FunASR / SenseVoice Small.
-- Multiple translation backends: OpenAI, DeepSeek, Qianwen, Anthropic, and custom OpenAI-compatible APIs.
-- VRChat integration via OSC to send translated text into the chatbox.
-- Reverse translation of incoming chatbox messages into Chinese, shown in a floating window.
-- Manual translation panel with direct "send to VRC" action.
+- **Local Speech Recognition** — Powered by FunASR / SenseVoice Small. Fully local inference, low latency, works offline.
+- **Multiple Translation Backends** — Supports OpenAI, DeepSeek, Qianwen, Anthropic, and any custom OpenAI-compatible API.
+- **VRChat Integration** — Sends translated text directly to the VRChat chatbox via the official OSC interface.
+- **Reverse Translation** — Listens to incoming chatbox messages and translates them into Chinese, displayed in a floating window.
+- **Manual Translation Panel** — Google Translate-style two-pane layout. Type text and send to VRC in one click.
+- **Flexible Output Formats** — Choose from `Japanese (Chinese)`, `Japanese only`, `Chinese only`, or `Chinese (Japanese)`.
+
+---
 
 ## Quick Start
 
@@ -23,25 +34,34 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first run, SenseVoice Small will be downloaded (about 500MB). Optional model cache location:
+Or download the Windows EXE from [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) — no Python installation required, ready to run immediately.
 
-```powershell
-$env:MODELSCOPE_CACHE = "./models"
-```
+> On first launch, SenseVoice Small (~500 MB) will be downloaded automatically.
+> Optional: set a custom model cache directory:
+> ```powershell
+> $env:MODELSCOPE_CACHE = "./models"
+> ```
+
+---
 
 ## Configuration
 
 1. Copy `config.example.json` to `config.json`.
-2. Open `Settings` after launch and fill backend config (API Key / Base URL / Model).
+2. After launch, open `⚙ Settings` and fill in your translation backend (API Key / Base URL / Model).
 3. Adjust microphone, VAD silence threshold, target language, and output format as needed.
+4. Enable OSC in VRChat: **Action Menu → Options → OSC → Enable**.
+
+---
 
 ## Privacy Notice
 
-> This project performs no data collection, stores no chat history, and each message is automatically destroyed after sending is finished.
+> **This project performs zero data collection, stores no chat content, and each message is automatically destroyed immediately after sending.**
 >
-> This is a local-only project with no project-owned cloud server; your API keys are not uploaded and abused.
+> This is a purely local application — there is no project-owned cloud server. Your API keys are never uploaded or misused.
 >
-> The app itself has no analytics, telemetry, or local chat log persistence. If you enable a cloud translation backend, current messages are sent to your configured API provider for translation.
+> The app itself contains no analytics, telemetry, or local chat log persistence. Only when you enable a cloud translation backend will the current message be sent to your own configured API provider for translation.
+
+---
 
 ## Tech Stack
 
@@ -52,10 +72,12 @@ $env:MODELSCOPE_CACHE = "./models"
 | VAD | webrtcvad |
 | ASR | FunASR / SenseVoice Small |
 | Translation | OpenAI SDK / Anthropic SDK |
-| VRChat Communication | python-osc |
+| VRChat Communication | python-osc (OSC UDP) |
+
+---
 
 ## Known Limitations
 
-- VRChat does not expose other users' voice stream, so reverse translation relies on chatbox text.
-- VRChat chatbox messages are limited to about 144 characters and are truncated automatically.
-- In noisy environments, VAD can be triggered incorrectly; adjust threshold in `Settings`.
+- VRChat does not expose other users' audio streams — reverse translation relies on chatbox text only.
+- VRChat chatbox messages are capped at ~144 characters and are auto-truncated.
+- In noisy environments, VAD may trigger incorrectly; adjust sensitivity in `Settings`.
