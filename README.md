@@ -1,4 +1,4 @@
-# VRC Realtime Translator
+﻿# VRC Realtime Translator
 
 [![zh-CN](https://img.shields.io/badge/README-zh--CN-2ea44f?style=for-the-badge)](./README.md)
 [![ja](https://img.shields.io/badge/README-ja-f39c12?style=for-the-badge)](./docs/README.ja.md)
@@ -24,6 +24,8 @@
 pip install -r requirements.txt
 python main.py
 ```
+
+也可以直接前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载 Windows EXE 版本（免安装 Python 环境）。
 
 首次运行会下载 SenseVoice Small 模型（约 500MB）。可选设置模型缓存目录：
 
@@ -61,3 +63,4 @@ $env:MODELSCOPE_CACHE = "./models"
 - VRChat 不开放他人语音流，反向翻译依赖聊天框文本。
 - VRChat 聊天框单条消息上限约 144 字符，超出会自动截断。
 - 噪声环境中 VAD 可能误触发，建议在 `Settings` 调整阈值。
+
