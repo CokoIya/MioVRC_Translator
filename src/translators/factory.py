@@ -39,6 +39,9 @@ def create_translator(config: dict) -> BaseTranslator:
             api_key=c.get("api_key", "").strip(),
             model=c.get("model", "qwen-mt-turbo"),
             base_url=c.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            # Disable Qwen3 thinking mode for fast responses.
+            # Qwen3 models reason by default; this bypasses that overhead.
+            extra_body={"enable_thinking": False},
         )
 
     if backend == "anthropic":

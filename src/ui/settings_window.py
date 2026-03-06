@@ -17,13 +17,10 @@ TEXT_SEC     = "#686880"   # セカンダリテキスト（灰）
 
 BACKENDS = ["openai", "deepseek", "qianwen", "anthropic", "custom"]
 
-# 音声認識エンジン選択肢
+# 音声認識エンジン選択肢（base と small のみ）
 ASR_ENGINES = [
-    ("Whisper Tiny  （极速，精度较低）",      "whisper-tiny"),
-    ("Whisper Base  （快速，精度一般）",      "whisper-base"),
-    ("Whisper Small （均衡推荐）",            "whisper-small"),
-    ("Whisper Medium（较慢，精度较高）",      "whisper-medium"),
-    ("SenseVoice    （加载时间过长，最准确）", "sensevoice"),
+    ("Whisper Base  （推荐，快速启动）", "whisper-base"),
+    ("Whisper Small （较慢，精度更高）", "whisper-small"),
 ]
 
 TARGET_LANGS = [
@@ -140,8 +137,8 @@ class SettingsWindow(ctk.CTkToplevel):
         asr_labels  = [lbl for lbl, _ in ASR_ENGINES]
         asr_codes   = {lbl: code for lbl, code in ASR_ENGINES}
         self._asr_reverse = {code: lbl for lbl, code in ASR_ENGINES}
-        cur_engine  = self._config.get("asr", {}).get("engine", "whisper-small")
-        self._asr_var   = ctk.StringVar(value=self._asr_reverse.get(cur_engine, asr_labels[2]))
+        cur_engine  = self._config.get("asr", {}).get("engine", "whisper-base")
+        self._asr_var   = ctk.StringVar(value=self._asr_reverse.get(cur_engine, asr_labels[0]))
         self._asr_codes = asr_codes
         ctk.CTkOptionMenu(
             scroll, values=asr_labels, variable=self._asr_var,
@@ -154,7 +151,7 @@ class SettingsWindow(ctk.CTkToplevel):
         asr_hint.pack(padx=16, pady=(0, 4), fill="x")
         ctk.CTkLabel(
             asr_hint,
-            text="更换模型需重启软件后生效。Whisper 系列首次使用时会自动下载模型文件。",
+            text="模型文件已内置，无需下载。切换模型需重启软件后生效。",
             font=ctk.CTkFont(size=11), text_color=TEXT_SEC, justify="left",
         ).pack(padx=10, pady=6, anchor="w")
 

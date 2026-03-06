@@ -8,3 +8,5 @@ venv/
 dist/
 build/
 .modelscope/
+models/
+upload_release.py

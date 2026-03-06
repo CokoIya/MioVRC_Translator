@@ -87,6 +87,7 @@ class MainWindow(ctk.CTk):
         self._translating = False
         self._src_placeholder = "点击输入文字…"
         self._src_text = ""
+        self._last_tgt_text = ""
         self._last_own_chatbox_echo_text = ""
         self._last_own_chatbox_echo_time = 0.0
 
@@ -238,7 +239,6 @@ class MainWindow(ctk.CTk):
         )
         self._src_input.pack(fill="both", expand=True, padx=8, pady=(6, 0))
         self._set_source_text("")
-        self._src_input.bind("<Button-1>", self._open_text_input_popup)
 
         # 入力下部ツールバー
         left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=30)
@@ -249,6 +249,14 @@ class MainWindow(ctk.CTk):
             left_bar, text="0 / 500", text_color=TEXT_SEC, font=ctk.CTkFont(size=10),
         )
         self._char_label.pack(side="left", padx=10)
+
+        ctk.CTkButton(
+            left_bar, text="✏ 文本输入", width=80, height=22,
+            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
+            border_width=1, border_color=GLASS_BORDER,
+            corner_radius=6, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            command=self._open_text_input_popup,
+        ).pack(side="left", padx=6)
 
         ctk.CTkButton(
             left_bar, text="清空", width=44, height=22,
@@ -391,11 +399,13 @@ class MainWindow(ctk.CTk):
             text = box.get("1.0", "end").strip()
             self._set_source_text(text)
             popup.destroy()
+            if text:
+                self._translate_manual()
 
         ctk.CTkButton(
             btn_row,
-            text="发送",
-            width=88,
+            text="发送并翻译",
+            width=100,
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
             command=do_send,
@@ -403,8 +413,8 @@ class MainWindow(ctk.CTk):
 
         ctk.CTkButton(
             btn_row,
-            text="关闭菜单",
-            width=100,
+            text="关闭",
+            width=80,
             fg_color=DANGER,
             hover_color=DANGER_HOVER,
             command=popup.destroy,
@@ -433,6 +443,7 @@ class MainWindow(ctk.CTk):
 
     def _clear_input(self):
         self._set_source_text("")
+        self._last_tgt_text = ""
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.configure(state="disabled")
@@ -638,7 +649,7 @@ class MainWindow(ctk.CTk):
             self._translator = create_translator(self._config)
             return True
         except ValueError:
-            messagebox.showwarning("未设置API", "您还没有设置API，请先到设置中填写后再翻译")
+            messagebox.showwarning("API 未配置", "API 未配置，请先在设置中填写 API Key 后再翻译。")
             return False
         except Exception as e:
             messagebox.showerror("翻译初始化失败", str(e))
@@ -649,19 +660,31 @@ class MainWindow(ctk.CTk):
         self._last_own_chatbox_echo_time = time.time()
 
     def _check_vrc_send_ack(self, sent_text: str):
-        # VRChat 如果可发送，通常会回传 /chatbox/input；没有回传则提示可能不支持
+        # VRChat echoes /chatbox/input back when the scene supports it.
         if self._last_own_chatbox_echo_text == sent_text and (time.time() - self._last_own_chatbox_echo_time) < 2.0:
             return
-        messagebox.showwarning("场景不支持", "当前场景可能不支持发送聊天信息，或聊天框功能被禁用")
+        messagebox.showwarning("当前场景不支持发送消息", "当前场景不支持发送消息，或聊天框功能已被禁用。")
 
     def _send_to_vrc(self):
-        """翻訳結果をVRCチャットボックスに送信する"""
-        text = self._tgt_output.get("1.0", "end").strip()
-        if not text:
+        """翻訳結果をVRCチャットボックスに送信する（出力フォーマット適用）"""
+        tgt_text = self._last_tgt_text
+        src_text = self._src_text
+        if not tgt_text and not src_text:
             return
         if not self._is_vrchat_running():
-            messagebox.showwarning("游戏未运行", "检测到 VRChat 未运行，无法发送消息")
+            messagebox.showwarning("游戏未运行", "游戏未运行，请先启动 VRChat 后再发送消息。")
             return
+
+        # Apply the same output format as voice-recognition mode.
+        fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
+        if fmt == "zh_only":
+            chatbox_text = src_text or tgt_text
+        elif fmt == "ja_only":
+            chatbox_text = tgt_text or src_text
+        elif fmt == "zh(ja)":
+            chatbox_text = f"{src_text}（{tgt_text}）" if src_text and tgt_text else src_text or tgt_text
+        else:  # ja(zh)
+            chatbox_text = f"{tgt_text}（{src_text}）" if src_text and tgt_text else tgt_text or src_text
 
         self._ensure_receiver_started()
         if self._sender is None:
@@ -671,7 +694,7 @@ class MainWindow(ctk.CTk):
                 port=osc_cfg.get("send_port", 9000),
             )
         try:
-            sent = self._sender.send_chatbox(text)
+            sent = self._sender.send_chatbox(chatbox_text)
             self._own_msgs.add(sent)
             if self._running:
                 self.after(1400, lambda s=sent: self._check_vrc_send_ack(s))
@@ -714,6 +737,9 @@ class MainWindow(ctk.CTk):
             self.after(0, self._reset_translate_btn)
 
     def _show_tgt(self, text: str):
+        # Only persist clean translation results, not error strings.
+        if not text.startswith("[错误]"):
+            self._last_tgt_text = text
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.insert("1.0", text)

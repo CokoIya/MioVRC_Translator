@@ -7,9 +7,8 @@
     "frame_duration_ms": 30
   },
   "asr": {
-    "model": "iic/SenseVoiceSmall",
-    "device": "cuda",
-    "engine": "whisper-small"
+    "device": "cpu",
+    "engine": "whisper-base"
   },
   "translation": {
     "backend": "openai",
