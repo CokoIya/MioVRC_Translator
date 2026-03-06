@@ -48,8 +48,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
-; SenseVoice モデルをユーザーのキャッシュに展開
-Source: "{#ModelDir}\*"; DestDir: "{%USERPROFILE}\.cache\modelscope\hub\models\iic\SenseVoiceSmall"; Flags: ignoreversion recursesubdirs createallsubdirs
+; SenseVoice モデルをアプリのインストールフォルダに展開（ネットワーク検証を完全回避）
+Source: "{#ModelDir}\*"; DestDir: "{app}\models\iic\SenseVoiceSmall"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
