@@ -1,6 +1,7 @@
-"""メインアプリケーションウィンドウ。"""
+"""メインアプリケーションウィンドウ"""
 
 import threading
+import webbrowser
 import customtkinter as ctk
 from tkinter import messagebox
 import sounddevice as sd
@@ -31,6 +32,10 @@ SUCCESS      = "#2ea85a"   # 緑（状態）
 TEXT_PRI     = "#252535"   # プライマリテキスト（濃紺）
 TEXT_SEC     = "#686880"   # セカンダリテキスト（灰）
 DIVIDER      = "#d8d4cc"   # 区切り線
+
+GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
+QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
+LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
 
 # 手動翻訳で選択できる言語
 MANUAL_LANGS = [
@@ -155,7 +160,7 @@ class MainWindow(ctk.CTk):
         self._bottom_bar.pack(side="bottom", pady=2)
 
     def _build_translate_panel(self):
-        """Google翻訳風の左右2ペイン翻訳パネルを構築する。"""
+        """Google翻訳風の左右2ペイン翻訳パネルを構築する"""
         outer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0)
         outer.pack(fill="both", expand=True, padx=0, pady=0)
 
@@ -274,32 +279,64 @@ class MainWindow(ctk.CTk):
             command=self._copy_result,
         ).pack(side="right", padx=2)
 
+        # 底部入口图标：占用底部空间，不增加窗口高度
+        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=40)
+        social_bar.pack(fill="x")
+        social_bar.pack_propagate(False)
+
+        social_center = ctk.CTkFrame(social_bar, fg_color="transparent")
+        social_center.pack(expand=True)
+
+        ctk.CTkButton(
+            social_center, text="◎ GitHub", width=92, height=26,
+            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
+            border_width=1, border_color=GLASS_BORDER,
+            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            command=lambda: self._open_external_url(GITHUB_REPO_URL),
+        ).pack(side="left", padx=6, pady=6)
+
+        ctk.CTkButton(
+            social_center, text="◎ QQ", width=78, height=26,
+            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
+            border_width=1, border_color=GLASS_BORDER,
+            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            command=lambda: self._open_external_url(QQ_GROUP_URL),
+        ).pack(side="left", padx=6, pady=6)
+
+        ctk.CTkButton(
+            social_center, text="◎ Line", width=84, height=26,
+            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
+            border_width=1, border_color=GLASS_BORDER,
+            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            command=lambda: self._open_external_url(LINE_GROUP_URL),
+        ).pack(side="left", padx=6, pady=6)
+
     # ── 翻訳パネルのヘルパー ─────────────────────────────────────────────────
 
     def _on_src_focus_in(self, _event):
-        """プレースホルダーをクリア。"""
+        """プレースホルダーをクリア"""
         if self._src_input.get("1.0", "end").strip() == "在此输入文字…":
             self._src_input.delete("1.0", "end")
             self._src_input.configure(text_color=TEXT_PRI)
 
     def _on_src_focus_out(self, _event):
-        """空ならプレースホルダーを復元。"""
+        """空ならプレースホルダーを復元"""
         if not self._src_input.get("1.0", "end").strip():
             self._src_input.insert("1.0", "在此输入文字…")
             self._src_input.configure(text_color=TEXT_SEC)
 
     def _on_src_key(self, _event):
-        """文字数カウントを更新。"""
+        """文字数カウントを更新"""
         n = len(self._src_input.get("1.0", "end").strip())
         self._char_label.configure(text=f"{n} / 500")
 
     def _on_tgt_lang_change(self, *_):
-        """翻译至ラジオと出力言語ラベルを同期。"""
+        """翻译至ラジオと出力言語ラベルを同期"""
         labels = {"ja": "日语", "en": "英语", "zh": "中文", "ko": "韩语"}
         self._tgt_lang_label.configure(text=labels.get(self._tgt_var.get(), ""))
 
     def _swap_langs(self):
-        """入出力テキストを入れ替える。"""
+        """入出力テキストを入れ替える"""
         src_text = self._src_input.get("1.0", "end").strip()
         tgt_text = self._tgt_output.get("1.0", "end").strip()
         if src_text == "在此输入文字…":
@@ -327,8 +364,15 @@ class MainWindow(ctk.CTk):
             self.clipboard_clear()
             self.clipboard_append(text)
 
+    @staticmethod
+    def _open_external_url(url: str):
+        try:
+            webbrowser.open_new_tab(url)
+        except Exception:
+            pass
+
     def _send_to_vrc(self):
-        """翻訳結果をVRCチャットボックスに送信する。"""
+        """翻訳結果をVRCチャットボックスに送信する"""
         text = self._tgt_output.get("1.0", "end").strip()
         if not text:
             return
@@ -342,7 +386,7 @@ class MainWindow(ctk.CTk):
         self._own_msgs.add(sent)
 
     def _translate_manual(self):
-        """手動入力テキストを翻訳する。"""
+        """手動入力テキストを翻訳する"""
         src_text = self._src_input.get("1.0", "end").strip()
         if not src_text or src_text == "在此输入文字…":
             return
@@ -372,7 +416,7 @@ class MainWindow(ctk.CTk):
         ).start()
 
     def _do_translate(self, text: str, src_lang: str, tgt_lang: str):
-        """バックグラウンドスレッドで翻訳を実行する。"""
+        """バックグラウンドスレッドで翻訳を実行する"""
         try:
             result = self._translator.translate(text, src_lang, tgt_lang)
             self.after(0, lambda: self._show_tgt(result))

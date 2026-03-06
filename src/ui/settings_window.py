@@ -1,4 +1,4 @@
-"""翻訳バックエンド・音声・出力フォーマットの設定ダイアログ。"""
+"""翻訳バックエンド・音声・出力フォーマットの設定ダイアログ"""
 
 import customtkinter as ctk
 from tkinter import messagebox
@@ -157,7 +157,7 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(side="right", padx=4)
 
     def _on_backend_change(self, backend: str):
-        """バックエンド変更時に対応するフィールドを再描画する。"""
+        """バックエンド変更時に対応するフィールドを再描画する"""
         for w in self._fields_frame.winfo_children():
             w.destroy()
 
@@ -187,7 +187,7 @@ class SettingsWindow(ctk.CTkToplevel):
             add_field("Model", "model")
 
     def _save(self):
-        """設定を保存してダイアログを閉じる。"""
+        """設定を保存してダイアログを閉じる"""
         backend = self._backend_var.get()
         tgt_lang = self._lang_codes.get(self._lang_var.get(), "ja")
         output_fmt = self._fmt_codes.get(self._fmt_var.get(), "ja(zh)")
