@@ -159,6 +159,14 @@ class MainWindow(ctk.CTk):
         )
         self._bottom_bar.pack(side="bottom", pady=2)
 
+        self._credit_bar = ctk.CTkLabel(
+            self,
+            text="制作者：VRC玩家 酒寄 みお，开源项目，禁止收费。",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=TEXT_SEC,
+        )
+        self._credit_bar.pack(side="bottom", pady=(0, 1))
+
     def _build_translate_panel(self):
         """Google翻訳風の左右2ペイン翻訳パネルを構築する"""
         outer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0)
