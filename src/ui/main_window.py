@@ -1,7 +1,8 @@
-"""メインアプリケーションウィンドウ"""
+﻿"""メインアプリケーションウィンドウ"""
 
 import threading
 import webbrowser
+from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox
 import sounddevice as sd
@@ -36,6 +37,13 @@ DIVIDER      = "#d8d4cc"   # 区切り線
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
+SPONSOR_IMAGE_CANDIDATES = (
+    "sponsor_qr.png",
+    "sponsor_qr.jpg",
+    "sponsor_qr.jpeg",
+    "sponsor.png",
+    "sponsor.jpg",
+)
 
 # 手動翻訳で選択できる言語
 MANUAL_LANGS = [
@@ -74,6 +82,7 @@ class MainWindow(ctk.CTk):
 
         self._running = False
         self._float_win: FloatingWindow | None = None
+        self._sponsor_win: ctk.CTkToplevel | None = None
 
         self._build()
         self._load_devices()
@@ -86,8 +95,8 @@ class MainWindow(ctk.CTk):
         top.pack(fill="x")
 
         ctk.CTkLabel(
-            top, text="Mio RealTime Translator",
-            font=ctk.CTkFont(size=14, weight="bold"), text_color=TEXT_PRI,
+            top, text="制作者：VRC玩家 酒寄 みお ｜ 开源项目，禁止收费",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT_PRI,
         ).pack(side="left", padx=14, pady=7)
 
         # 右端ボタン群
@@ -158,14 +167,6 @@ class MainWindow(ctk.CTk):
             self, text="未加载模型", font=ctk.CTkFont(size=10), text_color=TEXT_SEC,
         )
         self._bottom_bar.pack(side="bottom", pady=2)
-
-        self._credit_bar = ctk.CTkLabel(
-            self,
-            text="制作者：VRC玩家 酒寄 みお，开源项目，禁止收费。",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=TEXT_SEC,
-        )
-        self._credit_bar.pack(side="bottom", pady=(0, 1))
 
     def _build_translate_panel(self):
         """Google翻訳風の左右2ペイン翻訳パネルを構築する"""
@@ -287,36 +288,38 @@ class MainWindow(ctk.CTk):
             command=self._copy_result,
         ).pack(side="right", padx=2)
 
-        # 底部入口图标：占用底部空间，不增加窗口高度
-        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=40)
+                # 底部入口图标：占用底部空间，不增加窗口高度
+        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=44)
         social_bar.pack(fill="x")
         social_bar.pack_propagate(False)
 
         social_center = ctk.CTkFrame(social_bar, fg_color="transparent")
         social_center.pack(expand=True)
 
+        icon_btn = {
+            "fg_color": ACCENT,
+            "hover_color": ACCENT_HOVER,
+            "corner_radius": 8,
+            "text_color": "#ffffff",
+            "font": ctk.CTkFont(size=15, weight="bold"),
+            "width": 56,
+            "height": 32,
+        }
+
         ctk.CTkButton(
-            social_center, text="◎ GitHub", width=92, height=26,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
-            command=lambda: self._open_external_url(GITHUB_REPO_URL),
+            social_center, text="🐱", command=lambda: self._open_external_url(GITHUB_REPO_URL), **icon_btn,
         ).pack(side="left", padx=6, pady=6)
 
         ctk.CTkButton(
-            social_center, text="◎ QQ", width=78, height=26,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
-            command=lambda: self._open_external_url(QQ_GROUP_URL),
+            social_center, text="Q", command=lambda: self._open_external_url(QQ_GROUP_URL), **icon_btn,
         ).pack(side="left", padx=6, pady=6)
 
         ctk.CTkButton(
-            social_center, text="◎ Line", width=84, height=26,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=12, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
-            command=lambda: self._open_external_url(LINE_GROUP_URL),
+            social_center, text="L", command=lambda: self._open_external_url(LINE_GROUP_URL), **icon_btn,
+        ).pack(side="left", padx=6, pady=6)
+
+        ctk.CTkButton(
+            social_center, text="￥", command=self._open_sponsor_window, **icon_btn,
         ).pack(side="left", padx=6, pady=6)
 
     # ── 翻訳パネルのヘルパー ─────────────────────────────────────────────────
@@ -378,6 +381,57 @@ class MainWindow(ctk.CTk):
             webbrowser.open_new_tab(url)
         except Exception:
             pass
+
+    @staticmethod
+    def _find_sponsor_image() -> Path | None:
+        assets_dir = Path(__file__).resolve().parents[2] / "assets"
+        for name in SPONSOR_IMAGE_CANDIDATES:
+            p = assets_dir / name
+            if p.exists():
+                return p
+        return None
+
+    def _open_sponsor_window(self):
+        image_path = self._find_sponsor_image()
+        if image_path is None:
+            messagebox.showinfo(
+                "赞助入口",
+                "未找到赞助收款图。\n请把图片放到 assets/sponsor_qr.png（或 sponsor_qr.jpg）后重试。",
+            )
+            return
+
+        if self._sponsor_win and self._sponsor_win.winfo_exists():
+            self._sponsor_win.deiconify()
+            self._sponsor_win.lift()
+            return
+
+        try:
+            from PIL import Image
+        except Exception:
+            messagebox.showerror("赞助入口", "缺少 Pillow 依赖，无法显示赞助图片。")
+            return
+
+        img = Image.open(image_path)
+        img.thumbnail((520, 520))
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+
+        self._sponsor_win = ctk.CTkToplevel(self)
+        self._sponsor_win.title("赞助入口")
+        self._sponsor_win.geometry(f"{img.size[0] + 40}x{img.size[1] + 90}")
+        self._sponsor_win.resizable(False, False)
+        self._sponsor_win.attributes("-topmost", True)
+        self._sponsor_win.configure(fg_color=BG_PRIMARY)
+
+        ctk.CTkLabel(
+            self._sponsor_win,
+            text="感谢支持：酒寄 みお",
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(pady=(12, 8))
+
+        img_label = ctk.CTkLabel(self._sponsor_win, text="", image=ctk_img)
+        img_label.image = ctk_img
+        img_label.pack(padx=12, pady=(0, 12))
 
     def _send_to_vrc(self):
         """翻訳結果をVRCチャットボックスに送信する"""
@@ -605,3 +659,4 @@ class MainWindow(ctk.CTk):
 
     def _set_bottom(self, text: str):
         self._bottom_bar.configure(text=text)
+
