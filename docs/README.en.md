@@ -1,6 +1,6 @@
 # VRC Realtime Translator
 
-[![zh-CN](https://img.shields.io/badge/README-zh--CN-2ea44f?style=for-the-badge)](./README.zh-CN.md)
+[![zh-CN](https://img.shields.io/badge/README-zh--CN-2ea44f?style=for-the-badge)](../README.md)
 [![ja](https://img.shields.io/badge/README-ja-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-en-0366d6?style=for-the-badge)](./README.en.md)
 
