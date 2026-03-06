@@ -1,0 +1,52 @@
+{
+  "audio": {
+    "input_device": null,
+    "vad_silence_threshold": 0.8,
+    "vad_sensitivity": 2,
+    "sample_rate": 16000,
+    "frame_duration_ms": 30
+  },
+  "asr": {
+    "model": "iic/SenseVoiceSmall",
+    "device": "cpu"
+  },
+  "translation": {
+    "backend": "openai",
+    "target_language": "ja",
+    "output_format": "ja(zh)",
+    "openai": {
+      "api_key": "",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini"
+    },
+    "deepseek": {
+      "api_key": "",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat"
+    },
+    "qianwen": {
+      "api_key": "",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-mt-turbo"
+    },
+    "anthropic": {
+      "api_key": "",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    "custom": {
+      "api_key": "",
+      "base_url": "",
+      "model": ""
+    }
+  },
+  "osc": {
+    "send_host": "127.0.0.1",
+    "send_port": 9000,
+    "receive_port": 9001
+  },
+  "ui": {
+    "floating_window_opacity": 0.9,
+    "show_floating_window": true,
+    "theme": "dark"
+  }
+}

@@ -1,0 +1,21 @@
+# UI
+customtkinter>=5.2.0
+
+# Audio
+sounddevice>=0.4.6
+numpy>=1.24.0
+webrtcvad>=2.0.10
+
+# ASR — SenseVoice (FunASR)
+funasr>=1.1.0
+modelscope>=1.9.0
+
+# Translation backends
+openai>=1.30.0        # covers OpenAI / DeepSeek / Qianwen / Custom
+anthropic>=0.28.0
+
+# OSC
+python-osc>=1.8.3
+
+# Optional: GPU acceleration (uncomment if CUDA available)
+# torch>=2.0.0+cu118
