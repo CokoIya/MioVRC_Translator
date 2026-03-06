@@ -2,14 +2,17 @@
 
 import threading
 import webbrowser
+import sys
+import subprocess
+import time
 from pathlib import Path
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, PhotoImage
 import sounddevice as sd
 
 from src.utils import config_manager
 from src.audio.recorder import AudioRecorder
-from src.asr.sense_voice import SenseVoiceASR
+from src.asr.factory import create_asr
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
 from src.osc.receiver import VRCOSCReceiver
@@ -41,6 +44,8 @@ ICON_GITHUB_FILE = "github.png"
 ICON_QQ_FILE = "qq.png"
 ICON_LINE_FILE = "line.png"
 ICON_SPONSOR_FILE = "sponsor.png"
+APP_ICON_ICO_FILE = "app_icon_mio.ico"
+APP_ICON_PNG_FILE = "app_icon_mio.png"
 SPONSOR_IMAGE_CANDIDATES = (
     "sponsor_qr.png",
     "sponsor_qr.jpg",
@@ -68,26 +73,30 @@ class MainWindow(ctk.CTk):
         self._config = config
         self.title("Mio Translator")
         # 元 620x560 → 幅+20% / 高さ-30%
-        self.geometry("744x392")
+        self.geometry("744x400")
         self.minsize(620, 320)
         self.configure(fg_color=BG_PRIMARY)
 
         # コアオブジェクト（開始時に生成）
         self._recorder: AudioRecorder | None = None
-        self._asr = SenseVoiceASR(
-            model_id=config.get("asr", {}).get("model"),
-            device=config.get("asr", {}).get("device", "cpu"),
-        )
+        self._asr = create_asr(config)
         self._translator = None
         self._sender: VRCOSCSender | None = None
         self._receiver: VRCOSCReceiver | None = None
         self._own_msgs: set[str] = set()
         self._translating = False
+        self._src_placeholder = "点击输入文字…"
+        self._src_text = ""
+        self._last_own_chatbox_echo_text = ""
+        self._last_own_chatbox_echo_time = 0.0
 
         self._running = False
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
+        self._window_icon: PhotoImage | None = None
+
+        self._set_window_icon()
 
         self._build()
         self._load_devices()
@@ -184,16 +193,17 @@ class MainWindow(ctk.CTk):
         hdr.pack_propagate(False)
 
         # 入力言語ドロップダウン
-        src_labels = [l for l, _ in MANUAL_LANGS]
-        src_codes  = {l: c for l, c in MANUAL_LANGS}
+        self._manual_langs = MANUAL_LANGS[:]
+        src_labels = [l for l, _ in self._manual_langs]
+        self._src_lang_codes = {l: c for l, c in self._manual_langs}
         self._src_lang_var = ctk.StringVar(value=src_labels[0])
-        self._src_lang_codes = src_codes
-        ctk.CTkOptionMenu(
+        self._src_lang_menu = ctk.CTkOptionMenu(
             hdr, values=src_labels, variable=self._src_lang_var, width=130,
             fg_color=BG_SECONDARY, button_color=BG_SECONDARY,
             button_hover_color=GLASS_HOVER, corner_radius=6,
             text_color=TEXT_PRI, font=ctk.CTkFont(size=12),
-        ).pack(side="left", padx=8)
+        )
+        self._src_lang_menu.pack(side="left", padx=8)
 
         # 入れ替えボタン
         ctk.CTkButton(
@@ -222,15 +232,13 @@ class MainWindow(ctk.CTk):
         self._src_input = ctk.CTkTextbox(
             left,
             font=ctk.CTkFont(size=13), wrap="word",
+            state="disabled",
             fg_color=BG_PANEL, corner_radius=0,
-            text_color=TEXT_PRI, border_width=0,
+            text_color=TEXT_SEC, border_width=0,
         )
         self._src_input.pack(fill="both", expand=True, padx=8, pady=(6, 0))
-        self._src_input.insert("1.0", "在此输入文字…")
-        self._src_input.configure(text_color=TEXT_SEC)
-        self._src_input.bind("<FocusIn>",  self._on_src_focus_in)
-        self._src_input.bind("<FocusOut>", self._on_src_focus_out)
-        self._src_input.bind("<KeyRelease>", self._on_src_key)
+        self._set_source_text("")
+        self._src_input.bind("<Button-1>", self._open_text_input_popup)
 
         # 入力下部ツールバー
         left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=30)
@@ -294,7 +302,7 @@ class MainWindow(ctk.CTk):
         ).pack(side="right", padx=2)
 
         # 底部图标按钮：保持窗口总高度不变，仅挤压文本区域
-        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=44)
+        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=58)
         social_bar.pack(fill="x")
         social_bar.pack_propagate(False)
 
@@ -341,47 +349,90 @@ class MainWindow(ctk.CTk):
 
     # ── 翻訳パネルのヘルパー ─────────────────────────────────────────────────
 
-    def _on_src_focus_in(self, _event):
-        """プレースホルダーをクリア"""
-        if self._src_input.get("1.0", "end").strip() == "在此输入文字…":
-            self._src_input.delete("1.0", "end")
-            self._src_input.configure(text_color=TEXT_PRI)
+    def _set_source_text(self, text: str):
+        safe = (text or "").strip()
+        if len(safe) > 500:
+            safe = safe[:500]
+        self._src_text = safe
 
-    def _on_src_focus_out(self, _event):
-        """空ならプレースホルダーを復元"""
-        if not self._src_input.get("1.0", "end").strip():
-            self._src_input.insert("1.0", "在此输入文字…")
-            self._src_input.configure(text_color=TEXT_SEC)
+        shown = safe or self._src_placeholder
+        color = TEXT_PRI if safe else TEXT_SEC
 
-    def _on_src_key(self, _event):
-        """文字数カウントを更新"""
-        n = len(self._src_input.get("1.0", "end").strip())
-        self._char_label.configure(text=f"{n} / 500")
+        self._src_input.configure(state="normal")
+        self._src_input.delete("1.0", "end")
+        self._src_input.insert("1.0", shown)
+        self._src_input.configure(text_color=color, state="disabled")
+        if hasattr(self, "_char_label"):
+            self._char_label.configure(text=f"{len(safe)} / 500")
+
+    def _open_text_input_popup(self, _event=None):
+        popup = ctk.CTkToplevel(self)
+        popup.title("文本输入")
+        popup.geometry("460x210")
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        popup.grab_set()
+
+        box = ctk.CTkTextbox(
+            popup,
+            height=92,
+            font=ctk.CTkFont(size=13),
+            fg_color=BG_PANEL,
+            text_color=TEXT_PRI,
+        )
+        box.pack(fill="x", padx=16, pady=(16, 8))
+        if self._src_text:
+            box.insert("1.0", self._src_text)
+
+        btn_row = ctk.CTkFrame(popup, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(2, 12))
+
+        def do_send():
+            text = box.get("1.0", "end").strip()
+            self._set_source_text(text)
+            popup.destroy()
+
+        ctk.CTkButton(
+            btn_row,
+            text="发送",
+            width=88,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            command=do_send,
+        ).pack(side="right", padx=4)
+
+        ctk.CTkButton(
+            btn_row,
+            text="关闭菜单",
+            width=100,
+            fg_color=DANGER,
+            hover_color=DANGER_HOVER,
+            command=popup.destroy,
+        ).pack(side="right", padx=4)
 
     def _on_tgt_lang_change(self, *_):
         """翻译至ラジオと出力言語ラベルを同期"""
         labels = {"ja": "日语", "en": "英语", "zh": "中文", "ko": "韩语"}
-        self._tgt_lang_label.configure(text=labels.get(self._tgt_var.get(), ""))
+        tgt_code = self._tgt_var.get()
+        self._tgt_lang_label.configure(text=labels.get(tgt_code, ""))
+
+        values = [lbl for lbl, code in self._manual_langs if code == "auto" or code != tgt_code]
+        self._src_lang_menu.configure(values=values)
+        if self._src_lang_var.get() not in values:
+            self._src_lang_var.set(values[0])
 
     def _swap_langs(self):
         """入出力テキストを入れ替える"""
-        src_text = self._src_input.get("1.0", "end").strip()
+        src_text = self._src_text
         tgt_text = self._tgt_output.get("1.0", "end").strip()
-        if src_text == "在此输入文字…":
-            src_text = ""
-        self._src_input.delete("1.0", "end")
-        self._src_input.insert("1.0", tgt_text)
-        self._src_input.configure(text_color=TEXT_PRI)
+        self._set_source_text(tgt_text)
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.insert("1.0", src_text)
         self._tgt_output.configure(state="disabled")
 
     def _clear_input(self):
-        self._src_input.delete("1.0", "end")
-        self._src_input.insert("1.0", "在此输入文字…")
-        self._src_input.configure(text_color=TEXT_SEC)
-        self._char_label.configure(text="0 / 500")
+        self._set_source_text("")
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.configure(state="disabled")
@@ -400,16 +451,72 @@ class MainWindow(ctk.CTk):
             pass
 
     @staticmethod
-    def _assets_dir() -> Path:
-        return Path(__file__).resolve().parents[2] / "assets"
+    def _runtime_base_dirs() -> list[Path]:
+        if not getattr(sys, "frozen", False):
+            return [Path(__file__).resolve().parents[2]]
+
+        dirs = [Path(sys.executable).resolve().parent]
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            meipass_path = Path(meipass)
+            if meipass_path not in dirs:
+                dirs.append(meipass_path)
+        return dirs
 
     @staticmethod
-    def _icons_dir() -> Path:
-        return MainWindow._assets_dir() / "icons"
+    def _assets_dirs() -> list[Path]:
+        dirs = []
+        for base in MainWindow._runtime_base_dirs():
+            assets_dir = base / "assets"
+            if assets_dir.exists():
+                dirs.append(assets_dir)
+        if dirs:
+            return dirs
+        return [MainWindow._runtime_base_dirs()[0] / "assets"]
+
+    @staticmethod
+    def _icons_dirs() -> list[Path]:
+        dirs = []
+        for assets_dir in MainWindow._assets_dirs():
+            icons_dir = assets_dir / "icons"
+            if icons_dir.exists():
+                dirs.append(icons_dir)
+        if dirs:
+            return dirs
+        return [MainWindow._assets_dirs()[0] / "icons"]
+
+    @staticmethod
+    def _find_asset_file(filename: str) -> Path | None:
+        for assets_dir in MainWindow._assets_dirs():
+            candidate = assets_dir / filename
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _set_window_icon(self):
+        ico_path = self._find_asset_file(APP_ICON_ICO_FILE)
+        if ico_path:
+            try:
+                self.iconbitmap(default=str(ico_path))
+            except Exception:
+                pass
+
+        png_path = self._find_asset_file(APP_ICON_PNG_FILE)
+        if png_path:
+            try:
+                self._window_icon = PhotoImage(file=str(png_path))
+                self.iconphoto(True, self._window_icon)
+            except Exception:
+                pass
 
     def _load_social_icon(self, filename: str) -> ctk.CTkImage | None:
-        icon_path = self._icons_dir() / filename
-        if not icon_path.exists():
+        icon_path = None
+        for icons_dir in self._icons_dirs():
+            candidate = icons_dir / filename
+            if candidate.exists():
+                icon_path = candidate
+                break
+        if icon_path is None:
             return None
         try:
             from PIL import Image
@@ -417,7 +524,7 @@ class MainWindow(ctk.CTk):
         except Exception:
             return None
 
-        icon = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+        icon = ctk.CTkImage(light_image=img, dark_image=img, size=(28, 28))
         self._social_icons[filename] = icon
         return icon
 
@@ -427,30 +534,32 @@ class MainWindow(ctk.CTk):
             parent,
             image=icon,
             text="" if icon else fallback_text,
-            width=56,
-            height=32,
-            corner_radius=8,
+            width=68,
+            height=40,
+            corner_radius=10,
             fg_color=fg,
             hover_color=hover,
             text_color="#ffffff",
             font=ctk.CTkFont(size=11, weight="bold"),
             command=command,
-        ).pack(side="left", padx=6, pady=6)
+        ).pack(side="left", padx=8, pady=8)
 
     @staticmethod
     def _find_sponsor_image() -> Path | None:
-        assets_dir = MainWindow._assets_dir()
-        for name in SPONSOR_IMAGE_CANDIDATES:
-            p = assets_dir / name
-            if p.exists():
-                return p
+        for assets_dir in MainWindow._assets_dirs():
+            for name in SPONSOR_IMAGE_CANDIDATES:
+                p = assets_dir / name
+                if p.exists():
+                    return p
 
-        # 兜底：如果用户未按指定命名，尝试直接取 assets 根目录中的第一张图片
-        for p in sorted(assets_dir.iterdir()):
-            if not p.is_file():
+            # 兜底：如果用户未按指定命名，尝试直接取 assets 根目录中的第一张图片
+            if not assets_dir.exists():
                 continue
-            if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
-                return p
+            for p in sorted(assets_dir.iterdir()):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+                    return p
         return None
 
     def _open_sponsor_window(self):
@@ -495,24 +604,84 @@ class MainWindow(ctk.CTk):
         img_label.image = ctk_img
         img_label.pack(padx=12, pady=(0, 12))
 
+    @staticmethod
+    def _is_vrchat_running() -> bool:
+        try:
+            out = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq VRChat.exe"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            return "VRChat.exe" in out
+        except Exception:
+            return False
+
+    def _ensure_receiver_started(self):
+        if self._receiver is not None:
+            return
+        osc_cfg = self._config.get("osc", {})
+        self._receiver = VRCOSCReceiver(
+            on_message=self._on_incoming_chatbox,
+            port=osc_cfg.get("receive_port", 9001),
+            own_messages=self._own_msgs,
+            on_own_message=self._on_own_chatbox_echo,
+        )
+        self._receiver.start()
+
+    def _ensure_translator_ready(self) -> bool:
+        if self._translator is not None:
+            return True
+
+        try:
+            self._translator = create_translator(self._config)
+            return True
+        except ValueError:
+            messagebox.showwarning("未设置API", "您还没有设置API，请先到设置中填写后再翻译")
+            return False
+        except Exception as e:
+            messagebox.showerror("翻译初始化失败", str(e))
+            return False
+
+    def _on_own_chatbox_echo(self, text: str):
+        self._last_own_chatbox_echo_text = text
+        self._last_own_chatbox_echo_time = time.time()
+
+    def _check_vrc_send_ack(self, sent_text: str):
+        # VRChat 如果可发送，通常会回传 /chatbox/input；没有回传则提示可能不支持
+        if self._last_own_chatbox_echo_text == sent_text and (time.time() - self._last_own_chatbox_echo_time) < 2.0:
+            return
+        messagebox.showwarning("场景不支持", "当前场景可能不支持发送聊天信息，或聊天框功能被禁用")
+
     def _send_to_vrc(self):
         """翻訳結果をVRCチャットボックスに送信する"""
         text = self._tgt_output.get("1.0", "end").strip()
         if not text:
             return
+        if not self._is_vrchat_running():
+            messagebox.showwarning("游戏未运行", "检测到 VRChat 未运行，无法发送消息")
+            return
+
+        self._ensure_receiver_started()
         if self._sender is None:
             osc_cfg = self._config.get("osc", {})
             self._sender = VRCOSCSender(
                 host=osc_cfg.get("send_host", "127.0.0.1"),
                 port=osc_cfg.get("send_port", 9000),
             )
-        sent = self._sender.send_chatbox(text)
-        self._own_msgs.add(sent)
+        try:
+            sent = self._sender.send_chatbox(text)
+            self._own_msgs.add(sent)
+            if self._running:
+                self.after(1400, lambda s=sent: self._check_vrc_send_ack(s))
+        except Exception as e:
+            messagebox.showerror("发送失败", str(e))
 
     def _translate_manual(self):
         """手動入力テキストを翻訳する"""
-        src_text = self._src_input.get("1.0", "end").strip()
-        if not src_text or src_text == "在此输入文字…":
+        src_text = self._src_text
+        if not src_text:
             return
         if self._translating:
             return
@@ -523,13 +692,8 @@ class MainWindow(ctk.CTk):
             src_code = detect_language(src_text)
         tgt_code = self._tgt_var.get()
 
-        # 翻訳APIが未初期化なら生成
-        if self._translator is None:
-            try:
-                self._translator = create_translator(self._config)
-            except Exception as e:
-                self._show_tgt(f"[错误] {e}")
-                return
+        if not self._ensure_translator_ready():
+            return
 
         self._translating = True
         self._translate_btn.configure(state="disabled", text="翻译中…")
@@ -588,7 +752,10 @@ class MainWindow(ctk.CTk):
     def _init_and_run(self):
         try:
             self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
-            self._translator = create_translator(self._config)
+            try:
+                self._translator = create_translator(self._config)
+            except ValueError:
+                raise RuntimeError("您还没有设置API，请先在设置中填写")
             osc_cfg = self._config.get("osc", {})
             self._sender = VRCOSCSender(
                 host=osc_cfg.get("send_host", "127.0.0.1"),
@@ -598,6 +765,7 @@ class MainWindow(ctk.CTk):
                 on_message=self._on_incoming_chatbox,
                 port=osc_cfg.get("receive_port", 9001),
                 own_messages=self._own_msgs,
+                on_own_message=self._on_own_chatbox_echo,
             )
             self._receiver.start()
             dev_name = self._device_var.get()
@@ -713,6 +881,8 @@ class MainWindow(ctk.CTk):
 
     def _on_config_saved(self, new_cfg: dict):
         self._config = new_cfg
+        self._asr = create_asr(new_cfg)
+        self._translator = None
 
     # ── ヘルパー ────────────────────────────────────────────────────────────
 

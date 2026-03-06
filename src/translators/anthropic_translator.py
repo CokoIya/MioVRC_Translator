@@ -1,4 +1,4 @@
-"""Anthropic Claude 翻訳バックエンド。"""
+"""Anthropic 翻訳バックエンド  """
 
 from .base import BaseTranslator
 

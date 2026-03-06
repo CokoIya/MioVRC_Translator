@@ -1,12 +1,11 @@
 ; Mio RealTime Translator — Inno Setup Script
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppPublisher "酒寄 みお"
 #define AppURL "https://78hejiu.top"
 #define AppExeName "MioTranslator.exe"
 #define SourceDir "dist\MioTranslator"
-#define ModelDir "C:\Users\yueya\.cache\modelscope\hub\models\iic\SenseVoiceSmall"
 
 [Setup]
 AppId={{A3F2C1B4-9E7D-4F6A-8C3E-1D5B0A2F9C8E}
@@ -48,8 +47,6 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
-; SenseVoice モデルをアプリのインストールフォルダに展開（ネットワーク検証を完全回避）
-Source: "{#ModelDir}\*"; DestDir: "{app}\models\iic\SenseVoiceSmall"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

@@ -1,4 +1,4 @@
-"""VADベースのセグメント分割による連続マイク録音。"""
+"""VADベースのセグメント分割による連続マイク録音  """
 
 import threading
 import queue
@@ -12,7 +12,7 @@ from .vad_detector import VADDetector
 class AudioRecorder:
     """
     マイクから連続的に音声を読み取り、フレームごとにVADを実行し、
-    完全な音声セグメント（numpy float32配列）をコールバックで出力する。
+    完全な音声セグメント（numpy float32配列）をコールバックで出力する  
     """
 
     def __init__(

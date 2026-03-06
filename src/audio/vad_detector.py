@@ -1,11 +1,11 @@
-"""WebRTC VAD ラッパー — 有声/無声フレームを検出する。"""
+"""WebRTC VAD ラッパー — 有声/無声フレームを検出する  """
 
 import collections
 import webrtcvad
 
 
 class VADDetector:
-    """リングバッファを用いた持続的発話検出VAD。"""
+    """リングバッファを用いた持続的発話検出VAD  """
 
     def __init__(
         self,
@@ -32,7 +32,7 @@ class VADDetector:
         self.in_speech = False
 
     def process_frame(self, pcm_bytes: bytes) -> bool:
-        """1フレームのPCMデータを処理し、発話中であれば True を返す。"""
+        """1フレームのPCMデータを処理し、発話中であれば True を返す  """
         if len(pcm_bytes) != self.frame_bytes:
             return self.in_speech
 

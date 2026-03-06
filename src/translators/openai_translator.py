@@ -1,19 +1,22 @@
-"""
-OpenAI 互換翻訳バックエンド。
-対応サービス: OpenAI, DeepSeek, Qianwen（互換モード）, Gemini（互換モード）,
-             Ollama, その他 OpenAI API 互換サービス。
-"""
+﻿"""OpenAI-compatible translation backend."""
 
 from .base import BaseTranslator
 
 
 class OpenAITranslator(BaseTranslator):
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.openai.com/v1"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://api.openai.com/v1",
+        timeout_s: float = 20.0,
+    ):
         try:
             from openai import OpenAI
         except ImportError:
-            raise RuntimeError("openai がインストールされていません。実行してください: pip install openai")
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+            raise RuntimeError("openai 未安装，请先执行: pip install openai")
+
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_s)
         self.model = model
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
@@ -21,7 +24,7 @@ class OpenAITranslator(BaseTranslator):
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=512,
+            temperature=0.0,
+            max_tokens=192,
         )
-        return response.choices[0].message.content.strip()
+        return (response.choices[0].message.content or "").strip()

@@ -1,4 +1,4 @@
-"""Unicode文字範囲によるシンプルな言語判定。"""
+"""Unicode文字範囲によるシンプルな言語判定  """
 
 import re
 
@@ -8,7 +8,7 @@ KO_RANGE = re.compile(r"[\uac00-\ud7af]")
 
 
 def detect_language(text: str) -> str:
-    """ISO 639-1 言語コードを返す。判定不能な場合は 'en' を返す。"""
+    """ISO 639-1 言語コードを返す  判定不能な場合は 'en' を返す  """
     if not text:
         return "en"
     ja = len(JA_RANGE.findall(text))

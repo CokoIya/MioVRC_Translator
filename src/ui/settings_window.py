@@ -17,6 +17,15 @@ TEXT_SEC     = "#686880"   # セカンダリテキスト（灰）
 
 BACKENDS = ["openai", "deepseek", "qianwen", "anthropic", "custom"]
 
+# 音声認識エンジン選択肢
+ASR_ENGINES = [
+    ("Whisper Tiny  （极速，精度较低）",      "whisper-tiny"),
+    ("Whisper Base  （快速，精度一般）",      "whisper-base"),
+    ("Whisper Small （均衡推荐）",            "whisper-small"),
+    ("Whisper Medium（较慢，精度较高）",      "whisper-medium"),
+    ("SenseVoice    （加载时间过长，最准确）", "sensevoice"),
+]
+
 TARGET_LANGS = [
     ("日本語 (ja)", "ja"),
     ("English (en)", "en"),
@@ -126,6 +135,29 @@ class SettingsWindow(ctk.CTkToplevel):
         self._fields_frame.pack(**pad, fill="both", expand=True)
         self._on_backend_change(self._backend_var.get())
 
+        # ── ASR エンジン選択 ──────────────────────────────────────────────────
+        label("语音识别模型")
+        asr_labels  = [lbl for lbl, _ in ASR_ENGINES]
+        asr_codes   = {lbl: code for lbl, code in ASR_ENGINES}
+        self._asr_reverse = {code: lbl for lbl, code in ASR_ENGINES}
+        cur_engine  = self._config.get("asr", {}).get("engine", "whisper-small")
+        self._asr_var   = ctk.StringVar(value=self._asr_reverse.get(cur_engine, asr_labels[2]))
+        self._asr_codes = asr_codes
+        ctk.CTkOptionMenu(
+            scroll, values=asr_labels, variable=self._asr_var,
+            fg_color=GLASS_BG, button_color=GLASS_BORDER,
+            button_hover_color=GLASS_HOVER, corner_radius=10,
+            text_color=TEXT_PRI, width=440,
+        ).pack(**pad, fill="x")
+
+        asr_hint = ctk.CTkFrame(scroll, fg_color=BG_SECONDARY, corner_radius=10)
+        asr_hint.pack(padx=16, pady=(0, 4), fill="x")
+        ctk.CTkLabel(
+            asr_hint,
+            text="更换模型需重启软件后生效。Whisper 系列首次使用时会自动下载模型文件。",
+            font=ctk.CTkFont(size=11), text_color=TEXT_SEC, justify="left",
+        ).pack(padx=10, pady=6, anchor="w")
+
         # ── VAD 静音閾値 ─────────────────────────────────────────────────────
         label("VAD 静音阈值 (秒)")
         self._vad_var = ctk.StringVar(
@@ -196,6 +228,9 @@ class SettingsWindow(ctk.CTkToplevel):
         cfg.setdefault("translation", {})["backend"] = backend
         cfg["translation"]["target_language"] = tgt_lang
         cfg["translation"]["output_format"] = output_fmt
+
+        asr_engine = self._asr_codes.get(self._asr_var.get(), "whisper-small")
+        cfg.setdefault("asr", {})["engine"] = asr_engine
 
         cfg["translation"].setdefault(backend, {})
         for key, var in self._field_vars.items():
