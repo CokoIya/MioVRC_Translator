@@ -37,6 +37,10 @@ DIVIDER      = "#d8d4cc"   # 区切り線
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
+ICON_GITHUB_FILE = "github.png"
+ICON_QQ_FILE = "qq.png"
+ICON_LINE_FILE = "line.png"
+ICON_SPONSOR_FILE = "sponsor.png"
 SPONSOR_IMAGE_CANDIDATES = (
     "sponsor_qr.png",
     "sponsor_qr.jpg",
@@ -83,6 +87,7 @@ class MainWindow(ctk.CTk):
         self._running = False
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
+        self._social_icons: dict[str, ctk.CTkImage] = {}
 
         self._build()
         self._load_devices()
@@ -288,7 +293,7 @@ class MainWindow(ctk.CTk):
             command=self._copy_result,
         ).pack(side="right", padx=2)
 
-                # 底部入口图标：占用底部空间，不增加窗口高度
+        # 底部图标按钮：保持窗口总高度不变，仅挤压文本区域
         social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=44)
         social_bar.pack(fill="x")
         social_bar.pack_propagate(False)
@@ -296,31 +301,43 @@ class MainWindow(ctk.CTk):
         social_center = ctk.CTkFrame(social_bar, fg_color="transparent")
         social_center.pack(expand=True)
 
-        icon_btn = {
-            "fg_color": ACCENT,
-            "hover_color": ACCENT_HOVER,
-            "corner_radius": 8,
-            "text_color": "#ffffff",
-            "font": ctk.CTkFont(size=15, weight="bold"),
-            "width": 56,
-            "height": 32,
-        }
+        github_icon = self._load_social_icon(ICON_GITHUB_FILE)
+        qq_icon = self._load_social_icon(ICON_QQ_FILE)
+        line_icon = self._load_social_icon(ICON_LINE_FILE)
+        sponsor_icon = self._load_social_icon(ICON_SPONSOR_FILE)
 
-        ctk.CTkButton(
-            social_center, text="🐱", command=lambda: self._open_external_url(GITHUB_REPO_URL), **icon_btn,
-        ).pack(side="left", padx=6, pady=6)
-
-        ctk.CTkButton(
-            social_center, text="Q", command=lambda: self._open_external_url(QQ_GROUP_URL), **icon_btn,
-        ).pack(side="left", padx=6, pady=6)
-
-        ctk.CTkButton(
-            social_center, text="L", command=lambda: self._open_external_url(LINE_GROUP_URL), **icon_btn,
-        ).pack(side="left", padx=6, pady=6)
-
-        ctk.CTkButton(
-            social_center, text="￥", command=self._open_sponsor_window, **icon_btn,
-        ).pack(side="left", padx=6, pady=6)
+        self._add_social_button(
+            parent=social_center,
+            icon=github_icon,
+            fallback_text="Git",
+            fg="#2b3137",
+            hover="#1f2328",
+            command=lambda: self._open_external_url(GITHUB_REPO_URL),
+        )
+        self._add_social_button(
+            parent=social_center,
+            icon=qq_icon,
+            fallback_text="QQ",
+            fg="#12B7F5",
+            hover="#0F9ED8",
+            command=lambda: self._open_external_url(QQ_GROUP_URL),
+        )
+        self._add_social_button(
+            parent=social_center,
+            icon=line_icon,
+            fallback_text="LINE",
+            fg="#06C755",
+            hover="#04A946",
+            command=lambda: self._open_external_url(LINE_GROUP_URL),
+        )
+        self._add_social_button(
+            parent=social_center,
+            icon=sponsor_icon,
+            fallback_text="赞助",
+            fg="#D4A638",
+            hover="#BC912D",
+            command=self._open_sponsor_window,
+        )
 
     # ── 翻訳パネルのヘルパー ─────────────────────────────────────────────────
 
@@ -383,11 +400,56 @@ class MainWindow(ctk.CTk):
             pass
 
     @staticmethod
+    def _assets_dir() -> Path:
+        return Path(__file__).resolve().parents[2] / "assets"
+
+    @staticmethod
+    def _icons_dir() -> Path:
+        return MainWindow._assets_dir() / "icons"
+
+    def _load_social_icon(self, filename: str) -> ctk.CTkImage | None:
+        icon_path = self._icons_dir() / filename
+        if not icon_path.exists():
+            return None
+        try:
+            from PIL import Image
+            img = Image.open(icon_path).convert("RGBA")
+        except Exception:
+            return None
+
+        icon = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+        self._social_icons[filename] = icon
+        return icon
+
+    @staticmethod
+    def _add_social_button(parent, icon, fallback_text: str, fg: str, hover: str, command):
+        ctk.CTkButton(
+            parent,
+            image=icon,
+            text="" if icon else fallback_text,
+            width=56,
+            height=32,
+            corner_radius=8,
+            fg_color=fg,
+            hover_color=hover,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=command,
+        ).pack(side="left", padx=6, pady=6)
+
+    @staticmethod
     def _find_sponsor_image() -> Path | None:
-        assets_dir = Path(__file__).resolve().parents[2] / "assets"
+        assets_dir = MainWindow._assets_dir()
         for name in SPONSOR_IMAGE_CANDIDATES:
             p = assets_dir / name
             if p.exists():
+                return p
+
+        # 兜底：如果用户未按指定命名，尝试直接取 assets 根目录中的第一张图片
+        for p in sorted(assets_dir.iterdir()):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
                 return p
         return None
 
