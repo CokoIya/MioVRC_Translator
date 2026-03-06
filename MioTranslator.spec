@@ -61,7 +61,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/app_icon_mio.ico',
+    icon='assets/icons/app_icon_mio.ico',
 )
 coll = COLLECT(
     exe,

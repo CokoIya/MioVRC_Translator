@@ -504,15 +504,23 @@ class MainWindow(ctk.CTk):
                 return candidate
         return None
 
+    @staticmethod
+    def _find_icon_file(filename: str) -> Path | None:
+        for icons_dir in MainWindow._icons_dirs():
+            candidate = icons_dir / filename
+            if candidate.exists():
+                return candidate
+        return MainWindow._find_asset_file(filename)
+
     def _set_window_icon(self):
-        ico_path = self._find_asset_file(APP_ICON_ICO_FILE)
+        ico_path = self._find_icon_file(APP_ICON_ICO_FILE)
         if ico_path:
             try:
                 self.iconbitmap(default=str(ico_path))
             except Exception:
                 pass
 
-        png_path = self._find_asset_file(APP_ICON_PNG_FILE)
+        png_path = self._find_icon_file(APP_ICON_PNG_FILE)
         if png_path:
             try:
                 self._window_icon = PhotoImage(file=str(png_path))
