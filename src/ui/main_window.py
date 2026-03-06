@@ -93,6 +93,7 @@ class MainWindow(ctk.CTk):
         self._last_own_chatbox_echo_time = 0.0
 
         self._running = False
+        self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
@@ -425,6 +426,7 @@ class MainWindow(ctk.CTk):
         """翻译至ラジオと出力言語ラベルを同期"""
         labels = {"ja": "日语", "en": "英语", "zh": "中文", "ko": "韩语"}
         tgt_code = self._tgt_var.get()
+        self._current_tgt_lang = tgt_code  # Cache for thread-safe access in _on_audio_segment
         self._tgt_lang_label.configure(text=labels.get(tgt_code, ""))
 
         values = [lbl for lbl, code in self._manual_langs if code == "auto" or code != tgt_code]
@@ -782,9 +784,12 @@ class MainWindow(ctk.CTk):
     def _start(self):
         self._set_status("正在加载模型…", "orange")
         self._start_btn.configure(state="disabled")
-        threading.Thread(target=self._init_and_run, daemon=True).start()
+        # Read Tkinter variables on the main thread before handing off to the worker.
+        dev_name = self._device_var.get()
+        dev_idx = self._devices.get(dev_name)
+        threading.Thread(target=self._init_and_run, args=(dev_idx,), daemon=True).start()
 
-    def _init_and_run(self):
+    def _init_and_run(self, dev_idx):
         try:
             self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
             try:
@@ -797,8 +802,6 @@ class MainWindow(ctk.CTk):
                 port=osc_cfg.get("send_port", 9000),
             )
             self._ensure_receiver_started()
-            dev_name = self._device_var.get()
-            dev_idx = self._devices.get(dev_name)
             audio_cfg = self._config.get("audio", {})
             self._recorder = AudioRecorder(
                 on_segment=self._on_audio_segment,
@@ -853,7 +856,7 @@ class MainWindow(ctk.CTk):
             if not text:
                 return
             src_lang = detect_language(text)
-            tgt_lang = self._tgt_var.get()
+            tgt_lang = self._current_tgt_lang
             fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
 
             if fmt == "zh_only":
