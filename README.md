@@ -34,7 +34,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-也可以直接前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载 Windows EXE 版（免安装 Python 环境，下载即用）。
+也可以直接前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载 Windows 安装包（`MioTranslator-Setup-v1.0.0.exe`），双击安装，选择路径，自动生成桌面快捷方式，无需 Python 环境。
 
 > 首次运行会自动下载 SenseVoice Small 模型（约 500 MB）。
 > 可选设置模型缓存目录：
