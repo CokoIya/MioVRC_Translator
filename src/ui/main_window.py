@@ -47,6 +47,7 @@ ICON_SPONSOR_FILE = "sponsor.png"
 APP_ICON_ICO_FILE = "app_icon_mio.ico"
 APP_ICON_PNG_FILE = "app_icon_mio.png"
 SPONSOR_IMAGE_CANDIDATES = (
+    "zanzhu.png",
     "sponsor_qr.png",
     "sponsor_qr.jpg",
     "sponsor_qr.jpeg",
@@ -795,13 +796,7 @@ class MainWindow(ctk.CTk):
                 host=osc_cfg.get("send_host", "127.0.0.1"),
                 port=osc_cfg.get("send_port", 9000),
             )
-            self._receiver = VRCOSCReceiver(
-                on_message=self._on_incoming_chatbox,
-                port=osc_cfg.get("receive_port", 9001),
-                own_messages=self._own_msgs,
-                on_own_message=self._on_own_chatbox_echo,
-            )
-            self._receiver.start()
+            self._ensure_receiver_started()
             dev_name = self._device_var.get()
             dev_idx = self._devices.get(dev_name)
             audio_cfg = self._config.get("audio", {})
