@@ -4,10 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 datas = [('config.example.json', '.'), ('assets', 'assets')]
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('funasr')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('modelscope')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 tmp_ret = collect_all('faster_whisper')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('ctranslate2')
@@ -16,10 +13,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 hiddenimports += [
     'faster_whisper',
     'ctranslate2',
-    'huggingface_hub',
     'src.asr.factory',
     'src.asr.whisper_asr',
-    'src.asr.sense_voice',
 ]
 
 a = Analysis(
@@ -31,7 +26,20 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # These large packages are pulled in transitively but are NOT used at runtime.
+        'torch', 'torchvision', 'torchaudio',
+        'tensorflow', 'keras',
+        'numba', 'llvmlite',
+        'scipy',
+        'sklearn', 'scikit_learn',
+        'matplotlib',
+        'IPython', 'ipykernel', 'ipywidgets',
+        'notebook', 'jupyter',
+        'pandas',
+        'lxml',
+        'aliyunsdkcore',
+    ],
     noarchive=False,
     optimize=0,
 )
