@@ -1,7 +1,70 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import sys
 from pathlib import Path
 
+from PyInstaller.building.datastruct import TOC
 from PyInstaller.utils.hooks import collect_all
+
+
+_APPLOCAL_RUNTIME_OVERRIDES = {
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "ucrtbase.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+}
+_API_SET_PREFIXES = ("api-ms-win-core-", "api-ms-win-crt-")
+
+
+def _python_dir() -> Path:
+    return Path(sys.executable).resolve().parent
+
+
+def _system32_dir() -> Path:
+    return Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+
+
+def _preferred_runtime_binary(name: str) -> str | None:
+    base_name = Path(name).name
+    lowered = base_name.lower()
+
+    search_dirs: list[Path] = []
+    if lowered.startswith("vcruntime140"):
+        search_dirs.append(_python_dir())
+    search_dirs.append(_system32_dir())
+
+    for directory in search_dirs:
+        candidate = directory / base_name
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _sanitize_analysis_binaries(entries) -> TOC:
+    sanitized = []
+    seen_names: set[str] = set()
+
+    for name, src, kind in entries:
+        base_name = Path(name).name
+        lowered = base_name.lower()
+
+        # Java の PATH から拾われる API Set DLL は混在すると不安定になるため同梱しない。
+        if lowered.startswith(_API_SET_PREFIXES):
+            continue
+
+        if lowered in _APPLOCAL_RUNTIME_OVERRIDES:
+            replacement = _preferred_runtime_binary(base_name)
+            if replacement is not None:
+                src = replacement
+
+        dedupe_key = name.lower()
+        if dedupe_key in seen_names:
+            continue
+        seen_names.add(dedupe_key)
+        sanitized.append((name, src, kind))
+
+    return TOC(sanitized)
 
 datas = [('config.example.json', '.'), ('assets', 'assets')]
 if Path('models').exists():
@@ -51,6 +114,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+a.binaries = _sanitize_analysis_binaries(a.binaries)
 pyz = PYZ(a.pure)
 
 exe = EXE(

@@ -39,13 +39,14 @@ python main.py
 
 前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载最新安装包。
 
-- 安装包文件名：`MioTranslator-Setup-v1.1.5.exe`
+- 安装包文件名：`MioTranslator-Setup-v1.1.6.exe`
 - 支持自定义安装路径
 - 默认安装目录：`%LocalAppData%\Programs\Mio RealTime Translator`
 - 安装完成后可创建桌面快捷方式
 - 无需单独安装 Python
 
 > 源码运行前需要先执行 `python download_models.py`，将模型下载到项目根目录的 `models/` 中。
+> Windows 安装包在未内置模型时，会在首次点击“开始监听”后自动下载到当前用户目录。
 
 
 ## 配置说明
