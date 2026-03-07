@@ -1,44 +1,48 @@
 """
-One-time script to download Whisper base and small models into models/.
+Whisper base と small のモデルを、パッケージ同梱用に
+リポジトリの `models/` ディレクトリへダウンロードする。
 
-Run once before first launch (or before building the installer):
+初回起動前、またはインストーラー作成前に実行する。  
     python download_models.py
 
-Models are saved to:
+保存先:
     models/whisper-base/
     models/whisper-small/
 
-After downloading, the app loads them locally with no network access.
+ダウンロード後は、PyInstaller とインストーラーがこれらのファイルを同梱できる。  
+実行時に同梱モデルが見つからない場合、GUI は初回利用時に
+LocalAppData へフォールバックダウンロードする。
 """
 
-import pathlib
 import sys
 
+from src.asr.model_manager import (
+    ALLOWED_SIZES,
+    ensure_packaging_model,
+    packaging_model_dir,
+    packaging_models_dir,
+)
 
-MODELS_DIR = pathlib.Path(__file__).parent / "models"
-SIZES = ("base", "small")
+SIZES = ALLOWED_SIZES
 
 
 def download(size: str):
-    dest = MODELS_DIR / f"whisper-{size}"
-    if dest.exists():
+    dest = packaging_model_dir(size)
+    if dest.exists() and (dest / "config.json").exists() and (dest / "model.bin").exists():
         print(f"[skip] whisper-{size} already exists at {dest}")
         return
 
-    print(f"[download] whisper-{size} → {dest} ...")
+    print(f"[download] whisper-{size} -> {dest} ...")
     try:
-        from faster_whisper import download_model
-    except ImportError:
-        print("ERROR: faster-whisper is not installed. Run: pip install faster-whisper")
+        ensure_packaging_model(size, progress_callback=print)
+    except Exception as exc:
+        print(f"ERROR: {exc}")
         sys.exit(1)
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    download_model(size, output_dir=str(dest))
     print(f"[done] whisper-{size} saved to {dest}")
 
 
 if __name__ == "__main__":
-    print(f"Saving models to: {MODELS_DIR.resolve()}\n")
+    print(f"Saving models to: {packaging_models_dir().resolve()}\n")
     for s in SIZES:
         download(s)
     print("\nAll models ready. You can now launch the app.")

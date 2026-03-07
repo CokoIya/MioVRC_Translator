@@ -1,4 +1,4 @@
-"""Anthropic 翻訳バックエンド  """
+"""Anthropic の翻訳バックエンド。"""
 
 from .base import BaseTranslator
 
@@ -8,7 +8,7 @@ class AnthropicTranslator(BaseTranslator):
         try:
             import anthropic
         except ImportError:
-            raise RuntimeError("anthropic がインストールされていません。実行してください: pip install anthropic")
+            raise RuntimeError("anthropic がインストールされていません。  実行してください: pip install anthropic")
         self._client = anthropic.Anthropic(api_key=api_key)
         self.model = model
 

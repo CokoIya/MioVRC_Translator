@@ -20,22 +20,22 @@ from src.utils.lang_detect import detect_language
 from .settings_window import SettingsWindow
 from .floating_window import FloatingWindow
 
-# ── カラーパレット（米白清新スタイル） ──────────────────────────────────────
-BG_PRIMARY   = "#f7f5f0"   # 米白色主背景
-BG_SECONDARY = "#edeae2"   # セカンダリ背景
-BG_TOP       = "#e5e1d8"   # トップバー
-BG_PANEL     = "#f2efe8"   # パネル背景
-GLASS_BG     = "#daeaf8"   # 淡青色ボタン背景
-GLASS_BORDER = "#8ab8d8"   # ボタン枠（天青色）
-GLASS_HOVER  = "#c4dcf2"   # ホバー
-ACCENT       = "#3a9fd8"   # 天青色アクセント
-ACCENT_HOVER = "#2882bc"   # アクセントホバー
-DANGER       = "#e05060"   # 赤（停止）
-DANGER_HOVER = "#c03045"   # 赤ホバー
-SUCCESS      = "#2ea85a"   # 緑（状態）
-TEXT_PRI     = "#252535"   # プライマリテキスト（濃紺）
-TEXT_SEC     = "#686880"   # セカンダリテキスト（灰）
-DIVIDER      = "#d8d4cc"   # 区切り線
+# ── カラーパレット ────────────────────────────────────────────────────────
+BG_PRIMARY   = "#f7f5f0"   # メイン背景色
+BG_SECONDARY = "#edeae2"   # 補助背景色
+BG_TOP       = "#e5e1d8"   # 上部バーの背景色
+BG_PANEL     = "#f2efe8"   # パネル背景色
+GLASS_BG     = "#daeaf8"   # ボタン背景色
+GLASS_BORDER = "#8ab8d8"   # ボタン枠線色
+GLASS_HOVER  = "#c4dcf2"   # ホバー時の背景色
+ACCENT       = "#3a9fd8"   # 強調色
+ACCENT_HOVER = "#2882bc"   # 強調色のホバー時背景色
+DANGER       = "#e05060"   # 停止系の強調色
+DANGER_HOVER = "#c03045"   # 停止系ホバー色
+SUCCESS      = "#2ea85a"   # 成功状態の色
+TEXT_PRI     = "#252535"   # 主テキスト色
+TEXT_SEC     = "#686880"   # 補助テキスト色
+DIVIDER      = "#d8d4cc"   # 区切り線の色
 
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
@@ -55,7 +55,7 @@ SPONSOR_IMAGE_CANDIDATES = (
     "sponsor.jpg",
 )
 
-# 手動翻訳で選択できる言語
+# 手動翻訳で選択可能な言語
 MANUAL_LANGS = [
     ("检测语言", "auto"),
     ("中文",     "zh"),
@@ -73,12 +73,12 @@ class MainWindow(ctk.CTk):
         super().__init__()
         self._config = config
         self.title("Mio Translator")
-        # 元 620x560 → 幅+20% / 高さ-30%
+        # 旧サイズ 620x560 から、幅を 20% 拡張し高さを 30% 縮小している。
         self.geometry("744x400")
         self.minsize(620, 320)
         self.configure(fg_color=BG_PRIMARY)
 
-        # コアオブジェクト（開始時に生成）
+        # 起動時に必要な主要オブジェクト。
         self._recorder: AudioRecorder | None = None
         self._asr = create_asr(config)
         self._translator = None
@@ -94,7 +94,7 @@ class MainWindow(ctk.CTk):
 
         self._running = False
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
-        self._current_src_lang: str | None = None  # None = auto-detect
+        self._current_src_lang: str | None = None  # `None` は自動判定を表す。
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
@@ -105,10 +105,10 @@ class MainWindow(ctk.CTk):
         self._build()
         self._load_devices()
 
-    # ── UI構築 ──────────────────────────────────────────────────────────────
+    # ── UI 構築 ────────────────────────────────────────────────────────────
 
     def _build(self):
-        # ── トップバー（タイトル・コントロールをまとめてコンパクトに） ─────
+        # ── 上部バー  タイトルと主要操作をまとめる ─────────────────────────
         top = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_TOP)
         top.pack(fill="x")
 
@@ -117,7 +117,7 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT_PRI,
         ).pack(side="left", padx=14, pady=7)
 
-        # 右端ボタン群
+        # 右側の操作ボタン群
         ctk.CTkButton(
             top, text="⚙ 设置", width=76,
             fg_color=GLASS_BG, hover_color=GLASS_HOVER,
@@ -149,7 +149,7 @@ class MainWindow(ctk.CTk):
         )
         self._status_label.pack(side="right", padx=8)
 
-        # ── マイク + 翻译至 を1行にまとめる ─────────────────────────────────
+        # ── マイク設定と翻訳先設定を 1 行にまとめる ───────────────────────
         bar = ctk.CTkFrame(self, fg_color=BG_SECONDARY, corner_radius=0)
         bar.pack(fill="x")
 
@@ -177,26 +177,26 @@ class MainWindow(ctk.CTk):
                 text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
             ).pack(side="left", padx=5, pady=5)
 
-        # ── Google翻訳スタイル・手動入力パネル ─────────────────────────────
+        # ── Google 翻訳風の手動入力パネル ─────────────────────────────────
         self._build_translate_panel()
 
-        # ── ステータスバー ──────────────────────────────────────────────────
+        # ── ステータスバー ────────────────────────────────────────────────
         self._bottom_bar = ctk.CTkLabel(
             self, text="未加载模型", font=ctk.CTkFont(size=10), text_color=TEXT_SEC,
         )
         self._bottom_bar.pack(side="bottom", pady=2)
 
     def _build_translate_panel(self):
-        """Google翻訳風の左右2ペイン翻訳パネルを構築する"""
+        """Google 翻訳風の左右 2 ペイン翻訳パネルを構築する。"""
         outer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0)
         outer.pack(fill="both", expand=True, padx=0, pady=0)
 
-        # ── 言語ヘッダー行 ──────────────────────────────────────────────────
+        # ── 言語ヘッダー行 ────────────────────────────────────────────────
         hdr = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=32)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
-        # 入力言語ドロップダウン
+        # 入力言語のドロップダウン
         self._manual_langs = MANUAL_LANGS[:]
         src_labels = [l for l, _ in self._manual_langs]
         self._src_lang_codes = {l: c for l, c in self._manual_langs}
@@ -209,7 +209,7 @@ class MainWindow(ctk.CTk):
         )
         self._src_lang_menu.pack(side="left", padx=8)
 
-        # 入れ替えボタン
+        # 入出力言語の入れ替えボタン
         ctk.CTkButton(
             hdr, text="⇄", width=32, height=24,
             fg_color="transparent", hover_color=GLASS_HOVER,
@@ -217,7 +217,7 @@ class MainWindow(ctk.CTk):
             command=self._swap_langs,
         ).pack(side="left", padx=4)
 
-        # 出力言語ラベル（翻译至と連動）
+        # 出力言語ラベル。  上部の翻訳先ラジオと連動する。
         self._tgt_lang_label = ctk.CTkLabel(
             hdr, text="日语", text_color=TEXT_PRI, font=ctk.CTkFont(size=12),
         )
@@ -227,7 +227,7 @@ class MainWindow(ctk.CTk):
         self._src_lang_var.trace_add("write", self._on_src_lang_change)
         self._on_src_lang_change()
 
-        # ── テキストエリア行 ────────────────────────────────────────────────
+        # ── テキストエリア行 ──────────────────────────────────────────────
         text_row = ctk.CTkFrame(outer, fg_color=BG_PANEL, corner_radius=0)
         text_row.pack(fill="both", expand=True)
 
@@ -245,7 +245,7 @@ class MainWindow(ctk.CTk):
         self._src_input.pack(fill="both", expand=True, padx=8, pady=(6, 0))
         self._set_source_text("")
 
-        # 入力下部ツールバー
+        # 入力エリア下部のツールバー
         left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=30)
         left_bar.pack(fill="x")
         left_bar.pack_propagate(False)
@@ -278,7 +278,7 @@ class MainWindow(ctk.CTk):
         )
         self._translate_btn.pack(side="right", padx=4)
 
-        # 区切り線
+        # 中央の区切り線
         ctk.CTkFrame(text_row, width=1, fg_color=DIVIDER).pack(
             side="left", fill="y", pady=6,
         )
@@ -295,7 +295,7 @@ class MainWindow(ctk.CTk):
         )
         self._tgt_output.pack(fill="both", expand=True, padx=8, pady=(6, 0))
 
-        # 出力下部ツールバー
+        # 出力エリア下部のツールバー
         right_bar = ctk.CTkFrame(right, fg_color=BG_SECONDARY, corner_radius=0, height=30)
         right_bar.pack(fill="x")
         right_bar.pack_propagate(False)
@@ -314,7 +314,7 @@ class MainWindow(ctk.CTk):
             command=self._copy_result,
         ).pack(side="right", padx=2)
 
-        # 底部图标按钮：保持窗口总高度不变，仅挤压文本区域
+        # 下部のアイコンボタン列。  全体の高さは変えず、本文領域だけを圧縮する。
         social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=58)
         social_bar.pack(fill="x")
         social_bar.pack_propagate(False)
@@ -360,7 +360,7 @@ class MainWindow(ctk.CTk):
             command=self._open_sponsor_window,
         )
 
-    # ── 翻訳パネルのヘルパー ─────────────────────────────────────────────────
+    # ── 翻訳パネルの補助処理 ─────────────────────────────────────────────
 
     def _set_source_text(self, text: str):
         safe = (text or "").strip()
@@ -426,10 +426,10 @@ class MainWindow(ctk.CTk):
         ).pack(side="right", padx=4)
 
     def _on_tgt_lang_change(self, *_):
-        """翻译至ラジオと出力言語ラベルを同期"""
+        """翻訳先ラジオと出力言語ラベルを同期する。"""
         labels = {"ja": "日语", "en": "英语", "zh": "中文", "ko": "韩语"}
         tgt_code = self._tgt_var.get()
-        self._current_tgt_lang = tgt_code  # Cache for thread-safe access in _on_audio_segment
+        self._current_tgt_lang = tgt_code  # `_on_audio_segment` から安全に参照できるように保持する。
         self._tgt_lang_label.configure(text=labels.get(tgt_code, ""))
 
         values = [lbl for lbl, code in self._manual_langs if code == "auto" or code != tgt_code]
@@ -438,13 +438,13 @@ class MainWindow(ctk.CTk):
             self._src_lang_var.set(values[0])
 
     def _on_src_lang_change(self, *_):
-        """Cache the selected source language for thread-safe ASR use."""
+        """選択中の入力言語を、スレッドセーフに参照できる形で保持する。"""
         label = self._src_lang_var.get()
         code = self._src_lang_codes.get(label, "auto")
         self._current_src_lang = None if code == "auto" else code
 
     def _swap_langs(self):
-        """入出力テキストを入れ替える"""
+        """入出力テキストを入れ替える。"""
         src_text = self._src_text
         tgt_text = self._tgt_output.get("1.0", "end").strip()
         self._set_source_text(tgt_text)
@@ -583,7 +583,7 @@ class MainWindow(ctk.CTk):
                 if p.exists():
                     return p
 
-            # 兜底：如果用户未按指定命名，尝试直接取 assets 根目录中的第一张图片
+            # 指定名の画像がない場合は、`assets` 直下で最初に見つかった画像を使う。
             if not assets_dir.exists():
                 continue
             for p in sorted(assets_dir.iterdir()):
@@ -680,13 +680,13 @@ class MainWindow(ctk.CTk):
         self._last_own_chatbox_echo_time = time.time()
 
     def _check_vrc_send_ack(self, sent_text: str):
-        # VRChat echoes /chatbox/input back when the scene supports it.
+        # シーンが対応していれば、VRChat は `/chatbox/input` をエコーバックする。
         if self._last_own_chatbox_echo_text == sent_text and (time.time() - self._last_own_chatbox_echo_time) < 2.0:
             return
         messagebox.showwarning("当前场景不支持发送消息", "当前场景不支持发送消息，或聊天框功能已被禁用。")
 
     def _send_to_vrc(self):
-        """翻訳結果をVRCチャットボックスに送信する（出力フォーマット適用）"""
+        """翻訳結果を VRC チャットボックスへ送信する。  出力形式の設定も適用する。"""
         tgt_text = self._last_tgt_text
         src_text = self._src_text
         if not tgt_text and not src_text:
@@ -695,7 +695,7 @@ class MainWindow(ctk.CTk):
             messagebox.showwarning("游戏未运行", "游戏未运行，请先启动 VRChat 后再发送消息。")
             return
 
-        # Apply the same output format as voice-recognition mode.
+        # 音声認識モードと同じ出力形式を適用する。
         fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
         if fmt == "zh_only":
             chatbox_text = src_text or tgt_text
@@ -703,7 +703,7 @@ class MainWindow(ctk.CTk):
             chatbox_text = tgt_text or src_text
         elif fmt == "zh(ja)":
             chatbox_text = f"{src_text}（{tgt_text}）" if src_text and tgt_text else src_text or tgt_text
-        else:  # ja(zh)
+        else:  # `ja(zh)`
             chatbox_text = f"{tgt_text}（{src_text}）" if src_text and tgt_text else tgt_text or src_text
 
         self._ensure_receiver_started()
@@ -722,14 +722,14 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("发送失败", str(e))
 
     def _translate_manual(self):
-        """手動入力テキストを翻訳する"""
+        """手動入力したテキストを翻訳する。"""
         src_text = self._src_text
         if not src_text:
             return
         if self._translating:
             return
 
-        # 言語コードを決定
+        # 言語コードを決定する。
         src_code = self._src_lang_codes.get(self._src_lang_var.get(), "auto")
         if src_code == "auto":
             src_code = detect_language(src_text)
@@ -747,7 +747,7 @@ class MainWindow(ctk.CTk):
         ).start()
 
     def _do_translate(self, text: str, src_lang: str, tgt_lang: str):
-        """バックグラウンドスレッドで翻訳を実行する"""
+        """バックグラウンドスレッドで翻訳を実行する。"""
         try:
             result = self._translator.translate(text, src_lang, tgt_lang)
             self.after(0, lambda: self._show_tgt(result))
@@ -758,7 +758,7 @@ class MainWindow(ctk.CTk):
             self.after(0, self._reset_translate_btn)
 
     def _show_tgt(self, text: str):
-        # Only persist clean translation results, not error strings.
+        # 正常な翻訳結果のみを保持し、エラー文字列は保存しない。
         if not text.startswith("[错误]"):
             self._last_tgt_text = text
         self._tgt_output.configure(state="normal")
@@ -770,7 +770,7 @@ class MainWindow(ctk.CTk):
         self._translating = False
         self._translate_btn.configure(state="normal", text="翻译")
 
-    # ── デバイスリスト ──────────────────────────────────────────────────────
+    # ── デバイス一覧 ──────────────────────────────────────────────────────
 
     def _load_devices(self):
         devices = AudioRecorder.list_devices()
@@ -786,25 +786,25 @@ class MainWindow(ctk.CTk):
 
     @staticmethod
     def _get_system_default_input(devices: list[dict], names: list[str]) -> str:
-        """Return the name of the system's current default input device (WASAPI-preferred)."""
+        """現在の既定入力デバイス名を返す。  可能なら WASAPI を優先する。"""
         try:
-            default_idx = sd.default.device[0]  # index 0 = input
+            default_idx = sd.default.device[0]  # 0 番目は入力デバイス
             if default_idx is not None and default_idx >= 0:
                 default_name = sd.query_devices(default_idx)["name"]
-                # Find the best API instance of that device name in our deduplicated list.
+                # 重複排除済み一覧の中から、最適な API 側の同名デバイスを探す。
                 match = next((d["name"] for d in devices if d["name"] == default_name), None)
                 if match and match in names:
                     return match
         except Exception:
             pass
-        # Fallback: skip known Windows loopback/monitor devices.
+        # フォールバック時は、既知の Windows ループバック系デバイスを避ける。
         _SKIP = ("microsoft 映射", "microsoft sound mapper", "立体声混音", "stereo mix")
         return next(
             (n for n in names if not any(s in n.lower() for s in _SKIP)),
             names[0],
         )
 
-    # ── 音声リスニング 開始 / 停止 ──────────────────────────────────────────
+    # ── 音声リスニングの開始と停止 ────────────────────────────────────────
 
     def _toggle_listening(self):
         if self._running:
@@ -813,20 +813,20 @@ class MainWindow(ctk.CTk):
             self._start()
 
     def _start(self):
-        self._set_status("正在加载模型…", "orange")
+        self._set_status("正在准备语音…", ACCENT)
         self._start_btn.configure(state="disabled")
-        # Read Tkinter variables on the main thread before handing off to the worker.
+        # ワーカースレッドへ渡す前に、Tkinter 変数はメインスレッドで読み出しておく。
         dev_name = self._device_var.get()
         dev_idx = self._devices.get(dev_name)
         threading.Thread(target=self._init_and_run, args=(dev_idx,), daemon=True).start()
 
     def _init_and_run(self, dev_idx):
         try:
-            self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
             try:
                 self._translator = create_translator(self._config)
             except ValueError:
                 raise RuntimeError("您还没有设置API，请先在设置中填写")
+            self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
             osc_cfg = self._config.get("osc", {})
             self._sender = VRCOSCSender(
                 host=osc_cfg.get("send_host", "127.0.0.1"),
@@ -880,30 +880,30 @@ class MainWindow(ctk.CTk):
         messagebox.showerror("启动失败", msg)
 
     def _on_vad_state(self, in_speech: bool):
-        """Called from the recorder thread when VAD state changes."""
+        """録音スレッドから呼ばれ、VAD 状態の変化を反映する。"""
         if in_speech:
             self.after(0, lambda: self._set_status("正在说话…", ACCENT))
         else:
             self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
 
-    # ── 音声セグメントハンドラ（ログなし・VRC送信のみ） ─────────────────────
+    # ── 音声セグメント処理  ログ出力はせず VRC 送信のみ行う ─────────────────
 
     def _on_audio_segment(self, audio):
         if not self._running:
             return
         try:
             self.after(0, lambda: self._set_status("识别中…", ACCENT))
-            asr_lang = self._current_src_lang  # None = auto-detect
+            asr_lang = self._current_src_lang  # `None` は自動判定
             text = self._asr.transcribe(audio, language=asr_lang)
             if not text:
                 return
-            # If the user selected an explicit source language, trust it;
-            # otherwise detect from the transcribed text.
+            # 入力言語が明示指定されている場合はそれを優先し、
+            # 未指定なら文字起こし結果から判定する。
             src_lang = asr_lang if asr_lang else detect_language(text)
             tgt_lang = self._current_tgt_lang
             fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
 
-            # Show recognised text in the source panel (thread-safe via after).
+            # 認識結果を入力パネルへ反映する。  UI 更新は `after` 経由で行う。
             self.after(0, lambda t=text: self._set_source_text(t))
 
             if fmt == "zh_only":
@@ -916,7 +916,7 @@ class MainWindow(ctk.CTk):
                     chatbox_text = f"{text}（{translated}）"
                 else:
                     chatbox_text = f"{translated}（{text}）"
-                # Show translation in the target panel.
+                # 翻訳結果を出力パネルへ反映する。
                 self.after(0, lambda t=translated: self._show_tgt(t))
 
             sent = self._sender.send_chatbox(chatbox_text)
@@ -927,7 +927,7 @@ class MainWindow(ctk.CTk):
             if self._running:
                 self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
 
-    # ── 受信チャットボックス（逆翻訳・フローティングウィンドウに表示） ───────
+    # ── 受信チャットボックス  逆翻訳してフローティングウィンドウへ表示 ─────
 
     def _on_incoming_chatbox(self, text: str):
         try:
@@ -944,7 +944,7 @@ class MainWindow(ctk.CTk):
         if self._float_win and self._float_win.winfo_exists():
             self._float_win.add_message(original, translated)
 
-    # ── フローティングウィンドウ ────────────────────────────────────────────
+    # ── フローティングウィンドウ ──────────────────────────────────────────
 
     def _toggle_float(self):
         if self._float_win and self._float_win.winfo_exists():
@@ -958,7 +958,7 @@ class MainWindow(ctk.CTk):
             self._float_win = FloatingWindow(self)
             self._float_btn.configure(text="悬浮窗 ▲")
 
-    # ── 設定 ────────────────────────────────────────────────────────────────
+    # ── 設定 ──────────────────────────────────────────────────────────────
 
     def _open_settings(self):
         SettingsWindow(self, self._config, on_save=self._on_config_saved)
@@ -968,7 +968,7 @@ class MainWindow(ctk.CTk):
         self._asr = create_asr(new_cfg)
         self._translator = None
 
-    # ── ヘルパー ────────────────────────────────────────────────────────────
+    # ── 補助処理 ──────────────────────────────────────────────────────────
 
     def _set_status(self, text: str, color: str = "white"):
         self._status_label.configure(text=text, text_color=color)

@@ -1,4 +1,4 @@
-﻿"""Receive VRChat OSC chatbox messages."""
+"""VRChat の OSC チャットボックスメッセージを受信する。"""
 
 import threading
 from typing import Callable, Optional, Set

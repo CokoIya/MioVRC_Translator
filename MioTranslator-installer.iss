@@ -1,7 +1,7 @@
-; Mio RealTime Translator — Inno Setup Script
+; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "1.1.3"
+#define AppVersion "1.1.5"
 #define AppPublisher "酒寄 みお"
 #define AppURL "https://78hejiu.top"
 #define AppExeName "MioTranslator.exe"
@@ -15,7 +15,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL=https://github.com/CokoIya/MioVRC_Translator/releases
-DefaultDirName={sd}\{#AppName}
+DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 AllowNoIcons=yes
 LicenseFile=
@@ -26,13 +26,13 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
-; 64ビットのみ
+; 64 ビット版のみを対象にする
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; UAC
+; UAC 設定
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-; ウィザード外観
+; ウィザードの外観設定
 WizardResizable=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
@@ -47,7 +47,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#SourceDir}\models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\models\*"; DestDir: "{app}\models"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

@@ -1,13 +1,13 @@
-"""Mio RealTime Translator — エントリポイント。"""
+"""Mio RealTime Translator のエントリーポイント。"""
 
-import sys
 import os
+import sys
 
-# プロジェクトルートを sys.path に追加
+# プロジェクトルートを `sys.path` に追加する。
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.utils import config_manager
 from src.ui.main_window import MainWindow
+from src.utils import config_manager
 
 
 def main():

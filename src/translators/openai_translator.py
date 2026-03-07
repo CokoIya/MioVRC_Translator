@@ -1,4 +1,4 @@
-"""OpenAI-compatible translation backend."""
+"""OpenAI 互換の翻訳バックエンド。"""
 
 from .base import BaseTranslator
 

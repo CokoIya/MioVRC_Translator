@@ -1,7 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
 datas = [('config.example.json', '.'), ('assets', 'assets')]
+if Path('models').exists():
+    datas.append(('models', 'models'))
 binaries = []
 hiddenimports = []
 
@@ -9,11 +13,15 @@ tmp_ret = collect_all('faster_whisper')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('ctranslate2')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('huggingface_hub')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 hiddenimports += [
     'faster_whisper',
     'ctranslate2',
+    'huggingface_hub',
     'src.asr.factory',
+    'src.asr.model_manager',
     'src.asr.whisper_asr',
 ]
 
@@ -27,7 +35,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # These large packages are pulled in transitively but are NOT used at runtime.
+        # これらの大型依存関係は推移的に取り込まれるが、実行時には使用しない。
         'torch', 'torchvision', 'torchaudio',
         'tensorflow', 'keras',
         'numba', 'llvmlite',

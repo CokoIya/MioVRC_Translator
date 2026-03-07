@@ -1,4 +1,4 @@
-"""OSC経由でVRChatにメッセージを送信する  """
+"""OSC 経由で VRChat にメッセージを送信する。"""
 
 from pythonosc import udp_client
 
@@ -12,9 +12,9 @@ class VRCOSCSender:
 
     def send_chatbox(self, text: str, immediate: bool = True) -> str:
         """
-        /chatbox/input 経由でVRChatのチャットボックスにテキストを送信する  
-        144文字を超える場合は自動的に省略記号で切り詰める  
-        実際に送信したテキストを返す  
+        `/chatbox/input` 経由で VRChat のチャットボックスへテキストを送信する。  
+        144 文字を超える場合は自動的に省略記号付きで切り詰める。  
+        実際に送信したテキストを返す。
         """
         if len(text) > MAX_CHATBOX_CHARS:
             text = text[: MAX_CHATBOX_CHARS - 1] + "…"

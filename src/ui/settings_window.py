@@ -4,20 +4,20 @@ import customtkinter as ctk
 from tkinter import messagebox
 from src.utils import config_manager
 
-# ── カラーパレット（米白清新スタイル） ──────────────────────────────────────
-BG_PRIMARY   = "#f7f5f0"   # 米白色主背景
-BG_SECONDARY = "#edeae2"   # セカンダリ背景
-GLASS_BG     = "#daeaf8"   # 淡青色ボタン背景
-GLASS_BORDER = "#8ab8d8"   # 天青色ボタン枠
-GLASS_HOVER  = "#c4dcf2"   # ホバー
-ACCENT       = "#3a9fd8"   # 天青色アクセント
-ACCENT_HOVER = "#2882bc"   # アクセントホバー
-TEXT_PRI     = "#252535"   # プライマリテキスト（濃紺）
-TEXT_SEC     = "#686880"   # セカンダリテキスト（灰）
+# ── カラーパレット ────────────────────────────────────────────────────────
+BG_PRIMARY   = "#f7f5f0"   # メイン背景色
+BG_SECONDARY = "#edeae2"   # 補助背景色
+GLASS_BG     = "#daeaf8"   # ボタン背景色
+GLASS_BORDER = "#8ab8d8"   # ボタン枠線色
+GLASS_HOVER  = "#c4dcf2"   # ホバー時の背景色
+ACCENT       = "#3a9fd8"   # 強調色
+ACCENT_HOVER = "#2882bc"   # 強調色のホバー時背景色
+TEXT_PRI     = "#252535"   # 主テキスト色
+TEXT_SEC     = "#686880"   # 補助テキスト色
 
 BACKENDS = ["openai", "deepseek", "qianwen", "anthropic", "custom"]
 
-# 音声認識エンジン選択肢（base と small のみ）
+# 音声認識エンジンの候補
 ASR_ENGINES = [
     ("Whisper Base  （推荐，快速启动）", "whisper-base"),
     ("Whisper Small （较慢，精度更高）", "whisper-small"),
@@ -33,7 +33,7 @@ TARGET_LANGS = [
     ("Español (es)", "es"),
 ]
 
-# 出力フォーマットの選択肢（表示ラベルは中文）
+# 出力形式の候補。  ラベルは中国語表記のままにする。
 OUTPUT_FORMATS = [
     ("日语（中文）", "ja(zh)"),
     ("仅日语",      "ja_only"),
@@ -70,7 +70,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 text_color=TEXT_PRI,
             ).pack(padx=16, pady=(12, 2), anchor="w")
 
-        # ── 翻訳バックエンド ─────────────────────────────────────────────────
+        # ── 翻訳バックエンド ───────────────────────────────────────────────
         label("翻译后端")
         self._backend_var = ctk.StringVar(value=trans_cfg.get("backend", "openai"))
         ctk.CTkOptionMenu(
@@ -81,7 +81,7 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pad, fill="x")
 
-        # ── 翻訳先言語 ───────────────────────────────────────────────────────
+        # ── 翻訳先言語 ─────────────────────────────────────────────────────
         label("目标语言")
         lang_labels = [lbl for lbl, _ in TARGET_LANGS]
         lang_codes = {lbl: code for lbl, code in TARGET_LANGS}
@@ -96,7 +96,7 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pad, fill="x")
 
-        # ── VRCチャットボックス出力フォーマット ──────────────────────────────
+        # ── VRC チャットボックス出力形式 ────────────────────────────────────
         label("VRC 聊天框输出格式")
         fmt_labels = [lbl for lbl, _ in OUTPUT_FORMATS]
         fmt_codes  = {lbl: code for lbl, code in OUTPUT_FORMATS}
@@ -111,7 +111,7 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pad, fill="x")
 
-        # フォーマット説明ヒント
+        # 出力形式の説明
         hint_frame = ctk.CTkFrame(scroll, fg_color=BG_SECONDARY, corner_radius=10)
         hint_frame.pack(padx=16, pady=(0, 4), fill="x")
         ctk.CTkLabel(
@@ -127,12 +127,12 @@ class SettingsWindow(ctk.CTkToplevel):
             justify="left",
         ).pack(padx=10, pady=8, anchor="w")
 
-        # ── バックエンド固有フィールド ────────────────────────────────────────
+        # ── バックエンド固有フィールド ──────────────────────────────────────
         self._fields_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self._fields_frame.pack(**pad, fill="both", expand=True)
         self._on_backend_change(self._backend_var.get())
 
-        # ── ASR エンジン選択 ──────────────────────────────────────────────────
+        # ── ASR エンジン選択 ────────────────────────────────────────────────
         label("语音识别模型")
         asr_labels  = [lbl for lbl, _ in ASR_ENGINES]
         asr_codes   = {lbl: code for lbl, code in ASR_ENGINES}
@@ -151,11 +151,11 @@ class SettingsWindow(ctk.CTkToplevel):
         asr_hint.pack(padx=16, pady=(0, 4), fill="x")
         ctk.CTkLabel(
             asr_hint,
-            text="模型文件已内置，无需下载。切换模型需重启软件后生效。",
+            text="若安装包未内置模型，首次点击开始监听会自动下载到本机用户目录。切换模型需重启软件后生效。",
             font=ctk.CTkFont(size=11), text_color=TEXT_SEC, justify="left",
         ).pack(padx=10, pady=6, anchor="w")
 
-        # ── VAD 静音閾値 ─────────────────────────────────────────────────────
+        # ── VAD 静音しきい値 ────────────────────────────────────────────────
         label("VAD 静音阈值 (秒)")
         self._vad_var = ctk.StringVar(
             value=str(self._config.get("audio", {}).get("vad_silence_threshold", 0.8))
@@ -166,7 +166,7 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pad, fill="x")
 
-        # ── ボタン ──────────────────────────────────────────────────────────
+        # ── 操作ボタン ──────────────────────────────────────────────────────
         btn_frame = ctk.CTkFrame(self, fg_color=BG_PRIMARY)
         btn_frame.pack(side="bottom", fill="x", padx=16, pady=12)
 
@@ -186,7 +186,7 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(side="right", padx=4)
 
     def _on_backend_change(self, backend: str):
-        """バックエンド変更時に対応するフィールドを再描画する"""
+        """バックエンド変更時に対応フィールドを再描画する。"""
         for w in self._fields_frame.winfo_children():
             w.destroy()
 
@@ -216,7 +216,7 @@ class SettingsWindow(ctk.CTkToplevel):
             add_field("Model", "model")
 
     def _save(self):
-        """設定を保存してダイアログを閉じる"""
+        """設定を保存してダイアログを閉じる。"""
         backend = self._backend_var.get()
         tgt_lang = self._lang_codes.get(self._lang_var.get(), "ja")
         output_fmt = self._fmt_codes.get(self._fmt_var.get(), "ja(zh)")

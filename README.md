@@ -39,9 +39,9 @@ python main.py
 
 前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载最新安装包。
 
-- 安装包文件名：`MioTranslator-Setup-v1.1.2.exe`
+- 安装包文件名：`MioTranslator-Setup-v1.1.5.exe`
 - 支持自定义安装路径
-- 默认安装目录：`C:\Mio RealTime Translator`
+- 默认安装目录：`%LocalAppData%\Programs\Mio RealTime Translator`
 - 安装完成后可创建桌面快捷方式
 - 无需单独安装 Python
 

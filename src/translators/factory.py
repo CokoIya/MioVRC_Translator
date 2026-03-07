@@ -1,8 +1,8 @@
-﻿"""Translator factory and basic config validation."""
+"""翻訳バックエンドの生成と基本的な設定検証を行う。"""
 
+from .anthropic_translator import AnthropicTranslator
 from .base import BaseTranslator
 from .openai_translator import OpenAITranslator
-from .anthropic_translator import AnthropicTranslator
 
 
 def _require_text(value: str, label: str):
@@ -39,8 +39,8 @@ def create_translator(config: dict) -> BaseTranslator:
             api_key=c.get("api_key", "").strip(),
             model=c.get("model", "qwen-mt-turbo"),
             base_url=c.get("base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            # Disable Qwen3 thinking mode for fast responses.
-            # Qwen3 models reason by default; this bypasses that overhead.
+            # Qwen3 の思考モードを無効化して応答を速くする。
+            # Qwen3 系モデルは既定で推論過程を出すため、その分のオーバーヘッドを避ける。
             extra_body={"enable_thinking": False},
         )
 

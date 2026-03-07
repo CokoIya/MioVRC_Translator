@@ -1,18 +1,19 @@
-"""VADベースのセグメント分割による連続マイク録音  """
+"""VAD ベースのセグメント分割で連続マイク録音を行う。"""
 
-import threading
 import queue
+import threading
+from typing import Callable, Optional
+
 import numpy as np
 import sounddevice as sd
-from typing import Callable, Optional
 
 from .vad_detector import VADDetector
 
 
 class AudioRecorder:
     """
-    マイクから連続的に音声を読み取り、フレームごとにVADを実行し、
-    完全な音声セグメント（numpy float32配列）をコールバックで出力する  
+    マイクから連続的に音声を取得し、フレーム単位で VAD を実行する。  
+    完全な音声セグメントを `numpy.float32` 配列としてコールバックへ渡す。
     """
 
     def __init__(
@@ -47,7 +48,7 @@ class AudioRecorder:
         self._running = False
         self._stream: Optional[sd.InputStream] = None
         self._worker_thread: Optional[threading.Thread] = None
-        self._capture_rate: int = sample_rate  # may differ from sample_rate when resampling
+        self._capture_rate: int = sample_rate  # リサンプリング時は `sample_rate` と異なる場合がある。
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
 
@@ -61,21 +62,21 @@ class AudioRecorder:
         self._capture_rate = self.sample_rate
 
         self._stream = self._open_stream(self.input_device)
-        # stream is already started inside _open_stream
+        # ストリームは `_open_stream` 内ですでに開始されている。
 
         self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._worker_thread.start()
 
     def _open_stream(self, device) -> sd.InputStream:
-        """Open InputStream, trying multiple formats/rates until one works."""
-        # Determine the device's native sample rate for fallback
+        """利用可能な形式とサンプルレートを順に試しながら `InputStream` を開く。"""
+        # フォールバック用にデバイスのネイティブサンプルレートを取得する。
         try:
             dev_idx = device if device is not None else sd.default.device[0]
             native_rate = int(sd.query_devices(dev_idx)["default_samplerate"])
         except Exception:
             native_rate = 48000
 
-        # Ordered candidates: (rate, channels, dtype)
+        # 試行順は `(rate, channels, dtype)`。
         candidates = [
             (self.sample_rate, 1, "int16"),
             (native_rate,      1, "int16"),
@@ -83,7 +84,7 @@ class AudioRecorder:
             (native_rate,      1, "float32"),
             (native_rate,      2, "float32"),
         ]
-        # Deduplicate while preserving order
+        # 順序を保ったまま重複候補を除外する。
         seen_c: list = []
         for c in candidates:
             if c not in seen_c:
@@ -102,7 +103,7 @@ class AudioRecorder:
                 stream.start()
             except Exception:
                 try:
-                    stream.close()  # must release PortAudio resource before next attempt
+                    stream.close()  # 次の試行前に PortAudio リソースを必ず解放する。
                 except Exception:
                     pass
                 raise
@@ -131,14 +132,14 @@ class AudioRecorder:
 
     def _sd_callback(self, indata, frames, time_info, status):
         data = indata
-        # Stereo → mono
+        # ステレオ入力をモノラルへ変換する。
         if self._capture_channels == 2:
             mono = (data[:, 0].astype(np.float32) + data[:, 1].astype(np.float32)) / 2
             data = mono.reshape(-1, 1)
-        # float32 → int16
+        # `float32` 入力を `int16` に変換する。
         if self._capture_dtype == "float32":
             data = np.clip(data * 32768, -32768, 32767).astype(np.int16)
-        # Decimate if capture rate differs
+        # キャプチャレートが異なる場合は間引いて合わせる。
         if self._capture_rate != self.sample_rate:
             ratio = self._capture_rate // self.sample_rate
             data = data[::ratio]
@@ -164,7 +165,7 @@ class AudioRecorder:
                 self._buffer.append(frame.flatten().astype(np.float32) / 32768.0)
                 self._was_in_speech = True
             elif self._was_in_speech:
-                # 発話→無音への遷移：セグメントを出力
+                # 発話から無音へ遷移したのでセグメントを出力する。
                 if self._buffer:
                     segment = np.concatenate(self._buffer)
                     self._buffer.clear()
@@ -177,14 +178,14 @@ class AudioRecorder:
 
     @staticmethod
     def list_devices() -> list[dict]:
-        """Return input devices deduplicated by name, preferring WASAPI > WDM-KS > DirectSound > MME."""
+        """入力デバイスを名前単位で重複排除して返す。  優先順は WASAPI > WDM-KS > DirectSound > MME。"""
         _API_PREF = {"Windows WASAPI": 0, "Windows WDM-KS": 1, "Windows DirectSound": 2, "MME": 3}
         try:
             hostapis = sd.query_hostapis()
         except Exception:
             hostapis = []
 
-        seen: dict[str, dict] = {}  # name -> best entry so far
+        seen: dict[str, dict] = {}  # デバイス名ごとの最良候補を保持する。
         for i, d in enumerate(sd.query_devices()):
             if d["max_input_channels"] <= 0:
                 continue

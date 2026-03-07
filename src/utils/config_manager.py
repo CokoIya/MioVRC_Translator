@@ -1,40 +1,28 @@
-﻿"""Configuration file helpers."""
+"""設定ファイルの読み書きを扱う。"""
 
 import json
 import shutil
-import sys
 from pathlib import Path
 
-
-def _runtime_base_dirs() -> list[Path]:
-    """Return possible runtime roots (source mode + frozen mode)."""
-    if not getattr(sys, "frozen", False):
-        return [Path(__file__).resolve().parents[2]]
-
-    dirs = [Path(sys.executable).resolve().parent]
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        meipass_path = Path(meipass)
-        if meipass_path not in dirs:
-            dirs.append(meipass_path)
-    return dirs
+from src.utils.app_paths import resource_base_dirs, writable_app_dir
 
 
 def _config_path() -> Path:
-    # Keep config beside the EXE in frozen mode for easy user editing.
-    return _runtime_base_dirs()[0] / "config.json"
+    """パッケージ版ではユーザーごとの書き込み可能ディレクトリへ保存する。"""
+    return writable_app_dir() / "config.json"
 
 
 def _example_path() -> Path:
-    for base in _runtime_base_dirs():
+    """同梱された `config.example.json` の場所を返す。"""
+    for base in resource_base_dirs():
         candidate = base / "config.example.json"
         if candidate.exists():
             return candidate
-    return _runtime_base_dirs()[0] / "config.example.json"
+    return resource_base_dirs()[0] / "config.example.json"
 
 
 def load_config() -> dict:
-    """Load config.json. If missing, copy from config.example.json."""
+    """`config.json` を読み込む。  見つからない場合は `config.example.json` を複製する。"""
     config_path = _config_path()
     if not config_path.exists():
         example_path = _example_path()
@@ -48,7 +36,7 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
-    """Save config to config.json."""
+    """`config.json` を保存する。"""
     config_path = _config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
@@ -56,7 +44,7 @@ def save_config(config: dict) -> None:
 
 
 def get(config: dict, *keys, default=None):
-    """Safely fetch a nested key from dict."""
+    """ネストした辞書キーを安全に取得する。"""
     node = config
     for key in keys:
         if not isinstance(node, dict) or key not in node:
