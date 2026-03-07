@@ -1,10 +1,14 @@
-"""ASR インスタンスの生成を担当する。  対応モデルは Whisper Base と Small のみ。"""
+"""設定に応じて利用する ASR バックエンドを生成する。"""
 
-from src.asr.whisper_asr import ALLOWED_SIZES
+DEFAULT_ASR_ENGINE = "whisper-small"
+AVAILABLE_ASR_ENGINES = (
+    "whisper-small",
+    "sensevoice-small",
+)
 
 
 def _resolve_device(device: str) -> str:
-    """設定されたデバイスを解決する。  CUDA が使えない場合は安全に CPU へ戻す。"""
+    """CUDA が使えない場合は安全側で CPU へ戻す。"""
     if device != "cuda":
         return device
     try:
@@ -17,19 +21,21 @@ def _resolve_device(device: str) -> str:
 
 
 def create_asr(config: dict):
-    """設定から `WhisperASR` を生成する。  有効値は `whisper-base` と `whisper-small` のみ。"""
+    """設定から ASR 実装を選択する。  不明な値は Whisper Small へ寄せる。"""
     asr_cfg = config.get("asr", {})
-    engine = asr_cfg.get("engine", "whisper-base")
+    engine = asr_cfg.get("engine", DEFAULT_ASR_ENGINE)
     device = _resolve_device(asr_cfg.get("device", "cpu"))
+    if engine not in AVAILABLE_ASR_ENGINES:
+        engine = DEFAULT_ASR_ENGINE
 
-    # `whisper-` 接頭辞があれば外してから検証する。
-    if engine.startswith("whisper-"):
-        size = engine.split("-", 1)[1]
-    else:
-        size = "base"
-
-    if size not in ALLOWED_SIZES:
-        size = "base"
+    if engine == "sensevoice-small":
+        from src.asr.sensevoice_asr import SenseVoiceASR
+        sensevoice_cfg = asr_cfg.get("sensevoice", {})
+        return SenseVoiceASR(
+            device=device,
+            model_id=sensevoice_cfg.get("model_id", "iic/SenseVoiceSmall"),
+            model_revision=sensevoice_cfg.get("model_revision", "master"),
+        )
 
     from src.asr.whisper_asr import WhisperASR
-    return WhisperASR(model_size=size, device=device)
+    return WhisperASR(model_size="small", device=device)

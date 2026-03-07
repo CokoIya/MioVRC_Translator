@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
+import importlib.util
 import os
 import sys
 from pathlib import Path
 
 from PyInstaller.building.datastruct import TOC
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 
 _APPLOCAL_RUNTIME_OVERRIDES = {
@@ -66,30 +67,97 @@ def _sanitize_analysis_binaries(entries) -> TOC:
 
     return TOC(sanitized)
 
-datas = [('config.example.json', '.'), ('assets', 'assets')]
-if Path('models').exists():
-    datas.append(('models', 'models'))
+
+def _package_dir(package_name: str) -> Path | None:
+    spec = importlib.util.find_spec(package_name)
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return Path(next(iter(spec.submodule_search_locations)))
+
+
+def _append_package_tree(datas_list, package_name: str) -> None:
+    package_dir = _package_dir(package_name)
+    if package_dir is not None and package_dir.exists():
+        datas_list.append((str(package_dir), package_name.replace(".", "/")))
+
+
+def _append_metadata(datas_list, distribution_name: str) -> None:
+    try:
+        datas_list += copy_metadata(distribution_name)
+    except Exception:
+        pass
+
+
+datas = [("config.example.json", "."), ("assets", "assets")]
+models_root = Path("models")
+sensevoice_bundle_dir = models_root / "sensevoice-small"
+include_sensevoice_bundle = False
+
+if models_root.exists():
+    for model_dir in sorted(models_root.glob("whisper-*")):
+        if model_dir.is_dir():
+            datas.append((str(model_dir), f"models/{model_dir.name}"))
+    if sensevoice_bundle_dir.is_dir():
+        datas.append((str(sensevoice_bundle_dir), "models/sensevoice-small"))
+        include_sensevoice_bundle = True
+
 binaries = []
 hiddenimports = []
 
-tmp_ret = collect_all('faster_whisper')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('ctranslate2')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('huggingface_hub')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+for package_name in ("faster_whisper", "ctranslate2", "huggingface_hub"):
+    tmp_ret = collect_all(package_name)
+    datas += tmp_ret[0]
+    binaries += tmp_ret[1]
+    hiddenimports += tmp_ret[2]
+
+if include_sensevoice_bundle:
+    # Copy the package trees directly so the beta ASR stack stays importable
+    # without forcing PyInstaller to analyze thousands of torch submodules.
+    for package_name in ("funasr", "modelscope", "torch", "torchaudio", "torch_complex", "torchgen"):
+        _append_package_tree(datas, package_name)
+    for distribution_name in ("funasr", "modelscope", "torch", "torchaudio", "torch-complex"):
+        _append_metadata(datas, distribution_name)
 
 hiddenimports += [
-    'faster_whisper',
-    'ctranslate2',
-    'huggingface_hub',
-    'src.asr.factory',
-    'src.asr.model_manager',
-    'src.asr.whisper_asr',
+    "faster_whisper",
+    "ctranslate2",
+    "huggingface_hub",
+    "src.asr.factory",
+    "src.asr.model_manager",
+    "src.asr.sensevoice_asr",
+    "src.asr.sensevoice_model_manager",
+    "src.asr.whisper_asr",
+]
+
+excludes = [
+    "torch",
+    "torchaudio",
+    "funasr",
+    "modelscope",
+    "torch_complex",
+    "torchgen",
+    # これらの大型依存関係は推移的に取り込まれるが、実行時には使用しない。
+    "torchvision",
+    "tensorflow",
+    "keras",
+    "numba",
+    "llvmlite",
+    "scipy",
+    "sklearn",
+    "scikit_learn",
+    "matplotlib",
+    "IPython",
+    "ipykernel",
+    "ipywidgets",
+    "notebook",
+    "jupyter",
+    "pandas",
+    "lxml",
+    "aliyunsdkcore",
 ]
 
 a = Analysis(
-    ['main.py'],
+    ["main.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -97,20 +165,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        # これらの大型依存関係は推移的に取り込まれるが、実行時には使用しない。
-        'torch', 'torchvision', 'torchaudio',
-        'tensorflow', 'keras',
-        'numba', 'llvmlite',
-        'scipy',
-        'sklearn', 'scikit_learn',
-        'matplotlib',
-        'IPython', 'ipykernel', 'ipywidgets',
-        'notebook', 'jupyter',
-        'pandas',
-        'lxml',
-        'aliyunsdkcore',
-    ],
+    excludes=excludes,
     noarchive=False,
     optimize=0,
 )
@@ -122,7 +177,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='MioTranslator',
+    name="MioTranslator",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -133,7 +188,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/icons/app_icon_mio.ico',
+    icon="assets/icons/app_icon_mio.ico",
 )
 coll = COLLECT(
     exe,
@@ -142,5 +197,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='MioTranslator',
+    name="MioTranslator",
 )

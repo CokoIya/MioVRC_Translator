@@ -18,7 +18,7 @@
 
 ## 主要功能
 
-- 本地语音识别：基于 `faster-whisper`，支持 `whisper-base` 与 `whisper-small` 本地模型。
+- 本地语音识别：基于 `faster-whisper`，当前版本固定使用 `whisper-small` 以优先保证识别精度。
 - 多翻译后端：支持 OpenAI 兼容接口，也支持 Anthropic。
 - VRChat 集成：识别和翻译结果可直接发送到 VRChat 聊天框。
 - 反向翻译：监听聊天框文字并翻译为中文，在悬浮窗显示。
@@ -39,7 +39,7 @@ python main.py
 
 前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载最新安装包。
 
-- 安装包文件名：`MioTranslator-Setup-v1.1.6.exe`
+- 安装包文件名：`MioTranslator-Setup-v1.2.0-beta.exe`
 - 支持自定义安装路径
 - 默认安装目录：`%LocalAppData%\Programs\Mio RealTime Translator`
 - 安装完成后可创建桌面快捷方式
@@ -74,7 +74,7 @@ Action Menu -> Options -> OSC -> Enable
 | UI | CustomTkinter |
 | 音频采集 | sounddevice |
 | VAD | webrtcvad |
-| 语音识别 | faster-whisper / whisper-base / whisper-small |
+| 语音识别 | faster-whisper / whisper-small |
 | 翻译 | OpenAI SDK / Anthropic SDK |
 | VRChat 通信 | python-osc |
 

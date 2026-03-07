@@ -6,8 +6,14 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 webrtcvad>=2.0.10
 
-# ASR — faster-whisper (base and small only; models are pre-bundled)
+# ASR – faster-whisper (base and small only; models are pre-bundled)
 faster-whisper>=1.0.0
+
+# Experimental ASR – SenseVoiceSmall
+funasr>=1.3.1
+modelscope>=1.28.0
+torch>=2.7.0
+torchaudio>=2.7.0
 
 # Translation backends
 openai>=1.30.0        # covers OpenAI / DeepSeek / Qianwen / Custom

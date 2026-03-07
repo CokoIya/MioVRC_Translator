@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from src.utils.app_paths import project_root, resource_base_dirs, writable_app_dir
 
-ALLOWED_SIZES = ("base", "small")
+ALLOWED_SIZES = ("small",)
 _DOWNLOAD_LOCKS = {size: threading.Lock() for size in ALLOWED_SIZES}
 _REQUIRED_FILES = ("config.json", "model.bin")
 

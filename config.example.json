@@ -3,12 +3,29 @@
     "input_device": null,
     "vad_silence_threshold": 0.8,
     "vad_sensitivity": 2,
+    "vad_speech_ratio": 0.72,
+    "vad_activation_threshold_s": 0.24,
+    "vad_min_rms": 0.012,
+    "min_segment_s": 0.45,
+    "partial_min_speech_s": 0.45,
+    "max_segment_s": 12.0,
     "sample_rate": 16000,
     "frame_duration_ms": 30
   },
   "asr": {
     "device": "cpu",
-    "engine": "whisper-base"
+    "engine": "whisper-small",
+    "sensevoice": {
+      "model_id": "iic/SenseVoiceSmall",
+      "model_revision": "master"
+    },
+    "streaming": {
+      "chunk_interval_ms": 250,
+      "chunk_window_s": 1.6,
+      "ring_buffer_s": 4.0,
+      "recent_speech_hold_s": 0.8,
+      "partial_stability_hits": 2
+    }
   },
   "translation": {
     "backend": "openai",

@@ -13,6 +13,7 @@ import sounddevice as sd
 from src.utils import config_manager
 from src.audio.recorder import AudioRecorder
 from src.asr.factory import create_asr
+from src.asr.streaming_merger import StreamingMerger
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
 from src.osc.receiver import VRCOSCReceiver
@@ -93,6 +94,12 @@ class MainWindow(ctk.CTk):
         self._last_own_chatbox_echo_time = 0.0
 
         self._running = False
+        self._partial_worker_busy = False
+        self._partial_worker_lock = threading.Lock()
+        self._final_worker_lock = threading.Lock()
+        self._merge_lock = threading.Lock()
+        self._partial_generation = 0
+        self._partial_merger = self._create_streaming_merger()
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._current_src_lang: str | None = None  # `None` は自動判定を表す。
         self._float_win: FloatingWindow | None = None
@@ -362,14 +369,14 @@ class MainWindow(ctk.CTk):
 
     # ── 翻訳パネルの補助処理 ─────────────────────────────────────────────
 
-    def _set_source_text(self, text: str):
+    def _set_source_text(self, text: str, text_color: str | None = None):
         safe = (text or "").strip()
         if len(safe) > 500:
             safe = safe[:500]
         self._src_text = safe
 
         shown = safe or self._src_placeholder
-        color = TEXT_PRI if safe else TEXT_SEC
+        color = text_color or (TEXT_PRI if safe else TEXT_SEC)
 
         self._src_input.configure(state="normal")
         self._src_input.delete("1.0", "end")
@@ -675,6 +682,108 @@ class MainWindow(ctk.CTk):
             messagebox.showerror("翻译初始化失败", str(e))
             return False
 
+    def _get_output_format(self) -> str:
+        return self._config.get("translation", {}).get("output_format", "ja(zh)")
+
+    def _listening_requires_translation(self) -> bool:
+        return self._get_output_format() != "zh_only"
+
+    def _streaming_config(self) -> dict:
+        return self._config.get("asr", {}).get("streaming", {})
+
+    def _create_streaming_merger(self) -> StreamingMerger:
+        streaming_cfg = self._streaming_config()
+        return StreamingMerger(
+            stable_repeats=streaming_cfg.get("partial_stability_hits", 2)
+        )
+
+    def _reset_streaming_state(self):
+        self._partial_generation += 1
+        with self._partial_worker_lock:
+            self._partial_worker_busy = False
+        with self._merge_lock:
+            self._partial_merger.reset()
+
+    def _on_audio_chunk(self, audio):
+        if not self._running:
+            return
+
+        generation = self._partial_generation
+        asr_lang = self._current_src_lang
+        with self._partial_worker_lock:
+            if self._partial_worker_busy:
+                return
+            self._partial_worker_busy = True
+
+        threading.Thread(
+            target=self._process_partial_audio_chunk,
+            args=(audio, asr_lang, generation),
+            daemon=True,
+        ).start()
+
+    def _process_partial_audio_chunk(self, audio, asr_lang, generation: int):
+        try:
+            text = self._asr.transcribe(audio, language=asr_lang, is_final=False)
+            if not text or generation != self._partial_generation or not self._running:
+                return
+
+            with self._merge_lock:
+                merged = self._partial_merger.ingest_partial(text)
+            if merged and generation == self._partial_generation and self._running:
+                self.after(0, lambda t=merged, g=generation: self._show_partial_text(t, g))
+        except Exception:
+            pass
+        finally:
+            with self._partial_worker_lock:
+                self._partial_worker_busy = False
+
+    def _show_partial_text(self, text: str, generation: int):
+        if not self._running or generation != self._partial_generation or not text:
+            return
+        self._set_source_text(text, text_color=TEXT_SEC)
+
+    def _process_final_audio_segment(self, audio, asr_lang):
+        with self._final_worker_lock:
+            if not self._running:
+                return
+            try:
+                self.after(0, lambda: self._set_status("识别中…", ACCENT))
+                text = self._asr.transcribe(audio, language=asr_lang, is_final=True)
+                with self._merge_lock:
+                    text = self._partial_merger.ingest_final(text)
+                if not text:
+                    return
+
+                src_lang = asr_lang if asr_lang else detect_language(text)
+                tgt_lang = self._current_tgt_lang
+                fmt = self._get_output_format()
+
+                self.after(0, lambda t=text: self._set_source_text(t))
+
+                if fmt == "zh_only":
+                    chatbox_text = text
+                else:
+                    translated = self._translator.translate(text, src_lang, tgt_lang)
+                    if fmt == "ja_only":
+                        chatbox_text = translated
+                    elif fmt == "zh(ja)":
+                        chatbox_text = f"{text}（{translated}）"
+                    else:
+                        chatbox_text = f"{translated}（{text}）"
+                    self.after(0, lambda t=translated: self._show_tgt(t))
+
+                sent = self._sender.send_chatbox(chatbox_text)
+                self._own_msgs.add(sent)
+            except Exception as exc:
+                error_text = str(exc).strip() or exc.__class__.__name__
+                self.after(
+                    0,
+                    lambda m=error_text[:120]: self._set_bottom(f"语音处理失败：{m}"),
+                )
+            finally:
+                if self._running:
+                    self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
+
     def _on_own_chatbox_echo(self, text: str):
         self._last_own_chatbox_echo_text = text
         self._last_own_chatbox_echo_time = time.time()
@@ -815,6 +924,7 @@ class MainWindow(ctk.CTk):
     def _start(self):
         self._set_status("正在准备语音…", ACCENT)
         self._start_btn.configure(state="disabled")
+        self._reset_streaming_state()
         # ワーカースレッドへ渡す前に、Tkinter 変数はメインスレッドで読み出しておく。
         dev_name = self._device_var.get()
         dev_idx = self._devices.get(dev_name)
@@ -822,10 +932,13 @@ class MainWindow(ctk.CTk):
 
     def _init_and_run(self, dev_idx):
         try:
-            try:
-                self._translator = create_translator(self._config)
-            except ValueError:
-                raise RuntimeError("您还没有设置API，请先在设置中填写")
+            if self._listening_requires_translation():
+                try:
+                    self._translator = create_translator(self._config)
+                except ValueError:
+                    raise RuntimeError("您还没有设置API，请先在设置中填写")
+            else:
+                self._translator = None
             self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
             osc_cfg = self._config.get("osc", {})
             self._sender = VRCOSCSender(
@@ -834,14 +947,26 @@ class MainWindow(ctk.CTk):
             )
             self._ensure_receiver_started()
             audio_cfg = self._config.get("audio", {})
+            streaming_cfg = self._streaming_config()
             self._recorder = AudioRecorder(
                 on_segment=self._on_audio_segment,
+                on_chunk=self._on_audio_chunk,
                 sample_rate=audio_cfg.get("sample_rate", 16000),
                 frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
                 vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
                 silence_threshold_s=audio_cfg.get("vad_silence_threshold", 0.8),
+                vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
+                vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
+                vad_min_rms=audio_cfg.get("vad_min_rms", 0.012),
+                min_segment_s=audio_cfg.get("min_segment_s", 0.45),
+                partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
+                max_segment_s=audio_cfg.get("max_segment_s", 12.0),
                 input_device=dev_idx,
                 on_vad_state=self._on_vad_state,
+                chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
+                chunk_window_s=streaming_cfg.get("chunk_window_s", 1.6),
+                ring_buffer_s=streaming_cfg.get("ring_buffer_s", 4.0),
+                recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
             )
             self._recorder.start()
             self._running = True
@@ -852,6 +977,7 @@ class MainWindow(ctk.CTk):
 
     def _stop(self):
         self._running = False
+        self._reset_streaming_state()
         if self._recorder:
             self._recorder.stop()
             self._recorder = None
@@ -891,48 +1017,20 @@ class MainWindow(ctk.CTk):
     def _on_audio_segment(self, audio):
         if not self._running:
             return
-        try:
-            self.after(0, lambda: self._set_status("识别中…", ACCENT))
-            asr_lang = self._current_src_lang  # `None` は自動判定
-            text = self._asr.transcribe(audio, language=asr_lang)
-            if not text:
-                return
-            # 入力言語が明示指定されている場合はそれを優先し、
-            # 未指定なら文字起こし結果から判定する。
-            src_lang = asr_lang if asr_lang else detect_language(text)
-            tgt_lang = self._current_tgt_lang
-            fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
-
-            # 認識結果を入力パネルへ反映する。  UI 更新は `after` 経由で行う。
-            self.after(0, lambda t=text: self._set_source_text(t))
-
-            if fmt == "zh_only":
-                chatbox_text = text
-            else:
-                translated = self._translator.translate(text, src_lang, tgt_lang)
-                if fmt == "ja_only":
-                    chatbox_text = translated
-                elif fmt == "zh(ja)":
-                    chatbox_text = f"{text}（{translated}）"
-                else:
-                    chatbox_text = f"{translated}（{text}）"
-                # 翻訳結果を出力パネルへ反映する。
-                self.after(0, lambda t=translated: self._show_tgt(t))
-
-            sent = self._sender.send_chatbox(chatbox_text)
-            self._own_msgs.add(sent)
-        except Exception:
-            pass
-        finally:
-            if self._running:
-                self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
+        self._partial_generation += 1
+        asr_lang = self._current_src_lang
+        threading.Thread(
+            target=self._process_final_audio_segment,
+            args=(audio, asr_lang),
+            daemon=True,
+        ).start()
 
     # ── 受信チャットボックス  逆翻訳してフローティングウィンドウへ表示 ─────
 
     def _on_incoming_chatbox(self, text: str):
         try:
             src_lang = detect_language(text)
-            if src_lang == "zh":
+            if src_lang == "zh" or self._translator is None:
                 self.after(0, lambda: self._show_incoming(text, None))
                 return
             translated = self._translator.translate(text, src_lang, "zh")
@@ -964,9 +1062,19 @@ class MainWindow(ctk.CTk):
         SettingsWindow(self, self._config, on_save=self._on_config_saved)
 
     def _on_config_saved(self, new_cfg: dict):
+        was_running = self._running
+        if was_running:
+            self._stop()
+
         self._config = new_cfg
         self._asr = create_asr(new_cfg)
         self._translator = None
+        self._tgt_var.set(new_cfg.get("translation", {}).get("target_language", "ja"))
+        with self._merge_lock:
+            self._partial_merger = self._create_streaming_merger()
+        self._reset_streaming_state()
+        if was_running:
+            self._set_bottom("设置已更新，请重新点击开始监听以应用新配置")
 
     # ── 補助処理 ──────────────────────────────────────────────────────────
 
