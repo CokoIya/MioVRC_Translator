@@ -19,8 +19,7 @@ TEXT_SEC = "#686880"
 BACKENDS = ["openai", "deepseek", "qianwen", "anthropic", "custom"]
 
 ASR_ENGINES = [
-    ("Whisper Small（稳定）", "whisper-small"),
-    ("SenseVoice Small（实验性）", "sensevoice-small"),
+    ("SenseVoice Small (实用性)", "sensevoice-small"),
 ]
 
 TARGET_LANGS = [
@@ -41,12 +40,9 @@ OUTPUT_FORMATS = [
 ]
 
 ASR_HINTS = {
-    "whisper-small": (
-        "Whisper Small 是当前默认的稳定后端。  如果安装包内已附带模型，用户可以直接开始监听。"
-    ),
     "sensevoice-small": (
-        "SenseVoice Small 属于实验性后端。  首次启用时会按需下载模型并使用分块识别与 partial 合并。  "
-        "如果发布包未包含 SenseVoice 运行依赖，将无法启用此项。"
+        "SenseVoice Small 是当前测试版默认后端。  安装包若已内置模型，可直接开始监听。  "
+        "如果未内置模型，仍会回退到首次自动下载。"
     ),
 }
 
@@ -170,7 +166,7 @@ class SettingsWindow(ctk.CTkToplevel):
         asr_labels = [label for label, _ in ASR_ENGINES]
         self._asr_codes = {label: code for label, code in ASR_ENGINES}
         self._asr_reverse = {code: label for label, code in ASR_ENGINES}
-        current_engine = asr_cfg.get("engine", "whisper-small")
+        current_engine = asr_cfg.get("engine", "sensevoice-small")
         self._asr_var = ctk.StringVar(
             value=self._asr_reverse.get(current_engine, asr_labels[0])
         )
@@ -317,7 +313,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
     def _on_asr_change(self, selected_label: str):
         """ASR 選択に応じて説明文を切り替える。"""
-        engine = self._asr_codes.get(selected_label, "whisper-small")
+        engine = self._asr_codes.get(selected_label, "sensevoice-small")
         self._asr_hint_label.configure(text=ASR_HINTS.get(engine, ""))
 
     def _on_output_format_change(self, _selected_label: str):
@@ -372,7 +368,7 @@ class SettingsWindow(ctk.CTkToplevel):
         backend = self._backend_var.get()
         target_lang = self._lang_codes.get(self._lang_var.get(), "ja")
         output_format = self._fmt_codes.get(self._fmt_var.get(), "ja(zh)")
-        asr_engine = self._asr_codes.get(self._asr_var.get(), "whisper-small")
+        asr_engine = self._asr_codes.get(self._asr_var.get(), "sensevoice-small")
 
         try:
             vad_threshold = self._parse_positive_float(self._vad_var.get(), "VAD 静音阈值")

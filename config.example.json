@@ -14,7 +14,7 @@
   },
   "asr": {
     "device": "cpu",
-    "engine": "whisper-small",
+    "engine": "sensevoice-small",
     "sensevoice": {
       "model_id": "iic/SenseVoiceSmall",
       "model_revision": "master"

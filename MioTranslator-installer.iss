@@ -1,7 +1,7 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "1.2.0-beta"
+#define AppVersion "1.2.0-beta2"
 #define AppPublisher "酒寄 みお"
 #define AppURL "https://78hejiu.top"
 #define AppExeName "MioTranslator.exe"
