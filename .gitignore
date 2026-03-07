@@ -9,7 +9,6 @@ dist/
 build/
 .modelscope/
 .tmp/
-.vendor/
 runtime_cache/
 runtime_models/
 models/

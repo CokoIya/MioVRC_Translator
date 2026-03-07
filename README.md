@@ -34,17 +34,16 @@ python download_models.py
 python main.py
 ```
 
-### 使用 Windows 安装包
+### 使用 Windows 完整 ZIP 包
 
-前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载最新安装包。
+前往 [Releases](https://github.com/CokoIya/MioVRC_Translator/releases) 下载最新完整压缩包。
 
-- 安装包文件名：`MioTranslator-Setup-v1.2.0-beta2.exe`
-- 支持自定义安装路径
-- 默认安装目录：`%LocalAppData%\Programs\Mio RealTime Translator`
-- 安装完成后可创建桌面快捷方式
+- 压缩包文件名：`MioTranslator-v1.2.0-beta2-full.zip`
+- 解压到任意目录后，运行 `MioTranslator.exe`
 - 无需单独安装 Python
+- 不经过安装器，避免安装阶段遗漏运行时依赖
 
-> 源码运行前需要先执行 `python download_models.py`，将 `SenseVoice Small` 下载到项目根目录的 `models/` 中。当前测试版安装包默认内置 `SenseVoice Small`；如果你自行精简安装包未附带模型，首次点击“开始监听”时也会自动下载到当前用户目录。
+> 源码运行前需要先执行 `python download_models.py`，将 `SenseVoice Small` 下载到项目根目录的 `models/` 中。当前测试版完整 ZIP 默认内置 `SenseVoice Small`；如果你自行精简压缩包未附带模型，首次点击“开始监听”时也会自动下载到当前用户目录。
 
 ## 配置说明
 
