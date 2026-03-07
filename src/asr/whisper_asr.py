@@ -69,13 +69,17 @@ class WhisperASR:
             if progress_callback:
                 progress_callback("模型加载完成")
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
-        """Transcribe float32 mono audio array."""
+    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000,
+                   language: Optional[str] = None) -> str:
+        """Transcribe float32 mono audio array.
+
+        language: ISO-639-1 code (e.g. 'ja', 'zh', 'en') or None for auto-detect.
+        """
         if self._model is None:
             self.load()
         with self._lock:
             segments, _ = self._model.transcribe(
-                audio, beam_size=5, language=None, vad_filter=True
+                audio, beam_size=5, language=language, vad_filter=True
             )
             return "".join(s.text for s in segments).strip()
 

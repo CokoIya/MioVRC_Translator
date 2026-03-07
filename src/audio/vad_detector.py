@@ -13,7 +13,7 @@ class VADDetector:
         frame_duration_ms: int = 30,
         sensitivity: int = 2,
         silence_threshold_s: float = 0.8,
-        speech_ratio: float = 0.75,
+        speech_ratio: float = 0.50,
     ):
         assert sample_rate in (8000, 16000, 32000, 48000)
         assert frame_duration_ms in (10, 20, 30)

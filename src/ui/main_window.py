@@ -94,6 +94,7 @@ class MainWindow(ctk.CTk):
 
         self._running = False
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
+        self._current_src_lang: str | None = None  # None = auto-detect
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
@@ -223,6 +224,8 @@ class MainWindow(ctk.CTk):
         self._tgt_lang_label.pack(side="left", padx=12)
         self._tgt_var.trace_add("write", self._on_tgt_lang_change)
         self._on_tgt_lang_change()
+        self._src_lang_var.trace_add("write", self._on_src_lang_change)
+        self._on_src_lang_change()
 
         # ── テキストエリア行 ────────────────────────────────────────────────
         text_row = ctk.CTkFrame(outer, fg_color=BG_PANEL, corner_radius=0)
@@ -433,6 +436,12 @@ class MainWindow(ctk.CTk):
         self._src_lang_menu.configure(values=values)
         if self._src_lang_var.get() not in values:
             self._src_lang_var.set(values[0])
+
+    def _on_src_lang_change(self, *_):
+        """Cache the selected source language for thread-safe ASR use."""
+        label = self._src_lang_var.get()
+        code = self._src_lang_codes.get(label, "auto")
+        self._current_src_lang = None if code == "auto" else code
 
     def _swap_langs(self):
         """入出力テキストを入れ替える"""
@@ -743,7 +752,8 @@ class MainWindow(ctk.CTk):
             result = self._translator.translate(text, src_lang, tgt_lang)
             self.after(0, lambda: self._show_tgt(result))
         except Exception as e:
-            self.after(0, lambda: self._show_tgt(f"[错误] {e}"))
+            msg = str(e)
+            self.after(0, lambda: self._show_tgt(f"[错误] {msg}"))
         finally:
             self.after(0, self._reset_translate_btn)
 
@@ -771,7 +781,28 @@ class MainWindow(ctk.CTk):
         if cfg_dev and cfg_dev in self._devices:
             self._device_var.set(cfg_dev)
         else:
-            self._device_var.set(names[0])
+            preferred = self._get_system_default_input(devices, names)
+            self._device_var.set(preferred)
+
+    @staticmethod
+    def _get_system_default_input(devices: list[dict], names: list[str]) -> str:
+        """Return the name of the system's current default input device (WASAPI-preferred)."""
+        try:
+            default_idx = sd.default.device[0]  # index 0 = input
+            if default_idx is not None and default_idx >= 0:
+                default_name = sd.query_devices(default_idx)["name"]
+                # Find the best API instance of that device name in our deduplicated list.
+                match = next((d["name"] for d in devices if d["name"] == default_name), None)
+                if match and match in names:
+                    return match
+        except Exception:
+            pass
+        # Fallback: skip known Windows loopback/monitor devices.
+        _SKIP = ("microsoft 映射", "microsoft sound mapper", "立体声混音", "stereo mix")
+        return next(
+            (n for n in names if not any(s in n.lower() for s in _SKIP)),
+            names[0],
+        )
 
     # ── 音声リスニング 開始 / 停止 ──────────────────────────────────────────
 
@@ -810,12 +841,14 @@ class MainWindow(ctk.CTk):
                 vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
                 silence_threshold_s=audio_cfg.get("vad_silence_threshold", 0.8),
                 input_device=dev_idx,
+                on_vad_state=self._on_vad_state,
             )
             self._recorder.start()
             self._running = True
             self.after(0, self._on_started)
         except Exception as e:
-            self.after(0, lambda: self._on_start_error(str(e)))
+            msg = str(e)
+            self.after(0, lambda: self._on_start_error(msg))
 
     def _stop(self):
         self._running = False
@@ -846,18 +879,32 @@ class MainWindow(ctk.CTk):
         )
         messagebox.showerror("启动失败", msg)
 
+    def _on_vad_state(self, in_speech: bool):
+        """Called from the recorder thread when VAD state changes."""
+        if in_speech:
+            self.after(0, lambda: self._set_status("正在说话…", ACCENT))
+        else:
+            self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
+
     # ── 音声セグメントハンドラ（ログなし・VRC送信のみ） ─────────────────────
 
     def _on_audio_segment(self, audio):
         if not self._running:
             return
         try:
-            text = self._asr.transcribe(audio)
+            self.after(0, lambda: self._set_status("识别中…", ACCENT))
+            asr_lang = self._current_src_lang  # None = auto-detect
+            text = self._asr.transcribe(audio, language=asr_lang)
             if not text:
                 return
-            src_lang = detect_language(text)
+            # If the user selected an explicit source language, trust it;
+            # otherwise detect from the transcribed text.
+            src_lang = asr_lang if asr_lang else detect_language(text)
             tgt_lang = self._current_tgt_lang
             fmt = self._config.get("translation", {}).get("output_format", "ja(zh)")
+
+            # Show recognised text in the source panel (thread-safe via after).
+            self.after(0, lambda t=text: self._set_source_text(t))
 
             if fmt == "zh_only":
                 chatbox_text = text
@@ -869,11 +916,16 @@ class MainWindow(ctk.CTk):
                     chatbox_text = f"{text}（{translated}）"
                 else:
                     chatbox_text = f"{translated}（{text}）"
+                # Show translation in the target panel.
+                self.after(0, lambda t=translated: self._show_tgt(t))
 
             sent = self._sender.send_chatbox(chatbox_text)
             self._own_msgs.add(sent)
         except Exception:
             pass
+        finally:
+            if self._running:
+                self.after(0, lambda: self._set_status("● 监听中…", SUCCESS))
 
     # ── 受信チャットボックス（逆翻訳・フローティングウィンドウに表示） ───────
 
