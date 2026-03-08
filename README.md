@@ -1,5 +1,19 @@
 # Mio RealTime Translator
 
+> [!IMPORTANT]
+> ## 下载说明
+> 为了保证识别精度和速度，未使用在线流式 STT，且为了避免网络不好的用户卡在模型下载阶段，我将模型整个打包在了 ZIP，无法使用 Inno Setup 顺利编译 EXE 安装包。
+>
+> 现在完整的文件下载方式将通过 QQ 群文件和 123 网盘上传并提供下载，如需下载文件可以进群。
+>
+> **QQ 1 群：`1077205718`**
+>
+> **QQ 2 群：`756274989`**
+>
+> **123 网盘链接群内实时更新。**
+>
+> **后续 Releases 提供的版本均为无模型文件版本，需要主动下载。**
+
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./docs/README.en.md)

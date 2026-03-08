@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import threading
 from typing import Optional
 
@@ -17,6 +18,35 @@ from src.asr.sensevoice_model_manager import (
 )
 
 _LANGUAGE_MAP = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko", "yue": "yue"}
+
+
+def _dependency_error_message(exc: Exception) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    if getattr(sys, "frozen", False):
+        return (
+            f"当前发布包缺少 SenseVoice 运行依赖：{detail}。"
+            "  请重新下载完整发布包，或使用当前 MioTranslator.spec 重新打包。"
+        )
+    return (
+        f"当前环境缺少 SenseVoice 依赖：{detail}。"
+        "  请先执行 pip install -r requirements.txt。"
+    )
+
+
+def _load_runtime_symbols():
+    from funasr import AutoModel
+    from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+    return AutoModel, rich_transcription_postprocess
+
+
+def validate_runtime_dependencies() -> tuple[bool, str]:
+    try:
+        auto_model_cls, _ = _load_runtime_symbols()
+    except (ImportError, OSError) as exc:
+        return False, _dependency_error_message(exc)
+
+    return True, f"SenseVoice runtime imports OK: {auto_model_cls.__module__}.AutoModel"
 
 
 class SenseVoiceASR:
@@ -40,12 +70,9 @@ class SenseVoiceASR:
             if self._model is not None:
                 return
             try:
-                from funasr import AutoModel
-                from funasr.utils.postprocess_utils import rich_transcription_postprocess
-            except ImportError as exc:
-                raise RuntimeError(
-                    "缺少 FunASR 依赖。  请先安装 funasr、modelscope、torch、torchaudio。"
-                ) from exc
+                AutoModel, rich_transcription_postprocess = _load_runtime_symbols()
+            except (ImportError, OSError) as exc:
+                raise RuntimeError(_dependency_error_message(exc)) from exc
 
             if not model_exists(self.model_id):
                 ensure_model(

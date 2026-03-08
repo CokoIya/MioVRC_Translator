@@ -73,13 +73,26 @@ if sensevoice_bundle_dir.is_dir():
 binaries = []
 hiddenimports = []
 
-for package_name in ("funasr", "modelscope", "torch", "torchaudio"):
+for package_name in (
+    "funasr",
+    "modelscope",
+    "torch",
+    "torchaudio",
+    "pydantic",
+    "pydantic_core",
+    "typing_inspection",
+    "annotated_types",
+    "rich",
+    "markdown_it",
+    "mdurl",
+):
     tmp_ret = collect_all(package_name)
     datas += tmp_ret[0]
     binaries += tmp_ret[1]
     hiddenimports += tmp_ret[2]
 
 hiddenimports += [
+    "typing_extensions",
     "src.asr.factory",
     "src.asr.sensevoice_asr",
     "src.asr.sensevoice_model_manager",
@@ -116,7 +129,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["src/runtime_hooks/pyi_rth_bundle_paths.py"],
     excludes=excludes,
     noarchive=False,
     optimize=0,
