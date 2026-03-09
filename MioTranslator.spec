@@ -65,9 +65,10 @@ def _sanitize_analysis_binaries(entries) -> TOC:
 
     return TOC(sanitized)
 datas = [("config.example.json", "."), ("assets", "assets")]
+bundle_models = os.environ.get("MIO_TRANSLATOR_BUNDLE_MODELS", "0") == "1"
 models_root = Path("models")
 sensevoice_bundle_dir = models_root / "sensevoice-small"
-if sensevoice_bundle_dir.is_dir():
+if bundle_models and sensevoice_bundle_dir.is_dir():
     datas.append((str(sensevoice_bundle_dir), "models/sensevoice-small"))
 
 binaries = []

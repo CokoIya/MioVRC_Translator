@@ -1,4 +1,4 @@
-"""SenseVoiceSmall の同梱配置と初回ダウンロードを管理する  """
+"""Manage bundled and runtime-downloaded SenseVoiceSmall model files."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ MODEL_REVISION = "master"
 BUNDLED_DIR_NAME = "sensevoice-small"
 _DOWNLOAD_LOCK = threading.Lock()
 
-ProgressCallback = Callable[[str], None]
+ProgressCallback = Callable[[dict[str, object]], None]
 
 
 def _model_slug(model_id: str) -> str:
@@ -23,13 +23,11 @@ def _model_slug(model_id: str) -> str:
 
 def bundled_model_dirs(model_id: str = MODEL_ID) -> list[pathlib.Path]:
     slug = _model_slug(model_id)
-    return [
-        base / "models" / BUNDLED_DIR_NAME
-        for base in resource_base_dirs()
-    ] + [
-        base / "models" / slug
-        for base in resource_base_dirs()
-    ]
+    dirs: list[pathlib.Path] = []
+    for base in resource_base_dirs():
+        dirs.append(base / "models" / BUNDLED_DIR_NAME)
+        dirs.append(base / "models" / slug)
+    return dirs
 
 
 def packaging_models_dir() -> pathlib.Path:
@@ -84,8 +82,120 @@ def resolve_model_path(model_id: str = MODEL_ID) -> str:
     if path is not None:
         return str(path)
     raise FileNotFoundError(
-        f"未找到可用的 SenseVoiceSmall 模型。  首次使用时会自动下载到：{model_dir(model_id)}"
+        f"SenseVoiceSmall model not found. It will be downloaded to: {model_dir(model_id)}"
     )
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    *,
+    stage: str,
+    message: str,
+    progress: float | None = None,
+    indeterminate: bool = False,
+    total_bytes: int | None = None,
+    downloaded_bytes: int | None = None,
+) -> None:
+    if progress_callback is None:
+        return
+    event: dict[str, object] = {
+        "stage": stage,
+        "message": message,
+        "indeterminate": indeterminate,
+    }
+    if progress is not None:
+        event["progress"] = max(0.0, min(float(progress), 1.0))
+    if total_bytes is not None:
+        event["total_bytes"] = int(total_bytes)
+    if downloaded_bytes is not None:
+        event["downloaded_bytes"] = int(downloaded_bytes)
+    progress_callback(event)
+
+
+def _try_remote_model_size(model_id: str, model_revision: str) -> int | None:
+    try:
+        from modelscope.hub.api import HubApi
+    except ImportError:
+        return None
+
+    try:
+        api = HubApi()
+        endpoint = api.get_endpoint_for_read(repo_id=model_id, repo_type="model")
+        cookies = api.get_cookies()
+        revision_detail = api.get_valid_revision_detail(
+            model_id,
+            revision=model_revision,
+            cookies=cookies,
+            endpoint=endpoint,
+        )
+        revision = revision_detail["Revision"]
+        repo_files = api.get_model_files(
+            model_id=model_id,
+            revision=revision,
+            recursive=True,
+            use_cookies=False if cookies is None else cookies,
+            headers={"Snapshot": "True"},
+            endpoint=endpoint,
+        )
+    except Exception:
+        return None
+
+    total_size = 0
+    for repo_file in repo_files:
+        if repo_file.get("Type") == "tree":
+            continue
+        total_size += int(repo_file.get("Size") or 0)
+    return total_size or None
+
+
+class _AggregateDownloadProgress:
+    def __init__(
+        self,
+        total_bytes: int | None,
+        progress_callback: ProgressCallback | None,
+    ) -> None:
+        self.total_bytes = int(total_bytes or 0)
+        self.progress_callback = progress_callback
+        self.downloaded_bytes = 0
+        self._lock = threading.Lock()
+
+    def update(self, delta_bytes: int) -> None:
+        if delta_bytes <= 0:
+            return
+        with self._lock:
+            self.downloaded_bytes += delta_bytes
+            total_bytes = self.total_bytes
+            downloaded_bytes = self.downloaded_bytes
+
+        if total_bytes > 0:
+            progress = min(downloaded_bytes / total_bytes, 0.999)
+            _emit_progress(
+                self.progress_callback,
+                stage="download",
+                message="downloading",
+                progress=progress,
+                total_bytes=total_bytes,
+                downloaded_bytes=downloaded_bytes,
+            )
+            return
+
+        _emit_progress(
+            self.progress_callback,
+            stage="download",
+            message="downloading",
+            indeterminate=True,
+            downloaded_bytes=downloaded_bytes,
+        )
+
+    def finish(self) -> None:
+        _emit_progress(
+            self.progress_callback,
+            stage="download_complete",
+            message="download_complete",
+            progress=1.0,
+            total_bytes=self.total_bytes or None,
+            downloaded_bytes=self.downloaded_bytes or None,
+        )
 
 
 def _download_model_to(
@@ -95,18 +205,36 @@ def _download_model_to(
     progress_callback: ProgressCallback | None = None,
 ) -> pathlib.Path:
     try:
+        from modelscope.hub.callback import ProgressCallback as ModelscopeProgressCallback
         from modelscope.hub.snapshot_download import snapshot_download
     except ImportError as exc:
         raise RuntimeError(
-            "缺少 modelscope 依赖，无法下载 SenseVoiceSmall 模型。"
+            "modelscope is required to download the SenseVoiceSmall model."
         ) from exc
 
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     modelscope_cache = cache_dir()
     modelscope_cache.mkdir(parents=True, exist_ok=True)
 
-    if progress_callback:
-        progress_callback("正在下载 SenseVoiceSmall 模型…")
+    total_bytes = _try_remote_model_size(model_id, model_revision)
+    tracker = _AggregateDownloadProgress(total_bytes, progress_callback)
+
+    class _ModelscopeProgress(ModelscopeProgressCallback):
+        def update(self, size: int):
+            tracker.update(size)
+
+        def end(self):
+            return None
+
+    _emit_progress(
+        progress_callback,
+        stage="download_prepare",
+        message="download_prepare",
+        progress=0.0 if total_bytes else None,
+        indeterminate=not total_bytes,
+        total_bytes=total_bytes,
+        downloaded_bytes=0,
+    )
 
     try:
         snapshot_download(
@@ -115,16 +243,17 @@ def _download_model_to(
             cache_dir=str(modelscope_cache),
             local_dir=str(target_dir),
             enable_file_lock=True,
+            progress_callbacks=[_ModelscopeProgress],
         )
     except Exception as exc:
-        raise RuntimeError(f"SenseVoiceSmall 模型下载失败：{exc}") from exc
+        raise RuntimeError(f"SenseVoiceSmall model download failed: {exc}") from exc
 
     if not _is_complete_model_dir(target_dir):
-        raise RuntimeError(f"SenseVoiceSmall 模型下载完成后仍不完整：{target_dir}")
+        raise RuntimeError(
+            f"SenseVoiceSmall model download finished but the directory is incomplete: {target_dir}"
+        )
 
-    if progress_callback:
-        progress_callback("SenseVoiceSmall 模型下载完成")
-
+    tracker.finish()
     return target_dir
 
 

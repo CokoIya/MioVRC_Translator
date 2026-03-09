@@ -15,12 +15,13 @@ from src.utils.i18n import tr
 from src.utils.ui_config import (
     MANUAL_SOURCE_LANGUAGE_OPTIONS,
     TARGET_LANGUAGE_OPTIONS,
-    get_target_language_name,
+    UI_LANGUAGE_OPTIONS,
     get_ui_language,
     normalize_output_format,
 )
 from src.audio.recorder import AudioRecorder
 from src.asr.factory import create_asr
+from src.asr.sensevoice_model_manager import ensure_model, model_exists
 from src.asr.streaming_merger import StreamingMerger
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
@@ -74,9 +75,8 @@ class MainWindow(ctk.CTk):
         self._config = config
         self._ui_lang = get_ui_language(config)
         self.title(tr(self._ui_lang, "window_title"))
-        # 旧サイズ 620x560 から  幅を 20   拡張し高さを 30   縮小している  
-        self.geometry("744x400")
-        self.minsize(620, 320)
+        self.geometry("860x500")
+        self.minsize(760, 450)
         self.configure(fg_color=BG_PRIMARY)
 
         # 起動時に必要な主要オブジェクト  
@@ -107,11 +107,21 @@ class MainWindow(ctk.CTk):
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
         self._window_icon: PhotoImage | None = None
+        self._status_text = self._t("status_ready")
+        self._status_color = SUCCESS
+        self._bottom_text = self._t("model_unloaded")
+        self._bottom_progress_visible = False
+        self._bottom_progress_value = 0.0
+        self._bottom_progress_indeterminate = False
+        self._bottom_progress_running = False
+        self._model_prepare_running = False
 
         self._set_window_icon()
 
         self._build()
         self._load_devices()
+        self.after(180, self._position_near_float_window)
+        self.after(420, self._maybe_prepare_runtime_model)
         self.after(300, self._maybe_show_osc_guide)
 
     def _t(self, key: str, **kwargs) -> str:
@@ -120,74 +130,103 @@ class MainWindow(ctk.CTk):
     # ── UI 構築 ────────────────────────────────────────────────────────────
 
     def _build(self):
-        # ── 上部バー  タイトルと主要操作をまとめる ─────────────────────────
-        top = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_TOP)
-        top.pack(fill="x")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        header = ctk.CTkFrame(self, corner_radius=0, fg_color=BG_TOP)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            top, text=self._t("creator_banner"),
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=TEXT_PRI,
-        ).pack(side="left", padx=14, pady=7)
+            header,
+            text=self._t("creator_banner"),
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=TEXT_PRI,
+            justify="left",
+            wraplength=900,
+        ).grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
 
-        # 右側の操作ボタン群
-        ctk.CTkButton(
-            top, text=self._t("settings_button"), width=88,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=10, text_color=TEXT_PRI,
-            command=self._open_settings,
-        ).pack(side="right", padx=6, pady=5)
-
-        ctk.CTkButton(
-            top, text=self._t("guide_button"), width=92,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=10, text_color=TEXT_PRI,
-            command=self._open_osc_guide,
-        ).pack(side="right", padx=4, pady=5)
-
-        self._float_btn = ctk.CTkButton(
-            top, text=self._t("floating_hidden"), width=88,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=10, text_color=TEXT_PRI,
-            command=self._toggle_float,
-        )
-        self._float_btn.pack(side="right", padx=2, pady=5)
-
-        self._start_btn = ctk.CTkButton(
-            top, text=self._t("start_listening"), width=110,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            corner_radius=10, text_color="#ffffff",
-            command=self._toggle_listening,
-        )
-        self._start_btn.pack(side="right", padx=6, pady=5)
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        actions.grid_columnconfigure(0, weight=1)
 
         self._status_label = ctk.CTkLabel(
-            top, text="● 就绪", text_color=SUCCESS,
+            actions,
+            text=self._status_text,
+            text_color=self._status_color,
             font=ctk.CTkFont(size=12),
         )
-        self._status_label.pack(side="right", padx=8)
+        self._status_label.grid(row=0, column=0, sticky="w")
 
-        # ── マイク設定と翻訳先設定を 1 行にまとめる ───────────────────────
-        bar = ctk.CTkFrame(self, fg_color=BG_SECONDARY, corner_radius=0)
-        bar.pack(fill="x")
+        action_buttons = ctk.CTkFrame(actions, fg_color="transparent")
+        action_buttons.grid(row=0, column=1, sticky="e")
 
+        self._start_btn = ctk.CTkButton(
+            action_buttons,
+            text=self._t("start_listening"),
+            width=134,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            corner_radius=10,
+            text_color="#ffffff",
+            command=self._toggle_listening,
+        )
+        self._start_btn.pack(side="right", padx=(8, 0))
+
+        ctk.CTkButton(
+            action_buttons,
+            text=self._t("settings_button"),
+            width=116,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            command=self._open_settings,
+        ).pack(side="right", padx=(8, 0))
+
+        ctk.CTkButton(
+            action_buttons,
+            text=self._t("guide_button"),
+            width=112,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            command=self._open_osc_guide,
+        ).pack(side="right", padx=(8, 0))
+
+        controls = ctk.CTkFrame(self, fg_color=BG_SECONDARY, corner_radius=0)
+        controls.grid(row=1, column=0, sticky="ew")
+        controls.grid_columnconfigure(0, weight=1)
+        controls.grid_columnconfigure(1, weight=0)
+
+        mic_group = ctk.CTkFrame(controls, fg_color="transparent")
+        mic_group.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=6)
         ctk.CTkLabel(
-            bar, text="麦克风：", text_color=TEXT_SEC, font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(12, 2), pady=5)
+            mic_group,
+            text=self._t("microphone"),
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         self._device_var = ctk.StringVar()
         self._device_menu = ctk.CTkOptionMenu(
-            bar, variable=self._device_var, values=["加载中…"], width=200,
-            fg_color=GLASS_BG, button_color=GLASS_BORDER,
-            button_hover_color=GLASS_HOVER, corner_radius=8,
-            text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            mic_group,
+            variable=self._device_var,
+            values=["Loading..."],
+            fg_color=GLASS_BG,
+            button_color=GLASS_BORDER,
+            button_hover_color=GLASS_HOVER,
+            corner_radius=8,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
+            width=250,
         )
-        self._device_menu.pack(side="left", padx=(0, 16), pady=5)
+        self._device_menu.grid(row=0, column=1, sticky="w")
 
-        ctk.CTkLabel(
-            bar, text=self._t("translate_to"), text_color=TEXT_SEC, font=ctk.CTkFont(size=11),
-        ).pack(side="left", padx=(0, 2))
         self._target_lang_labels = [label for label, _ in TARGET_LANGUAGE_OPTIONS]
         self._target_lang_codes = {label: code for label, code in TARGET_LANGUAGE_OPTIONS}
         self._target_lang_reverse = {code: label for label, code in TARGET_LANGUAGE_OPTIONS}
@@ -195,165 +234,300 @@ class MainWindow(ctk.CTk):
         self._tgt_var = ctk.StringVar(
             value=self._target_lang_reverse.get(initial_tgt, self._target_lang_labels[0])
         )
-        self._tgt_menu = ctk.CTkOptionMenu(
-            bar,
-            values=self._target_lang_labels,
-            variable=self._tgt_var,
-            fg_color=GLASS_BG,
-            button_color=GLASS_BORDER,
-            button_hover_color=GLASS_HOVER,
-            corner_radius=8,
-            text_color=TEXT_PRI,
-            font=ctk.CTkFont(size=11),
-            width=148,
-        )
-        self._tgt_menu.pack(side="left", padx=5, pady=5)
 
-        # ── Google 翻訳風の手動入力パネル ─────────────────────────────────
+        float_group = ctk.CTkFrame(controls, fg_color="transparent")
+        float_group.grid(row=0, column=1, sticky="e", padx=(6, 12), pady=6)
+        self._float_btn = ctk.CTkButton(
+            float_group,
+            text=self._t("floating_hidden"),
+            width=120,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            command=self._toggle_float,
+        )
+        self._float_btn.grid(row=0, column=0, sticky="ew")
+
         self._build_translate_panel()
 
-        # ── ステータスバー ────────────────────────────────────────────────
+        bottom = ctk.CTkFrame(self, fg_color=BG_PRIMARY)
+        bottom.grid(row=3, column=0, sticky="ew")
+        bottom.grid_columnconfigure(0, weight=1)
+
         self._bottom_bar = ctk.CTkLabel(
-            self, text=self._t("model_unloaded"), font=ctk.CTkFont(size=10), text_color=TEXT_SEC,
+            bottom,
+            text=self._bottom_text,
+            font=ctk.CTkFont(size=10),
+            text_color=TEXT_SEC,
+            justify="left",
+            wraplength=920,
         )
-        self._bottom_bar.pack(side="bottom", pady=2)
+        self._bottom_bar.grid(row=0, column=0, sticky="w", padx=12, pady=(4, 2))
+
+        self._bottom_progress = ctk.CTkProgressBar(
+            bottom,
+            height=10,
+            fg_color=BG_SECONDARY,
+            progress_color=ACCENT,
+        )
+        self._bottom_progress.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        self._bottom_progress.set(self._bottom_progress_value)
+
+        self._set_status(self._status_text, self._status_color)
+        self._set_bottom(self._bottom_text)
+        self._refresh_start_button()
+        self._apply_float_btn_state()
+        if self._bottom_progress_visible:
+            self._show_bottom_progress(
+                self._bottom_progress_value,
+                indeterminate=self._bottom_progress_indeterminate,
+            )
+        else:
+            self._hide_bottom_progress()
 
     def _build_translate_panel(self):
-        """Google 翻訳風の左右 2 ペイン翻訳パネルを構築する  """
         outer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0)
-        outer.pack(fill="both", expand=True, padx=0, pady=0)
+        outer.grid(row=2, column=0, sticky="nsew")
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(1, weight=1)
 
-        # ── 言語ヘッダー行 ────────────────────────────────────────────────
-        hdr = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=32)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
+        hdr = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=40)
+        hdr.grid(row=0, column=0, sticky="ew")
+        hdr.grid_columnconfigure(3, weight=1)
+        hdr.grid_propagate(False)
 
-        # 入力言語のドロップダウン
         self._manual_langs = list(MANUAL_SOURCE_LANGUAGE_OPTIONS)
-        src_labels = [l for l, _ in self._manual_langs]
-        self._src_lang_codes = {l: c for l, c in self._manual_langs}
+        src_labels = [label for label, _ in self._manual_langs]
+        self._src_lang_codes = {label: code for label, code in self._manual_langs}
         self._src_lang_var = ctk.StringVar(value=src_labels[0])
         self._src_lang_menu = ctk.CTkOptionMenu(
-            hdr, values=src_labels, variable=self._src_lang_var, width=130,
-            fg_color=BG_SECONDARY, button_color=BG_SECONDARY,
-            button_hover_color=GLASS_HOVER, corner_radius=6,
-            text_color=TEXT_PRI, font=ctk.CTkFont(size=12),
+            hdr,
+            values=src_labels,
+            variable=self._src_lang_var,
+            width=132,
+            fg_color=BG_SECONDARY,
+            button_color=BG_SECONDARY,
+            button_hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=12),
         )
-        self._src_lang_menu.pack(side="left", padx=8)
+        self._src_lang_menu.grid(row=0, column=0, sticky="w", padx=(8, 4), pady=6)
 
-        # 入出力言語の入れ替えボタン
         ctk.CTkButton(
-            hdr, text="⇄", width=32, height=24,
-            fg_color="transparent", hover_color=GLASS_HOVER,
-            corner_radius=6, text_color=TEXT_SEC,
+            hdr,
+            text="<->",
+            width=36,
+            height=24,
+            fg_color="transparent",
+            hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_SEC,
             command=self._swap_langs,
-        ).pack(side="left", padx=4)
+        ).grid(row=0, column=1, sticky="w", padx=(0, 6), pady=6)
 
-        # 出力言語ラベル    上部の翻訳先ラジオと連動する  
-        self._tgt_lang_label = ctk.CTkLabel(
-            hdr, text=get_target_language_name(self._config.get("translation", {}).get("target_language", "ja")),
-            text_color=TEXT_PRI, font=ctk.CTkFont(size=12),
+        self._tgt_menu = ctk.CTkOptionMenu(
+            hdr,
+            values=self._target_lang_labels,
+            variable=self._tgt_var,
+            fg_color=BG_SECONDARY,
+            button_color=BG_SECONDARY,
+            button_hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            width=154,
         )
-        self._tgt_lang_label.pack(side="left", padx=12)
+        self._tgt_menu.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=6)
+
+        ui_lang_labels = [label for label, _ in UI_LANGUAGE_OPTIONS]
+        self._ui_lang_codes = {label: code for label, code in UI_LANGUAGE_OPTIONS}
+        self._ui_lang_reverse = {code: label for label, code in UI_LANGUAGE_OPTIONS}
+        self._ui_lang_var = ctk.StringVar(
+            value=self._ui_lang_reverse.get(self._ui_lang, ui_lang_labels[0])
+        )
+
+        lang_badge = ctk.CTkFrame(
+            hdr,
+            fg_color="#d5ecfb",
+            corner_radius=12,
+            border_width=1,
+            border_color="#97c4e6",
+        )
+        lang_badge.grid(row=0, column=4, sticky="e", padx=(8, 10), pady=5)
+
+        ctk.CTkLabel(
+            lang_badge,
+            text="🌐",
+            text_color=ACCENT,
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(side="left", padx=(8, 5), pady=2)
+
+        self._ui_lang_menu = ctk.CTkOptionMenu(
+            lang_badge,
+            values=ui_lang_labels,
+            variable=self._ui_lang_var,
+            command=self._on_ui_lang_selected,
+            width=112,
+            height=26,
+            fg_color="#d5ecfb",
+            button_color="#b6daf3",
+            button_hover_color=GLASS_HOVER,
+            dropdown_fg_color=BG_PRIMARY,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
+        )
+        self._ui_lang_menu.pack(side="left", padx=(0, 4), pady=2)
         self._tgt_var.trace_add("write", self._on_tgt_lang_change)
         self._on_tgt_lang_change()
         self._src_lang_var.trace_add("write", self._on_src_lang_change)
         self._on_src_lang_change()
 
-        # ── テキストエリア行 ──────────────────────────────────────────────
         text_row = ctk.CTkFrame(outer, fg_color=BG_PANEL, corner_radius=0)
-        text_row.pack(fill="both", expand=True)
+        text_row.grid(row=1, column=0, sticky="nsew")
+        text_row.grid_columnconfigure(0, weight=1)
+        text_row.grid_columnconfigure(2, weight=1)
+        text_row.grid_rowconfigure(0, weight=1)
+        text_row.configure(height=220)
 
-        # 入力エリア
         left = ctk.CTkFrame(text_row, fg_color=BG_PANEL, corner_radius=0)
-        left.pack(side="left", fill="both", expand=True)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(0, weight=1)
 
         self._src_input = ctk.CTkTextbox(
             left,
-            font=ctk.CTkFont(size=13), wrap="word",
+            height=180,
+            font=ctk.CTkFont(size=13),
+            wrap="word",
             state="disabled",
-            fg_color=BG_PANEL, corner_radius=0,
-            text_color=TEXT_SEC, border_width=0,
+            fg_color=BG_PANEL,
+            corner_radius=0,
+            text_color=TEXT_SEC,
+            border_width=0,
         )
-        self._src_input.pack(fill="both", expand=True, padx=8, pady=(6, 0))
+        self._src_input.grid(row=0, column=0, sticky="nsew", padx=8, pady=(6, 0))
         self._set_source_text("")
 
-        # 入力エリア下部のツールバー
-        left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=30)
-        left_bar.pack(fill="x")
-        left_bar.pack_propagate(False)
+        left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=34)
+        left_bar.grid(row=1, column=0, sticky="ew")
+        left_bar.grid_propagate(False)
 
         self._char_label = ctk.CTkLabel(
-            left_bar, text=self._t("char_count", count=0), text_color=TEXT_SEC, font=ctk.CTkFont(size=10),
+            left_bar,
+            text=self._t("char_count", count=0),
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=10),
         )
         self._char_label.pack(side="left", padx=10)
 
         ctk.CTkButton(
-            left_bar, text=self._t("manual_input"), width=88, height=22,
-            fg_color=GLASS_BG, hover_color=GLASS_HOVER,
-            border_width=1, border_color=GLASS_BORDER,
-            corner_radius=6, text_color=TEXT_PRI, font=ctk.CTkFont(size=11),
+            left_bar,
+            text=self._t("manual_input"),
+            width=108,
+            height=24,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=6,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
             command=self._open_text_input_popup,
         ).pack(side="left", padx=6)
 
         ctk.CTkButton(
-            left_bar, text=self._t("clear"), width=58, height=22,
-            fg_color="transparent", hover_color=GLASS_HOVER,
-            corner_radius=6, text_color=TEXT_SEC, font=ctk.CTkFont(size=11),
+            left_bar,
+            text=self._t("clear"),
+            width=68,
+            height=24,
+            fg_color="transparent",
+            hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=11),
             command=self._clear_input,
         ).pack(side="right", padx=6)
 
         self._translate_btn = ctk.CTkButton(
-            left_bar, text=self._t("translate"), width=72, height=22,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            corner_radius=8, text_color="#ffffff", font=ctk.CTkFont(size=11),
+            left_bar,
+            text=self._t("translate"),
+            width=88,
+            height=24,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            corner_radius=8,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11),
             command=self._translate_manual,
         )
         self._translate_btn.pack(side="right", padx=4)
 
-        # 中央の区切り線
-        ctk.CTkFrame(text_row, width=1, fg_color=DIVIDER).pack(
-            side="left", fill="y", pady=6,
+        ctk.CTkFrame(text_row, width=1, fg_color=DIVIDER).grid(
+            row=0,
+            column=1,
+            sticky="ns",
+            pady=6,
         )
 
-        # 出力エリア
         right = ctk.CTkFrame(text_row, fg_color=BG_PANEL, corner_radius=0)
-        right.pack(side="left", fill="both", expand=True)
+        right.grid(row=0, column=2, sticky="nsew")
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
 
         self._tgt_output = ctk.CTkTextbox(
             right,
-            font=ctk.CTkFont(size=13), wrap="word", state="disabled",
-            fg_color=BG_PANEL, corner_radius=0,
-            text_color=TEXT_PRI, border_width=0,
+            height=180,
+            font=ctk.CTkFont(size=13),
+            wrap="word",
+            state="disabled",
+            fg_color=BG_PANEL,
+            corner_radius=0,
+            text_color=TEXT_PRI,
+            border_width=0,
         )
-        self._tgt_output.pack(fill="both", expand=True, padx=8, pady=(6, 0))
+        self._tgt_output.grid(row=0, column=0, sticky="nsew", padx=8, pady=(6, 0))
 
-        # 出力エリア下部のツールバー
-        right_bar = ctk.CTkFrame(right, fg_color=BG_SECONDARY, corner_radius=0, height=30)
-        right_bar.pack(fill="x")
-        right_bar.pack_propagate(False)
+        right_bar = ctk.CTkFrame(right, fg_color=BG_SECONDARY, corner_radius=0, height=34)
+        right_bar.grid(row=1, column=0, sticky="ew")
+        right_bar.grid_propagate(False)
 
         ctk.CTkButton(
-            right_bar, text=self._t("send_to_vrc"), width=96, height=22,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            corner_radius=8, text_color="#ffffff", font=ctk.CTkFont(size=11),
+            right_bar,
+            text=self._t("send_to_vrc"),
+            width=114,
+            height=24,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            corner_radius=8,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11),
             command=self._send_to_vrc,
         ).pack(side="right", padx=6)
 
         ctk.CTkButton(
-            right_bar, text=self._t("copy"), width=72, height=22,
-            fg_color="transparent", hover_color=GLASS_HOVER,
-            corner_radius=6, text_color=TEXT_SEC, font=ctk.CTkFont(size=11),
+            right_bar,
+            text=self._t("copy"),
+            width=84,
+            height=24,
+            fg_color="transparent",
+            hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=11),
             command=self._copy_result,
         ).pack(side="right", padx=2)
 
-        # 下部のアイコンボタン列    全体の高さは変えず  本文領域だけを圧縮する  
-        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=58)
-        social_bar.pack(fill="x")
-        social_bar.pack_propagate(False)
+        social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=56)
+        social_bar.grid(row=2, column=0, sticky="ew")
+        social_bar.grid_propagate(False)
 
         social_center = ctk.CTkFrame(social_bar, fg_color="transparent")
-        social_center.pack(expand=True)
+        social_center.pack(expand=True, pady=8)
 
         github_icon = self._load_social_icon(ICON_GITHUB_FILE)
         qq_icon = self._load_social_icon(ICON_QQ_FILE)
@@ -393,6 +567,36 @@ class MainWindow(ctk.CTk):
             command=self._open_sponsor_window,
         )
 
+    def _refresh_start_button(self):
+        if self._running:
+            self._start_btn.configure(
+                text=self._t("stop_listening"),
+                state="normal",
+                fg_color=DANGER,
+                hover_color=DANGER_HOVER,
+            )
+            return
+
+        self._start_btn.configure(
+            text=self._t("start_listening"),
+            state="disabled" if self._model_prepare_running else "normal",
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+        )
+
+    def _float_is_visible(self) -> bool:
+        return bool(
+            self._float_win
+            and self._float_win.winfo_exists()
+            and self._float_win.winfo_viewable()
+        )
+
+    def _apply_float_btn_state(self):
+        if hasattr(self, "_float_btn"):
+            self._float_btn.configure(
+                text=self._t("floating_shown") if self._float_is_visible() else self._t("floating_hidden")
+            )
+
     # ── 翻訳パネルの補助処理 ─────────────────────────────────────────────
 
     def _set_source_text(self, text: str, text_color: str | None = None):
@@ -408,8 +612,13 @@ class MainWindow(ctk.CTk):
         self._src_input.delete("1.0", "end")
         self._src_input.insert("1.0", shown)
         self._src_input.configure(text_color=color, state="disabled")
-        if hasattr(self, "_char_label"):
-            self._char_label.configure(text=self._t("char_count", count=len(safe)))
+        char_label = getattr(self, "_char_label", None)
+        if char_label is not None:
+            try:
+                if char_label.winfo_exists():
+                    char_label.configure(text=self._t("char_count", count=len(safe)))
+            except Exception:
+                pass
 
     def _open_text_input_popup(self, _event=None):
         popup = ctk.CTkToplevel(self)
@@ -459,10 +668,9 @@ class MainWindow(ctk.CTk):
         ).pack(side="right", padx=4)
 
     def _on_tgt_lang_change(self, *_):
-        """翻訳先ラジオと出力言語ラベルを同期する  """
+        """翻訳先の状態と入力言語候補を同期する。"""
         tgt_code = self._target_lang_codes.get(self._tgt_var.get(), "ja")
         self._current_tgt_lang = tgt_code  #     on  audio  segment   から安全に参照できるように保持する  
-        self._tgt_lang_label.configure(text=get_target_language_name(tgt_code))
 
         values = [lbl for lbl, code in self._manual_langs if code == "auto" or code != tgt_code]
         self._src_lang_menu.configure(values=values)
@@ -497,6 +705,174 @@ class MainWindow(ctk.CTk):
         if text:
             self.clipboard_clear()
             self.clipboard_append(text)
+
+    def _on_ui_lang_selected(self, selected_label: str):
+        new_lang = self._ui_lang_codes.get(selected_label, self._ui_lang)
+        if new_lang == self._ui_lang:
+            return
+
+        device_name = self._current_device_name()
+        restore_float = self._float_is_visible()
+
+        ui_cfg = self._config.setdefault("ui", {})
+        ui_cfg["language"] = new_lang
+        ui_cfg["language_source"] = "manual"
+        config_manager.save_config(self._config)
+
+        self._ui_lang = new_lang
+        self.title(self._t("window_title"))
+        model_id, _model_revision = self._sensevoice_model_spec()
+        if self._running:
+            self._status_text = self._t("status_listening")
+            self._status_color = SUCCESS
+        elif self._status_color == SUCCESS:
+            self._status_text = self._t("status_ready")
+        if self._model_prepare_running:
+            self._bottom_text = self._t("model_downloading")
+        elif model_exists(model_id):
+            self._bottom_text = self._t("model_ready")
+
+        self._rebuild_ui(device_name=device_name, restore_float=restore_float)
+
+    def _sensevoice_model_spec(self) -> tuple[str, str]:
+        asr_cfg = self._config.get("asr", {})
+        sensevoice_cfg = asr_cfg.get("sensevoice", {})
+        model_id = str(sensevoice_cfg.get("model_id", "iic/SenseVoiceSmall"))
+        model_revision = str(sensevoice_cfg.get("model_revision", "master"))
+        return model_id, model_revision
+
+    def _maybe_prepare_runtime_model(self):
+        if self._model_prepare_running:
+            return
+
+        model_id, model_revision = self._sensevoice_model_spec()
+        if model_exists(model_id):
+            if self._bottom_text == self._t("model_unloaded"):
+                self._set_bottom(self._t("model_ready"))
+            return
+
+        self._model_prepare_running = True
+        self._refresh_start_button()
+        self._set_bottom(self._t("model_downloading"))
+        self._show_bottom_progress(0.0, indeterminate=True)
+        threading.Thread(
+            target=self._prepare_runtime_model,
+            args=(model_id, model_revision),
+            daemon=True,
+        ).start()
+
+    def _prepare_runtime_model(self, model_id: str, model_revision: str):
+        try:
+            ensure_model(
+                model_id=model_id,
+                model_revision=model_revision,
+                progress_callback=lambda event: self.after(0, self._handle_model_progress, event),
+            )
+        except Exception as exc:
+            self.after(0, lambda m=str(exc): self._on_model_prepare_failed(m))
+            return
+        self.after(0, self._on_model_prepare_ready)
+
+    def _on_model_prepare_ready(self):
+        self._model_prepare_running = False
+        self._refresh_start_button()
+        self._hide_bottom_progress()
+        self._set_bottom(self._t("model_ready"))
+
+    def _on_model_prepare_failed(self, message: str):
+        self._model_prepare_running = False
+        self._refresh_start_button()
+        self._hide_bottom_progress()
+        self._set_bottom(message)
+
+    def _handle_model_progress(self, event):
+        if isinstance(event, dict):
+            stage = str(event.get("stage", "")).strip()
+            progress_value = event.get("progress")
+            progress = float(progress_value) if isinstance(progress_value, (int, float)) else None
+            indeterminate = bool(event.get("indeterminate", False))
+
+            if stage == "download_complete":
+                self._set_bottom(self._t("model_ready"))
+                self._show_bottom_progress(1.0, indeterminate=False)
+                return
+
+            if stage in {"download_prepare", "download"}:
+                text = self._t("model_downloading")
+                if progress is not None:
+                    text = f"{text} {progress * 100:.0f}%"
+                self._set_bottom(text)
+                self._show_bottom_progress(progress, indeterminate=indeterminate)
+                return
+
+            if stage == "loading":
+                self._set_bottom(self._t("model_loading"))
+                self._show_bottom_progress(progress, indeterminate=True)
+                return
+
+            if stage == "ready":
+                self._set_bottom(self._t("model_ready"))
+                self._hide_bottom_progress()
+                return
+
+            message = str(event.get("message", "")).strip()
+            if message:
+                self._set_bottom(message)
+                self._show_bottom_progress(progress, indeterminate=indeterminate)
+            return
+
+        message = str(event).strip()
+        if not message:
+            return
+        self._set_bottom(message)
+        self._show_bottom_progress(None, indeterminate=True)
+
+    def _show_bottom_progress(self, progress: float | None, *, indeterminate: bool):
+        self._bottom_progress_visible = True
+        self._bottom_progress_indeterminate = indeterminate
+        if progress is not None:
+            self._bottom_progress_value = max(0.0, min(float(progress), 1.0))
+
+        if not hasattr(self, "_bottom_progress"):
+            return
+
+        self._bottom_progress.grid()
+        if self._bottom_progress_running:
+            self._bottom_progress.stop()
+            self._bottom_progress_running = False
+
+        if indeterminate:
+            self._bottom_progress.configure(mode="indeterminate")
+            self._bottom_progress.start()
+            self._bottom_progress_running = True
+            return
+
+        self._bottom_progress.configure(mode="determinate")
+        self._bottom_progress.set(self._bottom_progress_value if progress is not None else 0.0)
+
+    def _hide_bottom_progress(self):
+        self._bottom_progress_visible = False
+        self._bottom_progress_indeterminate = False
+        self._bottom_progress_value = 0.0
+
+        if not hasattr(self, "_bottom_progress"):
+            return
+
+        if self._bottom_progress_running:
+            self._bottom_progress.stop()
+            self._bottom_progress_running = False
+        self._bottom_progress.configure(mode="determinate")
+        self._bottom_progress.set(0.0)
+        self._bottom_progress.grid_remove()
+
+    def _position_near_float_window(self):
+        if not self._float_win or not self._float_win.winfo_exists():
+            return
+        self.update_idletasks()
+        self._float_win.update_idletasks()
+        x = self.winfo_x() + self.winfo_width() + 18
+        y = self.winfo_y() + 118
+        self._float_win.geometry(f"+{x}+{y}")
 
     @staticmethod
     def _open_external_url(url: str):
@@ -953,8 +1329,18 @@ class MainWindow(ctk.CTk):
     def _toggle_listening(self):
         if self._running:
             self._stop()
-        else:
-            self._start()
+            return
+
+        if self._model_prepare_running:
+            self._set_bottom(self._t("model_download_wait"))
+            return
+
+        model_id, _model_revision = self._sensevoice_model_spec()
+        if not model_exists(model_id):
+            self._maybe_prepare_runtime_model()
+            return
+
+        self._start()
 
     def _start(self):
         self._set_status(self._t("starting"), ACCENT)
@@ -974,7 +1360,7 @@ class MainWindow(ctk.CTk):
                     raise RuntimeError(self._t("listen_requires_api"))
             else:
                 self._translator = None
-            self._asr.load(progress_callback=lambda m: self.after(0, self._set_bottom, m))
+            self._asr.load(progress_callback=lambda event: self.after(0, self._handle_model_progress, event))
             osc_cfg = self._config.get("osc", {})
             self._sender = VRCOSCSender(
                 host=osc_cfg.get("send_host", "127.0.0.1"),
@@ -1022,24 +1408,21 @@ class MainWindow(ctk.CTk):
         self._sender = None
         self._translator = None
         self._set_status(self._t("status_stopped"), DANGER)
-        self._start_btn.configure(
-            text=self._t("start_listening"), state="normal",
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-        )
+        self._refresh_start_button()
+        if not self._model_prepare_running:
+            self._hide_bottom_progress()
+            self._set_bottom(self._t("model_ready"))
 
     def _on_started(self):
         self._set_status(self._t("status_listening"), SUCCESS)
-        self._start_btn.configure(
-            text=self._t("stop_listening"), state="normal",
-            fg_color=DANGER, hover_color=DANGER_HOVER,
-        )
+        self._refresh_start_button()
+        self._hide_bottom_progress()
+        self._set_bottom(self._t("model_ready"))
 
     def _on_start_error(self, msg: str):
         self._set_status(self._t("status_error"), DANGER)
-        self._start_btn.configure(
-            text=self._t("start_listening"), state="normal",
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-        )
+        self._refresh_start_button()
+        self._hide_bottom_progress()
         messagebox.showerror(self._t("listen_start_failed_title"), msg)
 
     def _on_vad_state(self, in_speech: bool):
@@ -1082,16 +1465,32 @@ class MainWindow(ctk.CTk):
     # ── フローティングウィンドウ ──────────────────────────────────────────
 
     def _toggle_float(self):
+        ui_cfg = self._config.setdefault("ui", {})
+        opacity = float(ui_cfg.get("floating_window_opacity", 0.92))
         if self._float_win and self._float_win.winfo_exists():
-            if self._float_win.winfo_viewable():
+            if self._float_is_visible():
                 self._float_win.hide()
-                self._float_btn.configure(text=self._t("floating_hidden"))
+                ui_cfg["show_floating_window"] = False
             else:
                 self._float_win.show()
-                self._float_btn.configure(text=self._t("floating_shown"))
+                self._position_near_float_window()
+                ui_cfg["show_floating_window"] = True
         else:
-            self._float_win = FloatingWindow(self, ui_language=self._ui_lang)
-            self._float_btn.configure(text=self._t("floating_shown"))
+            self._float_win = FloatingWindow(
+                self,
+                ui_language=self._ui_lang,
+                opacity=opacity,
+                on_opacity_change=self._on_float_opacity_changed,
+            )
+            self._position_near_float_window()
+            ui_cfg["show_floating_window"] = True
+        config_manager.save_config(self._config)
+        self._apply_float_btn_state()
+
+    def _on_float_opacity_changed(self, opacity: float):
+        ui_cfg = self._config.setdefault("ui", {})
+        ui_cfg["floating_window_opacity"] = round(float(opacity), 2)
+        config_manager.save_config(self._config)
 
     # ── 設定 ──────────────────────────────────────────────────────────────
 
@@ -1103,7 +1502,7 @@ class MainWindow(ctk.CTk):
             return self._device_var.get()
         return None
 
-    def _rebuild_ui(self, device_name: str | None = None):
+    def _rebuild_ui(self, device_name: str | None = None, restore_float: bool = False):
         source_text = self._src_text
         target_text = self._last_tgt_text
 
@@ -1117,6 +1516,11 @@ class MainWindow(ctk.CTk):
         for child in list(self.winfo_children()):
             child.destroy()
 
+        self._char_label = None
+        self._src_input = None
+        self._tgt_output = None
+        self._bottom_bar = None
+        self._bottom_progress = None
         self._social_icons.clear()
         self._src_placeholder = self._t("source_placeholder")
         self._build()
@@ -1133,6 +1537,18 @@ class MainWindow(ctk.CTk):
             self._tgt_output.configure(state="normal")
             self._tgt_output.delete("1.0", "end")
             self._tgt_output.configure(state="disabled")
+
+        if restore_float:
+            ui_cfg = self._config.setdefault("ui", {})
+            self._float_win = FloatingWindow(
+                self,
+                ui_language=self._ui_lang,
+                opacity=float(ui_cfg.get("floating_window_opacity", 0.92)),
+                on_opacity_change=self._on_float_opacity_changed,
+            )
+            self._position_near_float_window()
+            ui_cfg["show_floating_window"] = True
+        self._apply_float_btn_state()
 
     def _maybe_show_osc_guide(self):
         ui_cfg = self._config.setdefault("ui", {})
@@ -1322,6 +1738,7 @@ class MainWindow(ctk.CTk):
     def _on_config_saved(self, new_cfg: dict):
         was_running = self._running
         device_name = self._current_device_name()
+        restore_float = self._float_is_visible()
         if was_running:
             self._set_bottom(self._t("settings_saved_reloading"))
             self._set_status(self._t("status_restarting"), ACCENT)
@@ -1337,7 +1754,8 @@ class MainWindow(ctk.CTk):
             self._partial_merger = self._create_streaming_merger()
         self._reset_streaming_state()
 
-        self._rebuild_ui(device_name=device_name)
+        self._rebuild_ui(device_name=device_name, restore_float=restore_float)
+        self.after(120, self._maybe_prepare_runtime_model)
         if was_running:
             self.after(100, self._start)
         else:
@@ -1346,7 +1764,12 @@ class MainWindow(ctk.CTk):
     # ── 補助処理 ──────────────────────────────────────────────────────────
 
     def _set_status(self, text: str, color: str = "white"):
-        self._status_label.configure(text=text, text_color=color)
+        self._status_text = text
+        self._status_color = color
+        if hasattr(self, "_status_label"):
+            self._status_label.configure(text=text, text_color=color)
 
     def _set_bottom(self, text: str):
-        self._bottom_bar.configure(text=text)
+        self._bottom_text = text
+        if hasattr(self, "_bottom_bar"):
+            self._bottom_bar.configure(text=text)

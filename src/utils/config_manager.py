@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 from src.utils.app_paths import resource_base_dirs, writable_app_dir
+from src.utils.ui_language_detection import bootstrap_ui_language
 
 
 def _config_path() -> Path:
@@ -37,11 +38,13 @@ def _merge_defaults(defaults, current):
 def load_config() -> dict:
     """  config  json   を読み込む    見つからない場合は   config  example  json   を複製する  """
     config_path = _config_path()
+    created_new = False
     if not config_path.exists():
         example_path = _example_path()
         if example_path.exists():
             config_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(example_path, config_path)
+            created_new = True
         else:
             return {}
     defaults = {}
@@ -52,7 +55,10 @@ def load_config() -> dict:
 
     with config_path.open("r", encoding="utf-8") as f:
         loaded = json.load(f)
-    return _merge_defaults(defaults, loaded)
+    merged = _merge_defaults(defaults, loaded)
+    if bootstrap_ui_language(merged, prefer_auto=created_new):
+        save_config(merged)
+    return merged
 
 
 def save_config(config: dict) -> None:

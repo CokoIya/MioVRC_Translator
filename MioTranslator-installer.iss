@@ -1,7 +1,8 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "1.2.0-beta3.0"
+#define AppVersion "V1.2.0_beta3.2_Releases"
+#define AppNumericVersion "1.2.0.32"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
@@ -20,7 +21,7 @@ DefaultGroupName={#AppName}
 AllowNoIcons=yes
 LicenseFile=
 OutputDir=dist
-OutputBaseFilename=MioTranslator-Setup-v{#AppVersion}
+OutputBaseFilename=MioTranslator-Setup-{#AppVersion}
 SetupIconFile=assets\icons\app_icon_mio.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -42,9 +43,9 @@ VersionInfoCopyright=Copyright (C) 2026 {#AppPublisher}
 VersionInfoDescription={#AppName} Installer
 VersionInfoProductName={#AppName}
 VersionInfoProductTextVersion={#AppVersion}
-VersionInfoProductVersion=1.2.0.3
+VersionInfoProductVersion={#AppNumericVersion}
 VersionInfoTextVersion={#AppVersion}
-VersionInfoVersion=1.2.0.3
+VersionInfoVersion={#AppNumericVersion}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

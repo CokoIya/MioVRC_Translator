@@ -41,7 +41,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._ui_lang = get_ui_language(config)
 
         self.title(tr(self._ui_lang, "settings_window_title"))
-        self.geometry("560x930")
+        self.geometry("560x460")
         self.resizable(False, False)
         self.grab_set()
         self.configure(fg_color=BG_PRIMARY)
@@ -59,7 +59,6 @@ class SettingsWindow(ctk.CTkToplevel):
         trans_cfg = self._config.get("translation", {})
         asr_cfg = self._config.get("asr", {})
         streaming_cfg = asr_cfg.get("streaming", {})
-        ui_cfg = self._config.get("ui", {})
 
         scroll = ctk.CTkScrollableFrame(self, fg_color=BG_PRIMARY, corner_radius=0)
         scroll.pack(fill="both", expand=True, padx=0, pady=0)
@@ -77,7 +76,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._ui_lang_codes = {label: code for label, code in UI_LANGUAGE_OPTIONS}
         self._ui_lang_reverse = {code: label for label, code in UI_LANGUAGE_OPTIONS}
         self._ui_lang_var = ctk.StringVar(
-            value=self._ui_lang_reverse.get(ui_cfg.get("language", self._ui_lang), ui_lang_labels[0])
+            value=self._ui_lang_reverse.get(self._ui_lang, ui_lang_labels[0])
         )
         ctk.CTkOptionMenu(
             scroll,
@@ -452,6 +451,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         ui_cfg = cfg.setdefault("ui", {})
         ui_cfg["language"] = ui_language
+        ui_cfg["language_source"] = "manual"
         ui_cfg.setdefault("osc_guide_seen", False)
 
         config_manager.save_config(cfg)

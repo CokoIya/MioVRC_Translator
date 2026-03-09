@@ -62,10 +62,11 @@
     "receive_port": 9001
   },
   "ui": {
-    "language": "zh-CN",
+    "language": "",
+    "language_source": "auto",
     "floating_window_opacity": 0.9,
     "osc_guide_seen": false,
-    "show_floating_window": true,
+    "show_floating_window": false,
     "theme": "dark"
   }
 }

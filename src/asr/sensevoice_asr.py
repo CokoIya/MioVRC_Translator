@@ -27,6 +27,12 @@ _LANGUAGE_MAP = {
 }
 
 
+def _emit_progress(progress_callback, *, stage: str, message: str) -> None:
+    if progress_callback is None:
+        return
+    progress_callback({"stage": stage, "message": message})
+
+
 def _dependency_error_message(exc: Exception) -> str:
     detail = str(exc).strip() or exc.__class__.__name__
     if getattr(sys, "frozen", False):
@@ -87,8 +93,7 @@ class SenseVoiceASR:
                     model_revision=self.model_revision,
                     progress_callback=progress_callback,
                 )
-            if progress_callback:
-                progress_callback("正在加载 SenseVoiceSmall 模型…")
+            _emit_progress(progress_callback, stage="loading", message="loading")
 
             model_path = resolve_model_path(self.model_id)
             self._model = AutoModel(
@@ -100,8 +105,7 @@ class SenseVoiceASR:
                 ncpu=self.ncpu,
             )
             self._postprocess = rich_transcription_postprocess
-            if progress_callback:
-                progress_callback("SenseVoiceSmall 模型加载完成")
+            _emit_progress(progress_callback, stage="ready", message="ready")
 
     def transcribe(
         self,

@@ -16,6 +16,26 @@ from src.asr.sensevoice_model_manager import (
 )
 
 
+def _print_progress(event) -> None:
+    if isinstance(event, dict):
+        message = str(event.get("message", "")).strip()
+        labels = {
+            "download_prepare": "preparing download",
+            "downloading": "downloading",
+            "download_complete": "download complete",
+            "loading": "loading model",
+            "ready": "model ready",
+        }
+        message = labels.get(message, message)
+        progress = event.get("progress")
+        if isinstance(progress, (int, float)):
+            print(f"[progress] {message} {progress * 100:.1f}%")
+            return
+        print(f"[progress] {message}")
+        return
+    print(event)
+
+
 def download_sensevoice():
     dest = packaging_model_dir()
     if dest.exists() and (dest / "configuration.json").exists() and (dest / "model.pt").exists():
@@ -24,7 +44,7 @@ def download_sensevoice():
 
     print(f"[download] sensevoice-small -> {dest} ...")
     try:
-        ensure_packaging_model(progress_callback=print)
+        ensure_packaging_model(progress_callback=_print_progress)
     except Exception as exc:
         print(f"ERROR: {exc}")
         sys.exit(1)
