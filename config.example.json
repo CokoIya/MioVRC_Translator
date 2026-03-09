@@ -30,7 +30,7 @@
   "translation": {
     "backend": "openai",
     "target_language": "ja",
-    "output_format": "ja(zh)",
+    "output_format": "translated_with_original",
     "openai": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",
@@ -62,7 +62,9 @@
     "receive_port": 9001
   },
   "ui": {
+    "language": "zh-CN",
     "floating_window_opacity": 0.9,
+    "osc_guide_seen": false,
     "show_floating_window": true,
     "theme": "dark"
   }

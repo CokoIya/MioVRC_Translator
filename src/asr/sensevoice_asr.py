@@ -1,4 +1,4 @@
-"""FunASR の SenseVoiceSmall を既存 ASR インターフェースへ接続する。"""
+"""FunASR の SenseVoiceSmall を既存 ASR インターフェースへ接続する  """
 
 from __future__ import annotations
 
@@ -17,7 +17,14 @@ from src.asr.sensevoice_model_manager import (
     resolve_model_path,
 )
 
-_LANGUAGE_MAP = {"zh": "zh", "en": "en", "ja": "ja", "ko": "ko", "yue": "yue"}
+_LANGUAGE_MAP = {
+    "zh": "zh",
+    "en": "en",
+    "ja": "ja",
+    "ko": "ko",
+    "ru": "ru",
+    "yue": "yue",
+}
 
 
 def _dependency_error_message(exc: Exception) -> str:

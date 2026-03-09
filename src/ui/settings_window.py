@@ -1,11 +1,25 @@
-"""翻訳バックエンドと音声認識の設定ダイアログ。  実験機能の切り替えもここで扱う。"""
+"""Settings dialog for translation, ASR, UI language, and streaming options."""
+
+from __future__ import annotations
 
 import customtkinter as ctk
 from tkinter import messagebox
 
 from src.utils import config_manager
+from src.utils.i18n import tr
+from src.utils.ui_config import (
+    BACKEND_ORDER,
+    DEFAULT_ASR_ENGINE,
+    OUTPUT_FORMAT_OPTIONS,
+    TARGET_LANGUAGE_OPTIONS,
+    UI_LANGUAGE_OPTIONS,
+    get_backend_label,
+    get_backend_value,
+    get_ui_language,
+    normalize_backend,
+    normalize_output_format,
+)
 
-# カラーパレット。  既存 UI の配色に合わせている。
 BG_PRIMARY = "#f7f5f0"
 BG_SECONDARY = "#edeae2"
 GLASS_BG = "#daeaf8"
@@ -16,69 +30,36 @@ ACCENT_HOVER = "#2882bc"
 TEXT_PRI = "#252535"
 TEXT_SEC = "#686880"
 
-BACKENDS = ["openai", "deepseek", "qianwen", "anthropic", "custom"]
-
-ASR_ENGINES = [
-    ("SenseVoice Small (实用性)", "sensevoice-small"),
-]
-
-TARGET_LANGS = [
-    ("日语 (ja)", "ja"),
-    ("English (en)", "en"),
-    ("韩语 (ko)", "ko"),
-    ("中文 (zh)", "zh"),
-    ("Français (fr)", "fr"),
-    ("Deutsch (de)", "de"),
-    ("Español (es)", "es"),
-]
-
-OUTPUT_FORMATS = [
-    ("日语（中文）", "ja(zh)"),
-    ("仅日语", "ja_only"),
-    ("仅中文", "zh_only"),
-    ("中文（日语）", "zh(ja)"),
-]
-
-ASR_HINTS = {
-    "sensevoice-small": (
-        "SenseVoice Small 是当前测试版默认后端。  安装包若已内置模型，可直接开始监听。  "
-        "如果未内置模型，仍会回退到首次自动下载。"
-    ),
-}
-
-STREAMING_HINT = (
-    "刷新间隔越短，partial 更新越快但 CPU 占用也会更高。  识别窗口需要大于等于刷新间隔，"
-    "这样才会保留重叠片段并让稳定前缀策略生效。"
-)
-
-OUTPUT_FORMAT_HINT = (
-    "日语（中文）：发送 翻译（原文）\n"
-    "仅日语：只发送翻译结果\n"
-    "仅中文：不调用翻译 API，只发送原文\n"
-    "中文（日语）：发送 原文（翻译）"
-)
+ASR_ENGINES = [("SenseVoice Small", DEFAULT_ASR_ENGINE)]
 
 
 class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent, config: dict, on_save=None):
         super().__init__(parent)
-        self.title("Settings - Mio Translator")
-        self.geometry("560x860")
+        self._config = config
+        self._on_save = on_save
+        self._ui_lang = get_ui_language(config)
+
+        self.title(tr(self._ui_lang, "settings_window_title"))
+        self.geometry("560x930")
         self.resizable(False, False)
         self.grab_set()
         self.configure(fg_color=BG_PRIMARY)
 
-        self._config = config
-        self._on_save = on_save
         self._field_vars: dict[str, ctk.StringVar] = {}
-        self._backend_entries: list[ctk.CTkEntry] = []
+        self._editable_backend_entries: list[ctk.CTkEntry] = []
+        self._readonly_backend_entries: list[ctk.CTkEntry] = []
         self._build()
+
+    def _t(self, key: str, **kwargs) -> str:
+        return tr(self._ui_lang, key, **kwargs)
 
     def _build(self):
         pad = {"padx": 16, "pady": 6}
         trans_cfg = self._config.get("translation", {})
         asr_cfg = self._config.get("asr", {})
         streaming_cfg = asr_cfg.get("streaming", {})
+        ui_cfg = self._config.get("ui", {})
 
         scroll = ctk.CTkScrollableFrame(self, fg_color=BG_PRIMARY, corner_radius=0)
         scroll.pack(fill="both", expand=True, padx=0, pady=0)
@@ -91,11 +72,35 @@ class SettingsWindow(ctk.CTkToplevel):
                 text_color=TEXT_PRI,
             ).pack(padx=16, pady=(12, 2), anchor="w")
 
-        section_label("翻译后端")
-        self._backend_var = ctk.StringVar(value=trans_cfg.get("backend", "openai"))
+        section_label(self._t("app_language"))
+        ui_lang_labels = [label for label, _ in UI_LANGUAGE_OPTIONS]
+        self._ui_lang_codes = {label: code for label, code in UI_LANGUAGE_OPTIONS}
+        self._ui_lang_reverse = {code: label for label, code in UI_LANGUAGE_OPTIONS}
+        self._ui_lang_var = ctk.StringVar(
+            value=self._ui_lang_reverse.get(ui_cfg.get("language", self._ui_lang), ui_lang_labels[0])
+        )
+        ctk.CTkOptionMenu(
+            scroll,
+            values=ui_lang_labels,
+            variable=self._ui_lang_var,
+            fg_color=GLASS_BG,
+            button_color=GLASS_BORDER,
+            button_hover_color=GLASS_HOVER,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+        ).pack(**pad, fill="x")
+
+        section_label(self._t("translation_backend"))
+        backend = normalize_backend(trans_cfg.get("backend"))
+        backend_labels = [get_backend_label(code) for code in BACKEND_ORDER]
+        self._backend_codes = {
+            get_backend_label(code): code for code in BACKEND_ORDER
+        }
+        self._backend_reverse = {code: get_backend_label(code) for code in BACKEND_ORDER}
+        self._backend_var = ctk.StringVar(value=self._backend_reverse.get(backend, backend_labels[0]))
         self._backend_menu = ctk.CTkOptionMenu(
             scroll,
-            values=BACKENDS,
+            values=backend_labels,
             variable=self._backend_var,
             command=self._on_backend_change,
             fg_color=GLASS_BG,
@@ -106,10 +111,10 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._backend_menu.pack(**pad, fill="x")
 
-        section_label("目标语言")
-        lang_labels = [label for label, _ in TARGET_LANGS]
-        self._lang_codes = {label: code for label, code in TARGET_LANGS}
-        self._lang_reverse = {code: label for label, code in TARGET_LANGS}
+        section_label(self._t("target_language"))
+        lang_labels = [label for label, _ in TARGET_LANGUAGE_OPTIONS]
+        self._lang_codes = {label: code for label, code in TARGET_LANGUAGE_OPTIONS}
+        self._lang_reverse = {code: label for label, code in TARGET_LANGUAGE_OPTIONS}
         current_target = trans_cfg.get("target_language", "ja")
         self._lang_var = ctk.StringVar(
             value=self._lang_reverse.get(current_target, lang_labels[0])
@@ -125,11 +130,11 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pad, fill="x")
 
-        section_label("VRC 聊天框输出格式")
-        format_labels = [label for label, _ in OUTPUT_FORMATS]
-        self._fmt_codes = {label: code for label, code in OUTPUT_FORMATS}
-        self._fmt_reverse = {code: label for label, code in OUTPUT_FORMATS}
-        current_format = trans_cfg.get("output_format", "ja(zh)")
+        section_label(self._t("output_format"))
+        format_labels = [label for label, _ in OUTPUT_FORMAT_OPTIONS]
+        self._fmt_codes = {label: code for label, code in OUTPUT_FORMAT_OPTIONS}
+        self._fmt_reverse = {code: label for label, code in OUTPUT_FORMAT_OPTIONS}
+        current_format = normalize_output_format(trans_cfg.get("output_format"))
         self._fmt_var = ctk.StringVar(
             value=self._fmt_reverse.get(current_format, format_labels[0])
         )
@@ -145,12 +150,13 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         )
         self._format_menu.pack(**pad, fill="x")
-        self._build_hint_box(scroll, OUTPUT_FORMAT_HINT)
+        self._build_hint_box(scroll, self._t("output_hint"))
 
-        section_label("翻译后端参数")
+        section_label(self._t("translation_backend_params"))
         self._fields_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self._fields_frame.pack(**pad, fill="both", expand=True)
         self._on_backend_change(self._backend_var.get())
+
         self._translation_lock_label = ctk.CTkLabel(
             self._build_hint_box(scroll, ""),
             text="",
@@ -162,39 +168,39 @@ class SettingsWindow(ctk.CTkToplevel):
         self._translation_lock_label.pack(padx=10, pady=8, anchor="w")
         self._apply_translation_mode_state()
 
-        section_label("语音识别后端")
+        section_label(self._t("asr_backend"))
         asr_labels = [label for label, _ in ASR_ENGINES]
         self._asr_codes = {label: code for label, code in ASR_ENGINES}
         self._asr_reverse = {code: label for label, code in ASR_ENGINES}
-        current_engine = asr_cfg.get("engine", "sensevoice-small")
+        current_engine = asr_cfg.get("engine", DEFAULT_ASR_ENGINE)
         self._asr_var = ctk.StringVar(
             value=self._asr_reverse.get(current_engine, asr_labels[0])
         )
-        ctk.CTkOptionMenu(
+        self._asr_menu = ctk.CTkOptionMenu(
             scroll,
             values=asr_labels,
             variable=self._asr_var,
-            command=self._on_asr_change,
             fg_color=GLASS_BG,
             button_color=GLASS_BORDER,
             button_hover_color=GLASS_HOVER,
             corner_radius=10,
             text_color=TEXT_PRI,
             width=440,
-        ).pack(**pad, fill="x")
+            state="disabled",
+        )
+        self._asr_menu.pack(**pad, fill="x")
 
         self._asr_hint_label = ctk.CTkLabel(
             self._build_hint_box(scroll, ""),
-            text="",
+            text=self._t("asr_hint_sensevoice"),
             font=ctk.CTkFont(size=11),
             text_color=TEXT_SEC,
             justify="left",
             wraplength=500,
         )
         self._asr_hint_label.pack(padx=10, pady=8, anchor="w")
-        self._on_asr_change(self._asr_var.get())
 
-        section_label("流式识别参数")
+        section_label(self._t("streaming_params"))
         self._chunk_interval_var = ctk.StringVar(
             value=str(streaming_cfg.get("chunk_interval_ms", 250))
         )
@@ -205,23 +211,23 @@ class SettingsWindow(ctk.CTkToplevel):
             value=str(streaming_cfg.get("partial_stability_hits", 2))
         )
 
-        self._build_entry(scroll, "Partial 刷新间隔 (ms)", self._chunk_interval_var, **pad)
-        self._build_entry(scroll, "识别窗口长度 (秒)", self._chunk_window_var, **pad)
-        self._build_entry(scroll, "稳定前缀命中次数", self._partial_hits_var, **pad)
-        self._build_hint_box(scroll, STREAMING_HINT)
+        self._build_entry(scroll, self._t("partial_refresh_interval"), self._chunk_interval_var, **pad)
+        self._build_entry(scroll, self._t("recognition_window_length"), self._chunk_window_var, **pad)
+        self._build_entry(scroll, self._t("partial_hits"), self._partial_hits_var, **pad)
+        self._build_hint_box(scroll, self._t("streaming_hint"))
 
-        section_label("VAD 静音阈值 (秒)")
+        section_label(self._t("vad_silence_threshold"))
         self._vad_var = ctk.StringVar(
             value=str(self._config.get("audio", {}).get("vad_silence_threshold", 0.8))
         )
-        self._build_entry(scroll, "句尾静音判定", self._vad_var, **pad)
+        self._build_entry(scroll, self._t("vad_silence_label"), self._vad_var, **pad)
 
         btn_frame = ctk.CTkFrame(self, fg_color=BG_PRIMARY)
         btn_frame.pack(side="bottom", fill="x", padx=16, pady=12)
 
         ctk.CTkButton(
             btn_frame,
-            text="保存",
+            text=self._t("save"),
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
             corner_radius=12,
@@ -231,7 +237,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         ctk.CTkButton(
             btn_frame,
-            text="取消",
+            text=self._t("cancel"),
             fg_color=GLASS_BG,
             hover_color=GLASS_HOVER,
             border_width=1,
@@ -271,65 +277,83 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
         ).pack(**pack_kwargs, fill="x")
 
-    def _on_backend_change(self, backend: str):
-        """翻訳バックエンドを切り替えたら、必要な入力欄だけを再描画する。"""
+    def _translation_locked(self) -> bool:
+        return self._fmt_codes.get(self._fmt_var.get(), OUTPUT_FORMAT_OPTIONS[0][1]) == "original_only"
+
+    def _add_backend_field(
+        self,
+        label_text: str,
+        value: str,
+        *,
+        secret: bool = False,
+        readonly: bool = False,
+        bind_key: str | None = None,
+    ) -> None:
+        ctk.CTkLabel(
+            self._fields_frame,
+            text=label_text,
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=12),
+        ).pack(anchor="w", padx=4, pady=(6, 0))
+
+        variable = ctk.StringVar(value=value)
+        entry = ctk.CTkEntry(
+            self._fields_frame,
+            textvariable=variable,
+            show="*" if secret else "",
+            fg_color=BG_SECONDARY if readonly else GLASS_BG,
+            border_color=GLASS_BORDER,
+            corner_radius=10,
+            text_color=TEXT_SEC if readonly else TEXT_PRI,
+            state="disabled" if readonly else "normal",
+        )
+        entry.pack(fill="x", padx=4, pady=(0, 2))
+        if bind_key is not None:
+            self._field_vars[bind_key] = variable
+            self._editable_backend_entries.append(entry)
+        else:
+            self._readonly_backend_entries.append(entry)
+
+    def _on_backend_change(self, selected_label: str):
         for widget in self._fields_frame.winfo_children():
             widget.destroy()
 
-        trans_cfg = self._config.get("translation", {})
         self._field_vars = {}
-        self._backend_entries = []
+        self._editable_backend_entries = []
+        self._readonly_backend_entries = []
 
-        def add_field(label_text: str, key: str, secret: bool = False):
-            ctk.CTkLabel(
-                self._fields_frame,
-                text=label_text,
-                text_color=TEXT_SEC,
-                font=ctk.CTkFont(size=12),
-            ).pack(anchor="w", padx=4, pady=(6, 0))
+        backend = self._backend_codes.get(selected_label, BACKEND_ORDER[0])
+        trans_cfg = self._config.get("translation", {})
+        backend_cfg = trans_cfg.get(backend, {})
 
-            variable = ctk.StringVar(value=trans_cfg.get(backend, {}).get(key, ""))
-            entry = ctk.CTkEntry(
-                self._fields_frame,
-                textvariable=variable,
-                show="*" if secret else "",
-                fg_color=GLASS_BG,
-                border_color=GLASS_BORDER,
-                corner_radius=10,
-                text_color=TEXT_PRI,
-            )
-            entry.pack(fill="x", padx=4, pady=(0, 2))
-            self._field_vars[key] = variable
-            self._backend_entries.append(entry)
-
-        if backend in ("openai", "deepseek", "qianwen", "custom"):
-            add_field("API Key", "api_key", secret=True)
-            add_field("Base URL", "base_url")
-            add_field("Model", "model")
-        elif backend == "anthropic":
-            add_field("API Key", "api_key", secret=True)
-            add_field("Model", "model")
+        self._add_backend_field(
+            self._t("api_key"),
+            str(backend_cfg.get("api_key", "")),
+            secret=True,
+            bind_key="api_key",
+        )
+        self._add_backend_field(
+            self._t("base_url"),
+            get_backend_value(backend, "base_url"),
+            readonly=True,
+        )
+        self._add_backend_field(
+            self._t("model"),
+            get_backend_value(backend, "model"),
+            readonly=True,
+        )
+        self._build_hint_box(self._fields_frame, self._t("fixed_by_backend"))
         self._apply_translation_mode_state()
-
-    def _on_asr_change(self, selected_label: str):
-        """ASR 選択に応じて説明文を切り替える。"""
-        engine = self._asr_codes.get(selected_label, "sensevoice-small")
-        self._asr_hint_label.configure(text=ASR_HINTS.get(engine, ""))
 
     def _on_output_format_change(self, _selected_label: str):
-        """出力形式に応じて翻訳設定欄の有効・無効を切り替える。"""
         self._apply_translation_mode_state()
-
-    def _translation_locked(self) -> bool:
-        return self._fmt_codes.get(self._fmt_var.get(), "ja(zh)") == "zh_only"
 
     def _apply_translation_mode_state(self):
         locked = self._translation_locked()
         state = "disabled" if locked else "normal"
 
-        if hasattr(self, "_backend_menu"):
-            self._backend_menu.configure(state=state)
-        for entry in self._backend_entries:
+        self._backend_menu.configure(state=state)
+        for entry in self._editable_backend_entries:
             entry.configure(
                 state=state,
                 fg_color=BG_SECONDARY if locked else GLASS_BG,
@@ -338,73 +362,76 @@ class SettingsWindow(ctk.CTkToplevel):
 
         if hasattr(self, "_translation_lock_label"):
             self._translation_lock_label.configure(
-                text=(
-                    "仅中文模式下不会调用翻译 API。  翻译后端与 API Key 已锁定。"
-                    if locked
-                    else "翻译模式下会在开始监听时检查当前后端的 API 配置。"
-                )
+                text=self._t("translation_lock_on") if locked else self._t("translation_lock_off")
             )
 
     def _parse_positive_float(self, value: str, field_name: str) -> float:
         try:
             parsed = float(value)
         except ValueError as exc:
-            raise ValueError(f"{field_name} 必须是数字") from exc
+            raise ValueError(self._t("must_be_number", field=field_name)) from exc
         if parsed <= 0:
-            raise ValueError(f"{field_name} 必须大于 0")
+            raise ValueError(self._t("must_be_positive", field=field_name))
         return parsed
 
     def _parse_positive_int(self, value: str, field_name: str) -> int:
         try:
             parsed = int(value)
         except ValueError as exc:
-            raise ValueError(f"{field_name} 必须是整数") from exc
+            raise ValueError(self._t("must_be_integer", field=field_name)) from exc
         if parsed <= 0:
-            raise ValueError(f"{field_name} 必须大于 0")
+            raise ValueError(self._t("must_be_positive", field=field_name))
         return parsed
 
     def _save(self):
-        """設定を保存して閉じる。  分块参数の基本整合性もここで検証する。"""
-        backend = self._backend_var.get()
-        target_lang = self._lang_codes.get(self._lang_var.get(), "ja")
-        output_format = self._fmt_codes.get(self._fmt_var.get(), "ja(zh)")
-        asr_engine = self._asr_codes.get(self._asr_var.get(), "sensevoice-small")
+        backend = self._backend_codes.get(self._backend_var.get(), BACKEND_ORDER[0])
+        target_lang = self._lang_codes.get(
+            self._lang_var.get(), TARGET_LANGUAGE_OPTIONS[0][1]
+        )
+        output_format = self._fmt_codes.get(
+            self._fmt_var.get(), OUTPUT_FORMAT_OPTIONS[0][1]
+        )
+        asr_engine = self._asr_codes.get(self._asr_var.get(), DEFAULT_ASR_ENGINE)
+        ui_language = self._ui_lang_codes.get(
+            self._ui_lang_var.get(), UI_LANGUAGE_OPTIONS[0][1]
+        )
 
         try:
-            vad_threshold = self._parse_positive_float(self._vad_var.get(), "VAD 静音阈值")
+            vad_threshold = self._parse_positive_float(
+                self._vad_var.get(), self._t("vad_silence_label")
+            )
             chunk_interval_ms = self._parse_positive_int(
                 self._chunk_interval_var.get(),
-                "Partial 刷新间隔",
+                self._t("partial_refresh_interval"),
             )
             chunk_window_s = self._parse_positive_float(
                 self._chunk_window_var.get(),
-                "识别窗口长度",
+                self._t("recognition_window_length"),
             )
             partial_hits = self._parse_positive_int(
                 self._partial_hits_var.get(),
-                "稳定前缀命中次数",
+                self._t("partial_hits"),
             )
         except ValueError as exc:
-            messagebox.showerror("错误", str(exc))
+            messagebox.showerror(self._t("error_title"), str(exc))
             return
 
         if chunk_window_s * 1000 < chunk_interval_ms:
             messagebox.showerror(
-                "错误",
-                "识别窗口长度不能小于 Partial 刷新间隔，否则无法形成重叠分块。",
+                self._t("error_title"),
+                self._t("window_must_not_be_less_than_interval"),
             )
             return
 
         cfg = self._config
-        cfg.setdefault("translation", {})
-        cfg["translation"]["backend"] = backend
-        cfg["translation"]["target_language"] = target_lang
-        cfg["translation"]["output_format"] = output_format
-
-        if not self._translation_locked():
-            cfg["translation"].setdefault(backend, {})
-            for key, variable in self._field_vars.items():
-                cfg["translation"][backend][key] = variable.get().strip()
+        translation_cfg = cfg.setdefault("translation", {})
+        translation_cfg["backend"] = backend
+        translation_cfg["target_language"] = target_lang
+        translation_cfg["output_format"] = normalize_output_format(output_format)
+        translation_cfg.setdefault(backend, {})
+        translation_cfg[backend]["api_key"] = self._field_vars["api_key"].get().strip()
+        translation_cfg[backend]["base_url"] = get_backend_value(backend, "base_url")
+        translation_cfg[backend]["model"] = get_backend_value(backend, "model")
 
         audio_cfg = cfg.setdefault("audio", {})
         audio_cfg["vad_silence_threshold"] = vad_threshold
@@ -422,6 +449,10 @@ class SettingsWindow(ctk.CTkToplevel):
             chunk_window_s,
         )
         streaming_cfg.setdefault("recent_speech_hold_s", 0.8)
+
+        ui_cfg = cfg.setdefault("ui", {})
+        ui_cfg["language"] = ui_language
+        ui_cfg.setdefault("osc_guide_seen", False)
 
         config_manager.save_config(cfg)
         if self._on_save:

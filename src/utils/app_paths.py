@@ -1,4 +1,4 @@
-"""バンドル済みリソースと書き込み可能なアプリデータのパスを管理する。"""
+"""バンドル済みリソースと書き込み可能なアプリデータのパスを管理する  """
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ APP_DIR_NAME = "Mio RealTime Translator"
 
 
 def project_root() -> Path:
-    """ソース実行時のリポジトリルートを返す。"""
+    """ソース実行時のリポジトリルートを返す  """
     return Path(__file__).resolve().parents[2]
 
 
 def resource_base_dirs() -> list[Path]:
-    """読み取り専用の同梱リソースを探す候補ディレクトリを返す。"""
+    """読み取り専用の同梱リソースを探す候補ディレクトリを返す  """
     if not getattr(sys, "frozen", False):
         return [project_root()]
 
@@ -29,7 +29,7 @@ def resource_base_dirs() -> list[Path]:
 
 
 def writable_app_dir() -> Path:
-    """実行時データを書き込むユーザー単位のディレクトリを返す。"""
+    """実行時データを書き込むユーザー単位のディレクトリを返す  """
     if not getattr(sys, "frozen", False):
         return project_root()
 

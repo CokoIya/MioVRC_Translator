@@ -1,4 +1,4 @@
-"""PyInstaller runtime hook for bundled native dependency lookup."""
+"""PyInstaller runtime hook for bundled native dependency lookup  """
 
 from __future__ import annotations
 

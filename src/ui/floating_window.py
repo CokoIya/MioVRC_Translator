@@ -1,8 +1,9 @@
-"""逆翻訳結果を表示する常時最前面のフローティングウィンドウ。"""
+"""逆翻訳結果を表示する常時最前面のフローティングウィンドウ  """
 
 from collections import deque
 
 import customtkinter as ctk
+from src.utils.i18n import tr
 
 # ── カラーパレット ────────────────────────────────────────────────────────
 BG_FLOAT = "#f7f5f0"      # フローティングウィンドウの背景色
@@ -15,13 +16,14 @@ MAX_ENTRIES = 5
 
 
 class FloatingWindow(ctk.CTkToplevel):
-    def __init__(self, parent):
+    def __init__(self, parent, ui_language: str = "zh-CN"):
         super().__init__(parent)
-        self.title("Mio Translator - 他人消息")
+        self._ui_lang = ui_language
+        self.title(tr(self._ui_lang, "floating_window_title"))
         self.geometry("420x300")
         self.attributes("-topmost", True)
         self.attributes("-alpha", 0.92)
-        self.overrideredirect(True)  # ボーダーを非表示にする。
+        self.overrideredirect(True)  # ボーダーを非表示にする  
         self.configure(fg_color=BG_FLOAT)
 
         self._entries: deque = deque(maxlen=MAX_ENTRIES)
@@ -29,13 +31,13 @@ class FloatingWindow(ctk.CTkToplevel):
         self._start_drag()
 
     def _build(self):
-        # ドラッグ用タイトルバー。
+        # ドラッグ用タイトルバー  
         self._title_bar = ctk.CTkFrame(
             self, height=32, corner_radius=0, fg_color=BG_TITLEBAR,
         )
         self._title_bar.pack(fill="x")
         ctk.CTkLabel(
-            self._title_bar, text="他人消息 (反向翻译)",
+            self._title_bar, text=tr(self._ui_lang, "floating_window_header"),
             font=ctk.CTkFont(size=11), text_color=TEXT_SEC,
         ).pack(side="left", padx=10)
         ctk.CTkButton(
@@ -45,11 +47,11 @@ class FloatingWindow(ctk.CTkToplevel):
             command=self.hide,
         ).pack(side="right", padx=4)
 
-        # 透明度スライダー。
+        # 透明度スライダー  
         slider_frame = ctk.CTkFrame(self, fg_color=GLASS_BG, corner_radius=0, height=28)
         slider_frame.pack(fill="x")
         ctk.CTkLabel(
-            slider_frame, text="透明度",
+            slider_frame, text=tr(self._ui_lang, "opacity"),
             font=ctk.CTkFont(size=10), text_color=TEXT_SEC,
         ).pack(side="left", padx=8)
         self._slider = ctk.CTkSlider(
@@ -59,7 +61,7 @@ class FloatingWindow(ctk.CTkToplevel):
         self._slider.set(0.92)
         self._slider.pack(side="left", padx=4, pady=4)
 
-        # メッセージ表示エリア。
+        # メッセージ表示エリア  
         self._text = ctk.CTkTextbox(
             self, font=ctk.CTkFont(size=12), wrap="word",
             state="disabled", fg_color=BG_FLOAT,
@@ -84,7 +86,7 @@ class FloatingWindow(ctk.CTkToplevel):
         self.geometry(f"+{x}+{y}")
 
     def add_message(self, original: str, translated: str | None):
-        """受信メッセージと翻訳結果を追加する。"""
+        """受信メッセージと翻訳結果を追加する  """
         self._entries.append((original, translated))
         self._refresh()
 

@@ -1,4 +1,4 @@
-"""Anthropic の翻訳バックエンド。"""
+"""Anthropic の翻訳バックエンド  """
 
 from .base import BaseTranslator
 

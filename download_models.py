@@ -1,8 +1,8 @@
 """
-SenseVoiceSmall を、パッケージ同梱用にリポジトリ内 `models/` へ保存する。
+SenseVoiceSmall を  パッケージ同梱用にリポジトリ内   models     へ保存する  
 
-使い方:
-    python download_models.py
+使い方  
+    python download  models  py
 """
 
 from __future__ import annotations

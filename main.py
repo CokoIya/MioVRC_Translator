@@ -1,9 +1,9 @@
-"""Mio RealTime Translator のエントリーポイント。"""
+"""Mio RealTime Translator のエントリーポイント  """
 
 import os
 import sys
 
-# プロジェクトルートを `sys.path` に追加する。
+# プロジェクトルートを   sys  path   に追加する  
 sys.path.insert(0, os.path.dirname(__file__))
 
 def _run_selftest() -> int:

@@ -1,0 +1,32 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 2, 0, 3),
+    prodvers=(1, 2, 0, 3),
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u"080404B0",
+          [
+            StringStruct(u"CompanyName", u"\u307f\u304a_Mio"),
+            StringStruct(u"FileDescription", u"Mio RealTime Translator"),
+            StringStruct(u"FileVersion", u"1.2.0-beta3.0"),
+            StringStruct(u"InternalName", u"MioTranslator"),
+            StringStruct(u"LegalCopyright", u"Copyright (C) 2026 \u307f\u304a_Mio"),
+            StringStruct(u"OriginalFilename", u"MioTranslator.exe"),
+            StringStruct(u"ProductName", u"Mio RealTime Translator"),
+            StringStruct(u"ProductVersion", u"1.2.0-beta3.0"),
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct(u"Translation", [2052, 1200])])
+  ]
+)

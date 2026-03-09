@@ -1,4 +1,4 @@
-"""SenseVoiceSmall の同梱配置と初回ダウンロードを管理する。"""
+"""SenseVoiceSmall の同梱配置と初回ダウンロードを管理する  """
 
 from __future__ import annotations
 
