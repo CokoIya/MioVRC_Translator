@@ -1,8 +1,8 @@
 # Mio RealTime Translator
 
-[![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./docs/README.zh-CN.md)
-[![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
-[![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./docs/README.en.md)
+[![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
+[![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
+[![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
 
 > 面向 VRChat 玩家的一款本地实时语音翻译工具
 > 作者：`みお_Mio` / 开源项目 / 禁止收费再分发

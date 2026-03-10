@@ -1,6 +1,6 @@
 # Mio RealTime Translator
 
-[![zh-CN](https://img.shields.io/badge/README-中文-2ea44f?style=for-the-badge)](../README.md)
+[![zh-CN](https://img.shields.io/badge/README-中文-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-日本語-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
 
