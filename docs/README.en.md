@@ -10,7 +10,7 @@
 ## Version
 
 - Desktop release: `v1.2.0`
-- GitHub Releases lite installer: `v1.2.0`
+- GitHub Releases lite installer: `v1.2.0_release`
 
 ## Overview
 
