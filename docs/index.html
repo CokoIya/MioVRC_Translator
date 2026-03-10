@@ -557,13 +557,13 @@
          target="_blank" rel="noopener"
          class="btn-download">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span id="download-button-text">点击跳转百度网盘下载</span>
+        <span id="download-button-text">下载百度网盘完整包</span>
       </a>
-      <a href="https://github.com/CokoIya/MioVRC_Translator/releases"
-         target="_blank" rel="noopener"
+      <a href="#"
+         id="download-releases-link"
          class="btn-download secondary">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
-        <span id="download-releases-text">打开 GitHub Releases 轻量版</span>
+        <span id="download-releases-text">下载 GitHub Releases 轻量版</span>
       </a>
       <p class="download-note" id="download-releases-note">GitHub Releases 版不内置语音模型，首次启动后会自动下载 SenseVoice Small。</p>
       <div class="group-links">
@@ -648,8 +648,9 @@
       "download-sub": "完整包通过百度网盘和 QQ 群文件提供；GitHub Releases 同步提供无内置模型的轻量安装版。",
       "download-card-title": "Mio RealTime Translator",
       "download-card-body": "Windows x64 · 含全部运行时依赖 · 网盘完整包内置 SenseVoice Small · GitHub Releases 轻量版首次启动自动下载模型",
-      "download-button-text": "打开百度网盘下载完整包",
-      "download-releases-text": "打开 GitHub Releases 轻量版",
+      "download-button-text": "下载百度网盘完整包",
+      "download-releases-text": "下载 GitHub Releases 轻量版",
+      "download-releases-loading": "正在获取最新版本…",
       "download-releases-note": "GitHub Releases 版不内置语音模型，首次启动后会自动下载 SenseVoice Small。",
       "download-meta": "百度网盘提取码：0601 · 若 QQ 链接无法拉起，可手动搜索群号进群下载",
       "privacy-title": "隐私声明",
@@ -702,8 +703,9 @@
       "download-sub": "The full package is available through Baidu Netdisk and QQ groups, while GitHub Releases also provides a lite installer without bundled models.",
       "download-card-title": "Mio RealTime Translator",
       "download-card-body": "Windows x64 · Includes all runtime dependencies · The full package bundles SenseVoice Small · The GitHub Releases lite build downloads the model on first launch",
-      "download-button-text": "Open Baidu Netdisk full package",
-      "download-releases-text": "Open GitHub Releases lite build",
+      "download-button-text": "Download Baidu Netdisk full package",
+      "download-releases-text": "Download GitHub Releases lite build",
+      "download-releases-loading": "Preparing latest download…",
       "download-releases-note": "The GitHub Releases build does not include the speech model. SenseVoice Small will start downloading automatically on first launch.",
       "download-meta": "Baidu extraction code: 0601 · If QQ links do not open, search the group number manually",
       "privacy-title": "Privacy Notice",
@@ -756,8 +758,9 @@
       "download-sub": "完全版は Baidu Netdisk と QQ グループで配布し、GitHub Releases ではモデル非同梱の軽量インストーラーも公開しています。",
       "download-card-title": "Mio RealTime Translator",
       "download-card-body": "Windows x64 · 実行時依存を同梱 · 完全版は SenseVoice Small 同梱 · GitHub Releases 軽量版は初回起動時にモデルを自動取得",
-      "download-button-text": "Baidu Netdisk で完全版を開く",
-      "download-releases-text": "GitHub Releases 軽量版を開く",
+      "download-button-text": "Baidu Netdisk で完全版をダウンロード",
+      "download-releases-text": "GitHub Releases 軽量版をダウンロード",
+      "download-releases-loading": "最新版を取得中…",
       "download-releases-note": "GitHub Releases 版には音声モデルが含まれていません。初回起動時に SenseVoice Small が自動ダウンロードされます。",
       "download-meta": "Baidu 抽出コード: 0601 · QQ が開けない場合はグループ番号を手動検索してください",
       "privacy-title": "プライバシーについて",
@@ -810,8 +813,9 @@
       "download-sub": "Полный пакет доступен через Baidu Netdisk и QQ-группы, а в GitHub Releases есть облегчённый установщик без встроенной модели.",
       "download-card-title": "Mio RealTime Translator",
       "download-card-body": "Windows x64 · Все зависимости уже внутри · Полный пакет включает SenseVoice Small · Лёгкая сборка из GitHub Releases скачает модель при первом запуске",
-      "download-button-text": "Открыть полный пакет на Baidu Netdisk",
-      "download-releases-text": "Открыть GitHub Releases lite",
+      "download-button-text": "Скачать полный пакет с Baidu Netdisk",
+      "download-releases-text": "Скачать GitHub Releases lite",
+      "download-releases-loading": "Получаем последнюю версию…",
       "download-releases-note": "В сборке из GitHub Releases нет встроенной речевой модели. SenseVoice Small начнёт скачиваться автоматически при первом запуске.",
       "download-meta": "Код извлечения Baidu: 0601 · Если QQ не открывается, найдите группу по номеру вручную",
       "privacy-title": "Конфиденциальность",
@@ -864,8 +868,9 @@
       "download-sub": "전체 패키지는 Baidu Netdisk와 QQ 그룹으로 배포되며, GitHub Releases에는 모델 비포함 경량 설치판도 함께 제공합니다.",
       "download-card-title": "Mio RealTime Translator",
       "download-card-body": "Windows x64 · 모든 런타임 의존성 포함 · 전체 패키지는 SenseVoice Small 기본 포함 · GitHub Releases 경량판은 첫 실행 시 모델을 자동 다운로드",
-      "download-button-text": "Baidu Netdisk 전체 패키지 열기",
-      "download-releases-text": "GitHub Releases 경량판 열기",
+      "download-button-text": "Baidu Netdisk 전체 패키지 다운로드",
+      "download-releases-text": "GitHub Releases 경량판 다운로드",
+      "download-releases-loading": "최신 버전을 가져오는 중…",
       "download-releases-note": "GitHub Releases 빌드에는 음성 모델이 포함되지 않습니다. 첫 실행 시 SenseVoice Small이 자동으로 다운로드됩니다.",
       "download-meta": "Baidu 추출 코드: 0601 · QQ 링크가 열리지 않으면 그룹 번호로 직접 검색하세요",
       "privacy-title": "개인정보 안내",
@@ -939,11 +944,98 @@
     return langFromBrowser();
   }
 
+  const latestReleaseApi = 'https://api.github.com/repos/CokoIya/MioVRC_Translator/releases/latest';
+  let latestReleaseAssetUrlPromise = null;
+
+  function scoreReleaseAsset(assetName) {
+    const name = String(assetName || '').toLowerCase();
+    if (!name) return Number.NEGATIVE_INFINITY;
+    if (name.endsWith('.blockmap') || name.endsWith('.yml') || name.endsWith('.yaml') || name.endsWith('.txt') || name.includes('sha256')) {
+      return Number.NEGATIVE_INFINITY;
+    }
+
+    let score = 0;
+    if (name.endsWith('.exe')) score += 100;
+    else if (name.endsWith('.msi')) score += 90;
+    else if (name.endsWith('.zip')) score += 50;
+
+    if (name.includes('setup')) score += 30;
+    if (name.includes('installer')) score += 30;
+    if (name.includes('lite')) score += 20;
+    if (name.includes('release')) score += 10;
+    if (name.includes('portable')) score -= 10;
+    return score;
+  }
+
+  function pickLatestReleaseAsset(assets) {
+    const candidates = Array.isArray(assets) ? assets : [];
+    return candidates
+      .map(asset => ({ asset, score: scoreReleaseAsset(asset && asset.name) }))
+      .filter(item => item.asset && item.asset.browser_download_url && item.score > Number.NEGATIVE_INFINITY)
+      .sort((a, b) => b.score - a.score)[0]?.asset || null;
+  }
+
+  async function getLatestReleaseAssetUrl() {
+    if (!latestReleaseAssetUrlPromise) {
+      latestReleaseAssetUrlPromise = fetch(latestReleaseApi, {
+        headers: { Accept: 'application/vnd.github+json' }
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`GitHub API ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(release => {
+          const asset = pickLatestReleaseAsset(release.assets);
+          if (!asset) {
+            throw new Error('No downloadable asset found');
+          }
+          return asset.browser_download_url;
+        })
+        .catch(error => {
+          latestReleaseAssetUrlPromise = null;
+          throw error;
+        });
+    }
+    return latestReleaseAssetUrlPromise;
+  }
+
   document.getElementById('lang-switcher').addEventListener('change', (event) => {
     applyLanguage(event.target.value);
   });
 
   detectInitialLanguage().then(applyLanguage);
+
+  const releaseDownloadLink = document.getElementById('download-releases-link');
+  const releaseDownloadText = document.getElementById('download-releases-text');
+  if (releaseDownloadLink && releaseDownloadText) {
+    releaseDownloadLink.addEventListener('click', async (event) => {
+      event.preventDefault();
+
+      const lang = localStorage.getItem('mio-site-lang') || document.documentElement.lang || 'zh-CN';
+      const dict = translations[lang] || translations['en'];
+      const originalText = dict['download-releases-text'] || releaseDownloadText.textContent;
+      const loadingText = dict['download-releases-loading'] || originalText;
+
+      releaseDownloadLink.style.pointerEvents = 'none';
+      releaseDownloadLink.setAttribute('aria-busy', 'true');
+      releaseDownloadText.textContent = loadingText;
+
+      try {
+        const assetUrl = await getLatestReleaseAssetUrl();
+        window.location.href = assetUrl;
+      } catch (_error) {
+        releaseDownloadText.textContent = originalText;
+      } finally {
+        setTimeout(() => {
+          releaseDownloadLink.style.pointerEvents = '';
+          releaseDownloadLink.removeAttribute('aria-busy');
+          releaseDownloadText.textContent = originalText;
+        }, 1200);
+      }
+    });
+  }
 
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
