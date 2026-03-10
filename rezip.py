@@ -41,3 +41,4 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         if i % 100 == 0:
             print(f'  {i}/{len(files)}', flush=True)
 print(f'Done: {out.stat().st_size // 1024 // 1024} MB')
+

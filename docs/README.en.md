@@ -109,3 +109,4 @@ powershell -ExecutionPolicy Bypass -File .\build_release_lite_installer.ps1
 - VRChat does not expose other players' raw audio streams, so reverse translation is based on chatbox text only
 - A single VRChat chatbox message is limited to about 144 characters
 - In noisy environments, VAD may trigger incorrectly and needs manual tuning
+

@@ -456,3 +456,4 @@ class SettingsWindow(ctk.CTkToplevel):
         if self._on_save:
             self._on_save(cfg)
         self.destroy()
+

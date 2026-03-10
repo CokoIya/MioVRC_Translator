@@ -21,3 +21,4 @@ python-osc>=1.8.3
 
 # Optional: GPU acceleration (uncomment if CUDA available)
 # torch>=2.0.0+cu118
+

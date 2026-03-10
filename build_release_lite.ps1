@@ -8,3 +8,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Release-lite build finished. Models are excluded from the bundle."
+

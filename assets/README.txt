@@ -7,3 +7,4 @@ Supported filenames:
 - sponsor.png
 - sponsor.jpg
 
+

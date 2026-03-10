@@ -67,3 +67,4 @@ Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; Flags: 
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+

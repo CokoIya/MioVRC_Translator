@@ -109,3 +109,4 @@ powershell -ExecutionPolicy Bypass -File .\build_release_lite_installer.ps1
 - VRChat 不公开其他玩家的原始音频流，反向翻译仅基于 chatbox 文本
 - VRChat chatbox 单条消息上限约为 144 个字符
 - 在嘈杂环境下，VAD 可能误触发，需要自行调整阈值
+

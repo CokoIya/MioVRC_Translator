@@ -24,3 +24,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Release-lite installer finished: dist\\MioTranslator-Setup-V1.2.0_beta3.2_Releases.exe"
+

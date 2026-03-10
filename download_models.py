@@ -55,3 +55,4 @@ if __name__ == "__main__":
     print(f"Saving models to: {packaging_models_dir().resolve()}\n")
     download_sensevoice()
     print("\nSenseVoiceSmall is ready. You can now launch the app.")
+
