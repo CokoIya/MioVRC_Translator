@@ -10,7 +10,7 @@
 ## バージョン
 
 - デスクトップ版: `v1.2.0`
-- GitHub Releases 軽量版インストーラー: `v1.2.0`
+- GitHub Releases 軽量版インストーラー: `v1.2.0_release`
 
 ## 概要
 
