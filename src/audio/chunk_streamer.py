@@ -1,5 +1,3 @@
-"""最近数秒の音声を保持しながら重複チャンクを切り出す  """
-
 from __future__ import annotations
 
 import collections
@@ -8,7 +6,6 @@ import numpy as np
 
 
 class ChunkStreamer:
-    """固定幅ウィンドウを一定間隔で切り出す簡易チャンクャ  """
 
     def __init__(
         self,

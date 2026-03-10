@@ -1,5 +1,3 @@
-"""Manage bundled and runtime-downloaded SenseVoiceSmall model files."""
-
 from __future__ import annotations
 
 import os

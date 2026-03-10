@@ -1,5 +1,3 @@
-"""VRChat のチャットボックスへ安全に OSC 送信するヘルパー。"""
-
 from __future__ import annotations
 
 import queue

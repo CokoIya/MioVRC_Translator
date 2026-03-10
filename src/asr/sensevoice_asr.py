@@ -1,5 +1,3 @@
-"""FunASR の SenseVoiceSmall を既存 ASR インターフェースへ接続する  """
-
 from __future__ import annotations
 
 import re

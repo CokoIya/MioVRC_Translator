@@ -1,5 +1,3 @@
-"""疑似ストリーミング認識の partial    final テキストを安定化する  """
-
 from __future__ import annotations
 
 import re
@@ -19,7 +17,6 @@ def _common_prefix(left: str, right: str) -> str:
 
 
 class StreamingMerger:
-    """連続する partial 結果の共通接頭辞を固定して表示揺れを抑える  """
 
     def __init__(self, stable_repeats: int = 2):
         self._stable_repeats = max(int(stable_repeats), 1)

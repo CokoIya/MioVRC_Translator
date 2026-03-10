@@ -1,5 +1,3 @@
-"""VRChat のチャットボックス OSC を受信するヘルパー。"""
-
 import threading
 from typing import Callable, Optional, Set
 

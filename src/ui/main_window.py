@@ -1,5 +1,3 @@
-﻿"""メインアプリケーションウィンドウ"""
-
 import queue
 import threading
 import webbrowser
@@ -34,23 +32,21 @@ from src.utils.lang_detect import detect_language
 from .settings_window import SettingsWindow
 from .floating_window import FloatingWindow
 
-# ── カラーパレット ────────────────────────────────────────────────────────
-BG_PRIMARY   = "#f7f5f0"   # メイン背景色
-BG_SECONDARY = "#edeae2"   # 補助背景色
-BG_TOP       = "#e5e1d8"   # 上部バーの背景色
-BG_PANEL     = "#f2efe8"   # パネル背景色
-GLASS_BG     = "#daeaf8"   # ボタン背景色
-GLASS_BORDER = "#8ab8d8"   # ボタン枠線色
-GLASS_HOVER  = "#c4dcf2"   # ホバー時の背景色
-ACCENT       = "#3a9fd8"   # 強調色
-ACCENT_HOVER = "#2882bc"   # 強調色のホバー時背景色
-DANGER       = "#e05060"   # 停止系の強調色
-DANGER_HOVER = "#c03045"   # 停止系ホバー色
-SUCCESS      = "#2ea85a"   # 成功状態の色
-TEXT_PRI     = "#252535"   # 主テキスト色
-TEXT_SEC     = "#686880"   # 補助テキスト色
-DIVIDER      = "#d8d4cc"   # 区切り線の色
-
+BG_PRIMARY = "#f7f5f0"
+BG_SECONDARY = "#edeae2"
+BG_TOP = "#e5e1d8"
+BG_PANEL = "#f2efe8"
+GLASS_BG = "#daeaf8"
+GLASS_BORDER = "#8ab8d8"
+GLASS_HOVER = "#c4dcf2"
+ACCENT = "#3a9fd8"
+ACCENT_HOVER = "#2882bc"
+DANGER = "#e05060"
+DANGER_HOVER = "#c03045"
+SUCCESS = "#2ea85a"
+TEXT_PRI = "#252535"
+TEXT_SEC = "#686880"
+DIVIDER = "#d8d4cc"
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
@@ -89,7 +85,6 @@ class MainWindow(ctk.CTk):
         self.minsize(760, 450)
         self.configure(fg_color=BG_PRIMARY)
 
-        # 起動時に必要な主要オブジェクト  
         self._recorder: AudioRecorder | None = None
         self._asr = create_asr(config)
         self._translator = None
@@ -124,7 +119,7 @@ class MainWindow(ctk.CTk):
             tuple[str, int] | None
         ] = queue.Queue(maxsize=INCOMING_TASK_QUEUE_MAXSIZE)
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
-        self._current_src_lang: str | None = None  #   None   は自動判定を表す  
+        self._current_src_lang: str | None = None
         self._float_win: FloatingWindow | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
@@ -229,8 +224,6 @@ class MainWindow(ctk.CTk):
         while len(self._own_msg_order) > OWN_MESSAGE_CACHE_SIZE:
             expired = self._own_msg_order.popleft()
             self._own_msgs.discard(expired)
-
-    # ── UI 構築 ────────────────────────────────────────────────────────────
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
@@ -710,7 +703,6 @@ class MainWindow(ctk.CTk):
                 text=self._t("floating_shown") if self._float_is_visible() else self._t("floating_hidden")
             )
 
-    # ── 翻訳パネルの補助処理 ─────────────────────────────────────────────
 
     def _set_source_text(self, text: str, text_color: str | None = None):
         safe = (text or "").strip()
@@ -792,9 +784,8 @@ class MainWindow(ctk.CTk):
         ).pack(side="right", padx=4)
 
     def _on_tgt_lang_change(self, *_):
-        """翻訳先の状態と入力言語候補を同期する。"""
         tgt_code = self._target_lang_codes.get(self._tgt_var.get(), "ja")
-        self._current_tgt_lang = tgt_code  #     on  audio  segment   から安全に参照できるように保持する
+        self._current_tgt_lang = tgt_code
         self._sync_target_language_to_config(tgt_code)
 
         values = [
@@ -805,7 +796,6 @@ class MainWindow(ctk.CTk):
             self._src_lang_var.set(values[0])
 
     def _on_src_lang_change(self, *_):
-        """選択中の入力言語を  スレッドセーフに参照できる形で保持する  """
         label = self._src_lang_var.get()
         code = self._src_lang_codes.get(label, "auto")
         self._current_src_lang = None if code == "auto" else code
@@ -817,7 +807,6 @@ class MainWindow(ctk.CTk):
             self._tgt_var.set(values[0])
 
     def _swap_langs(self):
-        """入出力テキストを入れ替える  """
         src_text = self._src_text
         tgt_text = self._tgt_output.get("1.0", "end").strip()
         self._set_source_text(tgt_text)
@@ -1124,7 +1113,6 @@ class MainWindow(ctk.CTk):
                 if p.exists():
                     return p
 
-            # 指定名の画像がない場合は    assets   直下で最初に見つかった画像を使う  
             if not assets_dir.exists():
                 continue
             for p in sorted(assets_dir.iterdir()):
@@ -1391,14 +1379,12 @@ class MainWindow(ctk.CTk):
         self._last_own_chatbox_echo_time = time.time()
 
     def _check_vrc_send_ack(self, sent_text: str):
-        # シーンが対応していれば  VRChat は     chatbox  input   をエコーバックする  
         if not self._osc_echo_capable:
             return
         if self._last_own_chatbox_echo_text == sent_text and (time.time() - self._last_own_chatbox_echo_time) < 2.0:
             return
 
     def _send_to_vrc(self):
-        """翻訳結果を VRC チャットボックスへ送信する    出力形式の設定も適用する  """
         tgt_text = self._last_tgt_text
         src_text = self._src_text
         if not tgt_text and not src_text:
@@ -1410,7 +1396,6 @@ class MainWindow(ctk.CTk):
             )
             return
 
-        # 音声認識モードと同じ出力形式を適用する  
         fmt = self._get_output_format()
         if fmt == "original_only":
             chatbox_text = src_text or tgt_text
@@ -1433,7 +1418,6 @@ class MainWindow(ctk.CTk):
             messagebox.showerror(self._t("send_failed_title"), str(e))
 
     def _translate_manual(self):
-        """手動入力したテキストを翻訳する  """
         src_text = self._src_text
         if not src_text:
             return
@@ -1443,7 +1427,6 @@ class MainWindow(ctk.CTk):
             self._show_tgt(src_text)
             return
 
-        # 言語コードを決定する  
         src_code = self._src_lang_codes.get(self._src_lang_var.get(), "auto")
         if src_code == "auto":
             src_code = detect_language(src_text)
@@ -1465,7 +1448,6 @@ class MainWindow(ctk.CTk):
         ).start()
 
     def _do_translate(self, text: str, src_lang: str, tgt_lang: str):
-        """バックグラウンドスレッドで翻訳を実行する  """
         try:
             result = self._translator.translate(text, src_lang, tgt_lang)
             self._call_in_ui(lambda: self._show_tgt(result))
@@ -1476,7 +1458,6 @@ class MainWindow(ctk.CTk):
             self._call_in_ui(self._reset_translate_btn)
 
     def _show_tgt(self, text: str):
-        # 正常な翻訳結果のみを保持し  エラー文字列は保存しない  
         if not text.startswith("[Error]"):
             self._last_tgt_text = text
         if text == self._tgt_rendered_text:
@@ -1490,8 +1471,6 @@ class MainWindow(ctk.CTk):
     def _reset_translate_btn(self):
         self._translating = False
         self._translate_btn.configure(state="normal", text=self._t("translate"))
-
-    # ── デバイス一覧 ──────────────────────────────────────────────────────
 
     def _load_devices(self):
         devices = AudioRecorder.list_devices()
@@ -1507,25 +1486,20 @@ class MainWindow(ctk.CTk):
 
     @staticmethod
     def _get_system_default_input(devices: list[dict], names: list[str]) -> str:
-        """現在の既定入力デバイス名を返す    可能なら WASAPI を優先する  """
         try:
             default_idx = sd.default.device[0]  # 0 番目は入力デバイス
             if default_idx is not None and default_idx >= 0:
                 default_name = sd.query_devices(default_idx)["name"]
-                # 重複排除済み一覧の中から  最適な API 側の同名デバイスを探す  
                 match = next((d["name"] for d in devices if d["name"] == default_name), None)
                 if match and match in names:
                     return match
         except Exception:
             pass
-        # フォールバック時は  既知の Windows ループバック系デバイスを避ける  
         _SKIP = ("microsoft 映射", "microsoft sound mapper", "立体声混音", "stereo mix")
         return next(
             (n for n in names if not any(s in n.lower() for s in _SKIP)),
             names[0],
         )
-
-    # ── 音声リスニングの開始と停止 ────────────────────────────────────────
 
     def _toggle_listening(self):
         if self._running:
@@ -1550,7 +1524,6 @@ class MainWindow(ctk.CTk):
         self._reset_streaming_state()
         self._drain_queue(self._partial_task_queue)
         self._drain_queue(self._final_task_queue)
-        # ワーカースレッドへ渡す前に  Tkinter 変数はメインスレッドで読み出しておく  
         dev_name = self._device_var.get()
         dev_idx = self._devices.get(dev_name)
         threading.Thread(target=self._init_and_run, args=(dev_idx,), daemon=True).start()
@@ -1635,13 +1608,10 @@ class MainWindow(ctk.CTk):
         messagebox.showerror(self._t("listen_start_failed_title"), msg)
 
     def _on_vad_state(self, in_speech: bool):
-        """録音スレッドから呼ばれ  VAD 状態の変化を反映する  """
         if in_speech:
             self._call_in_ui(lambda: self._set_status(self._t("status_speaking"), ACCENT))
         else:
             self._call_in_ui(lambda: self._set_status(self._t("status_listening"), SUCCESS))
-
-    # ── 音声セグメント処理  ログ出力はせず VRC 送信のみ行う ─────────────────
 
     def _on_audio_segment(self, audio):
         if not self._running:
@@ -1652,8 +1622,6 @@ class MainWindow(ctk.CTk):
             self._final_task_queue,
             (audio, asr_lang, self._listen_session),
         )
-
-    # ── 受信チャットボックス  逆翻訳してフローティングウィンドウへ表示 ─────
 
     def _on_incoming_chatbox(self, text: str):
         self._enqueue_latest(
@@ -1680,8 +1648,6 @@ class MainWindow(ctk.CTk):
     def _show_incoming(self, original: str, translated: str | None):
         if self._float_win and self._float_win.winfo_exists():
             self._float_win.add_message(original, translated)
-
-    # ── フローティングウィンドウ ──────────────────────────────────────────
 
     def _toggle_float(self):
         ui_cfg = self._config.setdefault("ui", {})
@@ -1710,8 +1676,6 @@ class MainWindow(ctk.CTk):
         ui_cfg = self._config.setdefault("ui", {})
         ui_cfg["floating_window_opacity"] = round(float(opacity), 2)
         self._schedule_config_save()
-
-    # ── 設定 ──────────────────────────────────────────────────────────────
 
     def _open_settings(self):
         SettingsWindow(self, self._config, on_save=self._on_config_saved)
@@ -1984,8 +1948,6 @@ class MainWindow(ctk.CTk):
             self.after(100, self._start)
         else:
             self._set_bottom(self._t("settings_saved"))
-
-    # ── 補助処理 ──────────────────────────────────────────────────────────
 
     def _set_status(self, text: str, color: str = "white"):
         if text == self._status_text and color == self._status_color:

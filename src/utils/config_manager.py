@@ -1,5 +1,3 @@
-"""設定ファイルの読み書きを扱う  """
-
 import json
 import shutil
 from pathlib import Path
@@ -9,12 +7,10 @@ from src.utils.ui_language_detection import bootstrap_ui_language
 
 
 def _config_path() -> Path:
-    """パッケージ版ではユーザーごとの書き込み可能ディレクトリへ保存する  """
     return writable_app_dir() / "config.json"
 
 
 def _example_path() -> Path:
-    """同梱された   config  example  json   の場所を返す  """
     for base in resource_base_dirs():
         candidate = base / "config.example.json"
         if candidate.exists():
@@ -36,7 +32,6 @@ def _merge_defaults(defaults, current):
 
 
 def load_config() -> dict:
-    """  config  json   を読み込む    見つからない場合は   config  example  json   を複製する  """
     config_path = _config_path()
     created_new = False
     if not config_path.exists():
@@ -62,7 +57,6 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
-    """  config  json   を保存する  """
     config_path = _config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
@@ -70,7 +64,6 @@ def save_config(config: dict) -> None:
 
 
 def get(config: dict, *keys, default=None):
-    """ネストした辞書キーを安全に取得する  """
     node = config
     for key in keys:
         if not isinstance(node, dict) or key not in node:

@@ -1,5 +1,3 @@
-"""Resolve the initial desktop UI language from saved config, IP, or locale."""
-
 from __future__ import annotations
 
 import json

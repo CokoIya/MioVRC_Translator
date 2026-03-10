@@ -1,5 +1,3 @@
-"""Minimal desktop UI translations."""
-
 from __future__ import annotations
 
 from src.utils.ui_config import DEFAULT_UI_LANGUAGE

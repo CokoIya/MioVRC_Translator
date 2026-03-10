@@ -1,5 +1,3 @@
-"""Unicode の文字範囲を使って簡易的に言語を判定する  """
-
 import re
 
 ZH_RANGE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
@@ -9,7 +7,6 @@ RU_RANGE = re.compile(r"[\u0400-\u04ff]")
 
 
 def detect_language(text: str) -> str:
-    """ISO 639  1 の言語コードを返す    判定できない場合は   en   を返す  """
     if not text:
         return "en"
     ja = len(JA_RANGE.findall(text))

@@ -1,5 +1,3 @@
-"""VAD と重複チャンク切り出しを併用する録音器  """
-
 from __future__ import annotations
 
 import collections
@@ -17,9 +15,6 @@ FRAME_QUEUE_MAXSIZE = 64
 
 
 class AudioRecorder:
-    """
-    マイクから連続的に音声を取得する    final 用の文単位切り出しと partial 用の重複チャンクを同時に扱う  
-    """
 
     def __init__(
         self,
@@ -111,7 +106,6 @@ class AudioRecorder:
         self._worker_thread.start()
 
     def _open_stream(self, device) -> sd.InputStream:
-        """利用可能な形式を順に試して InputStream を開く  """
         try:
             dev_idx = device if device is not None else sd.default.device[0]
             native_rate = int(sd.query_devices(dev_idx)["default_samplerate"])
@@ -321,7 +315,6 @@ class AudioRecorder:
 
     @staticmethod
     def list_devices() -> list[dict]:
-        """入力デバイスを名前単位で重複排除して返す  """
         api_preference = {
             "Windows WASAPI": 0,
             "Windows WDM-KS": 1,

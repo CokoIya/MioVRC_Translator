@@ -1,5 +1,3 @@
-"""受信した逆翻訳メッセージを表示するフローティングウィンドウ。"""
-
 from __future__ import annotations
 
 from collections import deque

@@ -1,5 +1,3 @@
-"""Settings dialog for translation, ASR, UI language, and streaming options."""
-
 from __future__ import annotations
 
 import customtkinter as ctk

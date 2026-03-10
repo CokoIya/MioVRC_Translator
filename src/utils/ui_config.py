@@ -1,5 +1,3 @@
-"""デスクトップ UI と設定処理で共有するメタデータ。"""
-
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping

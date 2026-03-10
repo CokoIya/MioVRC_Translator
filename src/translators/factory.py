@@ -1,5 +1,3 @@
-"""翻訳バックエンドの生成と基本的な設定検証を行う  """
-
 from .anthropic_translator import AnthropicTranslator
 from .base import BaseTranslator
 from .openai_translator import OpenAITranslator
