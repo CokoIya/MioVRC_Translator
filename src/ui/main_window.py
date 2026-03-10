@@ -1,10 +1,12 @@
 ﻿"""メインアプリケーションウィンドウ"""
 
+import queue
 import threading
 import webbrowser
 import sys
 import subprocess
 import time
+from collections import deque
 from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox, PhotoImage
@@ -16,6 +18,8 @@ from src.utils.ui_config import (
     MANUAL_SOURCE_LANGUAGE_OPTIONS,
     TARGET_LANGUAGE_OPTIONS,
     UI_LANGUAGE_OPTIONS,
+    get_manual_source_language_options,
+    get_target_language_options,
     get_ui_language,
     normalize_output_format,
 )
@@ -65,6 +69,12 @@ SPONSOR_IMAGE_CANDIDATES = (
     "sponsor.jpg",
 )
 
+PARTIAL_TASK_QUEUE_MAXSIZE = 1
+FINAL_TASK_QUEUE_MAXSIZE = 8
+INCOMING_TASK_QUEUE_MAXSIZE = 12
+OWN_MESSAGE_CACHE_SIZE = 200
+CONFIG_SAVE_DEBOUNCE_MS = 280
+
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
@@ -86,21 +96,33 @@ class MainWindow(ctk.CTk):
         self._sender: VRCOSCSender | None = None
         self._receiver: VRCOSCReceiver | None = None
         self._own_msgs: set[str] = set()
+        self._own_msg_order: deque[str] = deque()
         self._osc_echo_capable = False
         self._translating = False
         self._src_placeholder = tr(self._ui_lang, "source_placeholder")
         self._src_text = ""
+        self._src_rendered_text = ""
+        self._src_rendered_color = TEXT_SEC
+        self._src_rendered_count = 0
         self._last_tgt_text = ""
+        self._tgt_rendered_text = ""
         self._last_own_chatbox_echo_text = ""
         self._last_own_chatbox_echo_time = 0.0
 
         self._running = False
-        self._partial_worker_busy = False
-        self._partial_worker_lock = threading.Lock()
-        self._final_worker_lock = threading.Lock()
+        self._listen_session = 0
         self._merge_lock = threading.Lock()
         self._partial_generation = 0
         self._partial_merger = self._create_streaming_merger()
+        self._partial_task_queue: queue.Queue[
+            tuple[object, str | None, int, int] | None
+        ] = queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE)
+        self._final_task_queue: queue.Queue[
+            tuple[object, str | None, int] | None
+        ] = queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE)
+        self._incoming_task_queue: queue.Queue[
+            tuple[str, int] | None
+        ] = queue.Queue(maxsize=INCOMING_TASK_QUEUE_MAXSIZE)
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._current_src_lang: str | None = None  #   None   は自動判定を表す  
         self._float_win: FloatingWindow | None = None
@@ -115,8 +137,12 @@ class MainWindow(ctk.CTk):
         self._bottom_progress_indeterminate = False
         self._bottom_progress_running = False
         self._model_prepare_running = False
+        self._config_save_after_id: str | None = None
+        self._destroying = False
 
         self._set_window_icon()
+        self._start_background_workers()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         self._build()
         self._load_devices()
@@ -126,6 +152,83 @@ class MainWindow(ctk.CTk):
 
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._ui_lang, key, **kwargs)
+
+    def _start_background_workers(self) -> None:
+        self._partial_worker = threading.Thread(
+            target=self._partial_worker_loop,
+            daemon=True,
+        )
+        self._partial_worker.start()
+        self._final_worker = threading.Thread(
+            target=self._final_worker_loop,
+            daemon=True,
+        )
+        self._final_worker.start()
+        self._incoming_worker = threading.Thread(
+            target=self._incoming_worker_loop,
+            daemon=True,
+        )
+        self._incoming_worker.start()
+
+    @staticmethod
+    def _drain_queue(work_queue: queue.Queue) -> None:
+        while True:
+            try:
+                work_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    @staticmethod
+    def _enqueue_latest(work_queue: queue.Queue, payload) -> bool:
+        try:
+            work_queue.put_nowait(payload)
+            return True
+        except queue.Full:
+            pass
+
+        try:
+            work_queue.get_nowait()
+        except queue.Empty:
+            return False
+
+        try:
+            work_queue.put_nowait(payload)
+            return True
+        except queue.Full:
+            return False
+
+    def _call_in_ui(self, callback, delay_ms: int = 0) -> bool:
+        if self._destroying:
+            return False
+        try:
+            self.after(delay_ms, callback)
+            return True
+        except Exception:
+            return False
+
+    def _schedule_config_save(self, delay_ms: int = CONFIG_SAVE_DEBOUNCE_MS) -> None:
+        if self._destroying:
+            return
+        if self._config_save_after_id is not None:
+            try:
+                self.after_cancel(self._config_save_after_id)
+            except Exception:
+                pass
+        self._config_save_after_id = self.after(delay_ms, self._flush_config_save)
+
+    def _flush_config_save(self) -> None:
+        self._config_save_after_id = None
+        config_manager.save_config(self._config)
+
+    def _remember_own_message(self, text: str) -> None:
+        safe = str(text or "").strip()
+        if not safe or safe in self._own_msgs:
+            return
+        self._own_msgs.add(safe)
+        self._own_msg_order.append(safe)
+        while len(self._own_msg_order) > OWN_MESSAGE_CACHE_SIZE:
+            expired = self._own_msg_order.popleft()
+            self._own_msgs.discard(expired)
 
     # ── UI 構築 ────────────────────────────────────────────────────────────
 
@@ -227,12 +330,17 @@ class MainWindow(ctk.CTk):
         )
         self._device_menu.grid(row=0, column=1, sticky="w")
 
-        self._target_lang_labels = [label for label, _ in TARGET_LANGUAGE_OPTIONS]
-        self._target_lang_codes = {label: code for label, code in TARGET_LANGUAGE_OPTIONS}
-        self._target_lang_reverse = {code: label for label, code in TARGET_LANGUAGE_OPTIONS}
+        self._all_target_lang_options = list(TARGET_LANGUAGE_OPTIONS)
+        self._target_lang_codes = {
+            label: code for label, code in self._all_target_lang_options
+        }
+        self._target_lang_reverse = {
+            code: label for label, code in self._all_target_lang_options
+        }
+        target_labels = [label for label, _ in get_target_language_options()]
         initial_tgt = self._config.get("translation", {}).get("target_language", "ja")
         self._tgt_var = ctk.StringVar(
-            value=self._target_lang_reverse.get(initial_tgt, self._target_lang_labels[0])
+            value=self._target_lang_reverse.get(initial_tgt, target_labels[0])
         )
 
         float_group = ctk.CTkFrame(controls, fg_color="transparent")
@@ -299,9 +407,14 @@ class MainWindow(ctk.CTk):
         hdr.grid_columnconfigure(3, weight=1)
         hdr.grid_propagate(False)
 
-        self._manual_langs = list(MANUAL_SOURCE_LANGUAGE_OPTIONS)
-        src_labels = [label for label, _ in self._manual_langs]
-        self._src_lang_codes = {label: code for label, code in self._manual_langs}
+        self._all_manual_lang_options = list(MANUAL_SOURCE_LANGUAGE_OPTIONS)
+        src_labels = [
+            label
+            for label, _ in get_manual_source_language_options({self._current_tgt_lang})
+        ]
+        self._src_lang_codes = {
+            label: code for label, code in self._all_manual_lang_options
+        }
         self._src_lang_var = ctk.StringVar(value=src_labels[0])
         self._src_lang_menu = ctk.CTkOptionMenu(
             hdr,
@@ -331,7 +444,7 @@ class MainWindow(ctk.CTk):
 
         self._tgt_menu = ctk.CTkOptionMenu(
             hdr,
-            values=self._target_lang_labels,
+            values=[label for label, _ in get_target_language_options()],
             variable=self._tgt_var,
             fg_color=BG_SECONDARY,
             button_color=BG_SECONDARY,
@@ -607,16 +720,27 @@ class MainWindow(ctk.CTk):
 
         shown = safe or self._src_placeholder
         color = text_color or (TEXT_PRI if safe else TEXT_SEC)
+        char_count = len(safe)
+
+        if (
+            shown == self._src_rendered_text
+            and color == self._src_rendered_color
+            and char_count == self._src_rendered_count
+        ):
+            return
 
         self._src_input.configure(state="normal")
         self._src_input.delete("1.0", "end")
         self._src_input.insert("1.0", shown)
         self._src_input.configure(text_color=color, state="disabled")
+        self._src_rendered_text = shown
+        self._src_rendered_color = color
+        self._src_rendered_count = char_count
         char_label = getattr(self, "_char_label", None)
         if char_label is not None:
             try:
                 if char_label.winfo_exists():
-                    char_label.configure(text=self._t("char_count", count=len(safe)))
+                    char_label.configure(text=self._t("char_count", count=char_count))
             except Exception:
                 pass
 
@@ -670,9 +794,12 @@ class MainWindow(ctk.CTk):
     def _on_tgt_lang_change(self, *_):
         """翻訳先の状態と入力言語候補を同期する。"""
         tgt_code = self._target_lang_codes.get(self._tgt_var.get(), "ja")
-        self._current_tgt_lang = tgt_code  #     on  audio  segment   から安全に参照できるように保持する  
+        self._current_tgt_lang = tgt_code  #     on  audio  segment   から安全に参照できるように保持する
+        self._sync_target_language_to_config(tgt_code)
 
-        values = [lbl for lbl, code in self._manual_langs if code == "auto" or code != tgt_code]
+        values = [
+            label for label, _ in get_manual_source_language_options({tgt_code})
+        ]
         self._src_lang_menu.configure(values=values)
         if self._src_lang_var.get() not in values:
             self._src_lang_var.set(values[0])
@@ -683,15 +810,18 @@ class MainWindow(ctk.CTk):
         code = self._src_lang_codes.get(label, "auto")
         self._current_src_lang = None if code == "auto" else code
 
+        exclude_codes = {self._current_src_lang} if self._current_src_lang else set()
+        values = [label for label, _ in get_target_language_options(exclude_codes)]
+        self._tgt_menu.configure(values=values)
+        if self._tgt_var.get() not in values:
+            self._tgt_var.set(values[0])
+
     def _swap_langs(self):
         """入出力テキストを入れ替える  """
         src_text = self._src_text
         tgt_text = self._tgt_output.get("1.0", "end").strip()
         self._set_source_text(tgt_text)
-        self._tgt_output.configure(state="normal")
-        self._tgt_output.delete("1.0", "end")
-        self._tgt_output.insert("1.0", src_text)
-        self._tgt_output.configure(state="disabled")
+        self._show_tgt(src_text)
 
     def _clear_input(self):
         self._set_source_text("")
@@ -699,6 +829,7 @@ class MainWindow(ctk.CTk):
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.configure(state="disabled")
+        self._tgt_rendered_text = ""
 
     def _copy_result(self):
         text = self._tgt_output.get("1.0", "end").strip()
@@ -717,7 +848,7 @@ class MainWindow(ctk.CTk):
         ui_cfg = self._config.setdefault("ui", {})
         ui_cfg["language"] = new_lang
         ui_cfg["language_source"] = "manual"
-        config_manager.save_config(self._config)
+        self._schedule_config_save()
 
         self._ui_lang = new_lang
         self.title(self._t("window_title"))
@@ -766,12 +897,14 @@ class MainWindow(ctk.CTk):
             ensure_model(
                 model_id=model_id,
                 model_revision=model_revision,
-                progress_callback=lambda event: self.after(0, self._handle_model_progress, event),
+                progress_callback=lambda event: self._call_in_ui(
+                    lambda e=event: self._handle_model_progress(e)
+                ),
             )
         except Exception as exc:
-            self.after(0, lambda m=str(exc): self._on_model_prepare_failed(m))
+            self._call_in_ui(lambda m=str(exc): self._on_model_prepare_failed(m))
             return
-        self.after(0, self._on_model_prepare_ready)
+        self._call_in_ui(self._on_model_prepare_ready)
 
     def _on_model_prepare_ready(self):
         self._model_prepare_running = False
@@ -1069,6 +1202,18 @@ class MainWindow(ctk.CTk):
         )
         self._receiver.start()
 
+    def _create_sender(self) -> VRCOSCSender:
+        osc_cfg = self._config.get("osc", {})
+        try:
+            min_send_interval_s = float(osc_cfg.get("min_send_interval_s", 0.8))
+        except (TypeError, ValueError):
+            min_send_interval_s = 0.8
+        return VRCOSCSender(
+            host=osc_cfg.get("send_host", "127.0.0.1"),
+            port=osc_cfg.get("send_port", 9000),
+            min_send_interval_s=min_send_interval_s,
+        )
+
     def _ensure_translator_ready(self) -> bool:
         if self._translator is not None:
             return True
@@ -1105,10 +1250,32 @@ class MainWindow(ctk.CTk):
 
     def _reset_streaming_state(self):
         self._partial_generation += 1
-        with self._partial_worker_lock:
-            self._partial_worker_busy = False
         with self._merge_lock:
             self._partial_merger.reset()
+
+    def _partial_worker_loop(self) -> None:
+        while True:
+            payload = self._partial_task_queue.get()
+            if payload is None:
+                return
+            audio, asr_lang, generation, session_id = payload
+            self._process_partial_audio_chunk(audio, asr_lang, generation, session_id)
+
+    def _final_worker_loop(self) -> None:
+        while True:
+            payload = self._final_task_queue.get()
+            if payload is None:
+                return
+            audio, asr_lang, session_id = payload
+            self._process_final_audio_segment(audio, asr_lang, session_id)
+
+    def _incoming_worker_loop(self) -> None:
+        while True:
+            payload = self._incoming_task_queue.get()
+            if payload is None:
+                return
+            text, session_id = payload
+            self._process_incoming_chatbox(text, session_id)
 
     def _on_audio_chunk(self, audio):
         if not self._running:
@@ -1116,79 +1283,107 @@ class MainWindow(ctk.CTk):
 
         generation = self._partial_generation
         asr_lang = self._current_src_lang
-        with self._partial_worker_lock:
-            if self._partial_worker_busy:
-                return
-            self._partial_worker_busy = True
+        self._enqueue_latest(
+            self._partial_task_queue,
+            (audio, asr_lang, generation, self._listen_session),
+        )
 
-        threading.Thread(
-            target=self._process_partial_audio_chunk,
-            args=(audio, asr_lang, generation),
-            daemon=True,
-        ).start()
-
-    def _process_partial_audio_chunk(self, audio, asr_lang, generation: int):
+    def _process_partial_audio_chunk(
+        self,
+        audio,
+        asr_lang,
+        generation: int,
+        session_id: int,
+    ):
+        if not self._running or session_id != self._listen_session:
+            return
         try:
             text = self._asr.transcribe(audio, language=asr_lang, is_final=False)
-            if not text or generation != self._partial_generation or not self._running:
+            if (
+                not text
+                or generation != self._partial_generation
+                or not self._running
+                or session_id != self._listen_session
+            ):
                 return
 
             with self._merge_lock:
                 merged = self._partial_merger.ingest_partial(text)
-            if merged and generation == self._partial_generation and self._running:
-                self.after(0, lambda t=merged, g=generation: self._show_partial_text(t, g))
+            if (
+                merged
+                and generation == self._partial_generation
+                and self._running
+                and session_id == self._listen_session
+            ):
+                self._call_in_ui(lambda t=merged, g=generation: self._show_partial_text(t, g))
         except Exception:
             pass
-        finally:
-            with self._partial_worker_lock:
-                self._partial_worker_busy = False
 
     def _show_partial_text(self, text: str, generation: int):
         if not self._running or generation != self._partial_generation or not text:
             return
         self._set_source_text(text, text_color=TEXT_SEC)
 
-    def _process_final_audio_segment(self, audio, asr_lang):
-        with self._final_worker_lock:
-            if not self._running:
+    def _process_final_audio_segment(self, audio, asr_lang, session_id: int):
+        if not self._running or session_id != self._listen_session:
+            return
+        fmt = self._get_output_format()
+        try:
+            if fmt != "original_only":
+                self._call_in_ui(lambda: self._set_status(self._t("translating"), ACCENT))
+            text = self._asr.transcribe(audio, language=asr_lang, is_final=True)
+            if not self._running or session_id != self._listen_session:
                 return
-            try:
-                self.after(0, lambda: self._set_status(self._t("translating"), ACCENT))
-                text = self._asr.transcribe(audio, language=asr_lang, is_final=True)
-                with self._merge_lock:
-                    text = self._partial_merger.ingest_final(text)
-                if not text:
-                    return
 
+            with self._merge_lock:
+                text = self._partial_merger.ingest_final(text)
+            if not text:
+                return
+            if not self._running or session_id != self._listen_session:
+                return
+
+            translator = self._translator
+            sender = self._sender
+
+            self._call_in_ui(lambda t=text: self._set_source_text(t))
+
+            translated = None
+            if fmt == "original_only":
+                chatbox_text = text
+            else:
                 src_lang = asr_lang if asr_lang else detect_language(text)
                 tgt_lang = self._current_tgt_lang
-                fmt = self._get_output_format()
-
-                self.after(0, lambda t=text: self._set_source_text(t))
-
-                if fmt == "original_only":
-                    chatbox_text = text
+                if src_lang == tgt_lang:
+                    translated = text
+                elif translator is None:
+                    raise RuntimeError("Translator is not ready")
                 else:
-                    translated = self._translator.translate(text, src_lang, tgt_lang)
-                    if fmt == "translated_only":
-                        chatbox_text = translated
-                    elif fmt == "original_with_translated":
-                        chatbox_text = f"{text}（{translated}）"
-                    else:
-                        chatbox_text = f"{translated}（{text}）"
-                    self.after(0, lambda t=translated: self._show_tgt(t))
+                    translated = translator.translate(text, src_lang, tgt_lang)
+                if not self._running or session_id != self._listen_session:
+                    return
 
-                sent = self._sender.send_chatbox(chatbox_text)
-                self._own_msgs.add(sent)
-            except Exception as exc:
-                error_text = str(exc).strip() or exc.__class__.__name__
-                self.after(
-                    0,
-                    lambda m=error_text[:120]: self._set_bottom(f"语音处理失败：{m}"),
+                if fmt == "translated_only":
+                    chatbox_text = translated
+                elif fmt == "original_with_translated":
+                    chatbox_text = f"{text}（{translated}）"
+                else:
+                    chatbox_text = f"{translated}（{text}）"
+                self._call_in_ui(lambda t=translated: self._show_tgt(t))
+
+            if not self._running or session_id != self._listen_session or sender is None:
+                return
+            sent = sender.send_chatbox(chatbox_text)
+            self._remember_own_message(sent)
+        except Exception as exc:
+            error_text = str(exc).strip() or exc.__class__.__name__
+            self._call_in_ui(
+                lambda m=error_text[:120]: self._set_bottom(f"语音处理失败：{m}")
+            )
+        finally:
+            if self._running and session_id == self._listen_session:
+                self._call_in_ui(
+                    lambda: self._set_status(self._t("status_listening"), SUCCESS)
                 )
-            finally:
-                if self._running:
-                    self.after(0, lambda: self._set_status(self._t("status_listening"), SUCCESS))
 
     def _on_own_chatbox_echo(self, text: str):
         self._osc_echo_capable = True
@@ -1228,14 +1423,10 @@ class MainWindow(ctk.CTk):
 
         self._ensure_receiver_started()
         if self._sender is None:
-            osc_cfg = self._config.get("osc", {})
-            self._sender = VRCOSCSender(
-                host=osc_cfg.get("send_host", "127.0.0.1"),
-                port=osc_cfg.get("send_port", 9000),
-            )
+            self._sender = self._create_sender()
         try:
             sent = self._sender.send_chatbox(chatbox_text)
-            self._own_msgs.add(sent)
+            self._remember_own_message(sent)
             if self._running and self._osc_echo_capable:
                 self.after(1400, lambda s=sent: self._check_vrc_send_ack(s))
         except Exception as e:
@@ -1248,12 +1439,19 @@ class MainWindow(ctk.CTk):
             return
         if self._translating:
             return
+        if self._get_output_format() == "original_only":
+            self._show_tgt(src_text)
+            return
 
         # 言語コードを決定する  
         src_code = self._src_lang_codes.get(self._src_lang_var.get(), "auto")
         if src_code == "auto":
             src_code = detect_language(src_text)
         tgt_code = self._target_lang_codes.get(self._tgt_var.get(), "ja")
+
+        if src_code == tgt_code:
+            self._show_tgt(src_text)
+            return
 
         if not self._ensure_translator_ready():
             return
@@ -1270,21 +1468,24 @@ class MainWindow(ctk.CTk):
         """バックグラウンドスレッドで翻訳を実行する  """
         try:
             result = self._translator.translate(text, src_lang, tgt_lang)
-            self.after(0, lambda: self._show_tgt(result))
+            self._call_in_ui(lambda: self._show_tgt(result))
         except Exception as e:
             msg = str(e)
-            self.after(0, lambda: self._show_tgt(f"[Error] {msg}"))
+            self._call_in_ui(lambda: self._show_tgt(f"[Error] {msg}"))
         finally:
-            self.after(0, self._reset_translate_btn)
+            self._call_in_ui(self._reset_translate_btn)
 
     def _show_tgt(self, text: str):
         # 正常な翻訳結果のみを保持し  エラー文字列は保存しない  
         if not text.startswith("[Error]"):
             self._last_tgt_text = text
+        if text == self._tgt_rendered_text:
+            return
         self._tgt_output.configure(state="normal")
         self._tgt_output.delete("1.0", "end")
         self._tgt_output.insert("1.0", text)
         self._tgt_output.configure(state="disabled")
+        self._tgt_rendered_text = text
 
     def _reset_translate_btn(self):
         self._translating = False
@@ -1345,7 +1546,10 @@ class MainWindow(ctk.CTk):
     def _start(self):
         self._set_status(self._t("starting"), ACCENT)
         self._start_btn.configure(state="disabled", text=self._t("starting"))
+        self._listen_session += 1
         self._reset_streaming_state()
+        self._drain_queue(self._partial_task_queue)
+        self._drain_queue(self._final_task_queue)
         # ワーカースレッドへ渡す前に  Tkinter 変数はメインスレッドで読み出しておく  
         dev_name = self._device_var.get()
         dev_idx = self._devices.get(dev_name)
@@ -1360,12 +1564,12 @@ class MainWindow(ctk.CTk):
                     raise RuntimeError(self._t("listen_requires_api"))
             else:
                 self._translator = None
-            self._asr.load(progress_callback=lambda event: self.after(0, self._handle_model_progress, event))
-            osc_cfg = self._config.get("osc", {})
-            self._sender = VRCOSCSender(
-                host=osc_cfg.get("send_host", "127.0.0.1"),
-                port=osc_cfg.get("send_port", 9000),
+            self._asr.load(
+                progress_callback=lambda event: self._call_in_ui(
+                    lambda e=event: self._handle_model_progress(e)
+                )
             )
+            self._sender = self._create_sender()
             self._ensure_receiver_started()
             audio_cfg = self._config.get("audio", {})
             streaming_cfg = self._streaming_config()
@@ -1391,21 +1595,26 @@ class MainWindow(ctk.CTk):
             )
             self._recorder.start()
             self._running = True
-            self.after(0, self._on_started)
+            self._call_in_ui(self._on_started)
         except Exception as e:
             msg = str(e)
-            self.after(0, lambda: self._on_start_error(msg))
+            self._call_in_ui(lambda: self._on_start_error(msg))
 
     def _stop(self):
         self._running = False
         self._reset_streaming_state()
+        self._drain_queue(self._partial_task_queue)
+        self._drain_queue(self._final_task_queue)
+        self._drain_queue(self._incoming_task_queue)
         if self._recorder:
             self._recorder.stop()
             self._recorder = None
         if self._receiver:
             self._receiver.stop()
             self._receiver = None
-        self._sender = None
+        if self._sender:
+            self._sender.close()
+            self._sender = None
         self._translator = None
         self._set_status(self._t("status_stopped"), DANGER)
         self._refresh_start_button()
@@ -1428,9 +1637,9 @@ class MainWindow(ctk.CTk):
     def _on_vad_state(self, in_speech: bool):
         """録音スレッドから呼ばれ  VAD 状態の変化を反映する  """
         if in_speech:
-            self.after(0, lambda: self._set_status(self._t("status_speaking"), ACCENT))
+            self._call_in_ui(lambda: self._set_status(self._t("status_speaking"), ACCENT))
         else:
-            self.after(0, lambda: self._set_status(self._t("status_listening"), SUCCESS))
+            self._call_in_ui(lambda: self._set_status(self._t("status_listening"), SUCCESS))
 
     # ── 音声セグメント処理  ログ出力はせず VRC 送信のみ行う ─────────────────
 
@@ -1439,22 +1648,32 @@ class MainWindow(ctk.CTk):
             return
         self._partial_generation += 1
         asr_lang = self._current_src_lang
-        threading.Thread(
-            target=self._process_final_audio_segment,
-            args=(audio, asr_lang),
-            daemon=True,
-        ).start()
+        self._enqueue_latest(
+            self._final_task_queue,
+            (audio, asr_lang, self._listen_session),
+        )
 
     # ── 受信チャットボックス  逆翻訳してフローティングウィンドウへ表示 ─────
 
     def _on_incoming_chatbox(self, text: str):
+        self._enqueue_latest(
+            self._incoming_task_queue,
+            (text, self._listen_session),
+        )
+
+    def _process_incoming_chatbox(self, text: str, session_id: int) -> None:
+        if not self._running or session_id != self._listen_session:
+            return
         try:
             src_lang = detect_language(text)
-            if src_lang == "zh" or self._translator is None:
-                self.after(0, lambda: self._show_incoming(text, None))
+            translator = self._translator
+            if src_lang == "zh" or translator is None:
+                if self._running and session_id == self._listen_session:
+                    self._call_in_ui(lambda: self._show_incoming(text, None))
                 return
-            translated = self._translator.translate(text, src_lang, "zh")
-            self.after(0, lambda: self._show_incoming(text, translated))
+            translated = translator.translate(text, src_lang, "zh")
+            if self._running and session_id == self._listen_session:
+                self._call_in_ui(lambda: self._show_incoming(text, translated))
         except Exception:
             pass
 
@@ -1484,13 +1703,13 @@ class MainWindow(ctk.CTk):
             )
             self._position_near_float_window()
             ui_cfg["show_floating_window"] = True
-        config_manager.save_config(self._config)
+        self._schedule_config_save()
         self._apply_float_btn_state()
 
     def _on_float_opacity_changed(self, opacity: float):
         ui_cfg = self._config.setdefault("ui", {})
         ui_cfg["floating_window_opacity"] = round(float(opacity), 2)
-        config_manager.save_config(self._config)
+        self._schedule_config_save()
 
     # ── 設定 ──────────────────────────────────────────────────────────────
 
@@ -1523,6 +1742,10 @@ class MainWindow(ctk.CTk):
         self._bottom_progress = None
         self._social_icons.clear()
         self._src_placeholder = self._t("source_placeholder")
+        self._src_rendered_text = ""
+        self._src_rendered_color = TEXT_SEC
+        self._src_rendered_count = 0
+        self._tgt_rendered_text = ""
         self._build()
         self._load_devices()
 
@@ -1537,6 +1760,7 @@ class MainWindow(ctk.CTk):
             self._tgt_output.configure(state="normal")
             self._tgt_output.delete("1.0", "end")
             self._tgt_output.configure(state="disabled")
+            self._tgt_rendered_text = ""
 
         if restore_float:
             ui_cfg = self._config.setdefault("ui", {})
@@ -1555,7 +1779,7 @@ class MainWindow(ctk.CTk):
         if ui_cfg.get("osc_guide_seen"):
             return
         ui_cfg["osc_guide_seen"] = True
-        config_manager.save_config(self._config)
+        self._schedule_config_save()
         self._open_osc_guide()
 
     def _guide_pages(self) -> list[dict[str, object]]:
@@ -1764,12 +1988,58 @@ class MainWindow(ctk.CTk):
     # ── 補助処理 ──────────────────────────────────────────────────────────
 
     def _set_status(self, text: str, color: str = "white"):
+        if text == self._status_text and color == self._status_color:
+            return
         self._status_text = text
         self._status_color = color
         if hasattr(self, "_status_label"):
             self._status_label.configure(text=text, text_color=color)
 
     def _set_bottom(self, text: str):
+        if text == self._bottom_text:
+            return
         self._bottom_text = text
         if hasattr(self, "_bottom_bar"):
             self._bottom_bar.configure(text=text)
+
+    def _sync_target_language_to_config(self, target_code: str) -> None:
+        translation_cfg = self._config.setdefault("translation", {})
+        if translation_cfg.get("target_language") == target_code:
+            return
+        translation_cfg["target_language"] = target_code
+        self._schedule_config_save()
+
+    def destroy(self):
+        if self._destroying:
+            return
+        self._destroying = True
+
+        if self._config_save_after_id is not None:
+            try:
+                self.after_cancel(self._config_save_after_id)
+            except Exception:
+                pass
+            self._config_save_after_id = None
+
+        try:
+            config_manager.save_config(self._config)
+        except Exception:
+            pass
+
+        try:
+            self._stop()
+        except Exception:
+            pass
+
+        for work_queue in (
+            self._partial_task_queue,
+            self._final_task_queue,
+            self._incoming_task_queue,
+        ):
+            self._drain_queue(work_queue)
+            try:
+                work_queue.put_nowait(None)
+            except queue.Full:
+                pass
+
+        super().destroy()

@@ -1,4 +1,4 @@
-"""VRChat の OSC チャットボックスメッセージを受信する  """
+"""VRChat のチャットボックス OSC を受信するヘルパー。"""
 
 import threading
 from typing import Callable, Optional, Set
@@ -22,6 +22,7 @@ class VRCOSCReceiver:
         self._thread: Optional[threading.Thread] = None
 
     def _handle_chatbox(self, address, *args):
+        del address
         if not args:
             return
 
@@ -39,24 +40,31 @@ class VRCOSCReceiver:
 
         try:
             self.on_message(text)
-        except Exception as e:
-            print(f"[OSCReceiver] on_message error: {e}")
+        except Exception as exc:
+            print(f"[OSCReceiver] on_message error: {exc}")
 
     def start(self):
         if self._server:
             return
 
-        d = dispatcher.Dispatcher()
-        d.map("/chatbox/input", self._handle_chatbox)
+        osc_dispatcher = dispatcher.Dispatcher()
+        osc_dispatcher.map("/chatbox/input", self._handle_chatbox)
 
-        self._server = osc_server.ThreadingOSCUDPServer(("0.0.0.0", self.port), d)
+        self._server = osc_server.ThreadingOSCUDPServer(
+            ("0.0.0.0", self.port),
+            osc_dispatcher,
+        )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
     def stop(self):
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
             self._server = None
+        if self._thread:
+            self._thread.join(timeout=1.0)
+            self._thread = None
 
     def register_own_message(self, text: str):
         self._own_messages.add(text)

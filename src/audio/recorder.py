@@ -13,6 +13,8 @@ import sounddevice as sd
 from .chunk_streamer import ChunkStreamer
 from .vad_detector import VADDetector
 
+FRAME_QUEUE_MAXSIZE = 64
+
 
 class AudioRecorder:
     """
@@ -69,7 +71,9 @@ class AudioRecorder:
         self._partial_min_speech_samples = max(int(partial_min_speech_s * sample_rate), 0)
         self._speech_samples = 0
         self._was_in_speech = False
-        self._frame_queue: queue.Queue = queue.Queue()
+        self._frame_queue: queue.Queue[np.ndarray | None] = queue.Queue(
+            maxsize=FRAME_QUEUE_MAXSIZE
+        )
         self._running = False
         self._stream: Optional[sd.InputStream] = None
         self._worker_thread: Optional[threading.Thread] = None
@@ -98,6 +102,7 @@ class AudioRecorder:
         self._speech_samples = 0
         self._was_in_speech = False
         self._capture_rate = self.sample_rate
+        self._clear_frame_queue()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
 
@@ -162,12 +167,15 @@ class AudioRecorder:
 
     def stop(self):
         self._running = False
+        self._enqueue_frame(None)
         if self._stream:
             self._stream.stop()
             self._stream.close()
             self._stream = None
         if self._worker_thread:
             self._worker_thread.join(timeout=2)
+            self._worker_thread = None
+        self._clear_frame_queue()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
 
@@ -176,30 +184,32 @@ class AudioRecorder:
         del time_info
         del status
 
-        data = indata
-        if self._capture_channels == 2:
-            mono = (data[:, 0].astype(np.float32) + data[:, 1].astype(np.float32)) / 2
-            data = mono.reshape(-1, 1)
-        if self._capture_dtype == "float32":
-            data = np.clip(data * 32768, -32768, 32767).astype(np.int16)
-        if self._capture_rate != self.sample_rate:
-            ratio = max(self._capture_rate // self.sample_rate, 1)
-            data = data[::ratio]
-        self._frame_queue.put(data.copy())
+        if not self._running:
+            return
+        self._enqueue_frame(indata.copy())
 
     def _process_loop(self):
-        while self._running:
+        while True:
             try:
                 frame = self._frame_queue.get(timeout=0.1)
             except queue.Empty:
+                if not self._running:
+                    break
                 continue
 
-            normalized = frame.flatten().astype(np.float32) / 32768.0
+            if frame is None:
+                break
+
+            normalized = self._prepare_frame(frame)
+            if normalized.size == 0:
+                continue
+
+            pcm = np.clip(normalized * 32768.0, -32768.0, 32767.0).astype(np.int16)
             previous_in_speech = self._was_in_speech
             if not previous_in_speech:
                 self._pre_speech_buffer.append(normalized)
 
-            pcm_bytes = frame.tobytes()
+            pcm_bytes = pcm.tobytes()
             in_speech = self.vad.process_frame(pcm_bytes)
 
             if in_speech:
@@ -246,6 +256,68 @@ class AudioRecorder:
                 self.on_segment(segment)
             except Exception as exc:
                 print(f"[Recorder] on_segment error: {exc}")
+
+    def _enqueue_frame(self, frame: np.ndarray | None) -> None:
+        try:
+            self._frame_queue.put_nowait(frame)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            self._frame_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        try:
+            self._frame_queue.put_nowait(frame)
+        except queue.Full:
+            pass
+
+    def _clear_frame_queue(self) -> None:
+        while True:
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
+        audio = np.asarray(frame)
+        if audio.ndim == 2:
+            if audio.shape[1] == 1:
+                audio = audio[:, 0]
+            else:
+                audio = audio.astype(np.float32).mean(axis=1)
+        else:
+            audio = audio.astype(np.float32, copy=False)
+
+        if self._capture_dtype == "float32":
+            normalized = np.clip(audio, -1.0, 1.0).astype(np.float32, copy=False)
+        else:
+            normalized = (audio / 32768.0).astype(np.float32, copy=False)
+
+        if self._capture_rate == self.sample_rate:
+            return normalized
+        return self._resample_audio(normalized, self._capture_rate, self.sample_rate)
+
+    @staticmethod
+    def _resample_audio(
+        audio: np.ndarray,
+        source_rate: int,
+        target_rate: int,
+    ) -> np.ndarray:
+        if audio.size == 0 or source_rate == target_rate:
+            return audio.astype(np.float32, copy=False)
+
+        target_size = max(int(round(audio.size * target_rate / source_rate)), 1)
+        if target_size == audio.size:
+            return audio.astype(np.float32, copy=False)
+        if audio.size == 1:
+            return np.repeat(audio, target_size).astype(np.float32, copy=False)
+
+        source_index = np.arange(audio.size, dtype=np.float32)
+        target_index = np.linspace(0, audio.size - 1, num=target_size, dtype=np.float32)
+        return np.interp(target_index, source_index, audio).astype(np.float32, copy=False)
 
     @staticmethod
     def list_devices() -> list[dict]:

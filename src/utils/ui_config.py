@@ -1,8 +1,8 @@
-"""Shared UI/backend metadata used by desktop windows and config plumbing."""
+"""デスクトップ UI と設定処理で共有するメタデータ。"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 DEFAULT_UI_LANGUAGE = "zh-CN"
 
@@ -124,6 +124,26 @@ def get_manual_source_label(code: str | None) -> str:
     return MANUAL_SOURCE_LABELS.get(str(code or ""), MANUAL_SOURCE_LANGUAGE_OPTIONS[0][0])
 
 
+def get_target_language_options(
+    exclude_codes: Collection[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    excluded = {str(code) for code in (exclude_codes or ()) if code}
+    return tuple(
+        (label, code) for label, code in TARGET_LANGUAGE_OPTIONS if code not in excluded
+    )
+
+
+def get_manual_source_language_options(
+    exclude_codes: Collection[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    excluded = {str(code) for code in (exclude_codes or ()) if code}
+    return tuple(
+        (label, code)
+        for label, code in MANUAL_SOURCE_LANGUAGE_OPTIONS
+        if code == "auto" or code not in excluded
+    )
+
+
 def get_ui_language(config: Mapping[str, object] | None) -> str:
     ui_cfg = config.get("ui", {}) if isinstance(config, Mapping) else {}
     if isinstance(ui_cfg, Mapping):
@@ -131,4 +151,3 @@ def get_ui_language(config: Mapping[str, object] | None) -> str:
         if language in UI_LANGUAGE_LABELS:
             return str(language)
     return DEFAULT_UI_LANGUAGE
-

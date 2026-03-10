@@ -1,4 +1,4 @@
-"""Floating window used to display incoming reverse-translated chat."""
+"""受信した逆翻訳メッセージを表示するフローティングウィンドウ。"""
 
 from __future__ import annotations
 
@@ -118,18 +118,37 @@ class FloatingWindow(ctk.CTkToplevel):
         self.geometry(f"+{x}+{y}")
 
     def add_message(self, original: str, translated: str | None) -> None:
-        self._entries.append((original, translated))
+        entry = (original, translated)
+        had_room = len(self._entries) < MAX_ENTRIES
+        self._entries.append(entry)
+        if had_room:
+            self._append_entry(entry)
+            return
         self._refresh()
+
+    def _append_entry(
+        self,
+        entry: tuple[str, str | None],
+        *,
+        manage_state: bool = True,
+    ) -> None:
+        original, translated = entry
+        if manage_state:
+            self._text.configure(state="normal")
+        self._text.insert("end", f"{original}\n")
+        if translated:
+            self._text.insert("end", f"  -> {translated}\n\n")
+        else:
+            self._text.insert("end", "\n")
+        if manage_state:
+            self._text.configure(state="disabled")
+            self._text.see("end")
 
     def _refresh(self) -> None:
         self._text.configure(state="normal")
         self._text.delete("1.0", "end")
-        for original, translated in self._entries:
-            self._text.insert("end", f"{original}\n")
-            if translated:
-                self._text.insert("end", f"  -> {translated}\n\n")
-            else:
-                self._text.insert("end", "\n")
+        for entry in self._entries:
+            self._append_entry(entry, manage_state=False)
         self._text.configure(state="disabled")
         self._text.see("end")
 

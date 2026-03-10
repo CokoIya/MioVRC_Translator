@@ -59,7 +59,8 @@
   "osc": {
     "send_host": "127.0.0.1",
     "send_port": 9000,
-    "receive_port": 9001
+    "receive_port": 9001,
+    "min_send_interval_s": 0.8
   },
   "ui": {
     "language": "",
