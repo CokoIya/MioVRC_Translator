@@ -10,7 +10,7 @@
 ## 版本
 
 - 桌面版：`v1.2.0`
-- GitHub Releases 轻量版安装器：`v1.2.0`
+- GitHub Releases 轻量版安装器：`v1.2.0_release`
 
 ## 简介
 
