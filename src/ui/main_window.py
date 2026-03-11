@@ -3,8 +3,6 @@ import threading
 import webbrowser
 import sys
 import subprocess
-import time
-from collections import deque
 from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox, PhotoImage
@@ -27,26 +25,25 @@ from src.asr.sensevoice_model_manager import ensure_model, model_exists
 from src.asr.streaming_merger import StreamingMerger
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
-from src.osc.receiver import VRCOSCReceiver
 from src.utils.lang_detect import detect_language
 from .settings_window import SettingsWindow
-from .floating_window import FloatingWindow
+from .window_effects import apply_window_icon, present_popup
 
-BG_PRIMARY = "#f7f5f0"
-BG_SECONDARY = "#edeae2"
-BG_TOP = "#e5e1d8"
-BG_PANEL = "#f2efe8"
-GLASS_BG = "#daeaf8"
-GLASS_BORDER = "#8ab8d8"
-GLASS_HOVER = "#c4dcf2"
-ACCENT = "#3a9fd8"
-ACCENT_HOVER = "#2882bc"
-DANGER = "#e05060"
-DANGER_HOVER = "#c03045"
-SUCCESS = "#2ea85a"
-TEXT_PRI = "#252535"
-TEXT_SEC = "#686880"
-DIVIDER = "#d8d4cc"
+BG_PRIMARY = "#f5f5f7"
+BG_SECONDARY = "#eef2f7"
+BG_TOP = "#f3f4f6"
+BG_PANEL = "#ffffff"
+GLASS_BG = "#f7f9fc"
+GLASS_BORDER = "#d6dbe4"
+GLASS_HOVER = "#e9edf5"
+ACCENT = "#0a84ff"
+ACCENT_HOVER = "#006ae6"
+DANGER = "#ff453a"
+DANGER_HOVER = "#e2352b"
+SUCCESS = "#34c759"
+TEXT_PRI = "#1d1d1f"
+TEXT_SEC = "#6e6e73"
+DIVIDER = "#e0e4eb"
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
@@ -67,8 +64,6 @@ SPONSOR_IMAGE_CANDIDATES = (
 
 PARTIAL_TASK_QUEUE_MAXSIZE = 1
 FINAL_TASK_QUEUE_MAXSIZE = 8
-INCOMING_TASK_QUEUE_MAXSIZE = 12
-OWN_MESSAGE_CACHE_SIZE = 200
 CONFIG_SAVE_DEBOUNCE_MS = 280
 
 ctk.set_appearance_mode("light")
@@ -89,10 +84,6 @@ class MainWindow(ctk.CTk):
         self._asr = create_asr(config)
         self._translator = None
         self._sender: VRCOSCSender | None = None
-        self._receiver: VRCOSCReceiver | None = None
-        self._own_msgs: set[str] = set()
-        self._own_msg_order: deque[str] = deque()
-        self._osc_echo_capable = False
         self._translating = False
         self._src_placeholder = tr(self._ui_lang, "source_placeholder")
         self._src_text = ""
@@ -101,8 +92,6 @@ class MainWindow(ctk.CTk):
         self._src_rendered_count = 0
         self._last_tgt_text = ""
         self._tgt_rendered_text = ""
-        self._last_own_chatbox_echo_text = ""
-        self._last_own_chatbox_echo_time = 0.0
 
         self._running = False
         self._listen_session = 0
@@ -115,12 +104,9 @@ class MainWindow(ctk.CTk):
         self._final_task_queue: queue.Queue[
             tuple[object, str | None, int] | None
         ] = queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE)
-        self._incoming_task_queue: queue.Queue[
-            tuple[str, int] | None
-        ] = queue.Queue(maxsize=INCOMING_TASK_QUEUE_MAXSIZE)
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._current_src_lang: str | None = None
-        self._float_win: FloatingWindow | None = None
+        self._device_picker_win: ctk.CTkToplevel | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
         self._window_icon: PhotoImage | None = None
@@ -141,7 +127,6 @@ class MainWindow(ctk.CTk):
 
         self._build()
         self._load_devices()
-        self.after(180, self._position_near_float_window)
         self.after(420, self._maybe_prepare_runtime_model)
         self.after(300, self._maybe_show_osc_guide)
 
@@ -159,11 +144,6 @@ class MainWindow(ctk.CTk):
             daemon=True,
         )
         self._final_worker.start()
-        self._incoming_worker = threading.Thread(
-            target=self._incoming_worker_loop,
-            daemon=True,
-        )
-        self._incoming_worker.start()
 
     @staticmethod
     def _drain_queue(work_queue: queue.Queue) -> None:
@@ -215,16 +195,6 @@ class MainWindow(ctk.CTk):
         self._config_save_after_id = None
         config_manager.save_config(self._config)
 
-    def _remember_own_message(self, text: str) -> None:
-        safe = str(text or "").strip()
-        if not safe or safe in self._own_msgs:
-            return
-        self._own_msgs.add(safe)
-        self._own_msg_order.append(safe)
-        while len(self._own_msg_order) > OWN_MESSAGE_CACHE_SIZE:
-            expired = self._own_msg_order.popleft()
-            self._own_msgs.discard(expired)
-
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -240,68 +210,27 @@ class MainWindow(ctk.CTk):
             text_color=TEXT_PRI,
             justify="left",
             wraplength=900,
-        ).grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 4))
-
-        actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
-        actions.grid_columnconfigure(0, weight=1)
-
-        self._status_label = ctk.CTkLabel(
-            actions,
-            text=self._status_text,
-            text_color=self._status_color,
-            font=ctk.CTkFont(size=12),
-        )
-        self._status_label.grid(row=0, column=0, sticky="w")
-
-        action_buttons = ctk.CTkFrame(actions, fg_color="transparent")
-        action_buttons.grid(row=0, column=1, sticky="e")
-
-        self._start_btn = ctk.CTkButton(
-            action_buttons,
-            text=self._t("start_listening"),
-            width=134,
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOVER,
-            corner_radius=10,
-            text_color="#ffffff",
-            command=self._toggle_listening,
-        )
-        self._start_btn.pack(side="right", padx=(8, 0))
-
-        ctk.CTkButton(
-            action_buttons,
-            text=self._t("settings_button"),
-            width=116,
-            fg_color=GLASS_BG,
-            hover_color=GLASS_HOVER,
-            border_width=1,
-            border_color=GLASS_BORDER,
-            corner_radius=10,
-            text_color=TEXT_PRI,
-            command=self._open_settings,
-        ).pack(side="right", padx=(8, 0))
-
-        ctk.CTkButton(
-            action_buttons,
-            text=self._t("guide_button"),
-            width=112,
-            fg_color=GLASS_BG,
-            hover_color=GLASS_HOVER,
-            border_width=1,
-            border_color=GLASS_BORDER,
-            corner_radius=10,
-            text_color=TEXT_PRI,
-            command=self._open_osc_guide,
-        ).pack(side="right", padx=(8, 0))
+        ).grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 8))
 
         controls = ctk.CTkFrame(self, fg_color=BG_SECONDARY, corner_radius=0)
         controls.grid(row=1, column=0, sticky="ew")
         controls.grid_columnconfigure(0, weight=1)
-        controls.grid_columnconfigure(1, weight=0)
 
-        mic_group = ctk.CTkFrame(controls, fg_color="transparent")
-        mic_group.grid(row=0, column=0, sticky="w", padx=(12, 6), pady=6)
+        control_row = ctk.CTkFrame(controls, fg_color="transparent")
+        control_row.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 6))
+        control_row.grid_columnconfigure(2, weight=1)
+
+        self._status_label = ctk.CTkLabel(
+            control_row,
+            text=self._status_text,
+            text_color=self._status_color,
+            font=ctk.CTkFont(size=12),
+        )
+        self._status_label.grid(row=0, column=0, sticky="w", padx=(0, 18))
+
+        mic_group = ctk.CTkFrame(control_row, fg_color="transparent")
+        mic_group.grid(row=0, column=1, sticky="w")
+
         ctk.CTkLabel(
             mic_group,
             text=self._t("microphone"),
@@ -309,19 +238,90 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=11),
         ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         self._device_var = ctk.StringVar()
-        self._device_menu = ctk.CTkOptionMenu(
+        device_picker = ctk.CTkFrame(
             mic_group,
-            variable=self._device_var,
-            values=["Loading..."],
             fg_color=GLASS_BG,
-            button_color=GLASS_BORDER,
-            button_hover_color=GLASS_HOVER,
-            corner_radius=8,
+            corner_radius=12,
+            border_width=1,
+            border_color=GLASS_BORDER,
+        )
+        device_picker.grid(row=0, column=1, sticky="w")
+        device_picker.grid_columnconfigure(0, weight=1)
+
+        self._device_button = ctk.CTkButton(
+            device_picker,
+            text="Loading...",
+            width=206,
+            height=34,
+            anchor="w",
+            fg_color="transparent",
+            hover_color="#ecf3ff",
+            corner_radius=10,
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=11),
-            width=250,
+            command=self._open_device_picker,
         )
-        self._device_menu.grid(row=0, column=1, sticky="w")
+        self._device_button.grid(row=0, column=0, sticky="ew", padx=(2, 0), pady=2)
+
+        ctk.CTkButton(
+            device_picker,
+            text="v",
+            width=30,
+            height=34,
+            fg_color="#e5edf8",
+            hover_color="#dbe7f5",
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._open_device_picker,
+        ).grid(row=0, column=1, padx=2, pady=2)
+
+        action_buttons = ctk.CTkFrame(control_row, fg_color="transparent")
+        action_buttons.grid(row=0, column=3, sticky="e")
+
+        self._start_btn = ctk.CTkButton(
+            action_buttons,
+            text=self._t("start_listening"),
+            width=120,
+            height=34,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            corner_radius=9,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._toggle_listening,
+        )
+        self._start_btn.pack(side="right", padx=(6, 0))
+
+        ctk.CTkButton(
+            action_buttons,
+            text=self._t("settings_button"),
+            width=104,
+            height=34,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=9,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
+            command=self._open_settings,
+        ).pack(side="right", padx=(6, 0))
+
+        ctk.CTkButton(
+            action_buttons,
+            text=self._t("guide_button"),
+            width=98,
+            height=34,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=9,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
+            command=self._open_osc_guide,
+        ).pack(side="right", padx=(6, 0))
 
         self._all_target_lang_options = list(TARGET_LANGUAGE_OPTIONS)
         self._target_lang_codes = {
@@ -335,22 +335,6 @@ class MainWindow(ctk.CTk):
         self._tgt_var = ctk.StringVar(
             value=self._target_lang_reverse.get(initial_tgt, target_labels[0])
         )
-
-        float_group = ctk.CTkFrame(controls, fg_color="transparent")
-        float_group.grid(row=0, column=1, sticky="e", padx=(6, 12), pady=6)
-        self._float_btn = ctk.CTkButton(
-            float_group,
-            text=self._t("floating_hidden"),
-            width=120,
-            fg_color=GLASS_BG,
-            hover_color=GLASS_HOVER,
-            border_width=1,
-            border_color=GLASS_BORDER,
-            corner_radius=10,
-            text_color=TEXT_PRI,
-            command=self._toggle_float,
-        )
-        self._float_btn.grid(row=0, column=0, sticky="ew")
 
         self._build_translate_panel()
 
@@ -380,7 +364,6 @@ class MainWindow(ctk.CTk):
         self._set_status(self._status_text, self._status_color)
         self._set_bottom(self._bottom_text)
         self._refresh_start_button()
-        self._apply_float_btn_state()
         if self._bottom_progress_visible:
             self._show_bottom_progress(
                 self._bottom_progress_value,
@@ -395,7 +378,7 @@ class MainWindow(ctk.CTk):
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(1, weight=1)
 
-        hdr = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=40)
+        hdr = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=38)
         hdr.grid(row=0, column=0, sticky="ew")
         hdr.grid_columnconfigure(3, weight=1)
         hdr.grid_propagate(False)
@@ -413,10 +396,13 @@ class MainWindow(ctk.CTk):
             hdr,
             values=src_labels,
             variable=self._src_lang_var,
-            width=132,
+            width=126,
             fg_color=BG_SECONDARY,
             button_color=BG_SECONDARY,
             button_hover_color=GLASS_HOVER,
+            dropdown_fg_color=BG_PANEL,
+            dropdown_hover_color="#e8f2ff",
+            dropdown_text_color=TEXT_PRI,
             corner_radius=6,
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=12),
@@ -426,8 +412,8 @@ class MainWindow(ctk.CTk):
         ctk.CTkButton(
             hdr,
             text="<->",
-            width=36,
-            height=24,
+            width=34,
+            height=22,
             fg_color="transparent",
             hover_color=GLASS_HOVER,
             corner_radius=6,
@@ -442,10 +428,13 @@ class MainWindow(ctk.CTk):
             fg_color=BG_SECONDARY,
             button_color=BG_SECONDARY,
             button_hover_color=GLASS_HOVER,
+            dropdown_fg_color=BG_PANEL,
+            dropdown_hover_color="#e8f2ff",
+            dropdown_text_color=TEXT_PRI,
             corner_radius=6,
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=12, weight="bold"),
-            width=154,
+            width=148,
         )
         self._tgt_menu.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=6)
 
@@ -458,10 +447,10 @@ class MainWindow(ctk.CTk):
 
         lang_badge = ctk.CTkFrame(
             hdr,
-            fg_color="#d5ecfb",
+            fg_color="#eef5ff",
             corner_radius=12,
             border_width=1,
-            border_color="#97c4e6",
+            border_color="#bfdbff",
         )
         lang_badge.grid(row=0, column=4, sticky="e", padx=(8, 10), pady=5)
 
@@ -477,12 +466,14 @@ class MainWindow(ctk.CTk):
             values=ui_lang_labels,
             variable=self._ui_lang_var,
             command=self._on_ui_lang_selected,
-            width=112,
-            height=26,
-            fg_color="#d5ecfb",
-            button_color="#b6daf3",
+            width=104,
+            height=24,
+            fg_color="#eef5ff",
+            button_color="#cfe5ff",
             button_hover_color=GLASS_HOVER,
-            dropdown_fg_color=BG_PRIMARY,
+            dropdown_fg_color=BG_PANEL,
+            dropdown_hover_color="#e8f2ff",
+            dropdown_text_color=TEXT_PRI,
             corner_radius=10,
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=11),
@@ -498,7 +489,7 @@ class MainWindow(ctk.CTk):
         text_row.grid_columnconfigure(0, weight=1)
         text_row.grid_columnconfigure(2, weight=1)
         text_row.grid_rowconfigure(0, weight=1)
-        text_row.configure(height=220)
+        text_row.configure(height=226)
 
         left = ctk.CTkFrame(text_row, fg_color=BG_PANEL, corner_radius=0)
         left.grid(row=0, column=0, sticky="nsew")
@@ -508,7 +499,7 @@ class MainWindow(ctk.CTk):
         self._src_input = ctk.CTkTextbox(
             left,
             height=180,
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=16),
             wrap="word",
             state="disabled",
             fg_color=BG_PANEL,
@@ -518,60 +509,6 @@ class MainWindow(ctk.CTk):
         )
         self._src_input.grid(row=0, column=0, sticky="nsew", padx=8, pady=(6, 0))
         self._set_source_text("")
-
-        left_bar = ctk.CTkFrame(left, fg_color=BG_SECONDARY, corner_radius=0, height=34)
-        left_bar.grid(row=1, column=0, sticky="ew")
-        left_bar.grid_propagate(False)
-
-        self._char_label = ctk.CTkLabel(
-            left_bar,
-            text=self._t("char_count", count=0),
-            text_color=TEXT_SEC,
-            font=ctk.CTkFont(size=10),
-        )
-        self._char_label.pack(side="left", padx=10)
-
-        ctk.CTkButton(
-            left_bar,
-            text=self._t("manual_input"),
-            width=108,
-            height=24,
-            fg_color=GLASS_BG,
-            hover_color=GLASS_HOVER,
-            border_width=1,
-            border_color=GLASS_BORDER,
-            corner_radius=6,
-            text_color=TEXT_PRI,
-            font=ctk.CTkFont(size=11),
-            command=self._open_text_input_popup,
-        ).pack(side="left", padx=6)
-
-        ctk.CTkButton(
-            left_bar,
-            text=self._t("clear"),
-            width=68,
-            height=24,
-            fg_color="transparent",
-            hover_color=GLASS_HOVER,
-            corner_radius=6,
-            text_color=TEXT_SEC,
-            font=ctk.CTkFont(size=11),
-            command=self._clear_input,
-        ).pack(side="right", padx=6)
-
-        self._translate_btn = ctk.CTkButton(
-            left_bar,
-            text=self._t("translate"),
-            width=88,
-            height=24,
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOVER,
-            corner_radius=8,
-            text_color="#ffffff",
-            font=ctk.CTkFont(size=11),
-            command=self._translate_manual,
-        )
-        self._translate_btn.pack(side="right", padx=4)
 
         ctk.CTkFrame(text_row, width=1, fg_color=DIVIDER).grid(
             row=0,
@@ -588,7 +525,7 @@ class MainWindow(ctk.CTk):
         self._tgt_output = ctk.CTkTextbox(
             right,
             height=180,
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=16),
             wrap="word",
             state="disabled",
             fg_color=BG_PANEL,
@@ -598,35 +535,93 @@ class MainWindow(ctk.CTk):
         )
         self._tgt_output.grid(row=0, column=0, sticky="nsew", padx=8, pady=(6, 0))
 
-        right_bar = ctk.CTkFrame(right, fg_color=BG_SECONDARY, corner_radius=0, height=34)
-        right_bar.grid(row=1, column=0, sticky="ew")
-        right_bar.grid_propagate(False)
+        action_bar = ctk.CTkFrame(text_row, fg_color=BG_SECONDARY, corner_radius=0, height=34)
+        action_bar.grid(row=1, column=0, columnspan=3, sticky="ew")
+        action_bar.grid_propagate(False)
+        action_bar.grid_columnconfigure(0, weight=1)
+        action_bar.grid_columnconfigure(1, weight=0)
+
+        left_actions = ctk.CTkFrame(action_bar, fg_color="transparent")
+        left_actions.grid(row=0, column=0, sticky="w", padx=10)
+
+        self._char_label = ctk.CTkLabel(
+            left_actions,
+            text=self._t("char_count", count=0),
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=10),
+        )
+        self._char_label.pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
-            right_bar,
-            text=self._t("send_to_vrc"),
-            width=114,
-            height=24,
+            left_actions,
+            text=self._t("manual_input"),
+            width=98,
+            height=22,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=6,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=11),
+            command=self._open_text_input_popup,
+        ).pack(side="left", padx=(0, 8))
+
+        self._translate_btn = ctk.CTkButton(
+            left_actions,
+            text=self._t("translate"),
+            width=82,
+            height=22,
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
             corner_radius=8,
             text_color="#ffffff",
             font=ctk.CTkFont(size=11),
-            command=self._send_to_vrc,
-        ).pack(side="right", padx=6)
+            command=self._translate_manual,
+        )
+        self._translate_btn.pack(side="left", padx=(0, 6))
 
         ctk.CTkButton(
-            right_bar,
+            left_actions,
+            text=self._t("clear"),
+            width=62,
+            height=22,
+            fg_color="transparent",
+            hover_color=GLASS_HOVER,
+            corner_radius=6,
+            text_color=TEXT_SEC,
+            font=ctk.CTkFont(size=11),
+            command=self._clear_input,
+        ).pack(side="left")
+
+        right_actions = ctk.CTkFrame(action_bar, fg_color="transparent")
+        right_actions.grid(row=0, column=1, sticky="e", padx=10)
+
+        ctk.CTkButton(
+            right_actions,
             text=self._t("copy"),
-            width=84,
-            height=24,
+            width=78,
+            height=22,
             fg_color="transparent",
             hover_color=GLASS_HOVER,
             corner_radius=6,
             text_color=TEXT_SEC,
             font=ctk.CTkFont(size=11),
             command=self._copy_result,
-        ).pack(side="right", padx=2)
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            right_actions,
+            text=self._t("send_to_vrc"),
+            width=106,
+            height=22,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            corner_radius=8,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11),
+            command=self._send_to_vrc,
+        ).pack(side="left")
 
         social_bar = ctk.CTkFrame(outer, fg_color=BG_SECONDARY, corner_radius=0, height=56)
         social_bar.grid(row=2, column=0, sticky="ew")
@@ -690,20 +685,6 @@ class MainWindow(ctk.CTk):
             hover_color=ACCENT_HOVER,
         )
 
-    def _float_is_visible(self) -> bool:
-        return bool(
-            self._float_win
-            and self._float_win.winfo_exists()
-            and self._float_win.winfo_viewable()
-        )
-
-    def _apply_float_btn_state(self):
-        if hasattr(self, "_float_btn"):
-            self._float_btn.configure(
-                text=self._t("floating_shown") if self._float_is_visible() else self._t("floating_hidden")
-            )
-
-
     def _set_source_text(self, text: str, text_color: str | None = None):
         safe = (text or "").strip()
         if len(safe) > 500:
@@ -739,24 +720,43 @@ class MainWindow(ctk.CTk):
     def _open_text_input_popup(self, _event=None):
         popup = ctk.CTkToplevel(self)
         popup.title(self._t("manual_input"))
-        popup.geometry("460x210")
+        apply_window_icon(popup)
+        popup.geometry("480x208")
+        popup._popup_size = (480, 208)
         popup.resizable(False, False)
         popup.attributes("-topmost", True)
+        popup.transient(self)
         popup.grab_set()
+        popup.configure(fg_color=BG_PANEL)
+        popup.grid_columnconfigure(0, weight=1)
+        popup.grid_rowconfigure(0, weight=1)
+
+        content = ctk.CTkFrame(
+            popup,
+            fg_color=BG_PANEL,
+            corner_radius=0,
+            border_width=0,
+        )
+        content.grid(row=0, column=0, sticky="nsew")
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(0, weight=1)
 
         box = ctk.CTkTextbox(
-            popup,
-            height=92,
+            content,
             font=ctk.CTkFont(size=13),
             fg_color=BG_PANEL,
             text_color=TEXT_PRI,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=14,
         )
-        box.pack(fill="x", padx=16, pady=(16, 8))
+        box.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 8))
         if self._src_text:
             box.insert("1.0", self._src_text)
+        box.focus_set()
 
-        btn_row = ctk.CTkFrame(popup, fg_color="transparent")
-        btn_row.pack(fill="x", padx=16, pady=(2, 12))
+        btn_row = ctk.CTkFrame(content, fg_color="transparent")
+        btn_row.grid(row=1, column=0, sticky="e", padx=10, pady=(0, 10))
 
         def do_send():
             text = box.get("1.0", "end").strip()
@@ -769,19 +769,30 @@ class MainWindow(ctk.CTk):
             btn_row,
             text=self._t("apply"),
             width=100,
+            height=36,
             fg_color=ACCENT,
             hover_color=ACCENT_HOVER,
+            corner_radius=12,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=do_send,
         ).pack(side="right", padx=4)
 
         ctk.CTkButton(
             btn_row,
             text=self._t("cancel"),
-            width=80,
-            fg_color=DANGER,
-            hover_color=DANGER_HOVER,
+            width=100,
+            height=36,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=12,
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=12),
             command=popup.destroy,
         ).pack(side="right", padx=4)
+        present_popup(popup, parent=self)
 
     def _on_tgt_lang_change(self, *_):
         tgt_code = self._target_lang_codes.get(self._tgt_var.get(), "ja")
@@ -832,7 +843,6 @@ class MainWindow(ctk.CTk):
             return
 
         device_name = self._current_device_name()
-        restore_float = self._float_is_visible()
 
         ui_cfg = self._config.setdefault("ui", {})
         ui_cfg["language"] = new_lang
@@ -852,7 +862,7 @@ class MainWindow(ctk.CTk):
         elif model_exists(model_id):
             self._bottom_text = self._t("model_ready")
 
-        self._rebuild_ui(device_name=device_name, restore_float=restore_float)
+        self._rebuild_ui(device_name=device_name)
 
     def _sensevoice_model_spec(self) -> tuple[str, str]:
         asr_cfg = self._config.get("asr", {})
@@ -987,15 +997,6 @@ class MainWindow(ctk.CTk):
         self._bottom_progress.set(0.0)
         self._bottom_progress.grid_remove()
 
-    def _position_near_float_window(self):
-        if not self._float_win or not self._float_win.winfo_exists():
-            return
-        self.update_idletasks()
-        self._float_win.update_idletasks()
-        x = self.winfo_x() + self.winfo_width() + 18
-        y = self.winfo_y() + 118
-        self._float_win.geometry(f"+{x}+{y}")
-
     @staticmethod
     def _open_external_url(url: str):
         try:
@@ -1055,20 +1056,8 @@ class MainWindow(ctk.CTk):
         return MainWindow._find_asset_file(filename)
 
     def _set_window_icon(self):
-        ico_path = self._find_icon_file(APP_ICON_ICO_FILE)
-        if ico_path:
-            try:
-                self.iconbitmap(default=str(ico_path))
-            except Exception:
-                pass
-
-        png_path = self._find_icon_file(APP_ICON_PNG_FILE)
-        if png_path:
-            try:
-                self._window_icon = PhotoImage(file=str(png_path))
-                self.iconphoto(True, self._window_icon)
-            except Exception:
-                pass
+        apply_window_icon(self)
+        self._window_icon = getattr(self, "_window_icon_ref", None)
 
     def _load_social_icon(self, filename: str) -> ctk.CTkImage | None:
         icon_path = None
@@ -1148,21 +1137,28 @@ class MainWindow(ctk.CTk):
 
         self._sponsor_win = ctk.CTkToplevel(self)
         self._sponsor_win.title("赞助入口")
-        self._sponsor_win.geometry(f"{img.size[0] + 40}x{img.size[1] + 90}")
+        apply_window_icon(self._sponsor_win)
+        self._sponsor_win._popup_size = (img.size[0] + 20, img.size[1] + 52)
         self._sponsor_win.resizable(False, False)
         self._sponsor_win.attributes("-topmost", True)
+        self._sponsor_win.transient(self)
         self._sponsor_win.configure(fg_color=BG_PRIMARY)
 
+        outer = ctk.CTkFrame(self._sponsor_win, fg_color=BG_PRIMARY)
+        outer.pack(fill="both", expand=True, padx=8, pady=8)
+
         ctk.CTkLabel(
-            self._sponsor_win,
+            outer,
             text="感谢支持：酒寄 みお",
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=14, weight="bold"),
-        ).pack(pady=(12, 8))
+        ).pack(pady=(4, 6))
 
-        img_label = ctk.CTkLabel(self._sponsor_win, text="", image=ctk_img)
+        img_label = ctk.CTkLabel(outer, text="", image=ctk_img)
         img_label.image = ctk_img
-        img_label.pack(padx=12, pady=(0, 12))
+        img_label.pack(padx=2, pady=(0, 2))
+
+        present_popup(self._sponsor_win, parent=self)
 
     @staticmethod
     def _is_vrchat_running() -> bool:
@@ -1177,18 +1173,6 @@ class MainWindow(ctk.CTk):
             return "VRChat.exe" in out
         except Exception:
             return False
-
-    def _ensure_receiver_started(self):
-        if self._receiver is not None:
-            return
-        osc_cfg = self._config.get("osc", {})
-        self._receiver = VRCOSCReceiver(
-            on_message=self._on_incoming_chatbox,
-            port=osc_cfg.get("receive_port", 9001),
-            own_messages=self._own_msgs,
-            on_own_message=self._on_own_chatbox_echo,
-        )
-        self._receiver.start()
 
     def _create_sender(self) -> VRCOSCSender:
         osc_cfg = self._config.get("osc", {})
@@ -1256,14 +1240,6 @@ class MainWindow(ctk.CTk):
                 return
             audio, asr_lang, session_id = payload
             self._process_final_audio_segment(audio, asr_lang, session_id)
-
-    def _incoming_worker_loop(self) -> None:
-        while True:
-            payload = self._incoming_task_queue.get()
-            if payload is None:
-                return
-            text, session_id = payload
-            self._process_incoming_chatbox(text, session_id)
 
     def _on_audio_chunk(self, audio):
         if not self._running:
@@ -1360,8 +1336,7 @@ class MainWindow(ctk.CTk):
 
             if not self._running or session_id != self._listen_session or sender is None:
                 return
-            sent = sender.send_chatbox(chatbox_text)
-            self._remember_own_message(sent)
+            sender.send_chatbox(chatbox_text)
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__
             self._call_in_ui(
@@ -1372,17 +1347,6 @@ class MainWindow(ctk.CTk):
                 self._call_in_ui(
                     lambda: self._set_status(self._t("status_listening"), SUCCESS)
                 )
-
-    def _on_own_chatbox_echo(self, text: str):
-        self._osc_echo_capable = True
-        self._last_own_chatbox_echo_text = text
-        self._last_own_chatbox_echo_time = time.time()
-
-    def _check_vrc_send_ack(self, sent_text: str):
-        if not self._osc_echo_capable:
-            return
-        if self._last_own_chatbox_echo_text == sent_text and (time.time() - self._last_own_chatbox_echo_time) < 2.0:
-            return
 
     def _send_to_vrc(self):
         tgt_text = self._last_tgt_text
@@ -1406,14 +1370,10 @@ class MainWindow(ctk.CTk):
         else:
             chatbox_text = f"{tgt_text}（{src_text}）" if src_text and tgt_text else tgt_text or src_text
 
-        self._ensure_receiver_started()
         if self._sender is None:
             self._sender = self._create_sender()
         try:
-            sent = self._sender.send_chatbox(chatbox_text)
-            self._remember_own_message(sent)
-            if self._running and self._osc_echo_capable:
-                self.after(1400, lambda s=sent: self._check_vrc_send_ack(s))
+            self._sender.send_chatbox(chatbox_text)
         except Exception as e:
             messagebox.showerror(self._t("send_failed_title"), str(e))
 
@@ -1476,13 +1436,133 @@ class MainWindow(ctk.CTk):
         devices = AudioRecorder.list_devices()
         self._devices = {d["name"]: d["index"] for d in devices}
         names = list(self._devices.keys()) or ["默认"]
-        self._device_menu.configure(values=names)
         cfg_dev = self._config.get("audio", {}).get("input_device")
         if cfg_dev and cfg_dev in self._devices:
-            self._device_var.set(cfg_dev)
+            self._set_selected_device(cfg_dev, persist=False)
         else:
             preferred = self._get_system_default_input(devices, names)
-            self._device_var.set(preferred)
+            self._set_selected_device(preferred, persist=False)
+
+    @staticmethod
+    def _format_device_label(name: str, limit: int = 30) -> str:
+        text = (name or "").strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[: max(0, limit - 3)]}..."
+
+    def _set_selected_device(self, device_name: str, *, persist: bool) -> None:
+        self._device_var.set(device_name)
+        if hasattr(self, "_device_button") and self._device_button is not None:
+            self._device_button.configure(text=self._format_device_label(device_name))
+        if not persist:
+            return
+        audio_cfg = self._config.setdefault("audio", {})
+        if audio_cfg.get("input_device") != device_name:
+            audio_cfg["input_device"] = device_name
+            self._schedule_config_save()
+
+    def _choose_device(self, device_name: str) -> None:
+        if device_name in getattr(self, "_devices", {}):
+            self._set_selected_device(device_name, persist=True)
+        self._close_device_picker()
+
+    def _open_device_picker(self) -> None:
+        if self._device_picker_win and self._device_picker_win.winfo_exists():
+            self._device_picker_win.deiconify()
+            self._device_picker_win.lift()
+            return
+
+        popup = ctk.CTkToplevel(self)
+        self._device_picker_win = popup
+        popup.title(self._t("microphone"))
+        apply_window_icon(popup)
+        popup.geometry("430x400")
+        popup._popup_size = (430, 400)
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        popup.transient(self)
+        popup.grab_set()
+        popup.configure(fg_color=BG_PRIMARY)
+        popup.protocol("WM_DELETE_WINDOW", self._close_device_picker)
+
+        outer = ctk.CTkFrame(popup, fg_color=BG_PRIMARY)
+        outer.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            outer,
+            text=self._t("microphone"),
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=20, weight="bold"),
+        ).pack(anchor="w", pady=(0, 4))
+
+        ctk.CTkLabel(
+            outer,
+            text=self._format_device_label(self._device_var.get(), limit=54),
+            text_color=TEXT_SEC,
+            justify="left",
+            wraplength=380,
+            font=ctk.CTkFont(size=12),
+        ).pack(anchor="w", pady=(0, 12))
+
+        card = ctk.CTkFrame(
+            outer,
+            fg_color=BG_PANEL,
+            corner_radius=22,
+            border_width=1,
+            border_color=GLASS_BORDER,
+        )
+        card.pack(fill="both", expand=True)
+
+        list_frame = ctk.CTkScrollableFrame(
+            card,
+            fg_color="transparent",
+            corner_radius=0,
+            scrollbar_button_color="#c9d5e3",
+            scrollbar_button_hover_color="#b7c6d8",
+        )
+        list_frame.pack(fill="both", expand=True, padx=10, pady=(10, 6))
+
+        current_name = self._device_var.get()
+        for name in self._devices.keys():
+            is_selected = name == current_name
+            ctk.CTkButton(
+                list_frame,
+                text=name,
+                anchor="w",
+                height=40,
+                fg_color="#eef5ff" if is_selected else "transparent",
+                hover_color="#edf3fb",
+                border_width=1 if is_selected else 0,
+                border_color="#bfdbff",
+                corner_radius=14,
+                text_color=ACCENT if is_selected else TEXT_PRI,
+                font=ctk.CTkFont(size=12, weight="bold" if is_selected else "normal"),
+                command=lambda selected=name: self._choose_device(selected),
+            ).pack(fill="x", padx=4, pady=4)
+
+        footer = ctk.CTkFrame(outer, fg_color="transparent")
+        footer.pack(fill="x", pady=(12, 0))
+
+        ctk.CTkButton(
+            footer,
+            text=self._t("cancel"),
+            width=84,
+            height=34,
+            fg_color=GLASS_BG,
+            hover_color=GLASS_HOVER,
+            border_width=1,
+            border_color=GLASS_BORDER,
+            corner_radius=10,
+            text_color=TEXT_PRI,
+            command=self._close_device_picker,
+        ).pack(side="right")
+
+        present_popup(popup, parent=self)
+
+    def _close_device_picker(self) -> None:
+        if self._device_picker_win and self._device_picker_win.winfo_exists():
+            self._device_picker_win.destroy()
+        self._device_picker_win = None
 
     @staticmethod
     def _get_system_default_input(devices: list[dict], names: list[str]) -> str:
@@ -1543,7 +1623,6 @@ class MainWindow(ctk.CTk):
                 )
             )
             self._sender = self._create_sender()
-            self._ensure_receiver_started()
             audio_cfg = self._config.get("audio", {})
             streaming_cfg = self._streaming_config()
             self._recorder = AudioRecorder(
@@ -1559,6 +1638,7 @@ class MainWindow(ctk.CTk):
                 min_segment_s=audio_cfg.get("min_segment_s", 0.45),
                 partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
                 max_segment_s=audio_cfg.get("max_segment_s", 12.0),
+                denoise_strength=audio_cfg.get("denoise_strength", 0.0),
                 input_device=dev_idx,
                 on_vad_state=self._on_vad_state,
                 chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
@@ -1578,13 +1658,9 @@ class MainWindow(ctk.CTk):
         self._reset_streaming_state()
         self._drain_queue(self._partial_task_queue)
         self._drain_queue(self._final_task_queue)
-        self._drain_queue(self._incoming_task_queue)
         if self._recorder:
             self._recorder.stop()
             self._recorder = None
-        if self._receiver:
-            self._receiver.stop()
-            self._receiver = None
         if self._sender:
             self._sender.close()
             self._sender = None
@@ -1623,60 +1699,6 @@ class MainWindow(ctk.CTk):
             (audio, asr_lang, self._listen_session),
         )
 
-    def _on_incoming_chatbox(self, text: str):
-        self._enqueue_latest(
-            self._incoming_task_queue,
-            (text, self._listen_session),
-        )
-
-    def _process_incoming_chatbox(self, text: str, session_id: int) -> None:
-        if not self._running or session_id != self._listen_session:
-            return
-        try:
-            src_lang = detect_language(text)
-            translator = self._translator
-            if src_lang == "zh" or translator is None:
-                if self._running and session_id == self._listen_session:
-                    self._call_in_ui(lambda: self._show_incoming(text, None))
-                return
-            translated = translator.translate(text, src_lang, "zh")
-            if self._running and session_id == self._listen_session:
-                self._call_in_ui(lambda: self._show_incoming(text, translated))
-        except Exception:
-            pass
-
-    def _show_incoming(self, original: str, translated: str | None):
-        if self._float_win and self._float_win.winfo_exists():
-            self._float_win.add_message(original, translated)
-
-    def _toggle_float(self):
-        ui_cfg = self._config.setdefault("ui", {})
-        opacity = float(ui_cfg.get("floating_window_opacity", 0.92))
-        if self._float_win and self._float_win.winfo_exists():
-            if self._float_is_visible():
-                self._float_win.hide()
-                ui_cfg["show_floating_window"] = False
-            else:
-                self._float_win.show()
-                self._position_near_float_window()
-                ui_cfg["show_floating_window"] = True
-        else:
-            self._float_win = FloatingWindow(
-                self,
-                ui_language=self._ui_lang,
-                opacity=opacity,
-                on_opacity_change=self._on_float_opacity_changed,
-            )
-            self._position_near_float_window()
-            ui_cfg["show_floating_window"] = True
-        self._schedule_config_save()
-        self._apply_float_btn_state()
-
-    def _on_float_opacity_changed(self, opacity: float):
-        ui_cfg = self._config.setdefault("ui", {})
-        ui_cfg["floating_window_opacity"] = round(float(opacity), 2)
-        self._schedule_config_save()
-
     def _open_settings(self):
         SettingsWindow(self, self._config, on_save=self._on_config_saved)
 
@@ -1685,16 +1707,9 @@ class MainWindow(ctk.CTk):
             return self._device_var.get()
         return None
 
-    def _rebuild_ui(self, device_name: str | None = None, restore_float: bool = False):
+    def _rebuild_ui(self, device_name: str | None = None):
         source_text = self._src_text
         target_text = self._last_tgt_text
-
-        if self._float_win and self._float_win.winfo_exists():
-            try:
-                self._float_win.destroy()
-            except Exception:
-                pass
-        self._float_win = None
 
         for child in list(self.winfo_children()):
             child.destroy()
@@ -1704,6 +1719,7 @@ class MainWindow(ctk.CTk):
         self._tgt_output = None
         self._bottom_bar = None
         self._bottom_progress = None
+        self._close_device_picker()
         self._social_icons.clear()
         self._src_placeholder = self._t("source_placeholder")
         self._src_rendered_text = ""
@@ -1714,7 +1730,7 @@ class MainWindow(ctk.CTk):
         self._load_devices()
 
         if device_name and device_name in getattr(self, "_devices", {}):
-            self._device_var.set(device_name)
+            self._set_selected_device(device_name, persist=False)
 
         self._set_source_text(source_text)
         if target_text:
@@ -1725,18 +1741,6 @@ class MainWindow(ctk.CTk):
             self._tgt_output.delete("1.0", "end")
             self._tgt_output.configure(state="disabled")
             self._tgt_rendered_text = ""
-
-        if restore_float:
-            ui_cfg = self._config.setdefault("ui", {})
-            self._float_win = FloatingWindow(
-                self,
-                ui_language=self._ui_lang,
-                opacity=float(ui_cfg.get("floating_window_opacity", 0.92)),
-                on_opacity_change=self._on_float_opacity_changed,
-            )
-            self._position_near_float_window()
-            ui_cfg["show_floating_window"] = True
-        self._apply_float_btn_state()
 
     def _maybe_show_osc_guide(self):
         ui_cfg = self._config.setdefault("ui", {})
@@ -1779,9 +1783,12 @@ class MainWindow(ctk.CTk):
         self._guide_page_index = 0
         self._guide_win = ctk.CTkToplevel(self)
         self._guide_win.title(self._t("guide_title"))
+        apply_window_icon(self._guide_win)
         self._guide_win.geometry("520x430")
+        self._guide_win._popup_size = (520, 430)
         self._guide_win.resizable(False, False)
         self._guide_win.attributes("-topmost", True)
+        self._guide_win.transient(self)
         self._guide_win.grab_set()
         self._guide_win.configure(fg_color=BG_PRIMARY)
 
@@ -1806,13 +1813,19 @@ class MainWindow(ctk.CTk):
         )
         self._guide_subtitle_label.pack(anchor="w", pady=(0, 14))
 
-        card = ctk.CTkFrame(outer, fg_color="#0b5960", corner_radius=20)
+        card = ctk.CTkFrame(
+            outer,
+            fg_color=BG_PANEL,
+            corner_radius=24,
+            border_width=1,
+            border_color=GLASS_BORDER,
+        )
         card.pack(fill="both", expand=True)
 
         self._guide_page_label = ctk.CTkLabel(
             card,
             text="",
-            text_color="#d4fbff",
+            text_color=ACCENT,
             font=ctk.CTkFont(size=12, weight="bold"),
         )
         self._guide_page_label.pack(anchor="w", padx=22, pady=(18, 10))
@@ -1820,7 +1833,7 @@ class MainWindow(ctk.CTk):
         self._guide_step_title_label = ctk.CTkLabel(
             card,
             text="",
-            text_color="#ffffff",
+            text_color=TEXT_PRI,
             font=ctk.CTkFont(size=22, weight="bold"),
         )
         self._guide_step_title_label.pack(anchor="w", padx=22)
@@ -1828,7 +1841,7 @@ class MainWindow(ctk.CTk):
         self._guide_step_body_label = ctk.CTkLabel(
             card,
             text="",
-            text_color="#d4fbff",
+            text_color=TEXT_SEC,
             justify="left",
             wraplength=430,
             font=ctk.CTkFont(size=13),
@@ -1841,7 +1854,7 @@ class MainWindow(ctk.CTk):
         self._guide_footer_label = ctk.CTkLabel(
             card,
             text=self._t("guide_footer"),
-            text_color="#b7eef3",
+            text_color=TEXT_SEC,
             justify="left",
             wraplength=430,
             font=ctk.CTkFont(size=12),
@@ -1878,6 +1891,7 @@ class MainWindow(ctk.CTk):
         self._guide_next_btn.pack(side="right")
 
         self._render_guide_page()
+        present_popup(self._guide_win, parent=self)
 
     def _render_guide_page(self):
         pages = self._guide_pages()
@@ -1897,8 +1911,8 @@ class MainWindow(ctk.CTk):
             ctk.CTkLabel(
                 self._guide_path_frame,
                 text=str(item),
-                fg_color="#19b8c3" if i == len(page["path"]) - 1 else "#083f45",
-                text_color="#ffffff",
+                fg_color=ACCENT if i == len(page["path"]) - 1 else "#eef5ff",
+                text_color="#ffffff" if i == len(page["path"]) - 1 else TEXT_PRI,
                 corner_radius=16,
                 padx=12,
                 pady=6,
@@ -1926,7 +1940,6 @@ class MainWindow(ctk.CTk):
     def _on_config_saved(self, new_cfg: dict):
         was_running = self._running
         device_name = self._current_device_name()
-        restore_float = self._float_is_visible()
         if was_running:
             self._set_bottom(self._t("settings_saved_reloading"))
             self._set_status(self._t("status_restarting"), ACCENT)
@@ -1937,12 +1950,11 @@ class MainWindow(ctk.CTk):
         self.title(self._t("window_title"))
         self._asr = create_asr(new_cfg)
         self._translator = None
-        self._osc_echo_capable = False
         with self._merge_lock:
             self._partial_merger = self._create_streaming_merger()
         self._reset_streaming_state()
 
-        self._rebuild_ui(device_name=device_name, restore_float=restore_float)
+        self._rebuild_ui(device_name=device_name)
         self.after(120, self._maybe_prepare_runtime_model)
         if was_running:
             self.after(100, self._start)
@@ -1996,7 +2008,6 @@ class MainWindow(ctk.CTk):
         for work_queue in (
             self._partial_task_queue,
             self._final_task_queue,
-            self._incoming_task_queue,
         ):
             self._drain_queue(work_queue)
             try:

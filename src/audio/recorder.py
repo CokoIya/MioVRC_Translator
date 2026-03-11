@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+from .adaptive_denoiser import AdaptiveDenoiser
 from .chunk_streamer import ChunkStreamer
 from .vad_detector import VADDetector
 
@@ -37,6 +38,7 @@ class AudioRecorder:
         partial_min_speech_s: float = 0.45,
         vad_min_rms: float = 0.012,
         max_segment_s: float = 12.0,
+        denoise_strength: float = 0.0,
     ):
         self.on_segment = on_segment
         self.on_chunk = on_chunk
@@ -75,6 +77,7 @@ class AudioRecorder:
         self._capture_rate: int = sample_rate
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
+        self._denoiser = AdaptiveDenoiser(strength=denoise_strength)
         self._chunk_streamer = (
             ChunkStreamer(
                 sample_rate=sample_rate,
@@ -98,6 +101,7 @@ class AudioRecorder:
         self._was_in_speech = False
         self._capture_rate = self.sample_rate
         self._clear_frame_queue()
+        self._denoiser.reset()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
 
@@ -194,12 +198,16 @@ class AudioRecorder:
             if frame is None:
                 break
 
+            previous_in_speech = self._was_in_speech
             normalized = self._prepare_frame(frame)
             if normalized.size == 0:
                 continue
+            normalized = self._denoiser.process(
+                normalized,
+                update_profile=not previous_in_speech,
+            )
 
             pcm = np.clip(normalized * 32768.0, -32768.0, 32767.0).astype(np.int16)
-            previous_in_speech = self._was_in_speech
             if not previous_in_speech:
                 self._pre_speech_buffer.append(normalized)
 

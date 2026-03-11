@@ -4,31 +4,31 @@
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
 
-> A local real-time voice translation tool for VRChat players
-> Author: `みお_Mio` / Open-source project / Paid redistribution is prohibited
+> A local real-time voice translation tool for VRChat users  
+> Author: `ここ_Mio` / Open-source project / Paid redistribution is prohibited
 
 ## Version
 
-- Desktop release: `v1.2.0`
-- GitHub Releases lite installer: `v1.2.0_release`
+- Desktop release: `v1.2.1`
+- GitHub Releases lite installer: `v1.2.1_release`
 
 ## Overview
 
-**Mio RealTime Translator** is a local real-time voice translation tool for VRChat. Its core pipeline is:
+**Mio RealTime Translator** is a local real-time voice translation tool for VRChat. Its current core pipeline is:
 
 - Local speech recognition: `SenseVoice Small`
-- Translation backends: `OpenAI` / `DeepSeek` / `Qianwen` / `Anthropic`
+- Translation services: `GPT` / `DeepSeek` / `GLM` / `Qwen` / `Claude`
 - VRChat communication: `OSC`
-- Reverse translation display: incoming chatbox text shown in a floating window
 
 ## Features
 
 - Recognizes microphone input locally and sends the result to the VRChat chatbox
 - Built-in manual translation panel for typing and sending text to VRC
 - Multiple output formats such as `Translation (Original)`, `Translation only`, `Original only`, and `Original (Translation)`
-- Reverse-translates incoming chatbox messages and shows them in a floating window
+- Built-in preset model lists for each translation service, with speed, quality, and plugin-fit notes
+- Adjustable denoise strength, VAD silence threshold, and streaming recognition parameters
+- More compact desktop UI for the main window and settings window, with unified popup positioning and icons
 - UI language switching
-- Adjustable streaming recognition parameters
 
 ## Download
 
@@ -67,8 +67,8 @@ $env:MODELSCOPE_CACHE = "./models"
 
 1. Copy `config.example.json` to `config.json`
 2. Launch the app and open `Settings`
-3. Choose a translation backend and fill in the corresponding `API Key`
-4. Adjust microphone, VAD silence threshold, target language, and output format as needed
+3. Choose a translation service and fill in the corresponding `API Key`
+4. Adjust microphone, denoise, VAD, target language, and output format as needed
 5. Enable OSC in VRChat: `Action Menu -> Options -> OSC -> Enable`
 
 ## Build
@@ -91,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File .\build_release_lite_installer.ps1
 - It does not store chat logs
 - Chatbox messages are discarded immediately after sending
 - The project does not operate its own cloud service
-- Only when a cloud translation backend is enabled will the current text be sent to the API provider you configured
+- Only when a cloud translation service is enabled will the current text be sent to the API endpoint you configured
 
 ## Tech Stack
 
@@ -101,12 +101,11 @@ powershell -ExecutionPolicy Bypass -File .\build_release_lite_installer.ps1
 | Audio Input | sounddevice |
 | VAD | webrtcvad |
 | ASR | FunASR / SenseVoice Small |
-| Translation | OpenAI SDK / Anthropic SDK |
+| Translation | OpenAI SDK / Anthropic SDK / OpenAI Compatible API |
 | VRChat Communication | python-osc |
 
 ## Known Limitations
 
-- VRChat does not expose other players' raw audio streams, so reverse translation is based on chatbox text only
+- Native VRChat OSC does not expose other players' chat text or raw audio, so the current version only handles your own microphone input and manual text input
 - A single VRChat chatbox message is limited to about 144 characters
-- In noisy environments, VAD may trigger incorrectly and needs manual tuning
-
+- In noisy environments, false triggers may still happen, so denoise and VAD settings may need manual tuning

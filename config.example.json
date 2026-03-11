@@ -6,6 +6,7 @@
     "vad_speech_ratio": 0.72,
     "vad_activation_threshold_s": 0.24,
     "vad_min_rms": 0.012,
+    "denoise_strength": 0.0,
     "min_segment_s": 0.45,
     "partial_min_speech_s": 0.45,
     "max_segment_s": 12.0,
@@ -39,16 +40,21 @@
     "deepseek": {
       "api_key": "",
       "base_url": "https://api.deepseek.com/v1",
-      "model": "deepseek-chat"
+      "model": "deepseek-reasoner"
+    },
+    "zhipu": {
+      "api_key": "",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-4.7-flash"
     },
     "qianwen": {
       "api_key": "",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen-mt-turbo"
+      "model": "qwen-mt-flash"
     },
     "anthropic": {
       "api_key": "",
-      "model": "claude-haiku-4-5-20251001"
+      "model": "claude-3-5-haiku-20241022"
     },
     "custom": {
       "api_key": "",
@@ -59,15 +65,12 @@
   "osc": {
     "send_host": "127.0.0.1",
     "send_port": 9000,
-    "receive_port": 9001,
     "min_send_interval_s": 0.8
   },
   "ui": {
     "language": "",
     "language_source": "auto",
-    "floating_window_opacity": 0.9,
     "osc_guide_seen": false,
-    "show_floating_window": false,
     "theme": "dark"
   }
 }
