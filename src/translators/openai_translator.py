@@ -13,8 +13,9 @@ class OpenAITranslator(BaseTranslator):
         max_output_tokens: int = 192,
         max_retries: int = 0,
         extra_body: dict | None = None,
+        prompt_profile: dict[str, object] | None = None,
     ):
-        super().__init__()
+        super().__init__(prompt_profile=prompt_profile)
         try:
             from openai import OpenAI
         except ImportError:

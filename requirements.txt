@@ -3,6 +3,7 @@ customtkinter>=5.2.0
 
 # Audio
 sounddevice>=0.4.6
+soundcard>=0.4.3
 numpy>=1.24.0
 webrtcvad>=2.0.10
 

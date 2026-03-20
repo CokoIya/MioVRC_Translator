@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+import threading
+from typing import Callable, Optional
+
+import numpy as np
+import sounddevice as sd
+
+from .recorder import AudioRecorder
+
+
+def _import_soundcard():
+    try:
+        import soundcard as sc
+    except ImportError as exc:
+        raise RuntimeError(
+            "Desktop audio capture component is unavailable in the current runtime. "
+            "If you are running from source, install `soundcard`; if you are using the packaged app, rebuild the bundle with soundcard included."
+        ) from exc
+    return sc
+
+
+def list_output_devices() -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    default_name = _default_output_device_name_from_sounddevice()
+
+    try:
+        sc = _import_soundcard()
+        try:
+            default_speaker = sc.default_speaker()
+            soundcard_default = str(getattr(default_speaker, "name", "") or "").strip()
+            if soundcard_default:
+                default_name = soundcard_default
+        except Exception:
+            pass
+
+        for speaker in sc.all_speakers():
+            name = str(getattr(speaker, "name", "") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            result.append(
+                {
+                    "name": name,
+                    "is_default": name == default_name,
+                }
+            )
+    except Exception:
+        pass
+
+    # Fallback to PortAudio device enumeration so we can still surface the
+    # active output device names even if SoundCard enumeration is incomplete.
+    for device in _sounddevice_output_devices():
+        name = str(device.get("name", "")).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        result.append(
+            {
+                "name": name,
+                "is_default": name == default_name,
+            }
+        )
+    return result
+
+
+def default_output_device_name() -> str | None:
+    for device in list_output_devices():
+        if device.get("is_default"):
+            return str(device.get("name", "")).strip() or None
+    devices = list_output_devices()
+    if devices:
+        return str(devices[0].get("name", "")).strip() or None
+    return None
+
+
+def desktop_audio_supported() -> bool:
+    return bool(list_output_devices())
+
+
+class DesktopAudioRecorder(AudioRecorder):
+    def __init__(
+        self,
+        on_segment: Callable[[np.ndarray], None],
+        sample_rate: int = 16000,
+        frame_duration_ms: int = 30,
+        vad_sensitivity: int = 2,
+        silence_threshold_s: float = 0.8,
+        vad_speech_ratio: float = 0.72,
+        vad_activation_threshold_s: float = 0.24,
+        output_device_name: str | None = None,
+        on_vad_state: Optional[Callable[[bool], None]] = None,
+        pre_speech_s: float = 0.30,
+        on_chunk: Optional[Callable[[np.ndarray], None]] = None,
+        chunk_interval_ms: int = 250,
+        chunk_window_s: float = 1.6,
+        ring_buffer_s: float = 4.0,
+        recent_speech_hold_s: float = 0.8,
+        min_segment_s: float = 0.45,
+        partial_min_speech_s: float = 0.45,
+        vad_min_rms: float = 0.012,
+        max_segment_s: float = 12.0,
+        denoise_strength: float = 0.0,
+    ):
+        super().__init__(
+            on_segment=on_segment,
+            sample_rate=sample_rate,
+            frame_duration_ms=frame_duration_ms,
+            vad_sensitivity=vad_sensitivity,
+            silence_threshold_s=silence_threshold_s,
+            vad_speech_ratio=vad_speech_ratio,
+            vad_activation_threshold_s=vad_activation_threshold_s,
+            input_device=None,
+            on_vad_state=on_vad_state,
+            pre_speech_s=pre_speech_s,
+            on_chunk=on_chunk,
+            chunk_interval_ms=chunk_interval_ms,
+            chunk_window_s=chunk_window_s,
+            ring_buffer_s=ring_buffer_s,
+            recent_speech_hold_s=recent_speech_hold_s,
+            min_segment_s=min_segment_s,
+            partial_min_speech_s=partial_min_speech_s,
+            vad_min_rms=vad_min_rms,
+            max_segment_s=max_segment_s,
+            denoise_strength=denoise_strength,
+        )
+        self._output_device_name = str(output_device_name or "").strip()
+        self._capture_thread: Optional[threading.Thread] = None
+        self._loopback_microphone = None
+
+    def start(self):
+        if self._running:
+            return
+        sc = _import_soundcard()
+        self._loopback_microphone = self._resolve_loopback_microphone(sc)
+        self._running = True
+        self.vad.reset()
+        self._buffer.clear()
+        self._pre_speech_buffer.clear()
+        self._speech_samples = 0
+        self._was_in_speech = False
+        self._capture_rate = self.sample_rate
+        self._capture_channels = 2
+        self._capture_dtype = "float32"
+        self._clear_frame_queue()
+        self._denoiser.reset()
+        if self._chunk_streamer is not None:
+            self._chunk_streamer.reset()
+
+        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._worker_thread.start()
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
+
+    def stop(self):
+        self._running = False
+        self._enqueue_frame(None)
+        if self._capture_thread:
+            self._capture_thread.join(timeout=2.0)
+            self._capture_thread = None
+        if self._worker_thread:
+            self._worker_thread.join(timeout=2.0)
+            self._worker_thread = None
+        self._clear_frame_queue()
+        if self._chunk_streamer is not None:
+            self._chunk_streamer.reset()
+        self._loopback_microphone = None
+
+    def _capture_loop(self) -> None:
+        microphone = self._loopback_microphone
+        if microphone is None:
+            sc = _import_soundcard()
+            microphone = self._resolve_loopback_microphone(sc)
+        blocksize = max(int(self.sample_rate * self.frame_duration_ms / 1000), 1)
+
+        # On Windows, system-output loopback captures the selected output
+        # device itself, so browser audio, players, and any other app routed
+        # to that same speaker are all included.
+        try:
+            with microphone.recorder(
+                samplerate=self.sample_rate,
+                blocksize=blocksize,
+            ) as recorder:
+                while self._running:
+                    frame = recorder.record(numframes=blocksize)
+                    if frame is None:
+                        continue
+                    self._enqueue_frame(np.asarray(frame, dtype=np.float32, order="C"))
+        except Exception as exc:
+            self._running = False
+            self._enqueue_frame(None)
+            print(f"[DesktopAudioRecorder] capture loop error: {exc}")
+
+    def _resolve_loopback_microphone(self, sc):
+        preferred_names: list[str] = []
+        if self._output_device_name:
+            preferred_names.append(self._output_device_name)
+        try:
+            default_speaker = sc.default_speaker()
+            default_name = str(getattr(default_speaker, "name", "") or "").strip()
+            if default_name and default_name not in preferred_names:
+                preferred_names.append(default_name)
+        except Exception:
+            pass
+        default_sd_name = _default_output_device_name_from_sounddevice()
+        if default_sd_name and default_sd_name not in preferred_names:
+            preferred_names.append(default_sd_name)
+
+        for name in preferred_names:
+            try:
+                return sc.get_microphone(id=name, include_loopback=True)
+            except Exception:
+                pass
+
+        try:
+            microphones = list(sc.all_microphones(include_loopback=True))
+        except Exception:
+            microphones = []
+
+        for name in preferred_names:
+            for microphone in microphones:
+                microphone_name = str(getattr(microphone, "name", "") or "").strip()
+                if microphone_name == name:
+                    return microphone
+
+        for microphone in microphones:
+            if bool(getattr(microphone, "isloopback", False)):
+                return microphone
+
+        raise RuntimeError(
+            "No desktop loopback capture source is available for the selected output device"
+        )
+
+
+def _default_output_device_name_from_sounddevice() -> str:
+    try:
+        default_out = sd.default.device[1]
+        if default_out is None or int(default_out) < 0:
+            return ""
+        return str(sd.query_devices(int(default_out))["name"]).strip()
+    except Exception:
+        return ""
+
+
+def _sounddevice_output_devices() -> list[dict[str, object]]:
+    default_name = _default_output_device_name_from_sounddevice()
+    devices: list[dict[str, object]] = []
+    try:
+        hostapis = sd.query_hostapis()
+        preferred_hostapi_ids = [
+            index
+            for index, hostapi in enumerate(hostapis)
+            if "WASAPI" in str(hostapi.get("name", "")).upper()
+        ]
+        if not preferred_hostapi_ids:
+            preferred_hostapi_ids = list(range(len(hostapis)))
+
+        for index, dev in enumerate(sd.query_devices()):
+            if int(dev.get("max_output_channels", 0)) <= 0:
+                continue
+            if int(dev.get("hostapi", -1)) not in preferred_hostapi_ids:
+                continue
+            name = str(dev.get("name", "")).strip()
+            if not name:
+                continue
+            devices.append(
+                {
+                    "name": name,
+                    "is_default": name == default_name,
+                    "index": index,
+                }
+            )
+    except Exception:
+        return []
+    return devices

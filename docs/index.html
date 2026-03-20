@@ -299,8 +299,10 @@
       line-height: 1.6;
     }
     .btn-download {
-      display: inline-flex; align-items: center; gap: 10px;
-      padding: 16px 40px; border-radius: 980px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+      width: min(100%, 380px);
+      min-height: 66px;
+      padding: 16px 32px; border-radius: 980px;
       background: var(--accent); color: #fff;
       font-size: 17px; font-weight: 600;
       text-decoration: none;
@@ -332,36 +334,6 @@
       font-size: 14px;
       color: #a1a1aa;
       line-height: 1.7;
-    }
-    .group-links {
-      width: 100%;
-      display: flex;
-      justify-content: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-    .group-link {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 12px 20px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(255,255,255,.06);
-      color: #f5f5f7;
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 600;
-      transition: background .2s, transform .15s, border-color .2s;
-    }
-    .group-link:hover {
-      background: rgba(255,255,255,.12);
-      border-color: rgba(255,255,255,.22);
-      transform: translateY(-1px);
-    }
-    .dl-meta {
-      margin-top: 20px;
-      font-size: 13px; color: #6e6e73;
     }
     .privacy-note {
       margin-top: 40px;
@@ -410,8 +382,6 @@
       .nav-actions { width: 100%; justify-content: flex-end; }
       .download-card { padding: 36px 24px; }
       .hero-cta { flex-direction: column; align-items: center; }
-      .group-links { flex-direction: column; }
-      .group-link { width: 100%; }
     }
   </style>
 </head>
@@ -506,8 +476,8 @@
     <div class="guide-step">
       <div class="step-num">1</div>
       <div class="step-body">
-        <h4 id="guide-step-1-title">下载并解压</h4>
-        <p id="guide-step-1-body">点击下方下载按钮跳转百度网盘，下载通过网盘分享的完整文件 <strong style="color:#f5f5f7;">Mio</strong>，提取码为 <strong style="color:#f5f5f7;">0601</strong>。解压到任意目录后直接运行其中的 <strong style="color:#f5f5f7;">MioTranslator.exe</strong>。</p>
+        <h4 id="guide-step-1-title">下载并安装</h4>
+        <p id="guide-step-1-body">点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f5f5f7;">MioTranslator.exe</strong> 即可。</p>
       </div>
     </div>
     <div class="guide-step">
@@ -546,46 +516,59 @@
 <section id="download">
   <p class="section-eyebrow" id="download-eyebrow">下载</p>
   <h2 class="section-title" id="download-title">下载即用</h2>
-  <p class="section-sub" id="download-sub">完整文件现通过百度网盘和 QQ 群文件提供。点击下方按钮跳转网盘下载，也可以直接进群获取最新包。</p>
+  <p class="section-sub" id="download-sub">推荐直接下载安装版。点一下就能开始下载；如果官网文件还没同步，会自动切换到 GitHub 备用下载。</p>
 
   <div class="download-card">
-    <span class="dl-icon">⬇️</span>
+    <span class="dl-icon">&#11015;</span>
     <h3 id="download-card-title">Mio RealTime Translator</h3>
-      <p id="download-card-body">Windows x64 · 含全部运行时依赖 · 测试版默认内置 SenseVoice Small · 解压后可直接运行</p>
+    <p id="download-card-body">Windows x64 · 已带运行依赖 · 下载后即可安装使用</p>
     <div class="download-actions">
-      <a href="https://pan.baidu.com/s/1HIdfd7tV3o1t845FKpu40g?pwd=0601"
-         target="_blank" rel="noopener"
-         class="btn-download">
+      <a href="./downloads/MioTranslator-Setup-latest.exe"
+         id="download-direct-link"
+         class="btn-download"
+         download="MioTranslator-Setup-latest.exe">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span id="download-button-text">下载百度网盘完整包</span>
+        <span id="download-button-text">立即下载安装</span>
       </a>
       <a href="#"
          id="download-releases-link"
          class="btn-download secondary">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
-        <span id="download-releases-text">下载 GitHub Releases 轻量版</span>
+        <span id="download-releases-text">GitHub 备用下载</span>
       </a>
-      <p class="download-note" id="download-releases-note">GitHub Releases 版不内置语音模型，首次启动后会自动下载 SenseVoice Small。</p>
-      <div class="group-links">
-        <a href="mqqapi://card/show_pslcard?src_type=internal&amp;version=1&amp;uin=1077205718&amp;card_type=group&amp;source=external"
-           class="group-link">QQ 1 群 · 1077205718</a>
-        <a href="mqqapi://card/show_pslcard?src_type=internal&amp;version=1&amp;uin=756274989&amp;card_type=group&amp;source=external"
-           class="group-link">QQ 2 群 · 756274989</a>
-      </div>
+      <p class="download-note" id="download-releases-note">如果主下载没有开始，直接点下面这个备用下载就可以。</p>
     </div>
-    <p class="dl-meta" id="download-meta">百度网盘提取码：0601 · 如浏览器无法拉起 QQ，可手动搜索群号进群下载</p>
   </div>
 
+  <div class="download-card">
+    <span class="dl-icon">&#128218;</span>
+    <h3 id="download-dict-title">ASR 官方词典</h3>
+    <p id="download-dict-body">这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。</p>
+    <div class="download-actions">
+      <a href="./dictionaries/"
+         target="_blank" rel="noopener"
+         class="btn-download secondary">
+        <span id="download-dict-module-text">打开词典页面</span>
+      </a>
+      <a href="./dictionaries/asr_dictionary_manifest.json"
+         target="_blank" rel="noopener"
+         class="btn-download secondary">
+        <span id="download-dict-manifest-text">查看更新清单</span>
+      </a>
+      <a href="./dictionaries/asr_terms.official.json"
+         target="_blank" rel="noopener"
+         class="btn-download secondary">
+        <span id="download-dict-json-text">下载词典文件</span>
+      </a>
+    </div>
+    <p class="download-note" id="download-dict-note">软件里的“更新词典”会从这里获取官方词典。</p>
+  </div>
   <div class="privacy-note">
     <h4>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
       <span id="privacy-title">隐私声明</span>
     </h4>
-    <p id="privacy-body">
-      本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>
-      本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>
-      软件本身不含任何统计、埋点或聊天日志写盘逻辑。
-    </p>
+    <p id="privacy-body">本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。</p>
   </div>
 </section>
 
@@ -633,8 +616,8 @@
       "guide-eyebrow": "使用说明",
       "guide-title": "五步开始使用",
       "guide-sub": "从下载到 VRChat 实时翻译，只需几分钟。",
-      "guide-step-1-title": "下载并解压",
-      "guide-step-1-body": "点击下方下载按钮跳转百度网盘，下载完整文件。提取码为 <strong style=\"color:#f5f5f7;\">0601</strong>。解压到任意目录后直接运行 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>。",
+      "guide-step-1-title": "下载并安装",
+      "guide-step-1-body": "点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong> 即可。",
       "guide-step-2-title": "配置翻译后端",
       "guide-step-2-body": "启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。",
       "guide-step-3-title": "在 VRChat 开启 OSC",
@@ -645,14 +628,20 @@
       "guide-step-5-body": "模型加载完成后，对着麦克风说话，翻译结果将自动出现在你的 VRChat 聊天框中。",
       "download-eyebrow": "下载",
       "download-title": "下载即用",
-      "download-sub": "完整包通过百度网盘和 QQ 群文件提供；GitHub Releases 同步提供无内置模型的轻量安装版。",
+      "download-sub": "推荐直接下载安装版。点一下就能开始下载；如果官网文件还没同步，会自动切换到 GitHub 备用下载。",
       "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · 含全部运行时依赖 · 网盘完整包内置 SenseVoice Small · GitHub Releases 轻量版首次启动自动下载模型",
-      "download-button-text": "下载百度网盘完整包",
-      "download-releases-text": "下载 GitHub Releases 轻量版",
+      "download-card-body": "Windows x64 · 已带运行依赖 · 下载后即可安装使用",
+      "download-button-text": "立即下载安装",
+      "download-button-loading": "正在准备下载...",
+      "download-releases-text": "GitHub 备用下载",
       "download-releases-loading": "正在获取最新版本…",
-      "download-releases-note": "GitHub Releases 版不内置语音模型，首次启动后会自动下载 SenseVoice Small。",
-      "download-meta": "百度网盘提取码：0601 · 若 QQ 链接无法拉起，可手动搜索群号进群下载",
+      "download-releases-note": "如果主下载没有开始，直接点下面这个备用下载就可以。",
+      "download-dict-title": "ASR 官方词典",
+      "download-dict-body": "这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。",
+      "download-dict-module-text": "打开词典页面",
+      "download-dict-manifest-text": "查看更新清单",
+      "download-dict-json-text": "下载词典文件",
+      "download-dict-note": "软件里的“更新词典”会从这里获取官方词典。",
       "privacy-title": "隐私声明",
       "privacy-body": "本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。",
       "footer-main": "制作者：VRC 玩家 <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
@@ -688,8 +677,8 @@
       "guide-eyebrow": "Guide",
       "guide-title": "Get started in five steps",
       "guide-sub": "From download to real-time VRChat translation in just a few minutes.",
-      "guide-step-1-title": "Download and extract",
-      "guide-step-1-body": "Use the download button below to get the full package. The extraction code is <strong style=\"color:#f5f5f7;\">0601</strong>. Extract it anywhere and run <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
+      "guide-step-1-title": "Download and install",
+      "guide-step-1-body": "Click the download button below to grab the installer. Run it to install, then launch <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
       "guide-step-2-title": "Configure your translation backend",
       "guide-step-2-body": "Launch MioTranslator.exe, open ⚙ Settings, and fill in your API Key. Base URL and Model are locked automatically by backend.",
       "guide-step-3-title": "Enable OSC in VRChat",
@@ -700,14 +689,20 @@
       "guide-step-5-body": "Once the model is loaded, speak into your microphone and the translated result will appear in your VRChat chatbox.",
       "download-eyebrow": "Download",
       "download-title": "Ready to use",
-      "download-sub": "The full package is available through Baidu Netdisk and QQ groups, while GitHub Releases also provides a lite installer without bundled models.",
+      "download-sub": "Download the installer directly — one click to start. If the site file is not synced yet, it will automatically switch to the GitHub backup.",
       "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · Includes all runtime dependencies · The full package bundles SenseVoice Small · The GitHub Releases lite build downloads the model on first launch",
-      "download-button-text": "Download Baidu Netdisk full package",
-      "download-releases-text": "Download GitHub Releases lite build",
-      "download-releases-loading": "Preparing latest download…",
-      "download-releases-note": "The GitHub Releases build does not include the speech model. SenseVoice Small will start downloading automatically on first launch.",
-      "download-meta": "Baidu extraction code: 0601 · If QQ links do not open, search the group number manually",
+      "download-card-body": "Windows x64 · Includes runtime dependencies · Download and install",
+      "download-button-text": "Download Installer",
+      "download-button-loading": "Preparing download…",
+      "download-releases-text": "GitHub Backup",
+      "download-releases-loading": "Fetching latest release…",
+      "download-releases-note": "If the main download does not start, click the backup button below.",
+      "download-dict-title": "ASR Dictionary",
+      "download-dict-body": "Official recognition terms and update files. The app only connects when you open it manually.",
+      "download-dict-module-text": "Open Dictionary Page",
+      "download-dict-manifest-text": "View Update List",
+      "download-dict-json-text": "Download Dictionary File",
+      "download-dict-note": "The app uses this page as the source for official dictionary updates.",
       "privacy-title": "Privacy Notice",
       "privacy-body": "This project performs <strong>no data collection</strong>, stores no chat logs, and destroys each message after sending.<br>It is a purely local project with no first-party cloud server, so your API keys are not uploaded or reused by this project.<br>No analytics, tracking, or local chat log persistence is built into the app.",
       "footer-main": "Created by VRC player <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · Open-source project · No paid redistribution · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
@@ -743,8 +738,8 @@
       "guide-eyebrow": "使い方",
       "guide-title": "5 ステップで開始",
       "guide-sub": "ダウンロードから VRChat リアルタイム翻訳まで、数分で完了します。",
-      "guide-step-1-title": "ダウンロードして展開",
-      "guide-step-1-body": "下のボタンから完全版をダウンロードしてください。取り出しコードは <strong style=\"color:#f5f5f7;\">0601</strong> です。展開後に <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong> を実行します。",
+      "guide-step-1-title": "ダウンロードしてインストール",
+      "guide-step-1-body": "下のボタンをクリックしてインストーラーを取得してください。インストール後、<strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong> を起動します。",
       "guide-step-2-title": "翻訳バックエンドを設定",
       "guide-step-2-body": "MioTranslator.exe を起動し、右上の ⚙ 設定から API Key を入力してください。Base URL と Model はバックエンドに合わせて固定されます。",
       "guide-step-3-title": "VRChat で OSC を有効化",
@@ -755,14 +750,20 @@
       "guide-step-5-body": "モデルの読み込みが終わったら、マイクに向かって話すだけで翻訳結果が VRChat のチャットボックスに表示されます。",
       "download-eyebrow": "ダウンロード",
       "download-title": "すぐ使える",
-      "download-sub": "完全版は Baidu Netdisk と QQ グループで配布し、GitHub Releases ではモデル非同梱の軽量インストーラーも公開しています。",
+      "download-sub": "インストーラー版をおすすめします。クリックひとつでダウンロードが始まります。公式サイトのファイルがまだ更新されていない場合は、GitHub バックアップに自動切替します。",
       "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · 実行時依存を同梱 · 完全版は SenseVoice Small 同梱 · GitHub Releases 軽量版は初回起動時にモデルを自動取得",
-      "download-button-text": "Baidu Netdisk で完全版をダウンロード",
-      "download-releases-text": "GitHub Releases 軽量版をダウンロード",
+      "download-card-body": "Windows x64 · ランタイム依存関係同梱 · ダウンロード後すぐにインストール可能",
+      "download-button-text": "インストーラーをダウンロード",
+      "download-button-loading": "ダウンロードを準備中…",
+      "download-releases-text": "GitHub バックアップ",
       "download-releases-loading": "最新版を取得中…",
-      "download-releases-note": "GitHub Releases 版には音声モデルが含まれていません。初回起動時に SenseVoice Small が自動ダウンロードされます。",
-      "download-meta": "Baidu 抽出コード: 0601 · QQ が開けない場合はグループ番号を手動検索してください",
+      "download-releases-note": "メインダウンロードが始まらない場合は、下のバックアップボタンをクリックしてください。",
+      "download-dict-title": "ASR 公式辞書",
+      "download-dict-body": "公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。",
+      "download-dict-module-text": "辞書ページを開く",
+      "download-dict-manifest-text": "更新リストを確認",
+      "download-dict-json-text": "辞書ファイルをダウンロード",
+      "download-dict-note": "アプリの「辞書を更新」はここから公式辞書を取得します。",
       "privacy-title": "プライバシーについて",
       "privacy-body": "本プロジェクトは<strong>データ収集を一切行わず</strong>、チャット内容を保存しません。各メッセージは送信後に破棄されます。<br>プロジェクト専用のクラウドサーバーは存在せず、API Key が本プロジェクト側へ送信・再利用されることはありません。<br>解析、トラッキング、ローカルチャットログ保存は実装していません。",
       "footer-main": "制作者: VRC プレイヤー <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · オープンソース · 有料配布禁止 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
@@ -798,8 +799,8 @@
       "guide-eyebrow": "Инструкция",
       "guide-title": "Старт за пять шагов",
       "guide-sub": "От скачивания до перевода в VRChat в реальном времени всего за несколько минут.",
-      "guide-step-1-title": "Скачайте и распакуйте",
-      "guide-step-1-body": "Скачайте полный пакет по кнопке ниже. Код извлечения: <strong style=\"color:#f5f5f7;\">0601</strong>. После распаковки запустите <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
+      "guide-step-1-title": "Скачайте и установите",
+      "guide-step-1-body": "Нажмите кнопку скачивания ниже, чтобы получить установщик. Запустите его, затем откройте <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
       "guide-step-2-title": "Настройте переводческий бэкенд",
       "guide-step-2-body": "Запустите MioTranslator.exe, откройте ⚙ Settings и введите API Key. Base URL и Model будут зафиксированы автоматически.",
       "guide-step-3-title": "Включите OSC в VRChat",
@@ -810,14 +811,20 @@
       "guide-step-5-body": "После загрузки модели просто говорите в микрофон, и перевод появится в чатбоксе VRChat.",
       "download-eyebrow": "Скачать",
       "download-title": "Готово к использованию",
-      "download-sub": "Полный пакет доступен через Baidu Netdisk и QQ-группы, а в GitHub Releases есть облегчённый установщик без встроенной модели.",
+      "download-sub": "Рекомендуем скачать версию с установщиком. Одно нажатие — и загрузка начнётся. Если файл на сайте ещё не обновлён, автоматически переключится на резервный из GitHub.",
       "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · Все зависимости уже внутри · Полный пакет включает SenseVoice Small · Лёгкая сборка из GitHub Releases скачает модель при первом запуске",
-      "download-button-text": "Скачать полный пакет с Baidu Netdisk",
-      "download-releases-text": "Скачать GitHub Releases lite",
+      "download-card-body": "Windows x64 · Включает зависимости для работы · Скачай и установи",
+      "download-button-text": "Скачать установщик",
+      "download-button-loading": "Подготовка загрузки…",
+      "download-releases-text": "Резервный GitHub",
       "download-releases-loading": "Получаем последнюю версию…",
-      "download-releases-note": "В сборке из GitHub Releases нет встроенной речевой модели. SenseVoice Small начнёт скачиваться автоматически при первом запуске.",
-      "download-meta": "Код извлечения Baidu: 0601 · Если QQ не открывается, найдите группу по номеру вручную",
+      "download-releases-note": "Если основная загрузка не началась, нажмите на резервную кнопку ниже.",
+      "download-dict-title": "Официальный словарь ASR",
+      "download-dict-body": "Официальные слова для распознавания и файлы обновлений. Подключается только когда вы открываете вручную.",
+      "download-dict-module-text": "Открыть страницу словаря",
+      "download-dict-manifest-text": "Посмотреть список обновлений",
+      "download-dict-json-text": "Скачать файл словаря",
+      "download-dict-note": "Функция «Обновить словарь» в приложении берёт официальный словарь отсюда.",
       "privacy-title": "Конфиденциальность",
       "privacy-body": "Проект <strong>не собирает никаких данных</strong>, не хранит журналы чатов и уничтожает каждое сообщение после отправки.<br>Это полностью локальный проект без собственного облачного сервера, поэтому API-ключи не выгружаются и не используются повторно.<br>В приложении нет аналитики, трекинга или записи чатов на диск.",
       "footer-main": "Автор: игрок VRC <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · Open-source · Платное распространение запрещено · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
@@ -853,8 +860,8 @@
       "guide-eyebrow": "가이드",
       "guide-title": "5단계로 시작",
       "guide-sub": "다운로드부터 VRChat 실시간 번역까지 몇 분이면 충분합니다.",
-      "guide-step-1-title": "다운로드 후 압축 해제",
-      "guide-step-1-body": "아래 버튼으로 전체 패키지를 내려받으세요. 추출 코드는 <strong style=\"color:#f5f5f7;\">0601</strong> 입니다. 압축 해제 후 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>를 실행하세요.",
+      "guide-step-1-title": "다운로드 후 설치",
+      "guide-step-1-body": "아래 다운로드 버튼을 클릭해 설치 파일을 받으세요. 설치 후 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>를 실행하세요.",
       "guide-step-2-title": "번역 백엔드 설정",
       "guide-step-2-body": "MioTranslator.exe를 실행하고 ⚙ Settings에서 API Key를 입력하세요. Base URL과 Model은 백엔드에 맞게 자동 고정됩니다.",
       "guide-step-3-title": "VRChat에서 OSC 켜기",
@@ -865,14 +872,20 @@
       "guide-step-5-body": "모델 로드가 끝나면 마이크에 말하기만 하면 번역 결과가 VRChat 채팅창에 표시됩니다.",
       "download-eyebrow": "다운로드",
       "download-title": "바로 사용 가능",
-      "download-sub": "전체 패키지는 Baidu Netdisk와 QQ 그룹으로 배포되며, GitHub Releases에는 모델 비포함 경량 설치판도 함께 제공합니다.",
+      "download-sub": "설치 버전을 바로 다운로드하는 것을 권장합니다. 클릭 한 번으로 다운로드가 시작됩니다. 공식 사이트 파일이 아직 업데이트되지 않은 경우 GitHub 백업으로 자동 전환됩니다.",
       "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · 모든 런타임 의존성 포함 · 전체 패키지는 SenseVoice Small 기본 포함 · GitHub Releases 경량판은 첫 실행 시 모델을 자동 다운로드",
-      "download-button-text": "Baidu Netdisk 전체 패키지 다운로드",
-      "download-releases-text": "GitHub Releases 경량판 다운로드",
+      "download-card-body": "Windows x64 · 런타임 의존성 포함 · 다운로드 후 바로 설치 가능",
+      "download-button-text": "설치 파일 다운로드",
+      "download-button-loading": "다운로드 준비 중…",
+      "download-releases-text": "GitHub 백업 다운로드",
       "download-releases-loading": "최신 버전을 가져오는 중…",
-      "download-releases-note": "GitHub Releases 빌드에는 음성 모델이 포함되지 않습니다. 첫 실행 시 SenseVoice Small이 자동으로 다운로드됩니다.",
-      "download-meta": "Baidu 추출 코드: 0601 · QQ 링크가 열리지 않으면 그룹 번호로 직접 검색하세요",
+      "download-releases-note": "메인 다운로드가 시작되지 않으면 아래 백업 버튼을 클릭하세요.",
+      "download-dict-title": "ASR 공식 사전",
+      "download-dict-body": "공식 인식 사전과 업데이트 파일을 제공합니다. 수동으로 열 때만 접속합니다.",
+      "download-dict-module-text": "사전 페이지 열기",
+      "download-dict-manifest-text": "업데이트 목록 보기",
+      "download-dict-json-text": "사전 파일 다운로드",
+      "download-dict-note": "앱의 '사전 업데이트'는 여기서 공식 사전을 가져옵니다.",
       "privacy-title": "개인정보 안내",
       "privacy-body": "이 프로젝트는 <strong>어떠한 데이터도 수집하지 않으며</strong> 채팅 로그를 저장하지 않고, 메시지는 전송 후 파기됩니다.<br>프로젝트 전용 클라우드 서버가 없기 때문에 API Key가 업로드되거나 재사용되지 않습니다.<br>분석, 추적, 로컬 채팅 로그 저장 기능은 포함되어 있지 않습니다.",
       "footer-main": "제작자: VRC 플레이어 <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · 오픈소스 · 유료 배포 금지 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
@@ -1001,11 +1014,59 @@
     return latestReleaseAssetUrlPromise;
   }
 
+  const directDownloadUrl = './downloads/MioTranslator-Setup-latest.exe';
+
+  async function getPreferredDownloadUrl() {
+    if (window.location.protocol === 'file:') {
+      return directDownloadUrl;
+    }
+
+    try {
+      const response = await fetch(directDownloadUrl, { method: 'HEAD', cache: 'no-store' });
+      if (response.ok || response.status === 405) {
+        return directDownloadUrl;
+      }
+    } catch (_error) {
+      // Ignore and fall back to GitHub Releases.
+    }
+    return getLatestReleaseAssetUrl();
+  }
+
   document.getElementById('lang-switcher').addEventListener('change', (event) => {
     applyLanguage(event.target.value);
   });
 
   detectInitialLanguage().then(applyLanguage);
+
+  const directDownloadLink = document.getElementById('download-direct-link');
+  const directDownloadText = document.getElementById('download-button-text');
+  if (directDownloadLink && directDownloadText) {
+    directDownloadLink.addEventListener('click', async (event) => {
+      event.preventDefault();
+
+      const lang = localStorage.getItem('mio-site-lang') || document.documentElement.lang || 'zh-CN';
+      const dict = translations[lang] || translations['en'];
+      const originalText = dict['download-button-text'] || directDownloadText.textContent;
+      const loadingText = dict['download-button-loading'] || originalText;
+
+      directDownloadLink.style.pointerEvents = 'none';
+      directDownloadLink.setAttribute('aria-busy', 'true');
+      directDownloadText.textContent = loadingText;
+
+      try {
+        const assetUrl = await getPreferredDownloadUrl();
+        window.location.href = assetUrl;
+      } catch (_error) {
+        directDownloadText.textContent = originalText;
+      } finally {
+        setTimeout(() => {
+          directDownloadLink.style.pointerEvents = '';
+          directDownloadLink.removeAttribute('aria-busy');
+          directDownloadText.textContent = originalText;
+        }, 1200);
+      }
+    });
+  }
 
   const releaseDownloadLink = document.getElementById('download-releases-link');
   const releaseDownloadText = document.getElementById('download-releases-text');

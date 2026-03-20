@@ -28,12 +28,18 @@ def detect_language(text: str) -> str:
 
 
 LANG_NAMES = {
-    "zh": "中文",
-    "ja": "日本語",
+    "zh": "\u4e2d\u6587",
+    "ja": "\u65e5\u672c\u8a9e",
     "en": "English",
-    "ko": "한국어",
-    "ru": "Русский",
-    "fr": "Français",
+    "ko": "\ud55c\uad6d\uc5b4",
+    "ru": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439",
+    "fr": "Fran\u00e7ais",
     "de": "Deutsch",
-    "es": "Español",
+    "es": "Espa\u00f1ol",
+    "pt": "Portugu\u00eas",
+    "it": "Italiano",
+    "th": "\u0e44\u0e17\u0e22",
+    "vi": "Ti\u1ebfng Vi\u1ec7t",
+    "id": "Bahasa Indonesia",
+    "ms": "Bahasa Melayu",
 }

@@ -1,0 +1,34 @@
+{
+  "version": "2026.03.19",
+  "source": "official",
+  "description": "Official ASR correction rules downloaded on demand.",
+  "entries": [
+    {
+      "replacement": "VRChat",
+      "patterns": ["VR chat", "Vrchat", "vr chat"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "OSC",
+      "patterns": ["O S C"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "VRC",
+      "patterns": ["V R C"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "\u516b\u5343\u4ee3",
+      "patterns": ["8000\u5e26"],
+      "languages": ["ja", "zh", "en"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Mio Translator",
+      "patterns": ["Mio translator"],
+      "mode": "substring",
+      "case_sensitive": false
+    }
+  ]
+}

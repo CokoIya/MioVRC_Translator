@@ -10,8 +10,9 @@ class AnthropicTranslator(BaseTranslator):
         model: str = "claude-3-5-haiku-20241022",
         timeout_s: float = 15.0,
         max_output_tokens: int = 192,
+        prompt_profile: dict[str, object] | None = None,
     ):
-        super().__init__()
+        super().__init__(prompt_profile=prompt_profile)
         try:
             import anthropic
         except ImportError:

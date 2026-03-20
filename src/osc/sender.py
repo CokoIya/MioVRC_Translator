@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import queue
 import threading
 import time
@@ -13,6 +14,13 @@ DUPLICATE_WINDOW_S = 1.5
 SEND_QUEUE_MAXSIZE = 32
 
 
+@dataclass(frozen=True)
+class _QueuedOSCMessage:
+    address: str
+    arguments: tuple[object, ...]
+    rate_limited: bool = False
+
+
 class VRCOSCSender:
     def __init__(
         self,
@@ -22,13 +30,14 @@ class VRCOSCSender:
     ):
         self._client = udp_client.SimpleUDPClient(host, port)
         self._min_send_interval_s = max(float(min_send_interval_s), 0.0)
-        self._queue: queue.Queue[tuple[str, bool] | None] = queue.Queue(
+        self._queue: queue.Queue[_QueuedOSCMessage | None] = queue.Queue(
             maxsize=SEND_QUEUE_MAXSIZE
         )
         self._state_lock = threading.Lock()
         self._last_enqueued_text = ""
         self._last_enqueued_at = 0.0
         self._last_sent_at = 0.0
+        self._avatar_state: dict[str, object] = {}
         self._worker = threading.Thread(target=self._send_loop, daemon=True)
         self._worker.start()
 
@@ -45,16 +54,17 @@ class VRCOSCSender:
             if payload is None:
                 return
 
-            text, immediate = payload
-            wait_s = self._min_send_interval_s - (time.monotonic() - self._last_sent_at)
-            if wait_s > 0:
-                time.sleep(wait_s)
+            if payload.rate_limited:
+                wait_s = self._min_send_interval_s - (time.monotonic() - self._last_sent_at)
+                if wait_s > 0:
+                    time.sleep(wait_s)
 
-            self._client.send_message("/chatbox/input", [text, immediate, False])
+            self._client.send_message(payload.address, list(payload.arguments))
             with self._state_lock:
-                self._last_sent_at = time.monotonic()
+                if payload.rate_limited:
+                    self._last_sent_at = time.monotonic()
 
-    def _enqueue_payload(self, payload: tuple[str, bool] | None) -> None:
+    def _enqueue_payload(self, payload: _QueuedOSCMessage | None) -> None:
         try:
             self._queue.put_nowait(payload)
             return
@@ -86,11 +96,54 @@ class VRCOSCSender:
             self._last_enqueued_text = safe
             self._last_enqueued_at = now
 
-        self._enqueue_payload((safe, immediate))
+        self._enqueue_payload(
+            _QueuedOSCMessage(
+                address="/chatbox/input",
+                arguments=(safe, immediate, False),
+                rate_limited=True,
+            )
+        )
         return safe
 
     def clear_chatbox(self):
-        self._enqueue_payload(("", True))
+        self._enqueue_payload(
+            _QueuedOSCMessage(
+                address="/chatbox/input",
+                arguments=("", True, False),
+                rate_limited=True,
+            )
+        )
+
+    def send_avatar_parameter(self, name: str, value: object, *, force: bool = False) -> bool:
+        param_name = str(name or "").strip()
+        if not param_name:
+            return False
+
+        with self._state_lock:
+            previous = self._avatar_state.get(param_name)
+            if not force and previous == value:
+                return False
+            self._avatar_state[param_name] = value
+
+        self._enqueue_payload(
+            _QueuedOSCMessage(
+                address=f"/avatar/parameters/{param_name}",
+                arguments=(value,),
+                rate_limited=False,
+            )
+        )
+        return True
+
+    def send_avatar_bool(self, name: str, value: bool, *, force: bool = False) -> bool:
+        return self.send_avatar_parameter(name, bool(value), force=force)
+
+    def send_avatar_int(self, name: str, value: int, *, force: bool = False) -> bool:
+        return self.send_avatar_parameter(name, int(value), force=force)
+
+    def clear_avatar_state(self, names: list[tuple[str, object]] | None = None) -> None:
+        defaults = names or []
+        for name, value in defaults:
+            self.send_avatar_parameter(name, value, force=True)
 
     def close(self) -> None:
         if self._worker.is_alive():

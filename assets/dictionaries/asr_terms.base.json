@@ -1,0 +1,28 @@
+{
+  "version": "bundled-2026.03.19",
+  "source": "bundled",
+  "description": "Bundled baseline ASR correction rules.",
+  "entries": [
+    {
+      "replacement": "VRChat",
+      "patterns": ["VR chat", "Vrchat", "vr chat"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "OSC",
+      "patterns": ["O S C"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "VRC",
+      "patterns": ["V R C"],
+      "mode": "substring"
+    },
+    {
+      "replacement": "\u516b\u5343\u4ee3",
+      "patterns": ["8000\u5e26"],
+      "languages": ["ja", "zh", "en"],
+      "mode": "substring"
+    }
+  ]
+}

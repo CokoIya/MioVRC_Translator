@@ -1,3 +1,4 @@
+from src.asr.text_corrections import LayeredASRCorrector
 from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
 AVAILABLE_ASR_ENGINES = ("sensevoice-small",)
@@ -8,6 +9,7 @@ def _resolve_device(device: str) -> str:
         return device
     try:
         import torch
+
         if torch.cuda.is_available():
             return "cuda"
     except Exception:
@@ -29,4 +31,5 @@ def create_asr(config: dict):
         device=device,
         model_id=sensevoice_cfg.get("model_id", "iic/SenseVoiceSmall"),
         model_revision=sensevoice_cfg.get("model_revision", "master"),
+        corrector=LayeredASRCorrector(config),
     )

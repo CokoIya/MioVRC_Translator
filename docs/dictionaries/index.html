@@ -1,0 +1,290 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mio ASR Dictionary</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1d1d1f;
+      --sub: #6e6e73;
+      --accent: #0071e3;
+      --accent-hover: #005fbe;
+      --border: #d9e0ea;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 48px 20px;
+      font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      background: linear-gradient(180deg, #eef4ff 0%, var(--bg) 100%);
+      color: var(--text);
+    }
+    .shell {
+      max-width: 920px;
+      margin: 0 auto;
+    }
+    .topbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 14px;
+    }
+    .lang-switcher {
+      height: 36px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.94);
+      color: var(--text);
+      padding: 0 14px;
+      font-size: 13px;
+      outline: none;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(30px, 5vw, 44px);
+      line-height: 1.08;
+    }
+    p {
+      margin: 0;
+      color: var(--sub);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+    .stack { display: grid; gap: 10px; }
+    .meta {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: #f7faff;
+      border: 1px solid #d9e8ff;
+      color: #234;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-top: 22px;
+    }
+    .item {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      background: #fcfdff;
+    }
+    .item h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 26px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 18px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+      transition: background 0.18s ease, transform 0.18s ease;
+    }
+    .btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+    .btn.secondary {
+      background: #edf4ff;
+      color: #1458a8;
+    }
+    .btn.secondary:hover {
+      background: #dfeeff;
+    }
+    code {
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 13px;
+      background: #f2f5f9;
+      border-radius: 8px;
+      padding: 2px 6px;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <select id="lang-switcher" class="lang-switcher" aria-label="Language">
+        <option value="zh-CN">简体中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ru">Русский</option>
+        <option value="ko">한국어</option>
+      </select>
+    </div>
+    <section class="card">
+      <h1 id="title">ASR Dictionary Module</h1>
+      <div class="stack">
+        <p id="intro-1"></p>
+        <p id="intro-2"></p>
+      </div>
+      <div class="meta">
+        <span id="meta-site-label"></span> <code>https://78hejiu.top/dictionaries/</code><br />
+        <span id="meta-manifest-label"></span> <code>https://78hejiu.top/dictionaries/asr_dictionary_manifest.json</code>
+      </div>
+      <div class="grid">
+        <article class="item">
+          <h2 id="card-1-title"></h2>
+          <p id="card-1-body"></p>
+        </article>
+        <article class="item">
+          <h2 id="card-2-title"></h2>
+          <p id="card-2-body"></p>
+        </article>
+        <article class="item">
+          <h2 id="card-3-title"></h2>
+          <p id="card-3-body"></p>
+        </article>
+      </div>
+      <div class="actions">
+        <a id="btn-manifest" class="btn" href="./asr_dictionary_manifest.json" target="_blank" rel="noopener"></a>
+        <a id="btn-json" class="btn secondary" href="./asr_terms.official.json" target="_blank" rel="noopener"></a>
+        <a id="btn-home" class="btn secondary" href="../index.html"></a>
+      </div>
+    </section>
+  </main>
+  <script>
+    const translations = {
+      "zh-CN": {
+        pageTitle: "Mio ASR 词典",
+        title: "ASR 官方词典模块",
+        "intro-1": "这个模块用于托管 Mio RealTime Translator 的官方 ASR 错词修正规则。程序平时保持离线，只有你在设置页手动点击“更新官方词典”时，才会访问这里的 manifest 和词典 JSON。",
+        "intro-2": "你也可以把这里的 manifest 和词典 JSON 作为自己的镜像更新源继续复用。",
+        "meta-site-label": "官网词典模块：",
+        "meta-manifest-label": "默认 Manifest：",
+        "card-1-title": "Manifest",
+        "card-1-body": "程序会先读取 manifest，确认版本、词典下载地址和校验值，再决定是否更新。",
+        "card-2-title": "词典 JSON",
+        "card-2-body": "官方纠错规则文件本体。你可以直接查看当前规则，或者拿去做自己的镜像分发。",
+        "card-3-title": "离线优先",
+        "card-3-body": "没有后台常驻同步。只有用户主动点击更新时，程序才会连接到官网词典模块。",
+        "btn-manifest": "查看 Manifest",
+        "btn-json": "下载词典 JSON",
+        "btn-home": "返回官网首页"
+      },
+      "en": {
+        pageTitle: "Mio ASR Dictionary",
+        title: "ASR Dictionary Module",
+        "intro-1": "This module hosts the official ASR correction rules for Mio RealTime Translator. The app stays offline by default and only reaches this manifest and dictionary JSON when you manually click update in Settings.",
+        "intro-2": "You can also reuse the manifest and dictionary JSON here as your own mirrored update source.",
+        "meta-site-label": "Dictionary module:",
+        "meta-manifest-label": "Default manifest:",
+        "card-1-title": "Manifest",
+        "card-1-body": "The app reads the manifest first to determine version, download URL, and checksum before updating.",
+        "card-2-title": "Dictionary JSON",
+        "card-2-body": "The official correction rules file itself. You can inspect it directly or mirror it on your own infrastructure.",
+        "card-3-title": "Offline First",
+        "card-3-body": "No background syncing. Only user-triggered updates connect to the website dictionary module.",
+        "btn-manifest": "View Manifest",
+        "btn-json": "Download Dictionary JSON",
+        "btn-home": "Back to Homepage"
+      },
+      "ja": {
+        pageTitle: "Mio ASR 辞書",
+        title: "ASR 公式辞書モジュール",
+        "intro-1": "このモジュールは Mio RealTime Translator の公式 ASR 誤認識修正ルールを配布するためのものです。アプリは通常オフラインのままで、設定画面で手動更新を押した時だけ manifest と辞書 JSON にアクセスします。",
+        "intro-2": "ここにある manifest と辞書 JSON を、自分用のミラー更新元として再利用することもできます。",
+        "meta-site-label": "辞書モジュール：",
+        "meta-manifest-label": "既定の Manifest：",
+        "card-1-title": "Manifest",
+        "card-1-body": "アプリは最初に manifest を読み、バージョン、辞書 URL、チェックサムを確認してから更新します。",
+        "card-2-title": "辞書 JSON",
+        "card-2-body": "公式の修正ルール本体です。現在のルールを直接確認したり、自分の配布元としてミラーすることもできます。",
+        "card-3-title": "オフライン優先",
+        "card-3-body": "バックグラウンド同期はありません。ユーザーが更新を押した時だけ、公式サイトの辞書モジュールへ接続します。",
+        "btn-manifest": "Manifest を見る",
+        "btn-json": "辞書 JSON をダウンロード",
+        "btn-home": "公式サイトへ戻る"
+      },
+      "ru": {
+        pageTitle: "Mio ASR Словарь",
+        title: "Модуль официального словаря ASR",
+        "intro-1": "Этот модуль размещает официальные правила исправления ошибок ASR для Mio RealTime Translator. Приложение остаётся офлайн по умолчанию и обращается к manifest и JSON словаря только когда вы вручную запускаете обновление в настройках.",
+        "intro-2": "Manifest и JSON словаря отсюда также можно использовать как собственный зеркальный источник обновлений.",
+        "meta-site-label": "Модуль словаря:",
+        "meta-manifest-label": "Manifest по умолчанию:",
+        "card-1-title": "Manifest",
+        "card-1-body": "Сначала приложение читает manifest, чтобы проверить версию, URL словаря и контрольную сумму перед обновлением.",
+        "card-2-title": "JSON словаря",
+        "card-2-body": "Сам файл официальных правил исправления. Его можно просматривать напрямую или зеркалировать на своей инфраструктуре.",
+        "card-3-title": "Офлайн по умолчанию",
+        "card-3-body": "Никакой фоновой синхронизации. Подключение происходит только когда пользователь сам запускает обновление.",
+        "btn-manifest": "Открыть Manifest",
+        "btn-json": "Скачать JSON словаря",
+        "btn-home": "Назад на главную"
+      },
+      "ko": {
+        pageTitle: "Mio ASR 사전",
+        title: "ASR 공식 사전 모듈",
+        "intro-1": "이 모듈은 Mio RealTime Translator의 공식 ASR 오인식 교정 규칙을 배포합니다. 앱은 기본적으로 오프라인 상태를 유지하며, 설정에서 수동으로 업데이트를 눌렀을 때만 manifest와 사전 JSON에 접근합니다.",
+        "intro-2": "여기의 manifest와 사전 JSON을 자신의 미러 업데이트 소스로 재사용할 수도 있습니다.",
+        "meta-site-label": "사전 모듈:",
+        "meta-manifest-label": "기본 Manifest:",
+        "card-1-title": "Manifest",
+        "card-1-body": "앱은 먼저 manifest를 읽고 버전, 사전 URL, 체크섬을 확인한 뒤 업데이트를 진행합니다.",
+        "card-2-title": "사전 JSON",
+        "card-2-body": "공식 교정 규칙 파일 본체입니다. 현재 규칙을 직접 확인하거나 자신의 인프라에 미러링할 수 있습니다.",
+        "card-3-title": "오프라인 우선",
+        "card-3-body": "백그라운드 동기화는 없습니다. 사용자가 직접 업데이트를 눌렀을 때만 공식 사이트 사전 모듈에 연결됩니다.",
+        "btn-manifest": "Manifest 보기",
+        "btn-json": "사전 JSON 다운로드",
+        "btn-home": "홈페이지로 돌아가기"
+      }
+    };
+
+    function langFromBrowser() {
+      const browser = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
+      if (browser.startsWith('zh')) return 'zh-CN';
+      if (browser.startsWith('ja')) return 'ja';
+      if (browser.startsWith('ko')) return 'ko';
+      if (browser.startsWith('ru')) return 'ru';
+      return 'en';
+    }
+
+    function applyLanguage(lang) {
+      const dict = translations[lang] || translations['en'];
+      document.title = dict.pageTitle;
+      document.documentElement.lang = lang;
+      Object.entries(dict).forEach(([key, value]) => {
+        if (key === 'pageTitle') return;
+        const el = document.getElementById(key);
+        if (!el) return;
+        el.textContent = value;
+      });
+      const switcher = document.getElementById('lang-switcher');
+      if (switcher) switcher.value = lang;
+      localStorage.setItem('mio-site-lang', lang);
+    }
+
+    const switcher = document.getElementById('lang-switcher');
+    if (switcher) {
+      switcher.addEventListener('change', (event) => applyLanguage(event.target.value));
+    }
+    const saved = localStorage.getItem('mio-site-lang');
+    applyLanguage(saved && translations[saved] ? saved : langFromBrowser());
+  </script>
+</body>
+</html>

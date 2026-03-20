@@ -14,6 +14,7 @@ from src.asr.sensevoice_model_manager import (
     model_exists,
     resolve_model_path,
 )
+from src.asr.text_corrections import LayeredASRCorrector
 
 _LANGUAGE_MAP = {
     "zh": "zh",
@@ -35,12 +36,12 @@ def _dependency_error_message(exc: Exception) -> str:
     detail = str(exc).strip() or exc.__class__.__name__
     if getattr(sys, "frozen", False):
         return (
-            f"当前发布包缺少 SenseVoice 运行依赖：{detail}。"
-            "  请重新下载完整发布包，或使用当前 MioTranslator.spec 重新打包。"
+            "The packaged build is missing SenseVoice runtime dependencies: "
+            f"{detail}. Re-download the full package or rebuild with MioTranslator.spec."
         )
     return (
-        f"当前环境缺少 SenseVoice 依赖：{detail}。"
-        "  请先执行 pip install -r requirements.txt。"
+        "The current environment is missing SenseVoice runtime dependencies: "
+        f"{detail}. Run `pip install -r requirements.txt` first."
     )
 
 
@@ -67,6 +68,7 @@ class SenseVoiceASR:
         ncpu: int | None = None,
         model_id: str = MODEL_ID,
         model_revision: str = MODEL_REVISION,
+        corrector: LayeredASRCorrector | None = None,
     ):
         self.device = device
         self.ncpu = max(ncpu or 4, 1)
@@ -75,6 +77,7 @@ class SenseVoiceASR:
         self._model = None
         self._postprocess = None
         self._lock = threading.Lock()
+        self._corrector = corrector
 
     def load(self, progress_callback=None):
         with self._lock:
@@ -130,9 +133,9 @@ class SenseVoiceASR:
                 use_itn=True,
                 disable_pbar=True,
             )
-        return self._clean_text(result)
+        return self._clean_text(result, language=language)
 
-    def _clean_text(self, result) -> str:
+    def _clean_text(self, result, language: str | None = None) -> str:
         if not isinstance(result, list) or not result:
             return ""
         text = str(result[0].get("text", "")).strip()
@@ -145,6 +148,8 @@ class SenseVoiceASR:
                 pass
         text = re.sub(r"<\|[^|]+\|>", "", text)
         text = re.sub(r"\s+", " ", text).strip()
+        if self._corrector is not None:
+            text = self._corrector.apply(text, language=language)
         return text
 
     @property

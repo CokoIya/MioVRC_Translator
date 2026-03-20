@@ -1,6 +1,10 @@
 {
   "audio": {
     "input_device": null,
+    "desktop_capture": {
+      "enabled": false,
+      "output_device": ""
+    },
     "vad_silence_threshold": 0.8,
     "vad_sensitivity": 2,
     "vad_speech_ratio": 0.72,
@@ -20,6 +24,10 @@
       "model_id": "iic/SenseVoiceSmall",
       "model_revision": "master"
     },
+    "correction": {
+      "enabled": true,
+      "official_manifest_url": "https://78hejiu.top/dictionaries/asr_dictionary_manifest.json"
+    },
     "streaming": {
       "chunk_interval_ms": 250,
       "chunk_window_s": 1.6,
@@ -32,6 +40,15 @@
     "backend": "openai",
     "target_language": "ja",
     "output_format": "translated_with_original",
+    "social": {
+      "mode": "standard",
+      "persona_preset": "custom",
+      "politeness": "neutral",
+      "tone": "natural",
+      "persona_name": "",
+      "persona_prompt": "",
+      "persona_glossary": ""
+    },
     "openai": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",
@@ -52,6 +69,16 @@
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "model": "qwen-mt-flash"
     },
+    "gemini": {
+      "api_key": "",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "model": "gemini-2.5-flash"
+    },
+    "doubao": {
+      "api_key": "",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": ""
+    },
     "anthropic": {
       "api_key": "",
       "model": "claude-3-5-haiku-20241022"
@@ -65,7 +92,16 @@
   "osc": {
     "send_host": "127.0.0.1",
     "send_port": 9000,
-    "min_send_interval_s": 0.8
+    "min_send_interval_s": 0.8,
+    "avatar_sync": {
+      "enabled": false,
+      "params": {
+        "translating": "MioTranslating",
+        "speaking": "MioSpeaking",
+        "error": "MioError",
+        "target_language": "MioTargetLanguage"
+      }
+    }
   },
   "ui": {
     "language": "",
