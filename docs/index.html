@@ -506,12 +506,12 @@
     .music-eq-bars span:nth-child(3) { height: 11px; animation: mio-eq 0.75s 0.09s ease-in-out infinite alternate; }
     @keyframes mio-eq {
       from { transform: scaleY(0.35); }
-      to   { transform: scaleY(1.0);  }
+      to   { transform: scaleY(1.0); }
     }
-    #music-bubble.mio-playing .music-icon-note  { opacity: 0; transform: scale(0.7); }
-    #music-bubble.mio-playing .music-eq-bars   { opacity: 1; }
-    #music-bubble.mio-paused  .music-icon-note  { opacity: 1; transform: scale(1);   }
-    #music-bubble.mio-paused  .music-eq-bars   { opacity: 0; }
+    #music-bubble.mio-playing .music-icon-note { opacity: 0; transform: scale(0.7); }
+    #music-bubble.mio-playing .music-eq-bars { opacity: 1; }
+    #music-bubble.mio-paused .music-icon-note { opacity: 1; transform: scale(1); }
+    #music-bubble.mio-paused .music-eq-bars { opacity: 0; }
     #music-bubble.mio-paused .music-eq-bars span { animation-play-state: paused; }
 
     .music-panel {
@@ -547,13 +547,13 @@
     }
     .music-brand-dot {
       width: 7px; height: 7px; border-radius: 50%;
-      background: #c62828;
-      box-shadow: 0 0 6px rgba(198,40,40,.7);
+      background: #4ade80;
+      box-shadow: 0 0 8px rgba(74,222,128,.72);
       animation: mio-pulse 2s infinite;
     }
     @keyframes mio-pulse {
-      0%,100% { opacity:1; transform:scale(1);   }
-      50%      { opacity:.6; transform:scale(0.8); }
+      0%,100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .65; transform: scale(0.82); }
     }
     .music-close-btn {
       width: 22px; height: 22px; border-radius: 50%;
@@ -566,16 +566,51 @@
       padding: 0;
     }
     .music-close-btn:hover { background: rgba(220,50,50,0.4); color: #fff; }
-    #music-iframe-wrap {
-      border-radius: 13px; overflow: hidden;
-      background: rgba(0,0,0,0.3);
+
+    .music-track-card {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      border-radius: 16px;
+      background: rgba(0,0,0,0.24);
+      border: 1px solid rgba(255,255,255,0.10);
+      padding: 12px;
     }
-    #music-iframe-wrap iframe {
-      display: block; width: 100%; border: 0;
+    #music-cover {
+      width: 54px; height: 54px;
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      font-size: 18px; font-weight: 700; letter-spacing: 1px;
+      color: rgba(255,255,255,0.96);
+      background: linear-gradient(135deg, #4568dc, #43cea2);
+      box-shadow: 0 10px 24px rgba(0,0,0,0.26);
     }
+    .music-track-meta {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #music-song-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.96);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #music-song-artist {
+      font-size: 12px;
+      color: rgba(220,220,230,0.78);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .music-ctrl-row {
       display: flex; align-items: center; justify-content: center;
-      gap: 10px; margin-top: 10px; padding: 0 2px;
+      gap: 10px; margin-top: 12px; padding: 0 2px;
     }
     .music-ctrl-btn {
       width: 34px; height: 34px; border-radius: 50%;
@@ -598,48 +633,51 @@
       width: 42px; height: 42px;
       background: rgba(255,255,255,0.16);
     }
-    .music-ctrl-play svg { width: 22px; height: 22px; }
-    .ctrl-icon-play  { display: none; }
-    .ctrl-icon-pause { display: block; }
-    #music-bubble.mio-paused .ctrl-icon-play  { display: block; }
-    #music-bubble.mio-paused .ctrl-icon-pause { display: none; }
+    .music-ctrl-play .ctrl-icon-pause { display: none; }
+    .music-ctrl-play.is-playing .ctrl-icon-play { display: none; }
+    .music-ctrl-play.is-playing .ctrl-icon-pause { display: block; }
+
     .music-vol-row {
-      display: flex; align-items: center; gap: 8px;
-      margin-top: 10px; padding: 0 2px;
-      color: rgba(255,255,255,0.5);
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 12px;
+      color: rgba(255,255,255,0.78);
     }
-    .music-vol-row svg { flex-shrink: 0; }
     .music-vol-slider {
       flex: 1;
       -webkit-appearance: none;
-      height: 3px; border-radius: 2px;
-      background: rgba(255,255,255,0.20);
-      outline: none; cursor: pointer;
-      transition: background .2s;
+      appearance: none;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+      outline: none;
     }
     .music-vol-slider:hover { background: rgba(255,255,255,0.32); }
     .music-vol-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 14px; height: 14px; border-radius: 50%;
       background: rgba(255,255,255,0.92);
+      border: 0;
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.16);
       cursor: pointer;
-      box-shadow: 0 1px 6px rgba(0,0,0,0.45);
-      transition: transform .15s;
     }
-    .music-vol-slider::-webkit-slider-thumb:hover { transform: scale(1.15); }
     .music-vol-slider::-moz-range-thumb {
       width: 14px; height: 14px; border-radius: 50%;
       background: rgba(255,255,255,0.92);
-      cursor: pointer; border: none;
+      border: 0;
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.16);
+      cursor: pointer;
     }
     .music-vol-num {
-      font-size: 11px; color: rgba(255,255,255,0.42);
-      min-width: 30px; text-align: right;
+      min-width: 38px;
+      text-align: right;
+      font-size: 12px;
+      color: rgba(255,255,255,0.74);
     }
-    .music-skip-note {
-      font-size: 10px; color: rgba(255,255,255,0.28);
-      text-align: center; margin-top: 6px;
-      letter-spacing: .2px;
+    #music-audio { display: none; }
+
+    @media (max-width: 600px) {
+      #music-bubble { right: 16px; bottom: 68px; }
+      .music-panel { width: min(284px, calc(100vw - 32px)); }
     }
   </style>
 </head>
@@ -781,13 +819,13 @@
     <h3 id="download-card-title">Mio RealTime Translator</h3>
     <p id="download-card-body">Windows x64 · 稳定版适合大多数用户 · beta 版可提前体验新功能</p>
     <div class="download-actions">
-      <a href="#"
+      <a href="https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.2.exe"
          id="download-direct-link"
          class="btn-download">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         <span id="download-button-text">稳定版下载</span>
       </a>
-      <a href="#"
+      <a href="https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.3_beta.exe"
          id="download-releases-link"
          class="btn-download secondary">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
@@ -847,16 +885,16 @@
     <div class="music-panel-hdr">
       <span class="music-brand-label">
         <span class="music-brand-dot"></span>
-        网易云音乐
+        音乐
       </span>
       <button class="music-close-btn" id="music-close-btn" aria-label="关闭播放器">×</button>
     </div>
-    <div id="music-iframe-wrap">
-      <iframe id="music-iframe"
-        src=""
-        frameborder="no" border="0" marginwidth="0" marginheight="0"
-        width="256" height="66" scrolling="no" allow="autoplay *">
-      </iframe>
+    <div class="music-track-card">
+      <div id="music-cover" aria-hidden="true">FM</div>
+      <div class="music-track-meta">
+        <div id="music-song-name"></div>
+        <div id="music-song-artist"></div>
+      </div>
     </div>
     <div class="music-ctrl-row">
       <button class="music-ctrl-btn" id="btn-prev" aria-label="上一首">
@@ -864,7 +902,7 @@
       </button>
       <button class="music-ctrl-btn music-ctrl-play" id="btn-play" aria-label="播放/暂停">
         <svg class="ctrl-icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-        <svg class="ctrl-icon-play"  viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="ctrl-icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
       </button>
       <button class="music-ctrl-btn" id="btn-next" aria-label="下一首">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18 14.5 12 6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg>
@@ -874,10 +912,10 @@
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
         <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77 0-4.28-2.99-7.86-7-8.77z"/>
       </svg>
-      <input type="range" class="music-vol-slider" id="music-vol-slider"
-             min="0" max="100" value="50" aria-label="音量">
+      <input type="range" class="music-vol-slider" id="music-vol-slider" min="0" max="100" value="50" aria-label="音量">
       <span class="music-vol-num" id="music-vol-num">50%</span>
     </div>
+    <audio id="music-audio" preload="none"></audio>
   </div>
   <button class="music-toggle-btn" id="music-toggle-btn" aria-label="音乐播放器">
     <svg class="music-icon-note" viewBox="0 0 24 24" fill="currentColor">
@@ -1364,176 +1402,328 @@
 
   /* ── FLOATING MUSIC PLAYER ── */
   (function () {
-    const bubble      = document.getElementById('music-bubble');
-    const toggleBtn   = document.getElementById('music-toggle-btn');
-    const closeBtn    = document.getElementById('music-close-btn');
-    const volSlider   = document.getElementById('music-vol-slider');
-    const volNum      = document.getElementById('music-vol-num');
-    const musicIframe = document.getElementById('music-iframe');
-    const btnPrev     = document.getElementById('btn-prev');
-    const btnPlay     = document.getElementById('btn-play');
-    const btnNext     = document.getElementById('btn-next');
+    const FREE_TRACKS = [
+      {
+        title: 'Moonlight Sonata',
+        artist: 'Beethoven',
+        mark: 'MS',
+        palette: ['#4568dc', '#43cea2'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d0/Moonlight_Sonata.ogg/Moonlight_Sonata.ogg.mp3'
+      },
+      {
+        title: 'Fur Elise',
+        artist: 'Beethoven',
+        mark: 'FE',
+        palette: ['#7f00ff', '#e100ff'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8f/Fur_Elise.ogg/Fur_Elise.ogg.mp3'
+      },
+      {
+        title: 'Canon in D',
+        artist: 'Pachelbel',
+        mark: 'CD',
+        palette: ['#11998e', '#38ef7d'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8a/Canon_and_Gigue_in_D.ogg/Canon_and_Gigue_in_D.ogg.mp3'
+      },
+      {
+        title: 'Prelude in C Major',
+        artist: 'J.S. Bach',
+        mark: 'PC',
+        palette: ['#ee0979', '#ff6a00'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/a/ac/JS_Bach_-_Well_Tempered_Clavier_-_Prelude_in_Fugue_No.1_in_C_major.ogg/JS_Bach_-_Well_Tempered_Clavier_-_Prelude_in_Fugue_No.1_in_C_major.ogg.mp3'
+      },
+      {
+        title: 'Waltz Op. 34 No. 2',
+        artist: 'Chopin',
+        mark: 'WZ',
+        palette: ['#f953c6', '#b91d73'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/6/62/Chopin_-_Waltz_op._34_no_2.ogg/Chopin_-_Waltz_op._34_no_2.ogg.mp3'
+      },
+      {
+        title: 'Minute Waltz',
+        artist: 'Chopin',
+        mark: 'MW',
+        palette: ['#f7971e', '#ffd200'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e5/Chopin_Minute_Waltz.ogg/Chopin_Minute_Waltz.ogg.mp3'
+      },
+      {
+        title: 'Greensleeves',
+        artist: 'Traditional',
+        mark: 'GR',
+        palette: ['#396afc', '#2948ff'],
+        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/2/20/Greensleeves.ogg/Greensleeves.ogg.mp3'
+      }
+    ];
+    const DEFAULT_VOLUME = 50;
+    const SHORT_TRACK_MAX_SECONDS = 30;
 
-    // 懒加载 iframe：第一次打开面板时才注入 src，避免页面加载时触发 autoplay 被浏览器拦截
-    const IFRAME_SRC = 'https://music.163.com/outchain/player?type=1&id=2353265631&auto=1&height=66';
-    let iframeLoaded = false;
-    function ensureIframe() {
-      if (!iframeLoaded) {
-        iframeLoaded = true;
-        musicIframe.src = IFRAME_SRC;
+    const bubble = document.getElementById('music-bubble');
+    const toggleBtn = document.getElementById('music-toggle-btn');
+    const closeBtn = document.getElementById('music-close-btn');
+    const musicAudio = document.getElementById('music-audio');
+    const musicCover = document.getElementById('music-cover');
+    const musicSongName = document.getElementById('music-song-name');
+    const musicSongArtist = document.getElementById('music-song-artist');
+    const volSlider = document.getElementById('music-vol-slider');
+    const volNum = document.getElementById('music-vol-num');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnPlay = document.getElementById('btn-play');
+    const btnNext = document.getElementById('btn-next');
+
+    if (!bubble || !toggleBtn || !closeBtn || !musicAudio || !musicCover || !musicSongName || !musicSongArtist || !volSlider || !volNum || !btnPrev || !btnPlay || !btnNext) {
+      return;
+    }
+
+    let panelOpen = false;
+    let wasDragged = false;
+    let autoplayBlocked = false;
+    let userPaused = false;
+    let queue = [];
+    let queueIndex = 0;
+    let consecutiveErrors = 0;
+
+    function shuffleTracks(list) {
+      const result = list.slice();
+      for (let i = result.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [result[i], result[j]] = [result[j], result[i]];
+      }
+      return result;
+    }
+
+    function ensureQueue() {
+      if (!queue.length) {
+        queue = shuffleTracks(FREE_TRACKS);
+        queueIndex = 0;
       }
     }
 
-    // 尝试点击 iframe 内部按钮（同源时有效，跨域静默失败）
-    function tryIframeBtn(...selectors) {
-      try {
-        const doc = musicIframe.contentDocument || musicIframe.contentWindow.document;
-        for (const sel of selectors) {
-          const el = doc.querySelector(sel);
-          if (el) { el.click(); return true; }
-        }
-      } catch (_) {}
-      return false;
+    function normalizeQueueIndex(index) {
+      ensureQueue();
+      if (index < 0) {
+        return queue.length - 1;
+      }
+      if (index >= queue.length) {
+        queue = shuffleTracks(FREE_TRACKS);
+        return 0;
+      }
+      return index;
     }
 
-    // ── 面板开关 ──
-    let panelOpen = false;
+    function setPlayingState(isPlaying) {
+      bubble.classList.toggle('mio-playing', isPlaying);
+      bubble.classList.toggle('mio-paused', !isPlaying);
+      btnPlay.classList.toggle('is-playing', isPlaying);
+    }
+
+    function buildCover(track) {
+      const palette = Array.isArray(track.palette) && track.palette.length === 2 ? track.palette : ['#4568dc', '#43cea2'];
+      musicCover.style.background = 'linear-gradient(135deg, ' + palette[0] + ', ' + palette[1] + ')';
+      musicCover.textContent = track.mark || 'FM';
+    }
+
+    function syncVolume() {
+      const value = Math.max(0, Math.min(100, Number(volSlider.value) || DEFAULT_VOLUME));
+      musicAudio.volume = value / 100;
+      volSlider.value = String(value);
+      volNum.textContent = value + '%';
+    }
+
+    function refreshMeta(track) {
+      buildCover(track);
+      musicSongName.textContent = track.title;
+      musicSongArtist.textContent = track.artist;
+    }
+
+    function attemptPlay() {
+      const playPromise = musicAudio.play();
+      if (!playPromise || typeof playPromise.then !== 'function') {
+        autoplayBlocked = false;
+        setPlayingState(true);
+        return;
+      }
+      playPromise.then(() => {
+        autoplayBlocked = false;
+        setPlayingState(true);
+      }).catch(() => {
+        autoplayBlocked = true;
+        setPlayingState(false);
+      });
+    }
+
+    function loadTrack(index, autoPlay) {
+      ensureQueue();
+      queueIndex = normalizeQueueIndex(index);
+      const track = queue[queueIndex];
+      refreshMeta(track);
+      musicAudio.src = track.url;
+      musicAudio.load();
+      if (autoPlay) {
+        userPaused = false;
+        attemptPlay();
+      } else {
+        setPlayingState(false);
+      }
+    }
+
     toggleBtn.addEventListener('click', () => {
-      if (wasDragged) return;
+      if (wasDragged) {
+        return;
+      }
       panelOpen = !panelOpen;
-      if (panelOpen) ensureIframe();
       bubble.classList.toggle('mio-open', panelOpen);
     });
+
     closeBtn.addEventListener('click', () => {
       panelOpen = false;
       bubble.classList.remove('mio-open');
     });
 
-    // ── 控制按钮 ──
     btnPrev.addEventListener('click', () => {
-      tryIframeBtn('[title="上一首"]', '.btn-prv', '.ply-btn-prv');
-      bubble.classList.add('mio-playing');
-      bubble.classList.remove('mio-paused');
+      loadTrack(queueIndex - 1, true);
     });
+
     btnNext.addEventListener('click', () => {
-      tryIframeBtn('[title="下一首"]', '.btn-next', '.ply-btn-next');
-      bubble.classList.add('mio-playing');
-      bubble.classList.remove('mio-paused');
+      loadTrack(queueIndex + 1, true);
     });
+
     btnPlay.addEventListener('click', () => {
-      const playing = bubble.classList.contains('mio-playing');
-      if (playing) {
-        tryIframeBtn('[title="暂停"]', '.btn-pause', '.ply-btn-pause');
-        bubble.classList.remove('mio-playing');
-        bubble.classList.add('mio-paused');
+      if (!musicAudio.src) {
+        loadTrack(queueIndex, true);
+        return;
+      }
+      if (musicAudio.paused) {
+        userPaused = false;
+        attemptPlay();
       } else {
-        ensureIframe();
-        tryIframeBtn('[title="播放"]', '.btn-play', '.ply-btn-play');
-        bubble.classList.add('mio-playing');
-        bubble.classList.remove('mio-paused');
+        userPaused = true;
+        autoplayBlocked = false;
+        musicAudio.pause();
       }
     });
 
-    // ── 音量（跨域时 best-effort）──
-    volSlider.addEventListener('input', () => {
-      const v = volSlider.value;
-      volNum.textContent = v + '%';
-      try {
-        const audio = musicIframe.contentDocument.querySelector('audio');
-        if (audio) audio.volume = v / 100;
-      } catch (_) {}
+    volSlider.addEventListener('input', syncVolume);
+
+    musicAudio.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(musicAudio.duration) && musicAudio.duration <= SHORT_TRACK_MAX_SECONDS) {
+        window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
+      }
     });
 
-    // ── 拖拽（鼠标）──
+    musicAudio.addEventListener('playing', () => {
+      consecutiveErrors = 0;
+      setPlayingState(true);
+    });
+
+    musicAudio.addEventListener('pause', () => {
+      if (musicAudio.ended) {
+        return;
+      }
+      setPlayingState(false);
+    });
+
+    musicAudio.addEventListener('ended', () => {
+      userPaused = false;
+      loadTrack(queueIndex + 1, true);
+    });
+
+    musicAudio.addEventListener('error', () => {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= FREE_TRACKS.length) {
+        setPlayingState(false);
+        return;
+      }
+      window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
+    });
+
+    document.addEventListener('pointerdown', () => {
+      if (autoplayBlocked && !userPaused) {
+        attemptPlay();
+      }
+    }, { passive: true });
+
     let isDragging = false;
-    let wasDragged = false;
-    let dragStartX = 0, dragStartY = 0;
-    let startRight = 22, startBottom = 72;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let startRight = 22;
+    let startBottom = 72;
 
     function getComputedPos() {
-      const s = window.getComputedStyle(bubble);
-      return { r: parseFloat(s.right) || 22, b: parseFloat(s.bottom) || 72 };
+      const style = window.getComputedStyle(bubble);
+      return { r: parseFloat(style.right) || 22, b: parseFloat(style.bottom) || 72 };
     }
 
-    toggleBtn.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
+    toggleBtn.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
       const pos = getComputedPos();
-      startRight = pos.r; startBottom = pos.b;
-      dragStartX = e.clientX; dragStartY = e.clientY;
-      isDragging = true; wasDragged = false;
+      startRight = pos.r;
+      startBottom = pos.b;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      isDragging = true;
+      wasDragged = false;
       document.body.style.cursor = 'grabbing';
     });
-    window.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      const dx = e.clientX - dragStartX;
-      const dy = e.clientY - dragStartY;
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) wasDragged = true;
-      bubble.style.right  = Math.max(8, Math.min(window.innerWidth  - 60, startRight  - dx)) + 'px';
+
+    window.addEventListener('mousemove', (event) => {
+      if (!isDragging) {
+        return;
+      }
+      const dx = event.clientX - dragStartX;
+      const dy = event.clientY - dragStartY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        wasDragged = true;
+      }
+      bubble.style.right = Math.max(8, Math.min(window.innerWidth - 60, startRight - dx)) + 'px';
       bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy)) + 'px';
     });
+
     window.addEventListener('mouseup', () => {
-      if (!isDragging) return;
+      if (!isDragging) {
+        return;
+      }
       isDragging = false;
       document.body.style.cursor = '';
-      setTimeout(() => { wasDragged = false; }, 0);
+      window.setTimeout(() => {
+        wasDragged = false;
+      }, 0);
     });
 
-    // ── 拖拽（触摸）──
-    let touchStartX = 0, touchStartY = 0, touchStartRight = 22, touchStartBottom = 72;
-    toggleBtn.addEventListener('touchstart', (e) => {
-      const t = e.touches[0];
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartRight = 22;
+    let touchStartBottom = 72;
+
+    toggleBtn.addEventListener('touchstart', (event) => {
+      const touch = event.touches[0];
       const pos = getComputedPos();
-      touchStartRight = pos.r; touchStartBottom = pos.b;
-      touchStartX = t.clientX; touchStartY = t.clientY;
+      touchStartRight = pos.r;
+      touchStartBottom = pos.b;
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
       wasDragged = false;
     }, { passive: true });
-    toggleBtn.addEventListener('touchmove', (e) => {
-      const t = e.touches[0];
-      const dx = t.clientX - touchStartX;
-      const dy = t.clientY - touchStartY;
+
+    toggleBtn.addEventListener('touchmove', (event) => {
+      const touch = event.touches[0];
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
       if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
         wasDragged = true;
-        e.preventDefault();
-        bubble.style.right  = Math.max(8, Math.min(window.innerWidth  - 60, touchStartRight  - dx)) + 'px';
+        event.preventDefault();
+        bubble.style.right = Math.max(8, Math.min(window.innerWidth - 60, touchStartRight - dx)) + 'px';
         bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, touchStartBottom - dy)) + 'px';
       }
     }, { passive: false });
 
-    // ── 轮询检测播放状态 + 30s 自动跳曲（跨域 best-effort）──
-    let lastSrc = '', trackStartTime = Date.now();
-    setInterval(() => {
-      try {
-        const doc   = musicIframe.contentDocument || musicIframe.contentWindow.document;
-        const audio = doc.querySelector('audio');
-        if (!audio) return;
-
-        if (!audio.paused) {
-          bubble.classList.add('mio-playing');
-          bubble.classList.remove('mio-paused');
-        } else {
-          bubble.classList.remove('mio-playing');
-          bubble.classList.add('mio-paused');
-        }
-
-        if (!volSlider._synced) {
-          audio.volume = volSlider.value / 100;
-          volSlider._synced = true;
-        }
-
-        if (!audio.paused && audio.duration > 0 && audio.duration < 30) {
-          if (audio.currentTime >= audio.duration - 0.8) {
-            if (!tryIframeBtn('[title="下一首"]', '.btn-next'))
-              audio.currentTime = audio.duration;
-          }
-        }
-
-        const src = audio.currentSrc || audio.src || '';
-        if (src && src !== lastSrc) { lastSrc = src; trackStartTime = Date.now(); }
-      } catch (_) {}
-    }, 500);
-
-    bubble.classList.add('mio-paused');
+    queue = shuffleTracks(FREE_TRACKS);
+    queueIndex = 0;
+    volSlider.value = String(DEFAULT_VOLUME);
+    syncVolume();
+    setPlayingState(false);
+    loadTrack(0, true);
   })();
 </script>
 </body>
