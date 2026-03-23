@@ -6,7 +6,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from src.utils import config_manager
-from src.audio.desktop_recorder import default_output_device_name, list_output_devices
+from src.audio.recorder import AudioRecorder
 from src.asr.text_corrections import dictionary_status, update_official_dictionary
 from src.utils.i18n import tr
 from src.utils.ui_config import (
@@ -400,6 +400,46 @@ WINDOW_COPY.update(
             "en": "System Default Output",
             "ja": "既定の出力デバイス",
         },
+        "vrc_listen_section": {
+            "zh-CN": "监听 VRC 音频",
+            "en": "VRC Listen",
+            "ja": "VRC 音声リスン",
+        },
+        "vrc_listen_subtitle": {
+            "zh-CN": "使用 Windows WASAPI Loopback 捕获 VRChat 所在输出设备的声音，并单独翻译到指定语言。",
+            "en": "Capture VRChat audio with Windows WASAPI loopback and translate it with an independent target language.",
+            "ja": "Windows WASAPI ループバックで VRChat の出力音声を取り込み、別の対象言語へ翻訳します。",
+        },
+        "vrc_listen_enabled": {
+            "zh-CN": "启用监听 VRC 音频",
+            "en": "Enable VRC Listen",
+            "ja": "VRC 音声リスンを有効化",
+        },
+        "vrc_listen_device": {
+            "zh-CN": "回环设备",
+            "en": "Loopback Device",
+            "ja": "ループバックデバイス",
+        },
+        "vrc_listen_device_default": {
+            "zh-CN": "未选择",
+            "en": "Not Selected",
+            "ja": "未選択",
+        },
+        "vrc_listen_device_missing": {
+            "zh-CN": "未找到 WASAPI 回环设备",
+            "en": "No WASAPI loopback devices found",
+            "ja": "WASAPI ループバックデバイスが見つかりません",
+        },
+        "vrc_listen_device_hint": {
+            "zh-CN": "只会列出 Windows WASAPI loopback 采集设备。未选择或当前系统没有可用设备时，这条监听管道不会启动。",
+            "en": "Only Windows WASAPI loopback capture devices are shown here. If none is selected, the VRC listen pipeline stays idle.",
+            "ja": "ここには Windows WASAPI のループバック収録デバイスだけを表示します。未選択または利用可能なデバイスがない場合、この音声リスン経路は起動しません。",
+        },
+        "vrc_listen_target_language": {
+            "zh-CN": "监听目标语言",
+            "en": "Listen Target Language",
+            "ja": "リスン対象言語",
+        },
         "avatar_section": {
             "zh-CN": "Avatar / OSC",
             "en": "Avatar / OSC",
@@ -667,7 +707,14 @@ class SettingsWindow(ctk.CTkToplevel):
         streaming_cfg = asr_cfg.get("streaming", {})
         audio_cfg = self._config.get("audio", {})
         social_cfg = trans_cfg.get("social", {}) if isinstance(trans_cfg.get("social", {}), dict) else {}
-        desktop_cfg = audio_cfg.get("desktop_capture", {}) if isinstance(audio_cfg.get("desktop_capture", {}), dict) else {}
+        legacy_desktop_cfg = audio_cfg.get("desktop_capture", {}) if isinstance(audio_cfg.get("desktop_capture", {}), dict) else {}
+        vrc_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
+        if not vrc_cfg:
+            vrc_cfg = {
+                "enabled": bool(legacy_desktop_cfg.get("enabled", False)),
+                "loopback_device": str(legacy_desktop_cfg.get("output_device", "")).strip() or None,
+                "target_language": "zh",
+            }
         osc_cfg = self._config.get("osc", {})
         avatar_cfg = osc_cfg.get("avatar_sync", {}) if isinstance(osc_cfg.get("avatar_sync", {}), dict) else {}
         avatar_params = avatar_cfg.get("params", {}) if isinstance(avatar_cfg.get("params", {}), dict) else {}
@@ -872,29 +919,74 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._asr_hint_label.pack(padx=10, pady=8, anchor="w")
 
-        section_label(voice_card, self._ui_copy("desktop_capture_device"))
-        desktop_default_label = self._ui_copy("desktop_capture_default")
-        desktop_devices = list_output_devices()
-        desktop_labels = [desktop_default_label] + [
-            str(device.get("name", "")).strip()
-            for device in desktop_devices
-            if str(device.get("name", "")).strip()
-        ]
-        configured_output = str(desktop_cfg.get("output_device", "")).strip()
-        if configured_output and configured_output not in desktop_labels:
-            desktop_labels.append(configured_output)
-        selected_output = configured_output or default_output_device_name() or desktop_default_label
-        if selected_output not in desktop_labels:
-            selected_output = desktop_default_label
-        self._desktop_output_var = ctk.StringVar(value=selected_output)
-        self._build_option_entry(
-            voice_card,
-            self._ui_copy("desktop_capture_device"),
-            desktop_labels,
-            self._desktop_output_var,
+        vrc_listen_card = self._build_section_card(
+            scroll,
+            self._ui_copy("vrc_listen_section"),
+            self._ui_copy("vrc_listen_subtitle"),
+        )
+
+        self._vrc_listen_enabled_var = ctk.StringVar(
+            value="1" if bool(vrc_cfg.get("enabled", False)) else "0"
+        )
+        self._build_switch_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_enabled"),
+            self._vrc_listen_enabled_var,
             **pad,
         )
-        self._build_hint_box(voice_card, self._ui_copy("desktop_capture_hint"))
+
+        target_language_options = get_target_language_options(ui_language=self._ui_lang)
+        listen_lang_labels = [label for label, _ in target_language_options]
+        self._listen_lang_codes = {
+            label: code for label, code in target_language_options
+        }
+        self._listen_lang_reverse = {
+            code: label for label, code in target_language_options
+        }
+
+        section_label(vrc_listen_card, self._ui_copy("vrc_listen_device"))
+        loopback_devices = AudioRecorder.list_loopback_devices()
+        self._loopback_devices = {
+            str(device.get("name", "")).strip(): int(device.get("index", -1))
+            for device in loopback_devices
+            if str(device.get("name", "")).strip()
+        }
+        loopback_default_label = self._ui_copy("vrc_listen_device_default")
+        loopback_missing_label = self._ui_copy("vrc_listen_device_missing")
+        loopback_labels = [loopback_default_label]
+        loopback_labels.extend(self._loopback_devices.keys())
+        configured_loopback = str(vrc_cfg.get("loopback_device") or "").strip()
+        if configured_loopback and configured_loopback not in loopback_labels:
+            loopback_labels.append(configured_loopback)
+        if len(loopback_labels) == 1:
+            loopback_labels.append(loopback_missing_label)
+        selected_loopback = configured_loopback or loopback_default_label
+        if selected_loopback not in loopback_labels:
+            selected_loopback = loopback_default_label
+        self._loopback_device_var = ctk.StringVar(value=selected_loopback)
+        self._build_option_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_device"),
+            loopback_labels,
+            self._loopback_device_var,
+            **pad,
+        )
+        self._build_hint_box(vrc_listen_card, self._ui_copy("vrc_listen_device_hint"))
+
+        current_listen_target = str(vrc_cfg.get("target_language", "zh")).strip() or "zh"
+        self._listen_target_lang_var = ctk.StringVar(
+            value=self._listen_lang_reverse.get(
+                current_listen_target,
+                listen_lang_labels[0],
+            )
+        )
+        self._build_option_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_target_language"),
+            listen_lang_labels,
+            self._listen_target_lang_var,
+            **pad,
+        )
 
         section_label(voice_card, self._t("streaming_params"))
         self._chunk_interval_var = ctk.StringVar(
@@ -1614,12 +1706,19 @@ class SettingsWindow(ctk.CTkToplevel):
             self._denoise_var.get(),
             0.0,
         )
-        desktop_cfg = audio_cfg.setdefault("desktop_capture", {})
-        desktop_output = self._desktop_output_var.get().strip()
-        if desktop_output == self._ui_copy("desktop_capture_default"):
-            desktop_output = ""
-        desktop_cfg["output_device"] = desktop_output
-        desktop_cfg.setdefault("enabled", False)
+        vrc_cfg = cfg.setdefault("vrc_listen", {})
+        loopback_device = self._loopback_device_var.get().strip()
+        if loopback_device in {
+            self._ui_copy("vrc_listen_device_default"),
+            self._ui_copy("vrc_listen_device_missing"),
+        }:
+            loopback_device = ""
+        vrc_cfg["enabled"] = self._vrc_listen_enabled_var.get() == "1"
+        vrc_cfg["loopback_device"] = loopback_device or None
+        vrc_cfg["target_language"] = self._listen_lang_codes.get(
+            self._listen_target_lang_var.get(),
+            target_language_options[0][1],
+        )
 
         asr_cfg = cfg.setdefault("asr", {})
         asr_cfg["engine"] = asr_engine

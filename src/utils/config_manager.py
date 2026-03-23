@@ -31,6 +31,51 @@ def _merge_defaults(defaults, current):
     return current
 
 
+def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
+    changed = False
+    audio_cfg = config.setdefault("audio", {})
+    legacy_cfg = audio_cfg.get("desktop_capture", {})
+    if not isinstance(legacy_cfg, dict):
+        legacy_cfg = {}
+    loaded = loaded if isinstance(loaded, dict) else {}
+    vrc_cfg = config.get("vrc_listen", {})
+    if not isinstance(vrc_cfg, dict):
+        vrc_cfg = {}
+        config["vrc_listen"] = vrc_cfg
+        changed = True
+    elif "vrc_listen" not in config:
+        config["vrc_listen"] = vrc_cfg
+        changed = True
+
+    defaults = {
+        "enabled": False,
+        "loopback_device": None,
+        "target_language": "zh",
+    }
+
+    for key, value in defaults.items():
+        if key not in vrc_cfg:
+            vrc_cfg[key] = value
+            changed = True
+
+    if "vrc_listen" not in loaded:
+        legacy_device = str(legacy_cfg.get("output_device", "")).strip()
+        if bool(legacy_cfg.get("enabled", False)) and not bool(vrc_cfg.get("enabled", False)):
+            vrc_cfg["enabled"] = True
+            changed = True
+        if legacy_device and not str(vrc_cfg.get("loopback_device") or "").strip():
+            vrc_cfg["loopback_device"] = legacy_device
+            changed = True
+
+    if vrc_cfg.get("loopback_device") == "":
+        vrc_cfg["loopback_device"] = None
+        changed = True
+    if not str(vrc_cfg.get("target_language", "")).strip():
+        vrc_cfg["target_language"] = "zh"
+        changed = True
+    return changed
+
+
 def load_config() -> dict:
     config_path = _config_path()
     created_new = False
@@ -51,7 +96,8 @@ def load_config() -> dict:
     with config_path.open("r", encoding="utf-8") as f:
         loaded = json.load(f)
     merged = _merge_defaults(defaults, loaded)
-    if bootstrap_ui_language(merged, prefer_auto=created_new):
+    config_changed = _ensure_vrc_listen_config(merged, loaded)
+    if bootstrap_ui_language(merged, prefer_auto=created_new) or config_changed:
         save_config(merged)
     return merged
 

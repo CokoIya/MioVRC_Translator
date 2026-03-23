@@ -39,6 +39,7 @@ class AudioRecorder:
         vad_min_rms: float = 0.012,
         max_segment_s: float = 12.0,
         denoise_strength: float = 0.0,
+        extra_settings: object | None = None,
     ):
         self.on_segment = on_segment
         self.on_chunk = on_chunk
@@ -46,6 +47,7 @@ class AudioRecorder:
         self.frame_duration_ms = frame_duration_ms
         self.silence_threshold_s = silence_threshold_s
         self.input_device = input_device
+        self.extra_settings = extra_settings
         self.on_vad_state = on_vad_state
         self.pre_speech_s = pre_speech_s
 
@@ -105,11 +107,11 @@ class AudioRecorder:
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
 
-        self._stream = self._open_stream(self.input_device)
+        self._stream = self._open_stream(self.input_device, self.extra_settings)
         self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._worker_thread.start()
 
-    def _open_stream(self, device) -> sd.InputStream:
+    def _open_stream(self, device, extra_settings=None) -> sd.InputStream:
         try:
             dev_idx = device if device is not None else sd.default.device[0]
             native_rate = int(sd.query_devices(dev_idx)["default_samplerate"])
@@ -128,7 +130,7 @@ class AudioRecorder:
             if candidate not in deduped:
                 deduped.append(candidate)
 
-        def _try_open_and_start(rate, channels, dtype, dev):
+        def _try_open_and_start(rate, channels, dtype, dev, stream_extra_settings):
             blocksize = int(rate * self.frame_duration_ms / 1000)
             self._capture_rate = rate
             self._capture_channels = channels
@@ -139,6 +141,7 @@ class AudioRecorder:
                 dtype=dtype,
                 blocksize=blocksize,
                 device=dev,
+                extra_settings=stream_extra_settings,
                 callback=self._sd_callback,
             )
             try:
@@ -152,12 +155,17 @@ class AudioRecorder:
             return stream
 
         last_err = None
-        for dev in ([device, None] if device is not None else [None]):
+        devices_to_try = (
+            [device]
+            if device is not None and extra_settings is not None
+            else ([device, None] if device is not None else [None])
+        )
+        for dev in devices_to_try:
             if dev is None and device is not None:
                 self.input_device = None
             for rate, channels, dtype in deduped:
                 try:
-                    return _try_open_and_start(rate, channels, dtype, dev)
+                    return _try_open_and_start(rate, channels, dtype, dev, extra_settings)
                 except sd.PortAudioError as exc:
                     last_err = exc
 
@@ -346,3 +354,58 @@ class AudioRecorder:
 
         result = sorted(seen.values(), key=lambda item: item["index"])
         return [{"index": item["index"], "name": item["name"]} for item in result]
+
+    @staticmethod
+    def list_loopback_devices() -> list[dict]:
+        try:
+            hostapis = sd.query_hostapis()
+            devices = sd.query_devices()
+        except Exception:
+            return []
+
+        def _hostapi_name(device: dict) -> str:
+            try:
+                return str(hostapis[int(device.get("hostapi", -1))]["name"]).strip()
+            except Exception:
+                return ""
+
+        def _normalize_name(name: object) -> str:
+            normalized = str(name or "").strip().lower()
+            return " ".join(normalized.replace("[loopback]", "loopback").split())
+
+        wasapi_outputs = [
+            _normalize_name(device.get("name", ""))
+            for device in devices
+            if int(device.get("max_output_channels", 0)) > 0
+            and "WASAPI" in _hostapi_name(device).upper()
+        ]
+        explicit: list[dict] = []
+        inferred: list[dict] = []
+        seen_names: set[str] = set()
+
+        for index, device in enumerate(devices):
+            if int(device.get("max_input_channels", 0)) <= 0:
+                continue
+            hostapi_name = _hostapi_name(device)
+            if "WASAPI" not in hostapi_name.upper():
+                continue
+            name = str(device.get("name", "")).strip()
+            if not name or name in seen_names:
+                continue
+
+            normalized = _normalize_name(name)
+            entry = {"index": index, "name": name}
+            if "loopback" in normalized:
+                explicit.append(entry)
+                seen_names.add(name)
+                continue
+
+            if any(
+                output_name
+                and (normalized == output_name or normalized in output_name or output_name in normalized)
+                for output_name in wasapi_outputs
+            ):
+                inferred.append(entry)
+                seen_names.add(name)
+
+        return explicit if explicit else inferred

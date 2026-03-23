@@ -1,5 +1,6 @@
 ﻿import queue
 import threading
+import time
 import webbrowser
 import sys
 import subprocess
@@ -20,17 +21,13 @@ from src.utils.ui_config import (
     target_language_osc_value,
 )
 from src.audio.recorder import AudioRecorder
-from src.audio.desktop_recorder import (
-    DesktopAudioRecorder,
-    default_output_device_name,
-    list_output_devices,
-)
 from src.asr.factory import create_asr
 from src.asr.sensevoice_model_manager import ensure_model, model_exists
 from src.asr.streaming_merger import StreamingMerger
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
 from src.utils.lang_detect import detect_language
+from .floating_window import FloatingWindow
 from .settings_window import SettingsWindow
 from .window_effects import apply_window_icon, present_popup
 
@@ -71,50 +68,53 @@ PARTIAL_TASK_QUEUE_MAXSIZE = 1
 FINAL_TASK_QUEUE_MAXSIZE = 8
 CONFIG_SAVE_DEBOUNCE_MS = 280
 MIC_SOURCE = "mic"
-DESKTOP_SOURCE = "desktop"
+LISTEN_SOURCE = "vrc_listen"
+DESKTOP_SOURCE = LISTEN_SOURCE
+LISTEN_PREFIX = "[听]"
+MIN_CHATBOX_COOLDOWN_S = 1.6
 
 MAIN_COPY = {
     "desktop_audio_off": {
-        "zh-CN": "桌音 OFF",
-        "en": "Desk OFF",
-        "ja": "デスク OFF",
-        "ru": "Desk OFF",
-        "ko": "데스크 OFF",
+        "zh-CN": "听 VRC OFF",
+        "en": "VRC OFF",
+        "ja": "VRC OFF",
+        "ru": "VRC OFF",
+        "ko": "VRC OFF",
     },
     "desktop_audio_on": {
-        "zh-CN": "桌音 ON",
-        "en": "Desk ON",
-        "ja": "デスク ON",
-        "ru": "Desk ON",
-        "ko": "데스크 ON",
+        "zh-CN": "听 VRC ON",
+        "en": "VRC ON",
+        "ja": "VRC ON",
+        "ru": "VRC ON",
+        "ko": "VRC ON",
     },
     "desktop_audio_unavailable_title": {
-        "zh-CN": "桌面音频不可用",
-        "en": "Desktop Audio Unavailable",
-        "ja": "デスクトップ音声を開始できません",
-        "ru": "Desktop Audio Unavailable",
-        "ko": "데스크톱 오디오를 사용할 수 없습니다",
+        "zh-CN": "VRC 监听不可用",
+        "en": "VRC Listen Unavailable",
+        "ja": "VRC 音声リスンを開始できません",
+        "ru": "VRC Listen Unavailable",
+        "ko": "VRC 음성 리슨을 사용할 수 없습니다",
     },
     "desktop_audio_unavailable_body": {
-        "zh-CN": "当前运行环境没有可用的桌面音频组件，或 Windows 下没有可用的输出设备可做回环采集。",
-        "en": "The current runtime is missing desktop-audio support, or Windows does not expose a usable output device for loopback capture.",
-        "ja": "現在の実行環境にデスクトップ音声機能が含まれていないか、Windows 側でループバック収録に使える出力デバイスが見つかりません。",
-        "ru": "The current runtime is missing desktop-audio support, or Windows does not expose a usable output device for loopback capture.",
-        "ko": "현재 실행 환경에 데스크톱 오디오 구성요소가 없거나, Windows에서 루프백 캡처 가능한 출력 장치를 찾지 못했습니다.",
+        "zh-CN": "当前系统没有可用的 Windows WASAPI 回环设备，或你还没有在设置里选择监听设备。",
+        "en": "No Windows WASAPI loopback device is available, or no listen device has been selected in Settings.",
+        "ja": "利用可能な Windows WASAPI ループバックデバイスがないか、設定でリスン用デバイスが選ばれていません。",
+        "ru": "No Windows WASAPI loopback device is available, or no listen device has been selected in Settings.",
+        "ko": "사용 가능한 Windows WASAPI 루프백 장치가 없거나, 설정에서 리슨 장치를 아직 선택하지 않았습니다.",
     },
     "desktop_audio_failed": {
-        "zh-CN": "桌面音频启动失败：{message}",
-        "en": "Desktop audio failed: {message}",
-        "ja": "デスクトップ音声の開始に失敗しました: {message}",
-        "ru": "Desktop audio failed: {message}",
-        "ko": "데스크톱 오디오 시작 실패: {message}",
+        "zh-CN": "VRC 监听启动失败：{message}",
+        "en": "VRC listen failed: {message}",
+        "ja": "VRC 音声リスンの開始に失敗しました: {message}",
+        "ru": "VRC listen failed: {message}",
+        "ko": "VRC 음성 리슨 시작 실패: {message}",
     },
     "desktop_audio_saved": {
-        "zh-CN": "桌面音频已切换",
-        "en": "Desktop audio updated",
-        "ja": "デスクトップ音声を更新しました",
-        "ru": "Desktop audio updated",
-        "ko": "데스크톱 오디오가 변경되었습니다",
+        "zh-CN": "VRC 监听已切换",
+        "en": "VRC listen updated",
+        "ja": "VRC 音声リスンを更新しました",
+        "ru": "VRC listen updated",
+        "ko": "VRC 음성 리슨이 변경되었습니다",
     },
 }
 
@@ -133,8 +133,9 @@ class MainWindow(ctk.CTk):
         self.configure(fg_color=BG_PRIMARY)
 
         self._recorder: AudioRecorder | None = None
-        self._desktop_recorder: DesktopAudioRecorder | None = None
+        self._listen_recorder: AudioRecorder | None = None
         self._asr = create_asr(config)
+        self._listen_asr = create_asr(config)
         self._translator = None
         self._sender: VRCOSCSender | None = None
         self._translating = False
@@ -162,17 +163,20 @@ class MainWindow(ctk.CTk):
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._current_src_lang: str | None = None
         self._current_asr_lang: str | None = None
-        self._desktop_capture_enabled = bool(
-            self._config.get("audio", {}).get("desktop_capture", {}).get("enabled", False)
-        )
-        self._desktop_devices: dict[str, str] = {}
+        self._desktop_capture_enabled = bool(self._vrc_listen_config().get("enabled", False))
+        self._desktop_devices: dict[str, int] = {}
         self._mic_in_speech = False
         self._desktop_in_speech = False
+        self._listen_running = False
         self._translation_state_lock = threading.Lock()
         self._active_translation_jobs = 0
+        self._listen_send_lock = threading.Lock()
+        self._listen_last_send_at = 0.0
+        self._own_msgs: set[str] = set()
         self._avatar_error_after_id: str | None = None
         self._device_picker_win: ctk.CTkToplevel | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
+        self._floating_window: FloatingWindow | None = None
         self._social_icons: dict[str, ctk.CTkImage] = {}
         self._window_icon: PhotoImage | None = None
         self._status_text = self._t("status_ready")
@@ -191,6 +195,7 @@ class MainWindow(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         self._build()
+        self._floating_window = FloatingWindow(self, self._ui_lang)
         self._load_devices()
         self._sync_all_avatar_params(force=True)
         self.after(420, self._maybe_prepare_runtime_model)
@@ -557,7 +562,7 @@ class MainWindow(ctk.CTk):
             corner_radius=13,
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=11, weight="bold"),
-            command=self._toggle_desktop_capture,
+            command=self._toggle_listen,
         )
         self._desktop_audio_button.pack(side="left", padx=(0, 8))
 
@@ -1472,29 +1477,71 @@ class MainWindow(ctk.CTk):
         self._sync_avatar_speaking_state()
         self._call_in_ui(self._refresh_runtime_status)
 
-    def _desktop_capture_config(self) -> dict:
+    @staticmethod
+    def _normalize_audio_device_name(name: str) -> str:
+        return " ".join(str(name or "").strip().lower().split())
+
+    def _vrc_listen_config(self) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
         audio_cfg = self._config.setdefault("audio", {})
-        desktop_cfg = audio_cfg.setdefault("desktop_capture", {})
-        if "enabled" not in desktop_cfg:
-            desktop_cfg["enabled"] = False
-        if "output_device" not in desktop_cfg:
-            desktop_cfg["output_device"] = ""
-        return desktop_cfg
+        legacy_cfg = audio_cfg.get("desktop_capture", {})
+        if not isinstance(legacy_cfg, dict):
+            legacy_cfg = {}
+        if "enabled" not in listen_cfg:
+            listen_cfg["enabled"] = bool(legacy_cfg.get("enabled", False))
+        if "loopback_device" not in listen_cfg:
+            legacy_device = str(legacy_cfg.get("output_device", "")).strip()
+            listen_cfg["loopback_device"] = legacy_device or None
+        if not str(listen_cfg.get("target_language", "")).strip():
+            listen_cfg["target_language"] = "zh"
+        return listen_cfg
+
+    def _desktop_capture_config(self) -> dict:
+        return self._vrc_listen_config()
 
     def _load_desktop_devices(self) -> None:
-        devices = list_output_devices()
         self._desktop_devices = {
-            str(device.get("name", "")).strip(): str(device.get("name", "")).strip()
-            for device in devices
+            str(device.get("name", "")).strip(): int(device.get("index", -1))
+            for device in AudioRecorder.list_loopback_devices()
             if str(device.get("name", "")).strip()
         }
 
     def _desktop_output_device_name(self) -> str | None:
         desktop_cfg = self._desktop_capture_config()
-        configured = str(desktop_cfg.get("output_device", "")).strip()
-        if configured and configured in self._desktop_devices:
-            return configured
-        return default_output_device_name()
+        configured = str(desktop_cfg.get("loopback_device") or "").strip()
+        return configured or None
+
+    def _desktop_input_device_index(self) -> int | None:
+        configured = self._desktop_output_device_name()
+        if not configured:
+            return None
+        if configured in self._desktop_devices:
+            return self._desktop_devices[configured]
+
+        normalized = self._normalize_audio_device_name(configured)
+        for name, index in self._desktop_devices.items():
+            if normalized == self._normalize_audio_device_name(name):
+                return index
+        for name, index in self._desktop_devices.items():
+            candidate = self._normalize_audio_device_name(name)
+            if normalized and (normalized in candidate or candidate in normalized):
+                return index
+        return None
+
+    def _listen_target_language(self) -> str:
+        listen_cfg = self._desktop_capture_config()
+        target = str(listen_cfg.get("target_language", "zh")).strip() or "zh"
+        return target
+
+    def _listen_feature_configured(self) -> bool:
+        return self._desktop_capture_enabled and self._desktop_output_device_name() is not None
+
+    @staticmethod
+    def _create_loopback_extra_settings():
+        try:
+            return sd.WasapiSettings(loopback=True)
+        except Exception:
+            return None
 
     def _set_desktop_capture_enabled(self, enabled: bool, *, persist: bool) -> None:
         self._desktop_capture_enabled = bool(enabled)
@@ -1506,14 +1553,20 @@ class MainWindow(ctk.CTk):
             desktop_cfg["enabled"] = self._desktop_capture_enabled
             self._schedule_config_save()
 
-    def _start_desktop_capture(self) -> None:
-        if self._desktop_recorder is not None:
+    def _start_listen(self) -> None:
+        if self._listen_recorder is not None:
             return
+
+        self._load_desktop_devices()
+        device_index = self._desktop_input_device_index()
+        if device_index is None:
+            raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
+
         audio_cfg = self._config.get("audio", {})
         streaming_cfg = self._streaming_config()
-        self._desktop_recorder = DesktopAudioRecorder(
+        self._listen_recorder = AudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
-            on_chunk=lambda audio: self._on_audio_chunk(audio, DESKTOP_SOURCE),
+            on_chunk=None,
             sample_rate=audio_cfg.get("sample_rate", 16000),
             frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
             vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
@@ -1525,7 +1578,8 @@ class MainWindow(ctk.CTk):
             partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
             max_segment_s=audio_cfg.get("max_segment_s", 12.0),
             denoise_strength=audio_cfg.get("denoise_strength", 0.0),
-            output_device_name=self._desktop_output_device_name(),
+            input_device=device_index,
+            extra_settings=self._create_loopback_extra_settings(),
             on_vad_state=lambda state: self._on_source_vad_state(DESKTOP_SOURCE, state),
             chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
             chunk_window_s=streaming_cfg.get("chunk_window_s", 1.6),
@@ -1533,25 +1587,34 @@ class MainWindow(ctk.CTk):
             recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
         )
         try:
-            self._desktop_recorder.start()
+            self._listen_recorder.start()
+            self._listen_running = True
         except Exception:
-            self._desktop_recorder = None
+            self._listen_recorder = None
+            self._listen_running = False
             raise
 
-    def _stop_desktop_capture(self) -> None:
+    def _start_desktop_capture(self) -> None:
+        self._start_listen()
+
+    def _stop_listen(self) -> None:
         self._desktop_in_speech = False
+        self._listen_running = False
         self._reset_streaming_state(DESKTOP_SOURCE)
-        if self._desktop_recorder is not None:
-            self._desktop_recorder.stop()
-            self._desktop_recorder = None
+        if self._listen_recorder is not None:
+            self._listen_recorder.stop()
+            self._listen_recorder = None
         self._sync_avatar_speaking_state(force=True)
         self._call_in_ui(self._refresh_runtime_status)
 
-    def _toggle_desktop_capture(self) -> None:
+    def _stop_desktop_capture(self) -> None:
+        self._stop_listen()
+
+    def _toggle_listen(self) -> None:
         target_enabled = not self._desktop_capture_enabled
         if target_enabled:
             self._load_desktop_devices()
-            if not self._desktop_devices:
+            if not self._desktop_devices or self._desktop_input_device_index() is None:
                 messagebox.showwarning(
                     self._copy("desktop_audio_unavailable_title"),
                     self._copy("desktop_audio_unavailable_body"),
@@ -1559,7 +1622,7 @@ class MainWindow(ctk.CTk):
                 return
             try:
                 if self._running:
-                    self._start_desktop_capture()
+                    self._start_listen()
             except Exception as exc:
                 messagebox.showerror(
                     self._copy("desktop_audio_unavailable_title"),
@@ -1571,9 +1634,12 @@ class MainWindow(ctk.CTk):
             return
 
         if self._running:
-            self._stop_desktop_capture()
+            self._stop_listen()
         self._set_desktop_capture_enabled(False, persist=True)
         self._set_bottom(self._copy("desktop_audio_saved"))
+
+    def _toggle_desktop_capture(self) -> None:
+        self._toggle_listen()
 
     def _on_desktop_capture_start_failed(self, message: str) -> None:
         self._refresh_desktop_capture_button()
@@ -1582,6 +1648,64 @@ class MainWindow(ctk.CTk):
             self._copy("desktop_audio_unavailable_title"),
             self._copy("desktop_audio_failed", message=message),
         )
+
+    def _format_listen_text(self, text: str) -> str:
+        clean = str(text or "").strip()
+        if not clean:
+            return ""
+        return f"{LISTEN_PREFIX} {clean}"
+
+    def _show_listen_translation(self, text: str, *, source: str = "listen") -> None:
+        translated = str(text or "").strip()
+        if not translated:
+            return
+        if self._floating_window is None:
+            self._floating_window = FloatingWindow(self, self._ui_lang)
+        self._floating_window.show_translation(translated, source=source)
+
+    def _send_listen_chatbox(self, text: str, session_id: int) -> None:
+        message = VRCOSCSender._normalize_text(text)
+        if not message or self._destroying:
+            return
+
+        try:
+            with self._listen_send_lock:
+                if self._destroying or not self._running or session_id != self._listen_session:
+                    return
+                wait_s = MIN_CHATBOX_COOLDOWN_S - (
+                    time.monotonic() - self._listen_last_send_at
+                )
+                if wait_s > 0:
+                    time.sleep(wait_s)
+                if self._destroying or not self._running or session_id != self._listen_session:
+                    return
+                sent = self._ensure_sender().send_chatbox(message)
+                if sent:
+                    self._listen_last_send_at = time.monotonic()
+                    self._own_msgs.add(sent)
+        except Exception as exc:
+            error_text = str(exc).strip() or exc.__class__.__name__
+            self._call_in_ui(
+                lambda m=error_text[:120]: self._set_bottom(
+                    f"Chatbox send failed: {m}"
+                )
+            )
+            self._call_in_ui(self._pulse_avatar_error)
+
+    def _send_listen_chatbox_async(self, text: str, session_id: int) -> None:
+        message = VRCOSCSender._normalize_text(text)
+        if not message or self._destroying:
+            return
+        threading.Thread(
+            target=self._send_listen_chatbox,
+            args=(message, session_id),
+            daemon=True,
+        ).start()
+
+    def _asr_for_source(self, source: str):
+        if source == DESKTOP_SOURCE:
+            return self._listen_asr
+        return self._asr
 
     def _ensure_translator_ready(self) -> bool:
         if self._translator is not None:
@@ -1606,7 +1730,7 @@ class MainWindow(ctk.CTk):
         )
 
     def _listening_requires_translation(self) -> bool:
-        return self._get_output_format() != "original_only"
+        return self._get_output_format() != "original_only" or self._listen_feature_configured()
 
     def _streaming_config(self) -> dict:
         return self._config.get("asr", {}).get("streaming", {})
@@ -1657,7 +1781,7 @@ class MainWindow(ctk.CTk):
             return
 
         generation = self._source_generation(source)
-        asr_lang = self._current_asr_lang
+        asr_lang = None if source == DESKTOP_SOURCE else self._current_asr_lang
         self._enqueue_latest(
             self._partial_task_queue,
             (audio, asr_lang, generation, self._listen_session, source),
@@ -1674,7 +1798,11 @@ class MainWindow(ctk.CTk):
         if not self._running or session_id != self._listen_session:
             return
         try:
-            text = self._asr.transcribe(audio, language=asr_lang, is_final=False)
+            text = self._asr_for_source(source).transcribe(
+                audio,
+                language=asr_lang,
+                is_final=False,
+            )
             if (
                 not text
                 or generation != self._source_generation(source)
@@ -1700,7 +1828,9 @@ class MainWindow(ctk.CTk):
     def _show_partial_text(self, text: str, generation: int, source: str):
         if not self._running or generation != self._source_generation(source) or not text:
             return
-        self._set_source_text(text, text_color=TEXT_SEC)
+        rendered = self._format_listen_text(text) if source == DESKTOP_SOURCE else text
+        text_color = "#0f766e" if source == DESKTOP_SOURCE else TEXT_SEC
+        self._set_source_text(rendered, text_color=text_color)
 
     def _process_final_audio_segment(
         self,
@@ -1713,10 +1843,15 @@ class MainWindow(ctk.CTk):
         if not self._running or session_id != self._listen_session:
             return
         fmt = self._get_output_format()
+        requires_translation = source == DESKTOP_SOURCE or fmt != "original_only"
         try:
-            if fmt != "original_only":
+            if requires_translation:
                 self._set_translating_state(True)
-            text = self._asr.transcribe(audio, language=asr_lang, is_final=True)
+            text = self._asr_for_source(source).transcribe(
+                audio,
+                language=asr_lang,
+                is_final=True,
+            )
             if not self._running or session_id != self._listen_session:
                 return
 
@@ -1728,12 +1863,26 @@ class MainWindow(ctk.CTk):
                 return
 
             translator = self._translator
-            sender = self._sender
-
-            self._call_in_ui(lambda t=text: self._set_source_text(t))
+            rendered_source = self._format_listen_text(text) if source == DESKTOP_SOURCE else text
+            self._call_in_ui(lambda t=rendered_source: self._set_source_text(t))
 
             translated = None
-            if fmt == "original_only":
+            if source == DESKTOP_SOURCE:
+                src_lang = detect_language(text)
+                tgt_lang = self._listen_target_language()
+                if src_lang == tgt_lang:
+                    translated = text
+                elif translator is None:
+                    raise RuntimeError("Translator is not ready")
+                else:
+                    translated = translator.translate(text, src_lang, tgt_lang)
+                if not self._running or session_id != self._listen_session:
+                    return
+
+                chatbox_text = self._format_listen_text(translated)
+                self._call_in_ui(lambda t=chatbox_text: self._show_tgt(t))
+                self._call_in_ui(lambda t=translated: self._show_listen_translation(t))
+            elif fmt == "original_only":
                 chatbox_text = text
             else:
                 src_lang = selected_src_lang if selected_src_lang else detect_language(text)
@@ -1757,17 +1906,29 @@ class MainWindow(ctk.CTk):
                     chatbox_text = f"{translated}({text})"
                 self._call_in_ui(lambda t=translated: self._show_tgt(t))
 
-            if not self._running or session_id != self._listen_session or sender is None:
+            if not self._running or session_id != self._listen_session:
                 return
-            sender.send_chatbox(chatbox_text)
+            if source == DESKTOP_SOURCE:
+                self._send_listen_chatbox_async(chatbox_text, session_id)
+            else:
+                sent = self._ensure_sender().send_chatbox(chatbox_text)
+                if sent:
+                    self._own_msgs.add(sent)
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__
             self._call_in_ui(
                 lambda m=error_text[:120]: self._set_bottom(f"璇煶澶勭悊澶辫触: {m}")
             )
+            if source == DESKTOP_SOURCE:
+                self._call_in_ui(
+                    lambda m=error_text[:120]: self._show_listen_translation(
+                        f"[Error] {m}",
+                        source="error",
+                    )
+                )
             self._call_in_ui(self._pulse_avatar_error)
         finally:
-            if fmt != "original_only":
+            if requires_translation:
                 self._set_translating_state(False)
             if self._running and session_id == self._listen_session:
                 self._call_in_ui(self._refresh_runtime_status)
@@ -1795,7 +1956,9 @@ class MainWindow(ctk.CTk):
             chatbox_text = f"{tgt_text}({src_text})" if src_text and tgt_text else tgt_text or src_text
 
         try:
-            self._ensure_sender().send_chatbox(chatbox_text)
+            sent = self._ensure_sender().send_chatbox(chatbox_text)
+            if sent:
+                self._own_msgs.add(sent)
         except Exception as e:
             self._pulse_avatar_error()
             messagebox.showerror(self._t("send_failed_title"), str(e))
@@ -2056,6 +2219,8 @@ class MainWindow(ctk.CTk):
                     lambda e=event: self._handle_model_progress(e)
                 )
             )
+            if self._listen_feature_configured():
+                self._listen_asr.load()
             self._sender = self._create_sender()
             audio_cfg = self._config.get("audio", {})
             streaming_cfg = self._streaming_config()
@@ -2081,9 +2246,9 @@ class MainWindow(ctk.CTk):
                 recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
             )
             self._recorder.start()
-            if self._desktop_capture_enabled:
+            if self._listen_feature_configured():
                 try:
-                    self._start_desktop_capture()
+                    self._start_listen()
                 except Exception as exc:
                     self._desktop_capture_enabled = False
                     self._desktop_capture_config()["enabled"] = False
@@ -2095,12 +2260,13 @@ class MainWindow(ctk.CTk):
             self._running = True
             self._call_in_ui(self._on_started)
         except Exception as e:
-            if self._desktop_recorder:
+            if self._listen_recorder:
                 try:
-                    self._desktop_recorder.stop()
+                    self._listen_recorder.stop()
                 except Exception:
                     pass
-                self._desktop_recorder = None
+                self._listen_recorder = None
+                self._listen_running = False
             if self._recorder:
                 try:
                     self._recorder.stop()
@@ -2126,9 +2292,10 @@ class MainWindow(ctk.CTk):
             self._active_translation_jobs = 0
         self._drain_queue(self._partial_task_queue)
         self._drain_queue(self._final_task_queue)
-        if self._desktop_recorder:
-            self._desktop_recorder.stop()
-            self._desktop_recorder = None
+        if self._listen_recorder:
+            self._listen_recorder.stop()
+            self._listen_recorder = None
+        self._listen_running = False
         if self._recorder:
             self._recorder.stop()
             self._recorder = None
@@ -2163,8 +2330,8 @@ class MainWindow(ctk.CTk):
         if not self._running:
             return
         self._reset_streaming_state(source)
-        asr_lang = self._current_asr_lang
-        selected_src_lang = self._current_src_lang
+        asr_lang = None if source == DESKTOP_SOURCE else self._current_asr_lang
+        selected_src_lang = None if source == DESKTOP_SOURCE else self._current_src_lang
         self._enqueue_latest(
             self._final_task_queue,
             (audio, asr_lang, selected_src_lang, self._listen_session, source),
@@ -2420,12 +2587,12 @@ class MainWindow(ctk.CTk):
         self._ui_lang = get_ui_language(new_cfg)
         self.title(self._t("window_title"))
         self._asr = create_asr(new_cfg)
+        self._listen_asr = create_asr(new_cfg)
         self._translator = None
-        self._desktop_capture_enabled = bool(
-            new_cfg.get("audio", {}).get("desktop_capture", {}).get("enabled", False)
-        )
+        self._desktop_capture_enabled = bool(self._vrc_listen_config().get("enabled", False))
         self._mic_in_speech = False
         self._desktop_in_speech = False
+        self._listen_running = False
         with self._translation_state_lock:
             self._active_translation_jobs = 0
         with self._merge_lock:
@@ -2434,6 +2601,8 @@ class MainWindow(ctk.CTk):
         self._reset_streaming_state()
 
         self._rebuild_ui(device_name=device_name)
+        if self._floating_window is not None:
+            self._floating_window.update_language(self._ui_lang)
         self._sync_all_avatar_params(force=True)
         self.after(120, self._maybe_prepare_runtime_model)
         if was_running:
@@ -2495,6 +2664,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._sender = None
+        if self._floating_window is not None:
+            try:
+                self._floating_window.destroy()
+            except Exception:
+                pass
+            self._floating_window = None
 
         for work_queue in (
             self._partial_task_queue,

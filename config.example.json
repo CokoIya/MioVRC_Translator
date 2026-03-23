@@ -89,6 +89,11 @@
       "model": ""
     }
   },
+  "vrc_listen": {
+    "enabled": false,
+    "loopback_device": null,
+    "target_language": "zh"
+  },
   "osc": {
     "send_host": "127.0.0.1",
     "send_port": 9000,
