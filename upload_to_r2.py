@@ -54,6 +54,7 @@ def upload(local_path: str, key: str) -> None:
         Bucket=BUCKET,
         Key=key,
         ContentType="application/octet-stream",
+        ContentDisposition=f'attachment; filename="{path.name}"',
     )
     upload_id = multipart["UploadId"]
     parts: list[dict[str, object]] = []
