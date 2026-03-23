@@ -519,13 +519,13 @@
       bottom: 62px;
       right: 0;
       width: 284px;
-      background: rgba(14,14,20,0.82);
-      backdrop-filter: saturate(200%) blur(28px);
-      -webkit-backdrop-filter: saturate(200%) blur(28px);
-      border: 1px solid rgba(255,255,255,0.13);
+      background: rgba(14,14,20,0.50);
+      backdrop-filter: saturate(180%) blur(28px);
+      -webkit-backdrop-filter: saturate(180%) blur(28px);
+      border: 1px solid rgba(255,255,255,0.16);
       border-radius: 22px;
       padding: 14px 14px 12px;
-      box-shadow: 0 20px 56px rgba(0,0,0,.55), 0 1px 0 rgba(255,255,255,0.05) inset;
+      box-shadow: 0 20px 56px rgba(0,0,0,.42), 0 1px 0 rgba(255,255,255,0.07) inset;
       opacity: 0;
       transform: translateY(10px) scale(0.94);
       pointer-events: none;
@@ -573,6 +573,36 @@
     #music-iframe-wrap iframe {
       display: block; width: 100%; border: 0;
     }
+    .music-ctrl-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 10px; margin-top: 10px; padding: 0 2px;
+    }
+    .music-ctrl-btn {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.14);
+      color: rgba(255,255,255,0.82);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: background .18s, transform .15s, box-shadow .18s;
+      padding: 0; flex-shrink: 0;
+    }
+    .music-ctrl-btn:hover {
+      background: rgba(255,255,255,0.22);
+      transform: scale(1.10);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+    }
+    .music-ctrl-btn:active { transform: scale(0.95); }
+    .music-ctrl-btn svg { width: 17px; height: 17px; pointer-events: none; }
+    .music-ctrl-play {
+      width: 42px; height: 42px;
+      background: rgba(255,255,255,0.16);
+    }
+    .music-ctrl-play svg { width: 22px; height: 22px; }
+    .ctrl-icon-play  { display: none; }
+    .ctrl-icon-pause { display: block; }
+    #music-bubble.mio-paused .ctrl-icon-play  { display: block; }
+    #music-bubble.mio-paused .ctrl-icon-pause { display: none; }
     .music-vol-row {
       display: flex; align-items: center; gap: 8px;
       margin-top: 10px; padding: 0 2px;
@@ -822,12 +852,23 @@
       <button class="music-close-btn" id="music-close-btn" aria-label="关闭播放器">×</button>
     </div>
     <div id="music-iframe-wrap">
-      <!-- 替换 id= 后面的数字为你想要的歌单/歌曲ID；type=1 歌单，type=2 单曲 -->
       <iframe id="music-iframe"
-        src="https://music.163.com/outchain/player?type=1&id=2353265631&auto=1&height=90"
+        src=""
         frameborder="no" border="0" marginwidth="0" marginheight="0"
-        width="256" height="90" scrolling="no" allow="autoplay *">
+        width="256" height="66" scrolling="no" allow="autoplay *">
       </iframe>
+    </div>
+    <div class="music-ctrl-row">
+      <button class="music-ctrl-btn" id="btn-prev" aria-label="上一首">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button class="music-ctrl-btn music-ctrl-play" id="btn-play" aria-label="播放/暂停">
+        <svg class="ctrl-icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+        <svg class="ctrl-icon-play"  viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button class="music-ctrl-btn" id="btn-next" aria-label="下一首">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18 14.5 12 6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg>
+      </button>
     </div>
     <div class="music-vol-row">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -1329,12 +1370,38 @@
     const volSlider   = document.getElementById('music-vol-slider');
     const volNum      = document.getElementById('music-vol-num');
     const musicIframe = document.getElementById('music-iframe');
+    const btnPrev     = document.getElementById('btn-prev');
+    const btnPlay     = document.getElementById('btn-play');
+    const btnNext     = document.getElementById('btn-next');
 
-    // ── Toggle open/close panel ──
+    // 懒加载 iframe：第一次打开面板时才注入 src，避免页面加载时触发 autoplay 被浏览器拦截
+    const IFRAME_SRC = 'https://music.163.com/outchain/player?type=1&id=2353265631&auto=1&height=66';
+    let iframeLoaded = false;
+    function ensureIframe() {
+      if (!iframeLoaded) {
+        iframeLoaded = true;
+        musicIframe.src = IFRAME_SRC;
+      }
+    }
+
+    // 尝试点击 iframe 内部按钮（同源时有效，跨域静默失败）
+    function tryIframeBtn(...selectors) {
+      try {
+        const doc = musicIframe.contentDocument || musicIframe.contentWindow.document;
+        for (const sel of selectors) {
+          const el = doc.querySelector(sel);
+          if (el) { el.click(); return true; }
+        }
+      } catch (_) {}
+      return false;
+    }
+
+    // ── 面板开关 ──
     let panelOpen = false;
-    toggleBtn.addEventListener('click', (e) => {
+    toggleBtn.addEventListener('click', () => {
       if (wasDragged) return;
       panelOpen = !panelOpen;
+      if (panelOpen) ensureIframe();
       bubble.classList.toggle('mio-open', panelOpen);
     });
     closeBtn.addEventListener('click', () => {
@@ -1342,18 +1409,42 @@
       bubble.classList.remove('mio-open');
     });
 
-    // ── Volume display (actual iframe audio is cross-origin, best-effort) ──
+    // ── 控制按钮 ──
+    btnPrev.addEventListener('click', () => {
+      tryIframeBtn('[title="上一首"]', '.btn-prv', '.ply-btn-prv');
+      bubble.classList.add('mio-playing');
+      bubble.classList.remove('mio-paused');
+    });
+    btnNext.addEventListener('click', () => {
+      tryIframeBtn('[title="下一首"]', '.btn-next', '.ply-btn-next');
+      bubble.classList.add('mio-playing');
+      bubble.classList.remove('mio-paused');
+    });
+    btnPlay.addEventListener('click', () => {
+      const playing = bubble.classList.contains('mio-playing');
+      if (playing) {
+        tryIframeBtn('[title="暂停"]', '.btn-pause', '.ply-btn-pause');
+        bubble.classList.remove('mio-playing');
+        bubble.classList.add('mio-paused');
+      } else {
+        ensureIframe();
+        tryIframeBtn('[title="播放"]', '.btn-play', '.ply-btn-play');
+        bubble.classList.add('mio-playing');
+        bubble.classList.remove('mio-paused');
+      }
+    });
+
+    // ── 音量（跨域时 best-effort）──
     volSlider.addEventListener('input', () => {
       const v = volSlider.value;
       volNum.textContent = v + '%';
-      // Attempt to set volume on iframe audio element (silently ignored if cross-origin)
       try {
-        const audio = musicIframe.contentDocument && musicIframe.contentDocument.querySelector('audio');
+        const audio = musicIframe.contentDocument.querySelector('audio');
         if (audio) audio.volume = v / 100;
-      } catch (_) { /* cross-origin – expected */ }
+      } catch (_) {}
     });
 
-    // ── Draggable (mouse) ──
+    // ── 拖拽（鼠标）──
     let isDragging = false;
     let wasDragged = false;
     let dragStartX = 0, dragStartY = 0;
@@ -1361,56 +1452,42 @@
 
     function getComputedPos() {
       const s = window.getComputedStyle(bubble);
-      const r = parseFloat(s.right)  || 22;
-      const b = parseFloat(s.bottom) || 72;
-      return { r, b };
+      return { r: parseFloat(s.right) || 22, b: parseFloat(s.bottom) || 72 };
     }
 
     toggleBtn.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
       const pos = getComputedPos();
-      startRight  = pos.r;
-      startBottom = pos.b;
-      dragStartX  = e.clientX;
-      dragStartY  = e.clientY;
-      isDragging  = true;
-      wasDragged  = false;
+      startRight = pos.r; startBottom = pos.b;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      isDragging = true; wasDragged = false;
       document.body.style.cursor = 'grabbing';
     });
-
     window.addEventListener('mousemove', (e) => {
       if (!isDragging) return;
       const dx = e.clientX - dragStartX;
       const dy = e.clientY - dragStartY;
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) wasDragged = true;
-      const newRight  = Math.max(8, Math.min(window.innerWidth  - 60, startRight  - dx));
-      const newBottom = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy));
-      bubble.style.right  = newRight  + 'px';
-      bubble.style.bottom = newBottom + 'px';
+      bubble.style.right  = Math.max(8, Math.min(window.innerWidth  - 60, startRight  - dx)) + 'px';
+      bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy)) + 'px';
     });
-
     window.addEventListener('mouseup', () => {
       if (!isDragging) return;
       isDragging = false;
       document.body.style.cursor = '';
-      // Snap back if dragged very little (treat as click, handled by toggle listener)
       setTimeout(() => { wasDragged = false; }, 0);
     });
 
-    // ── Touch drag support ──
-    let touchStartX = 0, touchStartY = 0;
-    let touchStartRight = 22, touchStartBottom = 72;
+    // ── 拖拽（触摸）──
+    let touchStartX = 0, touchStartY = 0, touchStartRight = 22, touchStartBottom = 72;
     toggleBtn.addEventListener('touchstart', (e) => {
       const t = e.touches[0];
       const pos = getComputedPos();
-      touchStartRight  = pos.r;
-      touchStartBottom = pos.b;
-      touchStartX = t.clientX;
-      touchStartY = t.clientY;
+      touchStartRight = pos.r; touchStartBottom = pos.b;
+      touchStartX = t.clientX; touchStartY = t.clientY;
       wasDragged = false;
     }, { passive: true });
-
     toggleBtn.addEventListener('touchmove', (e) => {
       const t = e.touches[0];
       const dx = t.clientX - touchStartX;
@@ -1418,24 +1495,19 @@
       if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
         wasDragged = true;
         e.preventDefault();
-        const newRight  = Math.max(8, Math.min(window.innerWidth  - 60, touchStartRight  - dx));
-        const newBottom = Math.max(8, Math.min(window.innerHeight - 60, touchStartBottom - dy));
-        bubble.style.right  = newRight  + 'px';
-        bubble.style.bottom = newBottom + 'px';
+        bubble.style.right  = Math.max(8, Math.min(window.innerWidth  - 60, touchStartRight  - dx)) + 'px';
+        bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, touchStartBottom - dy)) + 'px';
       }
     }, { passive: false });
 
-    // ── Playing state detection + 30s auto-skip (best-effort via iframe audio) ──
-    let lastSrc = '';
-    let trackStartTime = Date.now();
-
+    // ── 轮询检测播放状态 + 30s 自动跳曲（跨域 best-effort）──
+    let lastSrc = '', trackStartTime = Date.now();
     setInterval(() => {
       try {
         const doc   = musicIframe.contentDocument || musicIframe.contentWindow.document;
         const audio = doc.querySelector('audio');
         if (!audio) return;
 
-        // Update EQ animation state
         if (!audio.paused) {
           bubble.classList.add('mio-playing');
           bubble.classList.remove('mio-paused');
@@ -1444,54 +1516,23 @@
           bubble.classList.add('mio-paused');
         }
 
-        // Sync volume slider on first success
-        if (volSlider._synced !== true) {
+        if (!volSlider._synced) {
           audio.volume = volSlider.value / 100;
           volSlider._synced = true;
         }
 
-        // 30s auto-skip: if track duration is < 30s and almost finished, click next
         if (!audio.paused && audio.duration > 0 && audio.duration < 30) {
           if (audio.currentTime >= audio.duration - 0.8) {
-            const nextBtn =
-              doc.querySelector('[title="下一首"]') ||
-              doc.querySelector('.btn-next') ||
-              doc.querySelector('[data-action="next"]');
-            if (nextBtn) {
-              nextBtn.click();
-            } else {
-              // Fallback: seek to end to trigger natural track advance
+            if (!tryIframeBtn('[title="下一首"]', '.btn-next'))
               audio.currentTime = audio.duration;
-            }
           }
         }
 
-        // Detect track change (src change) and reset timer
         const src = audio.currentSrc || audio.src || '';
-        if (src && src !== lastSrc) {
-          lastSrc = src;
-          trackStartTime = Date.now();
-        }
-
-        // Second pass: if 30+ seconds elapsed and track hasn't advanced past 30s, skip
-        if (!audio.paused && audio.duration > 0 && audio.duration < 30) {
-          const elapsed = (Date.now() - trackStartTime) / 1000;
-          if (elapsed > audio.duration + 2) {
-            // Stuck on short track – force next
-            const nextBtn =
-              doc.querySelector('[title="下一首"]') ||
-              doc.querySelector('.btn-next');
-            if (nextBtn) nextBtn.click();
-            trackStartTime = Date.now();
-          }
-        }
-      } catch (_) {
-        // Cross-origin restriction: cannot access iframe internals.
-        // EQ animation state stays as-is.
-      }
+        if (src && src !== lastSrc) { lastSrc = src; trackStartTime = Date.now(); }
+      } catch (_) {}
     }, 500);
 
-    // Start in "paused" visual state; iframe will autoplay and we update on first tick.
     bubble.classList.add('mio-paused');
   })();
 </script>
