@@ -1300,9 +1300,6 @@
     return langFromBrowser();
   }
 
-  const directDownloadUrl = '';
-  const downloadsPageUrl = '';
-
   document.getElementById('lang-switcher').addEventListener('change', (event) => {
     applyLanguage(event.target.value);
   });
@@ -1311,6 +1308,7 @@
 
   const directDownloadLink = document.getElementById('download-direct-link');
   const directDownloadText = document.getElementById('download-button-text');
+  const directDownloadUrl = directDownloadLink ? (directDownloadLink.getAttribute('href') || '') : '';
   if (directDownloadLink && directDownloadText) {
     directDownloadLink.addEventListener('click', (event) => {
       event.preventDefault();
@@ -1342,6 +1340,7 @@
 
   const releaseDownloadLink = document.getElementById('download-releases-link');
   const releaseDownloadText = document.getElementById('download-releases-text');
+  const downloadsPageUrl = releaseDownloadLink ? (releaseDownloadLink.getAttribute('href') || '') : '';
   if (releaseDownloadLink && releaseDownloadText) {
     releaseDownloadLink.addEventListener('click', (event) => {
       event.preventDefault();
