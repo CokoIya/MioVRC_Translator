@@ -4,47 +4,48 @@
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
 
-> A local real-time voice translation tool for VRChat users  
-> Author: `ここ_Mio` / Open-source project / Paid redistribution is prohibited
-
-## Version
-
-- Desktop release: `v1.2.1`
-- GitHub Releases lite installer: `v1.2.1_release`
+> A local real-time translation tool for VRChat users  
+> Author: `ここ_Mio` / Open-source project / No paid redistribution  
+> Official website: `https://78hejiu.top`
 
 ## Overview
 
-**Mio RealTime Translator** is a local real-time voice translation tool for VRChat. Its current core pipeline is:
+**Mio RealTime Translator** is a desktop translation tool built for VRChat. It mainly focuses on two use cases:
 
-- Local speech recognition: `SenseVoice Small`
-- Translation services: `GPT` / `DeepSeek` / `GLM` / `Qwen` / `Claude`
-- VRChat communication: `OSC`
+- Translate your own speech and send it to the `VRChat Chatbox`
+- Reverse-translate speech you hear in VRChat so it is easier to understand and verify
 
-## Features
+Current main pipelines:
 
-- Recognizes microphone input locally and sends the result to the VRChat chatbox
-- Built-in manual translation panel for typing and sending text to VRC
-- Multiple output formats such as `Translation (Original)`, `Translation only`, `Original only`, and `Original (Translation)`
-- Built-in preset model lists for each translation service, with speed, quality, and plugin-fit notes
-- Adjustable denoise strength, VAD silence threshold, and streaming recognition parameters
-- More compact desktop UI for the main window and settings window, with unified popup positioning and icons
-- UI language switching
+- Microphone translation: `Microphone -> ASR -> Translation -> VRChat Chatbox`
+- Reverse translation: `VRChat audio -> ASR -> Translation -> Chatbox / Floating display`
 
 ## Download
 
-### GitHub Releases
+- Official download site: `https://78hejiu.top`
+- Stable builds, beta builds, and all future updates are distributed through the official website
+- This repository no longer provides GitHub Releases special builds or synced binary packages
+- GitHub is now mainly used for source code, issue tracking, and development history
 
-You can download the latest Windows build from [Releases](https://github.com/CokoIya/MioVRC_Translator/releases).
+## Highlights
 
-The lite release **does not bundle the SenseVoice Small model**. If the model is missing on first launch, the app downloads it automatically and shows progress in the bottom status area.
+- Local speech recognition and live translation
+- Send translated text to the `VRChat Chatbox`
+- Reverse translation by listening to VRChat playback audio
+- Built-in manual text translation panel
+- Multiple chatbox output formats
+- Multilingual UI
+- ASR dictionary, self-voice suppression, denoise, VAD, and recognition tuning
+- `Avatar / OSC` parameter sync
+- Optional floating window display
 
-### Full Offline Package
+## Requirements
 
-- QQ Group 1: `1077205718`
-- QQ Group 2: `756274989`
-- Baidu Netdisk: `https://pan.baidu.com/s/1HIdfd7tV3o1t845FKpu40g?pwd=0601`
+- Recommended OS: `Windows 10 / 11`
+- Reverse translation relies on `Windows WASAPI Loopback`
+- If the model is missing locally, `SenseVoice Small` will be downloaded automatically on first launch
 
-## Quick Start
+## Run From Source
 
 ```bash
 pip install -r requirements.txt
@@ -57,55 +58,30 @@ To download the model in advance:
 python download_models.py
 ```
 
-SenseVoice Small will also be downloaded automatically on first launch. To override the model cache directory:
+To override the model cache directory:
 
 ```powershell
 $env:MODELSCOPE_CACHE = "./models"
 ```
 
-## Configuration
+## First-Time Setup
 
 1. Copy `config.example.json` to `config.json`
 2. Launch the app and open `Settings`
-3. Choose a translation service and fill in the corresponding `API Key`
-4. Adjust microphone, denoise, VAD, target language, and output format as needed
-5. Enable OSC in VRChat: `Action Menu -> Options -> OSC -> Enable`
-
-## Build
-
-### Releases Lite Build
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_release_lite.ps1
-```
-
-### Releases Lite Installer
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build_release_lite_installer.ps1
-```
+3. Choose a translation service and enter the corresponding `API Key`
+4. Set your target language, output format, microphone, and reverse-translation options as needed
+5. Enable `OSC` in VRChat  
+   `Action Menu -> Options -> OSC -> Enable`
 
 ## Privacy
 
-- This project does not collect user data
+- The project does not collect user data
 - It does not store chat logs
-- Chatbox messages are discarded immediately after sending
-- The project does not operate its own cloud service
-- Only when a cloud translation service is enabled will the current text be sent to the API endpoint you configured
+- Chatbox text is not kept after sending
+- Only when you enable a cloud translation service will the current text be sent to the API provider you configured
 
-## Tech Stack
+## Notes
 
-| Module | Technology |
-| --- | --- |
-| UI | CustomTkinter |
-| Audio Input | sounddevice |
-| VAD | webrtcvad |
-| ASR | FunASR / SenseVoice Small |
-| Translation | OpenAI SDK / Anthropic SDK / OpenAI Compatible API |
-| VRChat Communication | python-osc |
-
-## Known Limitations
-
-- Native VRChat OSC does not expose other players' chat text or raw audio, so the current version only handles your own microphone input and manual text input
-- A single VRChat chatbox message is limited to about 144 characters
-- In noisy environments, false triggers may still happen, so denoise and VAD settings may need manual tuning
+- Native VRChat OSC does not expose other players' raw chat text
+- Reverse translation depends on loopback capture from your local playback device, so system audio routing matters
+- VRChat Chatbox has rate limits and per-message length limits
