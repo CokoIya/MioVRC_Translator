@@ -3,10 +3,13 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
+[![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+
+**官网下载安装：<https://78hejiu.top>**
 
 > 面向 VRChat 用户的本地实时语音翻译工具  
 > 作者：`ここ_Mio` / 开源项目 / 禁止收费分发  
-> 官网：`https://78hejiu.top`
+> 下载官网：<https://78hejiu.top>
 
 ## 简介
 
@@ -22,7 +25,7 @@
 
 ## 下载
 
-- 官方下载站：`https://78hejiu.top`
+- 官方下载站：<https://78hejiu.top>
 - 稳定版、beta 测试版，以及未来所有更新，统一在官网提供下载
 - 本仓库不再提供 GitHub Releases 特供版，也不再同步二进制安装包
 - GitHub 仓库主要用于源代码、问题反馈和开发记录

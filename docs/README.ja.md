@@ -3,10 +3,13 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
+[![安定版 / Beta ダウンロード](https://img.shields.io/badge/安定版%20%2F%20Beta%20ダウンロード-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+
+**公式ダウンロード: <https://78hejiu.top>**
 
 > VRChat 向けのローカルリアルタイム翻訳ツール  
 > 作者: `ここ_Mio` / オープンソース / 有料再配布禁止  
-> 公式サイト: `https://78hejiu.top`
+> ダウンロード先: <https://78hejiu.top>
 
 ## 概要
 
@@ -22,7 +25,7 @@
 
 ## ダウンロード
 
-- 公式ダウンロード先: `https://78hejiu.top`
+- 公式ダウンロード先: <https://78hejiu.top>
 - 安定版、beta 版、今後のすべての更新は公式サイトで配布します
 - このリポジトリでは GitHub Releases 特別版やバイナリ配布を今後行いません
 - GitHub は主にソースコード、Issue、開発履歴の公開に使います

@@ -3,10 +3,13 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
+[![Stable / Beta Download](https://img.shields.io/badge/Stable%20%2F%20Beta%20Download-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+
+**Official download: <https://78hejiu.top>**
 
 > A local real-time translation tool for VRChat users  
 > Author: `ここ_Mio` / Open-source project / No paid redistribution  
-> Official website: `https://78hejiu.top`
+> Download site: <https://78hejiu.top>
 
 ## Overview
 
@@ -22,7 +25,7 @@ Current main pipelines:
 
 ## Download
 
-- Official download site: `https://78hejiu.top`
+- Official download site: <https://78hejiu.top>
 - Stable builds, beta builds, and all future updates are distributed through the official website
 - This repository no longer provides GitHub Releases special builds or synced binary packages
 - GitHub is now mainly used for source code, issue tracking, and development history
