@@ -24,7 +24,7 @@ class VADDetector:
         self.vad = webrtcvad.Vad(sensitivity)
         self.sample_rate = sample_rate
         self.frame_duration_ms = frame_duration_ms
-        self.frame_bytes = int(sample_rate * frame_duration_ms / 1000) * 2  # 16ビット
+        self.frame_bytes = int(sample_rate * frame_duration_ms / 1000) * 2  # int16，每样本 2 字节
 
         activation_frames = max(1, int(activation_threshold_s * 1000 / frame_duration_ms))
         self._activation_window = collections.deque(maxlen=activation_frames)
@@ -50,6 +50,7 @@ class VADDetector:
 
         if self.in_speech:
             self._speech_frames += 1
+            # 超出最大时长则强制结束，防止无结尾的长段把队列撑死
             if (
                 self._max_speech_frames is not None
                 and self._speech_frames >= self._max_speech_frames
@@ -64,6 +65,7 @@ class VADDetector:
                     self._finish_speech()
             return self.in_speech
 
+        # 滑动窗口内有声帧比例超过阈值才触发语音开始，抗误触
         ratio = sum(self._activation_window) / len(self._activation_window)
         if (
             len(self._activation_window) == self._activation_window.maxlen

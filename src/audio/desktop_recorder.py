@@ -49,8 +49,7 @@ def list_output_devices() -> list[dict[str, object]]:
     except Exception:
         pass
 
-    # Fallback to PortAudio device enumeration so we can still surface the
-    # active output device names even if SoundCard enumeration is incomplete.
+    # SoundCard 枚举不全时用 PortAudio 兜底，补漏掉的输出设备
     for device in _sounddevice_output_devices():
         name = str(device.get("name", "")).strip()
         if not name or name in seen:
@@ -174,9 +173,7 @@ class DesktopAudioRecorder(AudioRecorder):
             microphone = self._resolve_loopback_microphone(sc)
         blocksize = max(int(self.sample_rate * self.frame_duration_ms / 1000), 1)
 
-        # On Windows, system-output loopback captures the selected output
-        # device itself, so browser audio, players, and any other app routed
-        # to that same speaker are all included.
+        # Windows 下录的是选中扬声器的回环，浏览器、播放器等走同一设备的音都会进来
         try:
             with microphone.recorder(
                 samplerate=self.sample_rate,

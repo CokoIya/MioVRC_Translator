@@ -19,6 +19,7 @@ def _example_path() -> Path:
 
 
 def _merge_defaults(defaults, current):
+    # 递归合并：用户值优先，example 里有但用户没配的键用默认值补上
     if isinstance(defaults, dict):
         node = current if isinstance(current, dict) else {}
         merged = {key: _merge_defaults(value, node.get(key)) for key, value in defaults.items()}
@@ -50,7 +51,11 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     defaults = {
         "enabled": False,
         "loopback_device": None,
+        "source_language": "auto",
         "target_language": "zh",
+        "self_suppress": False,
+        "self_suppress_seconds": 0.65,
+        "show_overlay": False,
     }
 
     for key, value in defaults.items():
@@ -70,8 +75,24 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if vrc_cfg.get("loopback_device") == "":
         vrc_cfg["loopback_device"] = None
         changed = True
+    if not str(vrc_cfg.get("source_language", "")).strip():
+        vrc_cfg["source_language"] = "auto"
+        changed = True
     if not str(vrc_cfg.get("target_language", "")).strip():
         vrc_cfg["target_language"] = "zh"
+        changed = True
+    if "self_suppress" not in vrc_cfg:
+        vrc_cfg["self_suppress"] = False
+        changed = True
+    try:
+        suppress_seconds = float(vrc_cfg.get("self_suppress_seconds", 0.65))
+        if suppress_seconds <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        vrc_cfg["self_suppress_seconds"] = 0.65
+        changed = True
+    if "show_overlay" not in vrc_cfg:
+        vrc_cfg["show_overlay"] = False
         changed = True
     return changed
 

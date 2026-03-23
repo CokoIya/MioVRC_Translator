@@ -71,6 +71,7 @@ class VRCOSCSender:
         except queue.Full:
             pass
 
+        # 队列满时丢掉最旧的一条再重试，保证最新消息能进去
         try:
             self._queue.get_nowait()
         except queue.Empty:

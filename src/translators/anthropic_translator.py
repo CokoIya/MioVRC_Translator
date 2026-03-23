@@ -17,7 +17,7 @@ class AnthropicTranslator(BaseTranslator):
             import anthropic
         except ImportError:
             raise RuntimeError(
-                "anthropic がインストールされていません。実行してください: pip install anthropic"
+                "anthropic 未安装，请先执行: pip install anthropic"
             )
         self._client = anthropic.Anthropic(api_key=api_key, timeout=timeout_s)
         self.model = model

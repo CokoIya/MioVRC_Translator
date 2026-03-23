@@ -6,6 +6,11 @@ import numpy as np
 
 
 class ChunkStreamer:
+    """按固定间隔从滑动窗口吐出 partial ASR chunk。
+
+    有语音活动时每隔 chunk_interval_ms 输出一段最近 chunk_window_s 的音频，
+    静音超过 recent_speech_hold_s 后停止输出并等下次激活。
+    """
 
     def __init__(
         self,
@@ -48,11 +53,13 @@ class ChunkStreamer:
 
         self._trim_buffer()
         if not self._is_recently_active():
+            # 静音太久，重置发射锚点，下次激活时重新触发首帧
             self._last_emit_sample = 0
             return []
 
         emitted: list[np.ndarray] = []
         if self._last_emit_sample == 0:
+            # 首次发射：等缓冲够一个完整窗口再开始
             if self._buffered_samples < self._window_samples:
                 return []
             emitted.append(self._slice_last(self._window_samples))

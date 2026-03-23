@@ -114,17 +114,39 @@ class AudioRecorder:
     def _open_stream(self, device, extra_settings=None) -> sd.InputStream:
         try:
             dev_idx = device if device is not None else sd.default.device[0]
-            native_rate = int(sd.query_devices(dev_idx)["default_samplerate"])
+            device_info = sd.query_devices(dev_idx)
+            native_rate = int(device_info["default_samplerate"])
+            max_input_channels = int(device_info.get("max_input_channels", 0))
+            max_output_channels = int(device_info.get("max_output_channels", 0))
         except Exception:
+            device_info = {}
             native_rate = 48000
+            max_input_channels = 1
+            max_output_channels = 2
 
-        candidates = [
-            (self.sample_rate, 1, "int16"),
-            (native_rate, 1, "int16"),
-            (native_rate, 2, "int16"),
-            (native_rate, 1, "float32"),
-            (native_rate, 2, "float32"),
+        loopback_enabled = extra_settings is not None
+        available_channels = max_input_channels
+        if loopback_enabled and max_output_channels > 0:
+            available_channels = max(available_channels, max_output_channels)
+        if available_channels <= 0:
+            available_channels = 2 if loopback_enabled else 1
+
+        preferred_channels = [2, 1] if loopback_enabled else [1, 2]
+        channel_candidates = [
+            channels
+            for channels in preferred_channels
+            if 0 < channels <= available_channels
         ]
+        if not channel_candidates:
+            channel_candidates = [max(available_channels, 1)]
+
+        candidates = []
+        for rate in (self.sample_rate, native_rate):
+            for channels in channel_candidates:
+                candidates.append((rate, channels, "int16"))
+        for rate in (native_rate,):
+            for channels in channel_candidates:
+                candidates.append((rate, channels, "float32"))
         deduped: list[tuple[int, int, str]] = []
         for candidate in candidates:
             if candidate not in deduped:
@@ -224,6 +246,7 @@ class AudioRecorder:
 
             if in_speech:
                 if not previous_in_speech:
+                    # 语音刚开始：把预录缓冲一起并进去，补上起始辅音
                     self._buffer = list(self._pre_speech_buffer)
                     self._pre_speech_buffer.clear()
                     self._speech_samples = normalized.size
@@ -369,43 +392,33 @@ class AudioRecorder:
             except Exception:
                 return ""
 
-        def _normalize_name(name: object) -> str:
-            normalized = str(name or "").strip().lower()
-            return " ".join(normalized.replace("[loopback]", "loopback").split())
+        try:
+            default_output_index = int(sd.default.device[1])
+            if default_output_index < 0:
+                default_output_index = -1
+        except Exception:
+            default_output_index = -1
 
-        wasapi_outputs = [
-            _normalize_name(device.get("name", ""))
-            for device in devices
-            if int(device.get("max_output_channels", 0)) > 0
-            and "WASAPI" in _hostapi_name(device).upper()
-        ]
-        explicit: list[dict] = []
-        inferred: list[dict] = []
-        seen_names: set[str] = set()
+        seen: dict[str, dict] = {}
 
         for index, device in enumerate(devices):
-            if int(device.get("max_input_channels", 0)) <= 0:
+            if int(device.get("max_output_channels", 0)) <= 0:
                 continue
             hostapi_name = _hostapi_name(device)
             if "WASAPI" not in hostapi_name.upper():
                 continue
             name = str(device.get("name", "")).strip()
-            if not name or name in seen_names:
+            if not name:
                 continue
 
-            normalized = _normalize_name(name)
-            entry = {"index": index, "name": name}
-            if "loopback" in normalized:
-                explicit.append(entry)
-                seen_names.add(name)
-                continue
+            pref = 0 if index == default_output_index else 1
+            existing = seen.get(name)
+            if existing is None or pref < existing["_pref"]:
+                seen[name] = {
+                    "index": index,
+                    "name": name,
+                    "_pref": pref,
+                }
 
-            if any(
-                output_name
-                and (normalized == output_name or normalized in output_name or output_name in normalized)
-                for output_name in wasapi_outputs
-            ):
-                inferred.append(entry)
-                seen_names.add(name)
-
-        return explicit if explicit else inferred
+        result = sorted(seen.values(), key=lambda item: (item["_pref"], item["index"]))
+        return [{"index": item["index"], "name": item["name"]} for item in result]

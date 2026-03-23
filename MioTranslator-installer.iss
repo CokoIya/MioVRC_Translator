@@ -46,6 +46,12 @@ VersionInfoProductTextVersion={#AppVersion}
 VersionInfoProductVersion={#AppNumericVersion}
 VersionInfoTextVersion={#AppVersion}
 VersionInfoVersion={#AppNumericVersion}
+#ifdef SignPfx
+#if SignPfx != ""
+SignTool=signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f "{#SignPfx}" /p "{#SignPass}" $f
+SignedUninstaller=yes
+#endif
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

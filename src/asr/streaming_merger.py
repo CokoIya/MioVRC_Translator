@@ -17,6 +17,11 @@ def _common_prefix(left: str, right: str) -> str:
 
 
 class StreamingMerger:
+    """流式 ASR 结果合并器。
+
+    连续多帧 partial 结果的公共前缀如果稳定出现 stable_repeats 次，
+    就把它锁定为稳定前缀，避免 partial 乱跳时回退到更短的文本。
+    """
 
     def __init__(self, stable_repeats: int = 2):
         self._stable_repeats = max(int(stable_repeats), 1)
@@ -41,6 +46,7 @@ class StreamingMerger:
 
         common = _common_prefix(self._last_partial, normalized)
         if len(common) > len(self._stable_prefix):
+            # 候选前缀连续出现足够次数才晋升为稳定前缀
             if common == self._candidate_prefix:
                 self._candidate_hits += 1
             else:
@@ -54,6 +60,7 @@ class StreamingMerger:
 
         self._last_partial = normalized
         self._current_text = normalized
+        # partial 乱跳时不让显示文本短于已稳定的前缀
         if self._stable_prefix and not self._current_text.startswith(self._stable_prefix):
             self._current_text = self._stable_prefix
         return self._current_text

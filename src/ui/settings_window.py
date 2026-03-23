@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import threading
+import time
 
 import customtkinter as ctk
 from tkinter import messagebox
@@ -19,6 +20,7 @@ from src.utils.ui_config import (
     get_backend_model_hint,
     get_backend_model_options,
     get_backend_model_profile,
+    get_manual_source_language_options,
     get_target_language_options,
     get_backend_value,
     get_ui_language,
@@ -47,6 +49,8 @@ SETTINGS_TEXT_WRAP = 410
 SETTINGS_HINT_WRAP = 390
 SETTINGS_MODEL_WRAP = 370
 SETTINGS_ASR_MENU_WIDTH = 340
+SECTION_ANIMATION_INTERVAL_MS = 16
+SECTION_ANIMATION_DURATION_MS = 220
 
 ASR_ENGINES = [("SenseVoice Small", DEFAULT_ASR_ENGINE)]
 DENOISE_PRESET_VALUES = (
@@ -157,57 +161,57 @@ ROLEPLAY_PRESETS: dict[str, dict[str, object]] = {
 
 WINDOW_COPY = {
     "header_title": {
-        "zh-CN": "插件设置",
+        "zh-CN": "设置",
         "en": "Plugin Settings",
         "ja": "プラグイン設定",
     },
     "header_subtitle": {
-        "zh-CN": "针对实时翻译做了默认整理，优先照顾延迟、稳定性和普通用户的可用性。",
+        "zh-CN": "常用的放前面，不懂的先别改。",
         "en": "Curated for live translation with an emphasis on low latency, stability, and simple defaults.",
         "ja": "リアルタイム翻訳向けに、遅延と安定性、使いやすさを優先して整理しています。",
     },
     "translation_section": {
-        "zh-CN": "翻译",
+        "zh-CN": "常用",
         "en": "Translation",
         "ja": "翻訳",
     },
     "translation_subtitle": {
-        "zh-CN": "这里决定翻译后端、目标语言和模型。模型说明会直接告诉你速度和是否适合插件实时翻译。",
+        "zh-CN": "先在这里改界面语言、AI 服务和发出去的样式。",
         "en": "Choose the backend, target language, and model here. The model notes call out speed and live-plugin suitability.",
         "ja": "翻訳バックエンド、対象言語、モデルをここで設定します。モデルの説明には速度とリアルタイム向きかどうかを表示します。",
     },
     "translation_provider": {
-        "zh-CN": "翻译服务",
+        "zh-CN": "AI 服务",
         "en": "Translation Service",
         "ja": "翻訳サービス",
     },
     "translation_provider_subtitle": {
-        "zh-CN": "这里决定翻译服务、目标语言和模型。模型说明会直接告诉你速度和是否适合插件实时翻译。",
+        "zh-CN": "先选语言和 AI。大多数人只用改这一块。",
         "en": "Choose the translation service, target language, and model here. The model notes call out speed and live-plugin suitability.",
         "ja": "翻訳サービス、対象言語、モデルをここで設定します。モデルの説明には速度とリアルタイム向きかどうかを表示します。",
     },
     "translation_provider_params": {
-        "zh-CN": "服务参数",
+        "zh-CN": "API 设置",
         "en": "Service Settings",
         "ja": "サービス設定",
     },
     "translation_lock_on": {
-        "zh-CN": "仅原文模式下不会调用翻译 API，服务和 API Key 已锁定。",
+        "zh-CN": "现在是“仅原文”，不会调用 AI，下面这些先不用填。",
         "en": "Original-only mode skips translation calls, so the service and API key are locked.",
         "ja": "原文のみモードでは翻訳 API を使わないため、サービスと API Key は固定されます。",
     },
     "voice_section": {
-        "zh-CN": "语音输入",
+        "zh-CN": "麦克风识别",
         "en": "Speech Input",
         "ja": "音声入力",
     },
     "voice_subtitle": {
-        "zh-CN": "这些参数影响实时监听的响应速度、句尾切分和杂音抑制。",
+        "zh-CN": "一般不用动。识别不稳、环境太吵时再来这里调。",
         "en": "These controls affect live-listening responsiveness, sentence splitting, and noise suppression.",
         "ja": "これらの設定は、リアルタイム音声入力の反応速度、文末判定、ノイズ抑制に影響します。",
     },
     "model_title": {
-        "zh-CN": "模型说明",
+        "zh-CN": "模型",
         "en": "Model Notes",
         "ja": "モデル情報",
     },
@@ -341,27 +345,27 @@ WINDOW_COPY = {
 WINDOW_COPY.update(
     {
         "rp_section": {
-            "zh-CN": "RP 模式",
+            "zh-CN": "说话风格",
             "en": "RP Mode",
             "ja": "RP モード",
         },
         "rp_subtitle": {
-            "zh-CN": "放在最后的可选玩法功能。启用后会使用预设或自定义人设影响翻译口吻。",
+            "zh-CN": "想让翻译更像某种角色说话时再开，不需要就别动。",
             "en": "An optional feature placed at the end. When enabled, translation follows the selected or custom roleplay persona.",
             "ja": "最後に置いた任意機能です。有効にすると、選んだ人設または自定义人設で翻訳口調を調整します。",
         },
         "rp_enabled": {
-            "zh-CN": "启用 RP 人设",
+            "zh-CN": "开启角色说话风格",
             "en": "Enable RP Persona",
             "ja": "RP 人設を有効化",
         },
         "rp_preset": {
-            "zh-CN": "人设预设",
+            "zh-CN": "预设风格",
             "en": "Persona Preset",
             "ja": "人設プリセット",
         },
         "rp_hint": {
-            "zh-CN": "选择预设会自动填入下方字段；你也可以继续手动改成自己的设定。",
+            "zh-CN": "选一个风格就行。下面那些看不懂可以先不改。",
             "en": "Selecting a preset auto-fills the fields below, and you can still edit them into your own persona.",
             "ja": "プリセットを選ぶと下の項目が自動入力されます。その後に自分用へ編集しても構いません。",
         },
@@ -401,52 +405,82 @@ WINDOW_COPY.update(
             "ja": "既定の出力デバイス",
         },
         "vrc_listen_section": {
-            "zh-CN": "监听 VRC 音频",
+            "zh-CN": "反向翻译",
             "en": "VRC Listen",
             "ja": "VRC 音声リスン",
         },
         "vrc_listen_subtitle": {
-            "zh-CN": "使用 Windows WASAPI Loopback 捕获 VRChat 所在输出设备的声音，并单独翻译到指定语言。",
-            "en": "Capture VRChat audio with Windows WASAPI loopback and translate it with an independent target language.",
-            "ja": "Windows WASAPI ループバックで VRChat の出力音声を取り込み、別の対象言語へ翻訳します。",
+            "zh-CN": "让程序听 VRChat 里的声音，再翻译给你看。",
+            "en": "The app will try to find the playback device used by VRChat automatically and translate it into the language you choose.",
+            "ja": "通常は VRChat が使っている再生デバイスを自動で見つけて、選んだ言語に翻訳します。",
         },
         "vrc_listen_enabled": {
-            "zh-CN": "启用监听 VRC 音频",
+            "zh-CN": "开启反向翻译",
             "en": "Enable VRC Listen",
             "ja": "VRC 音声リスンを有効化",
         },
         "vrc_listen_device": {
-            "zh-CN": "回环设备",
-            "en": "Loopback Device",
-            "ja": "ループバックデバイス",
+            "zh-CN": "播放设备",
+            "en": "Playback Device",
+            "ja": "再生デバイス",
         },
         "vrc_listen_device_default": {
-            "zh-CN": "未选择",
-            "en": "Not Selected",
-            "ja": "未選択",
+            "zh-CN": "自动检测（推荐）",
+            "en": "Auto Detect (Recommended)",
+            "ja": "自動検出（推奨）",
         },
         "vrc_listen_device_missing": {
-            "zh-CN": "未找到 WASAPI 回环设备",
-            "en": "No WASAPI loopback devices found",
-            "ja": "WASAPI ループバックデバイスが見つかりません",
+            "zh-CN": "没有找到可用的播放设备",
+            "en": "No playback devices found",
+            "ja": "使える再生デバイスが見つかりません",
         },
         "vrc_listen_device_hint": {
-            "zh-CN": "只会列出 Windows WASAPI loopback 采集设备。未选择或当前系统没有可用设备时，这条监听管道不会启动。",
-            "en": "Only Windows WASAPI loopback capture devices are shown here. If none is selected, the VRC listen pipeline stays idle.",
-            "ja": "ここには Windows WASAPI のループバック収録デバイスだけを表示します。未選択または利用可能なデバイスがない場合、この音声リスン経路は起動しません。",
+            "zh-CN": "一般不用改。默认会自己找 VRChat 正在用的耳机或音箱。",
+            "en": "By default, the app will try to find the device currently used by VRChat. If it can't, it falls back to your current default playback device. You can also choose a headset or speaker manually.",
+            "ja": "通常は VRChat が今使っているデバイスを自動で探します。見つからない場合は、現在の既定の再生デバイスを使います。必要なら手動でヘッドセットやスピーカーを選べます。",
         },
         "vrc_listen_target_language": {
-            "zh-CN": "监听目标语言",
-            "en": "Listen Target Language",
-            "ja": "リスン対象言語",
+            "zh-CN": "翻成什么语言",
+            "en": "Translate To",
+            "ja": "翻訳先",
+        },
+        "vrc_listen_source_language": {
+            "zh-CN": "对方在说什么语言",
+            "en": "Speaker Language",
+            "ja": "相手の言語",
+        },
+        "vrc_listen_source_language_hint": {
+            "zh-CN": "自动识别老出错时，就在这里固定成中文、日语、英语这些。",
+            "en": "If auto detection is often wrong, choose a fixed language here such as Chinese, Japanese, or English.",
+            "ja": "自動判定が不安定な場合は、ここで中国語、日本語、英語などに固定できます。",
+        },
+        "vrc_listen_self_suppress": {
+            "zh-CN": "开启自声抑制",
+            "en": "Enable Self Suppression",
+            "ja": "自声抑制を有効化",
+        },
+        "vrc_listen_self_suppress_hint": {
+            "zh-CN": "如果你开了变声器、麦克风监听，或者反向翻译会把自己的原话也识别进去，建议打开这个选项。",
+            "en": "Turn this on if a voice changer, mic monitoring, or reverse translation is picking up your own voice.",
+            "ja": "ボイスチェンジャーやマイクモニターの影響で自分の声まで拾う場合は、この項目をオンにしてください。",
+        },
+        "vrc_listen_self_suppress_seconds": {
+            "zh-CN": "抑制时长（秒）",
+            "en": "Suppression Time (sec)",
+            "ja": "抑制時間（秒）",
+        },
+        "vrc_listen_self_suppress_seconds_hint": {
+            "zh-CN": "默认 0.65 秒。开了变声器、麦克风监听，或者反向翻译会把自己的原话一起识别进去时，可以适当调大一点；太大则可能把别人刚开口的内容也一起跳过。",
+            "en": "Default: 0.65 seconds. Increase this if a voice changer, mic monitoring, or reverse translation is still picking up your own voice. If it's too large, the start of other people's speech may also be skipped.",
+            "ja": "初期値は 0.65 秒です。ボイスチェンジャーやマイクモニターの影響で自分の声をまだ拾う場合は少し大きくしてください。大きすぎると、相手が話し始めた直後の音声まで飛ばすことがあります。",
         },
         "avatar_section": {
-            "zh-CN": "Avatar / OSC",
+            "zh-CN": "Avatar 同步",
             "en": "Avatar / OSC",
             "ja": "Avatar / OSC",
         },
         "avatar_subtitle": {
-            "zh-CN": "把翻译状态同步到 VRChat Avatar 参数。目标语言会以整数参数发送。",
+            "zh-CN": "把翻译状态发给 Avatar。用不到就不用改。",
             "en": "Sync translation state to VRChat avatar parameters. Target language is sent as an integer parameter.",
             "ja": "翻訳状態を VRChat の Avatar パラメータへ同期します。対象言語は整数パラメータで送信します。",
         },
@@ -480,7 +514,277 @@ WINDOW_COPY.update(
             "en": "Target Language Param",
             "ja": "対象言語パラメータ",
         },
+        "settings_app_language": {
+            "zh-CN": "界面语言",
+            "en": "Interface Language",
+            "ja": "表示言語",
+        },
+        "settings_target_language": {
+            "zh-CN": "你想翻成什么语言",
+            "en": "Target Language",
+            "ja": "翻訳したい言語",
+        },
+        "settings_output_format": {
+            "zh-CN": "发到聊天框的样式",
+            "en": "Chatbox Style",
+            "ja": "チャット欄の表示",
+        },
+        "settings_output_format_hint": {
+            "zh-CN": "译文（原文）：先发译文，后面带原文\n仅译文：只发翻译结果\n仅原文：不走 AI 翻译，只发原文\n原文（译文）：先发原文，后面带译文",
+            "en": "Translation (Original): translated text first, original after it\nTranslation only: only translated text\nOriginal only: no AI translation, send original only\nOriginal (Translation): original text first, translation after it",
+            "ja": "訳文（原文）：訳文のあとに原文\n訳文のみ：訳文だけ\n原文のみ：AI 翻訳なしで原文だけ\n原文（訳文）：原文のあとに訳文",
+        },
+        "settings_asr_backend": {
+            "zh-CN": "语音模型",
+            "en": "Speech Model",
+            "ja": "音声モデル",
+        },
+        "settings_asr_hint": {
+            "zh-CN": "一般不用改，这个版本固定用这一套。",
+            "en": "You usually don't need to change this in this build.",
+            "ja": "このバージョンでは基本そのままで大丈夫です。",
+        },
+        "settings_streaming": {
+            "zh-CN": "识别速度",
+            "en": "Recognition Speed",
+            "ja": "認識スピード",
+        },
+        "settings_partial_refresh_interval": {
+            "zh-CN": "刷新间隔（毫秒）",
+            "en": "Refresh Interval (ms)",
+            "ja": "更新間隔（ms）",
+        },
+        "settings_recognition_window_length": {
+            "zh-CN": "识别窗口（秒）",
+            "en": "Recognition Window (s)",
+            "ja": "認識ウィンドウ（秒）",
+        },
+        "settings_partial_hits": {
+            "zh-CN": "稳定后再显示次数",
+            "en": "Stable Hits",
+            "ja": "安定判定回数",
+        },
+        "settings_streaming_hint": {
+            "zh-CN": "想更快出字就把刷新间隔调小一点；电脑压力会更大。看不懂就保持默认。",
+            "en": "Lower values update text faster, but use more CPU. If unsure, keep the default.",
+            "ja": "小さくすると文字は早く出ますが、PC 負荷は上がります。迷ったら初期値のままで大丈夫です。",
+        },
+        "settings_vad": {
+            "zh-CN": "停顿判定",
+            "en": "Pause Detection",
+            "ja": "無音判定",
+        },
+        "settings_vad_seconds": {
+            "zh-CN": "停多久算一句说完（秒）",
+            "en": "Silence Before Sentence End (s)",
+            "ja": "何秒止まったら一区切りか",
+        },
+        "settings_dictionary": {
+            "zh-CN": "识别纠错词典",
+            "en": "Correction Dictionary",
+            "ja": "補正辞書",
+        },
+        "settings_dictionary_hint": {
+            "zh-CN": "只用来修正语音识别错字。平时不会联网，只有你点更新时才会下载官方词典。",
+            "en": "Only used to fix speech-to-text mistakes. It stays offline until you click update.",
+            "ja": "音声認識の誤字修正用です。更新ボタンを押した時だけオンライン取得します。",
+        },
+        "settings_dictionary_update": {
+            "zh-CN": "更新词典",
+            "en": "Update Dictionary",
+            "ja": "辞書を更新",
+        },
     }
+)
+
+
+def _extend_window_copy_language(language: str, entries: dict[str, str]) -> None:
+    for key, text in entries.items():
+        WINDOW_COPY.setdefault(key, {})[language] = text
+
+
+_extend_window_copy_language(
+    "ru",
+    {
+        "header_title": "Настройки",
+        "header_subtitle": "Сверху только самое нужное. Если не уверены, лучше не менять.",
+        "translation_section": "Основное",
+        "translation_subtitle": "Здесь меняются язык интерфейса, AI-сервис и вид отправки в чат.",
+        "translation_provider": "AI сервис",
+        "translation_provider_subtitle": "Сначала выберите язык и AI. Большинству людей хватает только этого блока.",
+        "translation_provider_params": "API настройки",
+        "translation_lock_on": "Сейчас выбран режим «только оригинал», AI не вызывается, поля ниже можно не заполнять.",
+        "voice_section": "Микрофон",
+        "voice_subtitle": "Обычно это трогать не нужно. Возвращайтесь сюда только если распознавание нестабильно или вокруг шумно.",
+        "model_title": "Модель",
+        "speed": "Скорость",
+        "quality": "Качество",
+        "fit": "Совет",
+        "very_fast": "Очень быстро",
+        "fast": "Быстро",
+        "balanced": "Баланс",
+        "slow": "Медленно",
+        "basic": "Базовое",
+        "high": "Высокое",
+        "recommended": "Рекомендуется",
+        "very_recommended": "Очень рекомендуется",
+        "general": "Обычное",
+        "conditional": "Обычное",
+        "not_recommended": "Не советуем",
+        "live_default": "Хороший вариант для долгого живого перевода: задержка и стабильность сбалансированы.",
+        "balanced_quality": "Больше упора на точность, но скорость для живого перевода обычно остается нормальной.",
+        "quality_first": "Лучше для ручного перевода или когда важнее качество. В постоянном режиме длинные фразы будут медленнее.",
+        "economy_first": "Упор на цену и скорость. Результат выходит быстро, но качество обычно ниже.",
+        "reasoning": "Модель с рассуждением. Может быть аккуратнее, но сильнее всего добавляет задержку в реальном времени.",
+        "ultra_fast": "Максимальный упор на скорость. Подходит, если важнее всего вывести перевод как можно раньше.",
+        "flash_mt": "Оптимизировано для машинного перевода и обычно лучше подходит для живого перевода в плагине.",
+        "mt_quality": "Тоже переводческая модель, но сильнее упирается в качество, чем в максимальную скорость.",
+        "legacy_mt": "Оставлено в основном для совместимости. Обычно лучше начинать с новых flash / plus моделей.",
+        "general_high_quality": "Более универсальная качественная модель. Формулировки богаче, но она обычно медленнее flash-серий.",
+        "custom": "Для этой модели нет встроенного описания. Использовать можно, но скорость и стабильность нужно проверять вручную.",
+        "rp_section": "Стиль речи",
+        "rp_subtitle": "Включайте только если хотите, чтобы перевод звучал как персонаж. Иначе лучше не трогать.",
+        "rp_enabled": "Включить стиль персонажа",
+        "rp_preset": "Готовый стиль",
+        "rp_hint": "Можно просто выбрать стиль. Если не понимаете поля ниже, оставьте как есть.",
+        "persona_name": "Имя персонажа",
+        "persona_prompt": "Описание стиля",
+        "persona_glossary": "Фразы персонажа",
+        "persona_glossary_hint": "По одной записи на строку: словечки, обращения, нежелательные замены или выражения, которые нельзя менять.",
+        "desktop_capture_device": "Устройство вывода",
+        "desktop_capture_hint": "Кнопка на главном экране использует выбранное здесь устройство для loopback-захвата. Если не выбирать, берется системное по умолчанию.",
+        "desktop_capture_default": "Системное по умолчанию",
+        "vrc_listen_section": "Обратный перевод",
+        "vrc_listen_subtitle": "Программа слушает звук из VRChat и переводит его для вас.",
+        "vrc_listen_enabled": "Включить обратный перевод",
+        "vrc_listen_device": "Устройство воспроизведения",
+        "vrc_listen_device_default": "Автоопределение (рекомендуется)",
+        "vrc_listen_device_missing": "Доступных устройств не найдено",
+        "vrc_listen_device_hint": "Обычно менять не нужно. По умолчанию программа сама ищет наушники или колонки, которые использует VRChat.",
+        "vrc_listen_target_language": "Во что переводить",
+        "vrc_listen_source_language": "На каком языке говорит собеседник",
+        "vrc_listen_source_language_hint": "Если автоопределение часто ошибается, зафиксируйте язык здесь: китайский, японский, английский и т.д.",
+        "vrc_listen_self_suppress": "Подавлять свой голос",
+        "vrc_listen_self_suppress_hint": "Включите это, если войсчейнджер, мониторинг микрофона или обратный перевод подхватывают вашу собственную речь.",
+        "vrc_listen_self_suppress_seconds": "Время подавления (сек)",
+        "vrc_listen_self_suppress_seconds_hint": "По умолчанию 0.65 сек. Увеличьте это значение, если программа все еще цепляет ваш голос. Слишком большое значение может пропускать начало чужой речи.",
+        "avatar_section": "Синхронизация Avatar",
+        "avatar_subtitle": "Отправляет состояние перевода в Avatar. Если не нужно, можно не трогать.",
+        "avatar_sync_enabled": "Включить синхронизацию Avatar",
+        "avatar_sync_hint": "Рекомендуемые параметры: MioTranslating / MioSpeaking / MioError / MioTargetLanguage",
+        "avatar_param_translating": "Параметр перевода",
+        "avatar_param_speaking": "Параметр речи",
+        "avatar_param_error": "Параметр ошибки",
+        "avatar_param_target_language": "Параметр целевого языка",
+        "settings_app_language": "Язык интерфейса",
+        "settings_target_language": "На какой язык переводить",
+        "settings_output_format": "Как отправлять в чат",
+        "settings_output_format_hint": "Перевод (Оригинал): сначала перевод, потом оригинал\nТолько перевод: отправлять только перевод\nТолько оригинал: без AI, отправлять только оригинал\nОригинал (Перевод): сначала оригинал, потом перевод",
+        "settings_asr_backend": "Речевая модель",
+        "settings_asr_hint": "Обычно менять не нужно, в этой версии используется фиксированный вариант.",
+        "settings_streaming": "Скорость распознавания",
+        "settings_partial_refresh_interval": "Интервал обновления (мс)",
+        "settings_recognition_window_length": "Окно распознавания (сек)",
+        "settings_partial_hits": "Сколько раз подтвердить перед показом",
+        "settings_streaming_hint": "Чтобы текст появлялся быстрее, уменьшите интервал обновления, но нагрузка на ПК вырастет. Если не уверены, оставьте по умолчанию.",
+        "settings_vad": "Пауза",
+        "settings_vad_seconds": "Сколько тишины считать концом фразы (сек)",
+        "settings_dictionary": "Словарь исправления",
+        "settings_dictionary_hint": "Используется только для исправления ошибок распознавания. Обычно приложение не выходит в сеть, загрузка будет только по кнопке обновления.",
+        "settings_dictionary_update": "Обновить словарь",
+    },
+)
+
+_extend_window_copy_language(
+    "ko",
+    {
+        "header_title": "설정",
+        "header_subtitle": "자주 쓰는 것만 위에 두었습니다. 잘 모르겠으면 건드리지 마세요.",
+        "translation_section": "기본",
+        "translation_subtitle": "여기서 화면 언어, AI 서비스, 채팅창으로 보낼 형식을 바꿉니다.",
+        "translation_provider": "AI 서비스",
+        "translation_provider_subtitle": "먼저 언어와 AI를 고르세요. 대부분은 이 블록만 바꾸면 됩니다.",
+        "translation_provider_params": "API 설정",
+        "translation_lock_on": "지금은 '원문만' 모드라서 AI를 호출하지 않습니다. 아래 항목은 입력하지 않아도 됩니다.",
+        "voice_section": "마이크 인식",
+        "voice_subtitle": "보통은 건드릴 필요가 없습니다. 인식이 불안정하거나 주변이 시끄러울 때만 조정하세요.",
+        "model_title": "모델",
+        "speed": "속도",
+        "quality": "품질",
+        "fit": "추천",
+        "very_fast": "매우 빠름",
+        "fast": "빠름",
+        "balanced": "균형",
+        "slow": "느림",
+        "basic": "기본",
+        "high": "높음",
+        "recommended": "추천",
+        "very_recommended": "강력 추천",
+        "general": "보통",
+        "conditional": "보통",
+        "not_recommended": "비추천",
+        "live_default": "오랜 실시간 번역에 무난한 선택입니다. 지연과 안정성의 균형이 좋습니다.",
+        "balanced_quality": "정확도 쪽에 조금 더 무게를 두지만, 실시간 번역에도 보통 충분한 속도를 유지합니다.",
+        "quality_first": "수동 번역이나 품질 우선 상황에 더 적합합니다. 계속 듣기에서는 긴 문장이 더 느리게 느껴질 수 있습니다.",
+        "economy_first": "비용과 속도를 우선합니다. 결과는 빠르지만 품질은 상위 모델보다 낮을 수 있습니다.",
+        "reasoning": "추론형 모델입니다. 더 꼼꼼할 수 있지만 실시간 번역에서는 지연이 가장 크게 늘어납니다.",
+        "ultra_fast": "속도를 최우선으로 둔 모델입니다. 번역이 최대한 빨리 뜨는 것이 중요할 때 유용합니다.",
+        "flash_mt": "기계 번역에 최적화되어 있어 일반 채팅 모델보다 실시간 번역에 더 잘 맞는 경우가 많습니다.",
+        "mt_quality": "번역 특화 모델이지만 가장 빠른 등급보다 품질에 더 무게를 둡니다.",
+        "legacy_mt": "주로 호환성 때문에 남아 있는 옵션입니다. 보통은 새로운 flash / plus 모델부터 시작하는 편이 좋습니다.",
+        "general_high_quality": "보다 범용적인 고품질 모델입니다. 표현력은 좋지만 flash 계열보다 느린 편입니다.",
+        "custom": "이 모델은 내장 설명이 없습니다. 사용할 수는 있지만 속도와 안정성은 직접 확인해야 합니다.",
+        "rp_section": "말투",
+        "rp_subtitle": "번역을 특정 캐릭터처럼 말하게 하고 싶을 때만 켜세요. 필요 없으면 건드리지 마세요.",
+        "rp_enabled": "캐릭터 말투 켜기",
+        "rp_preset": "프리셋 말투",
+        "rp_hint": "말투만 골라도 충분합니다. 아래 항목이 어렵다면 그대로 두세요.",
+        "persona_name": "캐릭터 이름",
+        "persona_prompt": "말투 설명",
+        "persona_glossary": "고정 표현",
+        "persona_glossary_hint": "한 줄에 하나씩 넣으세요. 말버릇, 호칭, 바꾸면 안 되는 표현 등을 적을 수 있습니다.",
+        "desktop_capture_device": "출력 장치",
+        "desktop_capture_hint": "메인 화면 버튼은 여기서 고른 출력 장치를 루프백 캡처에 사용합니다. 선택하지 않으면 시스템 기본 장치를 따릅니다.",
+        "desktop_capture_default": "시스템 기본 장치",
+        "vrc_listen_section": "역방향 번역",
+        "vrc_listen_subtitle": "VRChat 안의 소리를 듣고, 그 내용을 번역해서 보여 줍니다.",
+        "vrc_listen_enabled": "역방향 번역 켜기",
+        "vrc_listen_device": "재생 장치",
+        "vrc_listen_device_default": "자동 감지 (권장)",
+        "vrc_listen_device_missing": "사용 가능한 재생 장치를 찾지 못했습니다",
+        "vrc_listen_device_hint": "보통은 바꿀 필요가 없습니다. 기본적으로 VRChat이 쓰는 헤드셋이나 스피커를 자동으로 찾습니다.",
+        "vrc_listen_target_language": "어떤 언어로 번역할지",
+        "vrc_listen_source_language": "상대가 말하는 언어",
+        "vrc_listen_source_language_hint": "자동 감지가 자주 틀리면 여기서 중국어, 일본어, 영어처럼 고정하세요.",
+        "vrc_listen_self_suppress": "내 목소리 억제",
+        "vrc_listen_self_suppress_hint": "보이스체인저, 마이크 모니터링, 역방향 번역 때문에 내 목소리까지 잡힐 때 켜세요.",
+        "vrc_listen_self_suppress_seconds": "억제 시간 (초)",
+        "vrc_listen_self_suppress_seconds_hint": "기본값은 0.65초입니다. 아직도 내 목소리를 잡으면 조금 늘려 보세요. 너무 크면 다른 사람이 막 말하기 시작한 부분도 건너뛸 수 있습니다.",
+        "avatar_section": "Avatar 동기화",
+        "avatar_subtitle": "번역 상태를 Avatar로 보냅니다. 필요 없으면 건드리지 않아도 됩니다.",
+        "avatar_sync_enabled": "Avatar 동기화 켜기",
+        "avatar_sync_hint": "권장 파라미터: MioTranslating / MioSpeaking / MioError / MioTargetLanguage",
+        "avatar_param_translating": "번역 중 파라미터",
+        "avatar_param_speaking": "말하는 중 파라미터",
+        "avatar_param_error": "오류 파라미터",
+        "avatar_param_target_language": "목표 언어 파라미터",
+        "settings_app_language": "화면 언어",
+        "settings_target_language": "어떤 언어로 번역할지",
+        "settings_output_format": "채팅창에 보내는 형식",
+        "settings_output_format_hint": "번역문 (원문): 번역문을 먼저 보내고 뒤에 원문을 붙입니다\n번역문만: 번역 결과만 보냅니다\n원문만: AI 번역 없이 원문만 보냅니다\n원문 (번역문): 원문을 먼저 보내고 뒤에 번역문을 붙입니다",
+        "settings_asr_backend": "음성 모델",
+        "settings_asr_hint": "보통은 바꿀 필요가 없습니다. 이 버전에서는 이 구성을 고정으로 사용합니다.",
+        "settings_streaming": "인식 속도",
+        "settings_partial_refresh_interval": "갱신 간격 (ms)",
+        "settings_recognition_window_length": "인식 창 길이 (초)",
+        "settings_partial_hits": "안정된 뒤 보여줄 횟수",
+        "settings_streaming_hint": "글자가 더 빨리 뜨게 하려면 갱신 간격을 줄이세요. 대신 PC 부담이 커집니다. 잘 모르겠으면 기본값을 유지하세요.",
+        "settings_vad": "멈춤 판정",
+        "settings_vad_seconds": "얼마나 멈추면 한 문장이 끝난 것으로 볼지 (초)",
+        "settings_dictionary": "인식 교정 사전",
+        "settings_dictionary_hint": "음성 인식 오타를 고치는 데만 사용됩니다. 평소에는 인터넷에 연결하지 않고, 업데이트 버튼을 눌렀을 때만 공식 사전을 받습니다.",
+        "settings_dictionary_update": "사전 업데이트",
+    },
 )
 
 
@@ -540,6 +844,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._dictionary_updating = False
         self._persona_prompt_box: ctk.CTkTextbox | None = None
         self._persona_glossary_box: ctk.CTkTextbox | None = None
+        self._section_cards: list[dict[str, object]] = []
         self._build()
         self.after(0, lambda: present_popup(self, parent=parent))
 
@@ -582,7 +887,152 @@ class SettingsWindow(ctk.CTkToplevel):
             wraplength=SETTINGS_TEXT_WRAP,
         ).pack(anchor="w", padx=12, pady=(0, 12))
 
-    def _build_section_card(self, parent, title: str, subtitle: str) -> ctk.CTkFrame:
+    def _bind_section_toggle(self, state: dict[str, object], *widgets) -> None:
+        for widget in widgets:
+            widget.bind("<Button-1>", lambda _event, s=state: self._toggle_section_card(s))
+
+    @staticmethod
+    def _section_ease(progress: float) -> float:
+        progress = min(max(progress, 0.0), 1.0)
+        if progress < 0.5:
+            return 4.0 * progress * progress * progress
+        return 1.0 - pow(-2.0 * progress + 2.0, 3.0) / 2.0
+
+    def _section_content_height(
+        self,
+        state: dict[str, object],
+        *,
+        force_measure: bool = False,
+    ) -> int:
+        cached_height = int(state.get("cached_height", 0) or 0)
+        if cached_height > 0 and not force_measure:
+            return cached_height
+        content = state["content"]
+        if hasattr(content, "update_idletasks") and hasattr(content, "winfo_reqheight"):
+            content.update_idletasks()
+            cached_height = max(1, int(content.winfo_reqheight()))
+            state["cached_height"] = cached_height
+            return cached_height
+        return 1
+
+    def _apply_section_height(self, state: dict[str, object], height: int) -> None:
+        wrap = state["content_wrap"]
+        if not isinstance(wrap, ctk.CTkFrame):
+            return
+        height = max(0, int(height))
+        if int(state.get("rendered_height", -1)) == height:
+            return
+        wrap.configure(height=height)
+        state["rendered_height"] = height
+
+    def _on_section_content_configure(self, state: dict[str, object]) -> None:
+        target_height = self._section_content_height(state, force_measure=True)
+        if bool(state.get("collapsed", False)) or bool(state.get("animating", False)):
+            return
+        self._apply_section_height(state, target_height)
+
+    def _animate_section(
+        self,
+        state: dict[str, object],
+        start: int,
+        end: int,
+        collapsed: bool,
+    ) -> None:
+        start = max(0, int(start))
+        end = max(0, int(end))
+        if start == end:
+            state["animating"] = False
+            self._apply_section_height(state, end)
+            return
+
+        after_id = state.get("after_id")
+        if after_id:
+            try:
+                self.after_cancel(str(after_id))
+            except Exception:
+                pass
+        state["animating"] = True
+        state["animation_generation"] = int(state.get("animation_generation", 0)) + 1
+        generation = int(state["animation_generation"])
+        duration_s = SECTION_ANIMATION_DURATION_MS / 1000.0
+        started_at = time.perf_counter()
+        delta = end - start
+
+        def step() -> None:
+            if int(state.get("animation_generation", 0)) != generation:
+                return
+            elapsed = time.perf_counter() - started_at
+            progress = 1.0 if duration_s <= 0 else min(elapsed / duration_s, 1.0)
+            eased = self._section_ease(progress)
+            self._apply_section_height(state, round(start + delta * eased))
+            if progress >= 1.0:
+                state["after_id"] = None
+                state["animating"] = False
+                final_height = 0 if collapsed else self._section_content_height(
+                    state,
+                    force_measure=True,
+                )
+                self._apply_section_height(state, final_height)
+                return
+            state["after_id"] = self.after(SECTION_ANIMATION_INTERVAL_MS, step)
+
+        step()
+
+    def _set_section_collapsed(
+        self,
+        state: dict[str, object],
+        collapsed: bool,
+        *,
+        animate: bool,
+    ) -> None:
+        state["collapsed"] = collapsed
+        arrow = state["arrow"]
+        wrap = state["content_wrap"]
+        if isinstance(arrow, ctk.CTkLabel):
+            arrow.configure(
+                text="▸" if collapsed else "▾",
+                text_color=TEXT_MUTED if collapsed else ACCENT,
+            )
+        if not isinstance(wrap, ctk.CTkFrame):
+            return
+        target_height = 0 if collapsed else self._section_content_height(
+            state,
+            force_measure=True,
+        )
+        if not animate:
+            state["animating"] = False
+            self._apply_section_height(state, target_height)
+            return
+        current_height = int(state.get("rendered_height", wrap.winfo_height()) or 0)
+        if current_height <= 1 and collapsed:
+            current_height = self._section_content_height(state, force_measure=True)
+        self._animate_section(state, current_height, target_height, collapsed)
+
+    def _toggle_section_card(self, state: dict[str, object]) -> None:
+        self._set_section_collapsed(
+            state,
+            not bool(state.get("collapsed", False)),
+            animate=True,
+        )
+
+    def _initialize_section_cards(self) -> None:
+        self.update_idletasks()
+        for state in self._section_cards:
+            self._section_content_height(state, force_measure=True)
+            self._set_section_collapsed(
+                state,
+                bool(state.get("collapsed", False)),
+                animate=False,
+            )
+
+    def _build_section_card(
+        self,
+        parent,
+        title: str,
+        subtitle: str,
+        *,
+        collapsed: bool = False,
+    ) -> ctk.CTkFrame:
         card = ctk.CTkFrame(
             parent,
             fg_color=CARD_BG,
@@ -592,22 +1042,64 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         card.pack(padx=SETTINGS_CARD_PADX, pady=(0, 10), fill="x")
 
-        ctk.CTkLabel(
-            card,
+        header = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
+        header.pack(fill="x", padx=12, pady=(10, 0))
+
+        top_row = ctk.CTkFrame(header, fg_color="transparent", corner_radius=0)
+        top_row.pack(fill="x")
+
+        arrow = ctk.CTkLabel(
+            top_row,
+            text="▾",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=ACCENT,
+        )
+        arrow.pack(side="left", padx=(0, 8))
+
+        title_label = ctk.CTkLabel(
+            top_row,
             text=title,
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color=TEXT_PRI,
-        ).pack(anchor="w", padx=12, pady=(12, 2))
+        )
+        title_label.pack(side="left")
 
-        ctk.CTkLabel(
-            card,
+        subtitle_label = ctk.CTkLabel(
+            header,
             text=subtitle,
             font=ctk.CTkFont(size=11),
             text_color=TEXT_MUTED,
             justify="left",
             wraplength=SETTINGS_TEXT_WRAP,
-        ).pack(anchor="w", padx=12, pady=(0, 10))
-        return card
+        )
+        subtitle_label.pack(anchor="w", padx=(24, 0), pady=(2, 10))
+
+        content_wrap = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
+        content_wrap.pack(fill="x", padx=0, pady=(0, 8))
+        content_wrap.pack_propagate(False)
+        content = ctk.CTkFrame(content_wrap, fg_color="transparent", corner_radius=0)
+        content.pack(fill="x")
+
+        state = {
+            "card": card,
+            "header": header,
+            "arrow": arrow,
+            "content_wrap": content_wrap,
+            "content": content,
+            "collapsed": collapsed,
+            "after_id": None,
+            "cached_height": 1,
+            "rendered_height": -1,
+            "animating": False,
+            "animation_generation": 0,
+        }
+        self._section_cards.append(state)
+        self._bind_section_toggle(state, header, top_row, arrow, title_label, subtitle_label)
+        content.bind(
+            "<Configure>",
+            lambda _event, s=state: self._on_section_content_configure(s),
+        )
+        return content
 
     def _build_model_info_card(self, backend: str, model: str) -> None:
         card = ctk.CTkFrame(
@@ -713,8 +1205,18 @@ class SettingsWindow(ctk.CTkToplevel):
             vrc_cfg = {
                 "enabled": bool(legacy_desktop_cfg.get("enabled", False)),
                 "loopback_device": str(legacy_desktop_cfg.get("output_device", "")).strip() or None,
+                "source_language": "auto",
                 "target_language": "zh",
+                "self_suppress": False,
+                "self_suppress_seconds": 0.65,
+                "show_overlay": False,
             }
+        else:
+            vrc_cfg.setdefault("source_language", "auto")
+            vrc_cfg.setdefault("target_language", "zh")
+            vrc_cfg.setdefault("self_suppress", False)
+            vrc_cfg.setdefault("self_suppress_seconds", 0.65)
+            vrc_cfg.setdefault("show_overlay", False)
         osc_cfg = self._config.get("osc", {})
         avatar_cfg = osc_cfg.get("avatar_sync", {}) if isinstance(osc_cfg.get("avatar_sync", {}), dict) else {}
         avatar_params = avatar_cfg.get("params", {}) if isinstance(avatar_cfg.get("params", {}), dict) else {}
@@ -736,9 +1238,10 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll,
             self._ui_copy("translation_section"),
             self._ui_copy("translation_provider_subtitle"),
+            collapsed=False,
         )
 
-        section_label(translation_card, self._t("app_language"))
+        section_label(translation_card, self._ui_copy("settings_app_language"))
         ui_lang_labels = [label for label, _ in UI_LANGUAGE_OPTIONS]
         self._ui_lang_codes = {label: code for label, code in UI_LANGUAGE_OPTIONS}
         self._ui_lang_reverse = {code: label for label, code in UI_LANGUAGE_OPTIONS}
@@ -785,7 +1288,7 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._backend_menu.pack(**pad, fill="x")
 
-        section_label(translation_card, self._t("target_language"))
+        section_label(translation_card, self._ui_copy("settings_target_language"))
         target_language_options = get_target_language_options(ui_language=self._ui_lang)
         lang_labels = [label for label, _ in target_language_options]
         self._lang_codes = {label: code for label, code in target_language_options}
@@ -809,7 +1312,7 @@ class SettingsWindow(ctk.CTkToplevel):
             height=34,
         ).pack(**pad, fill="x")
 
-        section_label(translation_card, self._t("output_format"))
+        section_label(translation_card, self._ui_copy("settings_output_format"))
         format_labels = [label for label, _ in OUTPUT_FORMAT_OPTIONS]
         self._fmt_codes = {label: code for label, code in OUTPUT_FORMAT_OPTIONS}
         self._fmt_reverse = {code: label for label, code in OUTPUT_FORMAT_OPTIONS}
@@ -833,7 +1336,7 @@ class SettingsWindow(ctk.CTkToplevel):
             height=34,
         )
         self._format_menu.pack(**pad, fill="x")
-        self._build_hint_box(translation_card, self._t("output_hint"))
+        self._build_hint_box(translation_card, self._ui_copy("settings_output_format_hint"))
 
         section_label(translation_card, self._ui_copy("translation_provider_params"))
         self._fields_frame = ctk.CTkFrame(
@@ -881,9 +1384,10 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll,
             self._ui_copy("voice_section"),
             self._ui_copy("voice_subtitle"),
+            collapsed=True,
         )
 
-        section_label(voice_card, self._t("asr_backend"))
+        section_label(voice_card, self._ui_copy("settings_asr_backend"))
         asr_labels = [label for label, _ in ASR_ENGINES]
         self._asr_codes = {label: code for label, code in ASR_ENGINES}
         self._asr_reverse = {code: label for label, code in ASR_ENGINES}
@@ -911,7 +1415,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self._asr_hint_label = ctk.CTkLabel(
             self._build_hint_box(voice_card, ""),
-            text=self._t("asr_hint_sensevoice"),
+            text=self._ui_copy("settings_asr_hint"),
             font=ctk.CTkFont(size=11),
             text_color=TEXT_SEC,
             justify="left",
@@ -923,6 +1427,7 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll,
             self._ui_copy("vrc_listen_section"),
             self._ui_copy("vrc_listen_subtitle"),
+            collapsed=True,
         )
 
         self._vrc_listen_enabled_var = ctk.StringVar(
@@ -935,6 +1440,33 @@ class SettingsWindow(ctk.CTkToplevel):
             **pad,
         )
 
+        self._listen_self_suppress_var = ctk.StringVar(
+            value="1" if bool(vrc_cfg.get("self_suppress", False)) else "0"
+        )
+        self._build_switch_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_self_suppress"),
+            self._listen_self_suppress_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_self_suppress_hint"),
+        )
+        self._listen_self_suppress_seconds_var = ctk.StringVar(
+            value=str(vrc_cfg.get("self_suppress_seconds", 0.65))
+        )
+        self._build_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_self_suppress_seconds"),
+            self._listen_self_suppress_seconds_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_self_suppress_seconds_hint"),
+        )
+
         target_language_options = get_target_language_options(ui_language=self._ui_lang)
         listen_lang_labels = [label for label, _ in target_language_options]
         self._listen_lang_codes = {
@@ -942,6 +1474,16 @@ class SettingsWindow(ctk.CTkToplevel):
         }
         self._listen_lang_reverse = {
             code: label for label, code in target_language_options
+        }
+        listen_source_options = get_manual_source_language_options(
+            ui_language=self._ui_lang
+        )
+        listen_source_labels = [label for label, _ in listen_source_options]
+        self._listen_src_codes = {
+            label: code for label, code in listen_source_options
+        }
+        self._listen_src_reverse = {
+            code: label for label, code in listen_source_options
         }
 
         section_label(vrc_listen_card, self._ui_copy("vrc_listen_device"))
@@ -973,6 +1515,25 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._build_hint_box(vrc_listen_card, self._ui_copy("vrc_listen_device_hint"))
 
+        current_listen_source = str(vrc_cfg.get("source_language", "auto")).strip() or "auto"
+        self._listen_source_lang_var = ctk.StringVar(
+            value=self._listen_src_reverse.get(
+                current_listen_source,
+                listen_source_labels[0],
+            )
+        )
+        self._build_option_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_source_language"),
+            listen_source_labels,
+            self._listen_source_lang_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_source_language_hint"),
+        )
+
         current_listen_target = str(vrc_cfg.get("target_language", "zh")).strip() or "zh"
         self._listen_target_lang_var = ctk.StringVar(
             value=self._listen_lang_reverse.get(
@@ -988,7 +1549,7 @@ class SettingsWindow(ctk.CTkToplevel):
             **pad,
         )
 
-        section_label(voice_card, self._t("streaming_params"))
+        section_label(voice_card, self._ui_copy("settings_streaming"))
         self._chunk_interval_var = ctk.StringVar(
             value=str(streaming_cfg.get("chunk_interval_ms", 250))
         )
@@ -999,16 +1560,36 @@ class SettingsWindow(ctk.CTkToplevel):
             value=str(streaming_cfg.get("partial_stability_hits", 2))
         )
 
-        self._build_entry(voice_card, self._t("partial_refresh_interval"), self._chunk_interval_var, **pad)
-        self._build_entry(voice_card, self._t("recognition_window_length"), self._chunk_window_var, **pad)
-        self._build_entry(voice_card, self._t("partial_hits"), self._partial_hits_var, **pad)
-        self._build_hint_box(voice_card, self._t("streaming_hint"))
+        self._build_entry(
+            voice_card,
+            self._ui_copy("settings_partial_refresh_interval"),
+            self._chunk_interval_var,
+            **pad,
+        )
+        self._build_entry(
+            voice_card,
+            self._ui_copy("settings_recognition_window_length"),
+            self._chunk_window_var,
+            **pad,
+        )
+        self._build_entry(
+            voice_card,
+            self._ui_copy("settings_partial_hits"),
+            self._partial_hits_var,
+            **pad,
+        )
+        self._build_hint_box(voice_card, self._ui_copy("settings_streaming_hint"))
 
-        section_label(voice_card, self._t("vad_silence_threshold"))
+        section_label(voice_card, self._ui_copy("settings_vad"))
         self._vad_var = ctk.StringVar(
             value=str(audio_cfg.get("vad_silence_threshold", 0.8))
         )
-        self._build_entry(voice_card, self._t("vad_silence_label"), self._vad_var, **pad)
+        self._build_entry(
+            voice_card,
+            self._ui_copy("settings_vad_seconds"),
+            self._vad_var,
+            **pad,
+        )
 
         denoise_texts = DENOISE_PRESET_LABELS.get(
             self._ui_lang,
@@ -1041,8 +1622,8 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._build_hint_box(voice_card, denoise_texts["hint"])
 
-        section_label(voice_card, self._t("asr_dictionary"))
-        self._build_hint_box(voice_card, self._t("asr_dictionary_hint"))
+        section_label(voice_card, self._ui_copy("settings_dictionary"))
+        self._build_hint_box(voice_card, self._ui_copy("settings_dictionary_hint"))
 
         dictionary_status_box = self._build_hint_box(voice_card, "")
         self._dictionary_status_label = ctk.CTkLabel(
@@ -1060,7 +1641,7 @@ class SettingsWindow(ctk.CTkToplevel):
         dictionary_actions.pack(padx=SETTINGS_FIELD_PADX, pady=(0, 6), fill="x")
         self._dictionary_update_button = ctk.CTkButton(
             dictionary_actions,
-            text=self._t("dictionary_update"),
+            text=self._ui_copy("settings_dictionary_update"),
             fg_color=GLASS_BG,
             hover_color=GLASS_HOVER,
             border_width=1,
@@ -1076,6 +1657,7 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll,
             self._ui_copy("avatar_section"),
             self._ui_copy("avatar_subtitle"),
+            collapsed=True,
         )
 
         self._avatar_sync_enabled_var = ctk.StringVar(
@@ -1129,6 +1711,7 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll,
             self._ui_copy("rp_section"),
             self._ui_copy("rp_subtitle"),
+            collapsed=True,
         )
 
         rp_enabled = str(social_cfg.get("mode", "standard")).strip() == "roleplay"
@@ -1191,6 +1774,7 @@ class SettingsWindow(ctk.CTkToplevel):
             **pad,
         )
         self._build_hint_box(rp_card, self._ui_copy("persona_glossary_hint"))
+        self._initialize_section_cards()
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(side="bottom", fill="x", padx=SETTINGS_FIELD_PADX, pady=10)
@@ -1560,7 +2144,7 @@ class SettingsWindow(ctk.CTkToplevel):
         if self._dictionary_update_button is not None:
             self._dictionary_update_button.configure(
                 state="disabled" if updating else "normal",
-                text=self._t("dictionary_updating") if updating else self._t("dictionary_update"),
+                text=self._t("dictionary_updating") if updating else self._ui_copy("settings_dictionary_update"),
             )
 
     def _start_dictionary_update(self) -> None:
@@ -1642,19 +2226,23 @@ class SettingsWindow(ctk.CTkToplevel):
 
         try:
             vad_threshold = self._parse_positive_float(
-                self._vad_var.get(), self._t("vad_silence_label")
+                self._vad_var.get(), self._ui_copy("settings_vad_seconds")
             )
             chunk_interval_ms = self._parse_positive_int(
                 self._chunk_interval_var.get(),
-                self._t("partial_refresh_interval"),
+                self._ui_copy("settings_partial_refresh_interval"),
             )
             chunk_window_s = self._parse_positive_float(
                 self._chunk_window_var.get(),
-                self._t("recognition_window_length"),
+                self._ui_copy("settings_recognition_window_length"),
             )
             partial_hits = self._parse_positive_int(
                 self._partial_hits_var.get(),
-                self._t("partial_hits"),
+                self._ui_copy("settings_partial_hits"),
+            )
+            listen_self_suppress_seconds = self._parse_positive_float(
+                self._listen_self_suppress_seconds_var.get(),
+                self._ui_copy("vrc_listen_self_suppress_seconds"),
             )
         except ValueError as exc:
             messagebox.showerror(self._t("error_title"), str(exc))
@@ -1713,12 +2301,21 @@ class SettingsWindow(ctk.CTkToplevel):
             self._ui_copy("vrc_listen_device_missing"),
         }:
             loopback_device = ""
-        vrc_cfg["enabled"] = self._vrc_listen_enabled_var.get() == "1"
+        vrc_cfg["enabled"] = (
+            self._vrc_listen_enabled_var.get() == "1"
+            and normalize_output_format(output_format) != "original_only"
+        )
         vrc_cfg["loopback_device"] = loopback_device or None
+        vrc_cfg["source_language"] = self._listen_src_codes.get(
+            self._listen_source_lang_var.get(),
+            "auto",
+        )
         vrc_cfg["target_language"] = self._listen_lang_codes.get(
             self._listen_target_lang_var.get(),
             target_language_options[0][1],
         )
+        vrc_cfg["self_suppress"] = self._listen_self_suppress_var.get() == "1"
+        vrc_cfg["self_suppress_seconds"] = listen_self_suppress_seconds
 
         asr_cfg = cfg.setdefault("asr", {})
         asr_cfg["engine"] = asr_engine

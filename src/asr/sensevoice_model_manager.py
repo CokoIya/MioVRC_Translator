@@ -264,6 +264,7 @@ def ensure_model(
     if existing is not None:
         return existing
 
+    # 加锁后二次检查，防止多线程同时触发下载
     with _DOWNLOAD_LOCK:
         existing = _existing_model_path(model_id)
         if existing is not None:

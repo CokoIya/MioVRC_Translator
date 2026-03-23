@@ -92,7 +92,11 @@
   "vrc_listen": {
     "enabled": false,
     "loopback_device": null,
-    "target_language": "zh"
+    "source_language": "auto",
+    "target_language": "zh",
+    "self_suppress": false,
+    "self_suppress_seconds": 0.65,
+    "show_overlay": false
   },
   "osc": {
     "send_host": "127.0.0.1",
