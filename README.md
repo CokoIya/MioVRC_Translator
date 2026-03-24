@@ -1,4 +1,4 @@
-# Mio RealTime Translator
+# Mio RealTime Translator | VRChat / VRC 实时翻译工具
 
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./docs/README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
@@ -9,13 +9,15 @@
 
 ### [https://78hejiu.top/](https://78hejiu.top/)
 
-> 面向 VRChat 用户的本地实时语音翻译工具  
+> 面向 VRChat / VRC 用户的本地实时语音翻译工具、VRChat Chatbox 翻译助手  
 > 作者：`ここ_Mio` / 开源项目 / 禁止收费分发  
 > 下载官网：[https://78hejiu.top/](https://78hejiu.top/)
 
 ## 简介
 
-**Mio RealTime Translator** 是一款面向 VRChat 的桌面实时翻译工具，重点解决两类场景：
+**Mio RealTime Translator** 是一款面向 VRChat / VRC 的桌面实时翻译工具。玩家也常用 `VRC 翻译插件`、`VRChat 翻译插件`、`VRChat Chatbox 翻译`、`VRChat 语音翻译` 等关键词来搜索这类工具。
+
+它重点解决两类场景：
 
 - 自己说的话，快速翻译后发到 `VRChat Chatbox`
 - 听到别人的语音后，快速做反向翻译，方便理解和确认内容
@@ -24,6 +26,15 @@
 
 - 麦克风翻译：`麦克风 -> ASR -> 翻译 -> VRChat Chatbox`
 - 反向翻译：`VRChat 音频 -> ASR -> 翻译 -> 聊天框 / 悬浮显示`
+
+## 相关关键词
+
+以下关键词用于帮助玩家在 GitHub 搜索中更容易找到本项目：
+
+- 中文：VRC翻译插件、VRChat翻译插件、VRChat实时翻译、VRChat语音翻译、VRChat Chatbox翻译、VRChat聊天框翻译、VRChat反向翻译、VRChat字幕翻译、VRChat本地翻译工具、VRChat语音转文字翻译
+- English: VRChat translator, VRC translator, VRChat real-time translator, VRChat voice translator, VRChat speech translation, VRChat Chatbox translator, VRChat subtitle overlay, VRChat local translation tool
+- 日本語：VRChat 翻訳ツール、VRC 翻訳、VRChat リアルタイム翻訳、VRChat 音声翻訳、VRChat Chatbox 翻訳、VRChat 字幕表示、VRChat ローカル翻訳ツール
+- 한국어: VRChat 번역기, VRC 번역기, VRChat 실시간 번역, VRChat 음성 번역, VRChat 채팅박스 번역, VRChat 자막 번역
 
 ## 下载
 
