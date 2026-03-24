@@ -27,9 +27,7 @@
 - 麦克风翻译：`麦克风 -> ASR -> 翻译 -> VRChat Chatbox`
 - 反向翻译：`VRChat 音频 -> ASR -> 翻译 -> 聊天框 / 悬浮显示`
 
-## 相关关键词
-
-以下关键词用于帮助玩家在 GitHub 搜索中更容易找到本项目：
+## 相关关键词：
 
 - 中文：VRC翻译插件、VRChat翻译插件、VRChat实时翻译、VRChat语音翻译、VRChat Chatbox翻译、VRChat聊天框翻译、VRChat反向翻译、VRChat字幕翻译、VRChat本地翻译工具、VRChat语音转文字翻译
 - English: VRChat translator, VRC translator, VRChat real-time translator, VRChat voice translator, VRChat speech translation, VRChat Chatbox translator, VRChat subtitle overlay, VRChat local translation tool
