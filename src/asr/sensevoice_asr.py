@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 
+from src.asr.funasr_runtime_compat import patch_sentencepiece_unicode_path_support
 from src.asr.sensevoice_model_manager import (
     MODEL_ID,
     MODEL_REVISION,
@@ -46,6 +47,7 @@ def _dependency_error_message(exc: Exception) -> str:
 
 
 def _load_runtime_symbols():
+    patch_sentencepiece_unicode_path_support()
     from funasr import AutoModel
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
 

@@ -50,7 +50,7 @@ SETTINGS_HINT_WRAP = 390
 SETTINGS_MODEL_WRAP = 370
 SETTINGS_ASR_MENU_WIDTH = 340
 SECTION_ANIMATION_INTERVAL_MS = 16
-SECTION_ANIMATION_DURATION_MS = 220
+SECTION_ANIMATION_DURATION_MS = 160
 
 ASR_ENGINES = [("SenseVoice Small", DEFAULT_ASR_ENGINE)]
 DENOISE_PRESET_VALUES = (
@@ -894,9 +894,7 @@ class SettingsWindow(ctk.CTkToplevel):
     @staticmethod
     def _section_ease(progress: float) -> float:
         progress = min(max(progress, 0.0), 1.0)
-        if progress < 0.5:
-            return 4.0 * progress * progress * progress
-        return 1.0 - pow(-2.0 * progress + 2.0, 3.0) / 2.0
+        return 1.0 - pow(1.0 - progress, 3.0)
 
     def _section_content_height(
         self,
@@ -936,7 +934,6 @@ class SettingsWindow(ctk.CTkToplevel):
         state: dict[str, object],
         start: int,
         end: int,
-        collapsed: bool,
     ) -> None:
         start = max(0, int(start))
         end = max(0, int(end))
@@ -968,11 +965,7 @@ class SettingsWindow(ctk.CTkToplevel):
             if progress >= 1.0:
                 state["after_id"] = None
                 state["animating"] = False
-                final_height = 0 if collapsed else self._section_content_height(
-                    state,
-                    force_measure=True,
-                )
-                self._apply_section_height(state, final_height)
+                self._apply_section_height(state, end)
                 return
             state["after_id"] = self.after(SECTION_ANIMATION_INTERVAL_MS, step)
 
@@ -1006,7 +999,7 @@ class SettingsWindow(ctk.CTkToplevel):
         current_height = int(state.get("rendered_height", wrap.winfo_height()) or 0)
         if current_height <= 1 and collapsed:
             current_height = self._section_content_height(state, force_measure=True)
-        self._animate_section(state, current_height, target_height, collapsed)
+        self._animate_section(state, current_height, target_height)
 
     def _toggle_section_card(self, state: dict[str, object]) -> None:
         self._set_section_collapsed(
@@ -1043,7 +1036,7 @@ class SettingsWindow(ctk.CTkToplevel):
         card.pack(padx=SETTINGS_CARD_PADX, pady=(0, 10), fill="x")
 
         header = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-        header.pack(fill="x", padx=12, pady=(10, 0))
+        header.pack(fill="x", padx=12, pady=(6, 0))
 
         top_row = ctk.CTkFrame(header, fg_color="transparent", corner_radius=0)
         top_row.pack(fill="x")
@@ -1072,10 +1065,10 @@ class SettingsWindow(ctk.CTkToplevel):
             justify="left",
             wraplength=SETTINGS_TEXT_WRAP,
         )
-        subtitle_label.pack(anchor="w", padx=(24, 0), pady=(2, 10))
+        subtitle_label.pack(anchor="w", padx=(24, 0), pady=(2, 6))
 
         content_wrap = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-        content_wrap.pack(fill="x", padx=0, pady=(0, 8))
+        content_wrap.pack(fill="x", padx=0, pady=(0, 4))
         content_wrap.pack_propagate(False)
         content = ctk.CTkFrame(content_wrap, fg_color="transparent", corner_radius=0)
         content.pack(fill="x")
@@ -1193,7 +1186,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self._refresh_model_info(backend, model)
 
     def _build(self):
-        pad = {"padx": SETTINGS_FIELD_PADX, "pady": 6}
+        pad = {"padx": SETTINGS_FIELD_PADX, "pady": 4}
         trans_cfg = self._config.get("translation", {})
         asr_cfg = self._config.get("asr", {})
         streaming_cfg = asr_cfg.get("streaming", {})
@@ -1224,13 +1217,24 @@ class SettingsWindow(ctk.CTkToplevel):
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent", corner_radius=0)
         scroll.pack(fill="both", expand=True, padx=0, pady=0)
 
+        def _fast_scroll(event, canvas=scroll._parent_canvas):
+            canvas.yview_scroll(int(-1 * (event.delta / 30)), "units")
+
+        def _bind_scroll_recursive(widget):
+            widget.bind("<MouseWheel>", _fast_scroll, add="+")
+            for child in widget.winfo_children():
+                _bind_scroll_recursive(child)
+
+        scroll.bind("<Configure>", lambda *_: _bind_scroll_recursive(scroll), add="+")
+        _bind_scroll_recursive(scroll)
+
         def section_label(parent, text: str):
             ctk.CTkLabel(
                 parent,
                 text=text,
                 font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=TEXT_SEC,
-            ).pack(padx=12, pady=(8, 2), anchor="w")
+            ).pack(padx=12, pady=(4, 2), anchor="w")
 
         self._build_header_card(scroll)
 
@@ -1814,7 +1818,7 @@ class SettingsWindow(ctk.CTkToplevel):
             border_color=CARD_BORDER,
         )
         if visible:
-            frame.pack(padx=SETTINGS_FIELD_PADX, pady=(0, 6), fill="x")
+            frame.pack(padx=SETTINGS_FIELD_PADX, pady=(0, 4), fill="x")
         if text:
             ctk.CTkLabel(
                 frame,
@@ -1922,7 +1926,7 @@ class SettingsWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=12, weight="bold"),
             progress_color=ACCENT,
         )
-        switch.pack(anchor="w", padx=12, pady=(2, 0))
+        switch.pack(anchor="w", padx=pack_kwargs.get("padx", 12), pady=pack_kwargs.get("pady", (2, 0)))
         return switch
 
     def _apply_roleplay_preset(self, preset_id: str) -> None:

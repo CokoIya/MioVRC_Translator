@@ -23,6 +23,7 @@ from src.utils.ui_config import (
     target_language_osc_value,
 )
 from src.audio.recorder import AudioRecorder
+from src.audio.desktop_recorder import DesktopAudioRecorder
 from src.audio.windows_audio import (
     default_output_device_name,
     detect_process_output_device_name,
@@ -1714,13 +1715,12 @@ class MainWindow(ctk.CTk):
             return
 
         self._load_desktop_devices()
-        device_index = self._desktop_input_device_index()
-        if device_index is None:
+        device_name = self._desktop_output_device_name()
+        if device_name is None:
             raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
 
         audio_cfg = self._config.get("audio", {})
-        streaming_cfg = self._streaming_config()
-        self._listen_recorder = AudioRecorder(
+        self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
             on_chunk=None,
             sample_rate=audio_cfg.get("sample_rate", 16000),
@@ -1734,13 +1734,8 @@ class MainWindow(ctk.CTk):
             partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
             max_segment_s=audio_cfg.get("max_segment_s", 12.0),
             denoise_strength=audio_cfg.get("denoise_strength", 0.0),
-            input_device=device_index,
-            extra_settings=self._create_loopback_extra_settings(),
+            output_device_name=device_name,
             on_vad_state=lambda state: self._on_source_vad_state(DESKTOP_SOURCE, state),
-            chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
-            chunk_window_s=streaming_cfg.get("chunk_window_s", 1.6),
-            ring_buffer_s=streaming_cfg.get("ring_buffer_s", 4.0),
-            recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
         )
         try:
             self._listen_recorder.start()
@@ -2152,7 +2147,7 @@ class MainWindow(ctk.CTk):
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__
             self._call_in_ui(
-                lambda m=error_text[:120]: self._set_bottom(f"璇煶澶勭悊澶辫触: {m}")
+                lambda m=error_text[:120]: self._set_bottom(f"语音处理失败: {m}")
             )
             if source == DESKTOP_SOURCE:
                 self._call_in_ui(

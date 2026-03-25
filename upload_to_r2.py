@@ -30,7 +30,7 @@ ENDPOINT = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
 
 UPLOADS = [
     (r"dist\MioTranslator-Setup-v1.2.2.exe", "MioTranslator-Setup-v1.2.2.exe"),
-    (r"dist\MioTranslator-Setup-v1.2.3_beta.exe", "MioTranslator-Setup-v1.2.3_beta.exe"),
+    (r"dist\MioTranslator-Setup-v1.2.3_beta2.exe", "MioTranslator-Setup-v1.2.3_beta2.exe"),
 ]
 
 s3 = boto3.client(
