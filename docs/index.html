@@ -1414,57 +1414,198 @@
 
   /* ── FLOATING MUSIC PLAYER ── */
   (function () {
-    const FREE_TRACKS = [
-      {
-        title: 'Moonlight Sonata',
-        artist: 'Beethoven',
-        mark: 'MS',
-        palette: ['#4568dc', '#43cea2'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d0/Moonlight_Sonata.ogg/Moonlight_Sonata.ogg.mp3'
-      },
-      {
-        title: 'Fur Elise',
-        artist: 'Beethoven',
-        mark: 'FE',
-        palette: ['#7f00ff', '#e100ff'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8f/Fur_Elise.ogg/Fur_Elise.ogg.mp3'
-      },
-      {
-        title: 'Canon in D',
-        artist: 'Pachelbel',
-        mark: 'CD',
-        palette: ['#11998e', '#38ef7d'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8a/Canon_and_Gigue_in_D.ogg/Canon_and_Gigue_in_D.ogg.mp3'
-      },
-      {
-        title: 'Prelude in C Major',
-        artist: 'J.S. Bach',
-        mark: 'PC',
-        palette: ['#ee0979', '#ff6a00'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/a/ac/JS_Bach_-_Well_Tempered_Clavier_-_Prelude_in_Fugue_No.1_in_C_major.ogg/JS_Bach_-_Well_Tempered_Clavier_-_Prelude_in_Fugue_No.1_in_C_major.ogg.mp3'
-      },
-      {
-        title: 'Waltz Op. 34 No. 2',
-        artist: 'Chopin',
-        mark: 'WZ',
-        palette: ['#f953c6', '#b91d73'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/6/62/Chopin_-_Waltz_op._34_no_2.ogg/Chopin_-_Waltz_op._34_no_2.ogg.mp3'
-      },
-      {
-        title: 'Minute Waltz',
-        artist: 'Chopin',
-        mark: 'MW',
-        palette: ['#f7971e', '#ffd200'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e5/Chopin_Minute_Waltz.ogg/Chopin_Minute_Waltz.ogg.mp3'
-      },
-      {
-        title: 'Greensleeves',
-        artist: 'Traditional',
-        mark: 'GR',
-        palette: ['#396afc', '#2948ff'],
-        url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/2/20/Greensleeves.ogg/Greensleeves.ogg.mp3'
-      }
+    /* 语言检测：浏览器语言以 zh 开头 → 网易云；否则 → YouTube */
+    const USE_YOUTUBE = !/^zh/i.test(navigator.language || '');
+
+    function wy(id) { return 'https://music.163.com/song/media/outer/url?id=' + id + '.mp3'; }
+
+    const PALETTES = [
+      ['#4568dc','#43cea2'], ['#7f00ff','#e100ff'], ['#11998e','#38ef7d'],
+      ['#ee0979','#ff6a00'], ['#f953c6','#b91d73'], ['#f7971e','#ffd200'],
+      ['#396afc','#2948ff'], ['#ffd89b','#19547b'], ['#43cea2','#185a9d'],
+      ['#f7797d','#c6426e'], ['#642b73','#c6426e'], ['#1a1a2e','#e94560'],
     ];
+
+    /* 热门曲库（会员歌曲仅返回30秒，由 SHORT_TRACK_MAX_SECONDS 逻辑自动跳过） */
+    const TRACKS = [
+      // ── 华语·周杰伦 ──
+      { title:'稻香',       artist:'周杰伦', url:wy(185809)     },
+      { title:'晴天',       artist:'周杰伦', url:wy(186016)     },
+      { title:'夜曲',       artist:'周杰伦', url:wy(186020)     },
+      { title:'七里香',     artist:'周杰伦', url:wy(186001)     },
+      { title:'告白气球',   artist:'周杰伦', url:wy(413812444)  },
+      { title:'青花瓷',     artist:'周杰伦', url:wy(185811)     },
+      { title:'东风破',     artist:'周杰伦', url:wy(185808)     },
+      { title:'发如雪',     artist:'周杰伦', url:wy(185814)     },
+      { title:'简单爱',     artist:'周杰伦', url:wy(186003)     },
+      { title:'双节棍',     artist:'周杰伦', url:wy(186002)     },
+      { title:'一路向北',   artist:'周杰伦', url:wy(186012)     },
+      { title:'说好不哭',   artist:'周杰伦', url:wy(1363765293) },
+      { title:'爱在西元前', artist:'周杰伦', url:wy(186010)     },
+      { title:'龙卷风',     artist:'周杰伦', url:wy(186008)     },
+      { title:'园游会',     artist:'周杰伦', url:wy(186004)     },
+      { title:'枫',         artist:'周杰伦', url:wy(186018)     },
+      { title:'彩虹',       artist:'周杰伦', url:wy(185815)     },
+      { title:'搁浅',       artist:'周杰伦', url:wy(186019)     },
+      { title:'以父之名',   artist:'周杰伦', url:wy(185810)     },
+      { title:'Mine Mine',  artist:'周杰伦', url:wy(1893740392) },
+      // ── 华语·经典 ──
+      { title:'起风了',     artist:'买辣椒也用券', url:wy(1330348079) },
+      { title:'我记得',     artist:'赵雷',         url:wy(28815250)   },
+      { title:'成都',       artist:'赵雷',         url:wy(436514312)  },
+      { title:'十年',       artist:'陈奕迅',       url:wy(26603)      },
+      { title:'富士山下',   artist:'陈奕迅',       url:wy(26282)      },
+      { title:'浮夸',       artist:'陈奕迅',       url:wy(27562)      },
+      { title:'孤勇者',     artist:'陈奕迅',       url:wy(1901371403) },
+      { title:'江南',       artist:'林俊杰',       url:wy(214919)     },
+      { title:'小酒窝',     artist:'林俊杰',       url:wy(273486)     },
+      { title:'泡沫',       artist:'邓紫棋',       url:wy(28391863)   },
+      { title:'光年之外',   artist:'邓紫棋',       url:wy(407453893)  },
+      { title:'年少有为',   artist:'李荣浩',       url:wy(476907688)  },
+      { title:'认真的雪',   artist:'薛之谦',       url:wy(29764244)   },
+      { title:'演员',       artist:'薛之谦',       url:wy(32507038)   },
+      { title:'漠河舞厅',   artist:'柳爽',         url:wy(1473122082) },
+      { title:'错位时空',   artist:'艾辰',         url:wy(1489268945) },
+      { title:'消愁',       artist:'毛不易',       url:wy(480350125)  },
+      { title:'理想三旬',   artist:'陈鸿宇',       url:wy(409650368)  },
+      { title:'大鱼',       artist:'周深',         url:wy(1295526467) },
+      { title:'你的答案',   artist:'阿冗',         url:wy(1295525613) },
+      { title:'倔强',       artist:'五月天',       url:wy(5234310)    },
+      { title:'知足',       artist:'五月天',       url:wy(5234309)    },
+      { title:'突然好想你', artist:'五月天',       url:wy(5234307)    },
+      { title:'传奇',       artist:'王菲',         url:wy(25706282)   },
+      { title:'红豆',       artist:'王菲',         url:wy(27515380)   },
+      { title:'吻别',       artist:'张学友',       url:wy(199374)     },
+      { title:'后来',       artist:'刘若英',       url:wy(1303879)    },
+      { title:'断桥残雪',   artist:'许嵩',         url:wy(28825229)   },
+      { title:'庐州月',     artist:'许嵩',         url:wy(28825216)   },
+      { title:'慢慢喜欢你', artist:'莫文蔚',       url:wy(33160531)   },
+      // ── 日语 ──
+      { title:'Lemon',              artist:'米津玄師',        url:wy(557584888)  },
+      { title:'夜に駆ける',         artist:'YOASOBI',         url:wy(1416767413) },
+      { title:'群青',               artist:'YOASOBI',         url:wy(1491225712) },
+      { title:'怪物',               artist:'YOASOBI',         url:wy(1568958573) },
+      { title:'グッバイ宣言',       artist:'Chinozo',         url:wy(1493141301) },
+      { title:'Pretender',          artist:'Official髭男dism', url:wy(1370484439) },
+      { title:'うっせぇわ',         artist:'Ado',             url:wy(1491657595) },
+      { title:'踊',                 artist:'Ado',             url:wy(1600901231) },
+      { title:'新時代',             artist:'Ado',             url:wy(1968236706) },
+      { title:'香水',               artist:'瑛人',            url:wy(1468012352) },
+      { title:'炎',                 artist:'LiSA',            url:wy(1500544392) },
+      { title:'紅蓮華',             artist:'LiSA',            url:wy(1372375103) },
+      { title:'白日',               artist:'King Gnu',        url:wy(1372554490) },
+      { title:'廻廻奇譚',           artist:'Eve',             url:wy(1568958586) },
+      { title:'死ぬのがいいわ',     artist:'藤井風',          url:wy(1885220456) },
+      { title:'前前前世',           artist:'RADWIMPS',        url:wy(32568038)   },
+      { title:'残酷な天使のテーゼ', artist:'高橋洋子',        url:wy(22703815)   },
+      { title:'ドライフラワー',     artist:'優里',            url:wy(1558061126) },
+      // ── 韩语 ──
+      { title:'Dynamite',       artist:'BTS',       url:wy(1486521939) },
+      { title:'Spring Day',     artist:'BTS',       url:wy(464234500)  },
+      { title:'Butter',         artist:'BTS',       url:wy(1832617656) },
+      { title:'LILAC',          artist:'IU',        url:wy(1599732614) },
+      { title:'Celebrity',      artist:'IU',        url:wy(1816362291) },
+      { title:'Eight',          artist:'IU',        url:wy(1421290535) },
+      { title:'Blueming',       artist:'IU',        url:wy(1372375076) },
+      { title:'How You Like That', artist:'BLACKPINK', url:wy(1480682501) },
+      { title:'Pink Venom',     artist:'BLACKPINK', url:wy(1968245895) },
+      { title:'Next Level',     artist:'aespa',     url:wy(1599670924) },
+      { title:'Hype Boy',       artist:'NewJeans',  url:wy(1962556165) },
+      // ── 英语 ──
+      { title:'Shape of You',    artist:'Ed Sheeran',      url:wy(449819667)  },
+      { title:'Perfect',         artist:'Ed Sheeran',      url:wy(413327261)  },
+      { title:'Counting Stars',  artist:'OneRepublic',     url:wy(28231490)   },
+      { title:'Believer',        artist:'Imagine Dragons', url:wy(472132277)  },
+      { title:'Enemy',           artist:'Imagine Dragons', url:wy(1816031331) },
+      { title:'Thunder',         artist:'Imagine Dragons', url:wy(476081094)  },
+      { title:'Sugar',           artist:'Maroon 5',        url:wy(30885072)   },
+      { title:'Girls Like You',  artist:'Maroon 5',        url:wy(1295552947) },
+      { title:'Faded',           artist:'Alan Walker',     url:wy(36990266)   },
+      { title:'Alone',           artist:'Alan Walker',     url:wy(416892104)  },
+      { title:'Levitating',      artist:'Dua Lipa',        url:wy(1474411641) },
+      { title:'Blinding Lights', artist:'The Weeknd',      url:wy(1467993004) },
+      { title:'Starboy',         artist:'The Weeknd',      url:wy(431255706)  },
+      { title:'Stay',            artist:'Justin Bieber',   url:wy(1830225154) },
+      { title:'bad guy',         artist:'Billie Eilish',   url:wy(1362656624) },
+      { title:'Happier Than Ever', artist:'Billie Eilish', url:wy(1807799505) },
+      { title:'As It Was',       artist:'Harry Styles',    url:wy(1916020232) },
+      { title:'drivers license', artist:'Olivia Rodrigo',  url:wy(1574495643) },
+      { title:'Attention',       artist:'Charlie Puth',    url:wy(470662830)  },
+      { title:'See You Again',   artist:'Charlie Puth',    url:wy(29947420)   },
+      { title:'Cheap Thrills',   artist:'Sia',             url:wy(33251017)   },
+      { title:'Hello',           artist:'Adele',           url:wy(33163451)   },
+      { title:'Rolling in the Deep', artist:'Adele',       url:wy(3986241)    },
+      { title:'Circles',         artist:'Post Malone',     url:wy(1372532535) },
+      { title:'Stressed Out',    artist:'Twenty One Pilots',url:wy(32236640)  },
+      { title:'Yellow',          artist:'Coldplay',        url:wy(3986010)    },
+      { title:'A Sky Full of Stars', artist:'Coldplay',    url:wy(28403360)   },
+      { title:'24K Magic',       artist:'Bruno Mars',      url:wy(431259188)  },
+      { title:'That\'s What I Like', artist:'Bruno Mars',  url:wy(462244940)  },
+    ].map(function (t, i) {
+      t.mark    = t.title.slice(0, 2);
+      t.palette = t.palette || PALETTES[i % PALETTES.length];
+      return t;
+    });
+
+    /* YouTube 曲库（非中文用户） */
+    const YT_TRACKS = [
+      // ── Global Pop ──
+      { title:'Shape of You',       artist:'Ed Sheeran',       videoId:'JGwWNGJdvx8' },
+      { title:'Perfect',            artist:'Ed Sheeran',       videoId:'2Vv-BfVoq4g' },
+      { title:'Counting Stars',     artist:'OneRepublic',      videoId:'hT_nvWreIhg' },
+      { title:'Believer',           artist:'Imagine Dragons',  videoId:'7wtfhZwyrcc' },
+      { title:'Thunder',            artist:'Imagine Dragons',  videoId:'fKopy74weus' },
+      { title:'Enemy',              artist:'Imagine Dragons',  videoId:'D9G1VOjN_84' },
+      { title:'Blinding Lights',    artist:'The Weeknd',       videoId:'4NRXx6U8ABQ' },
+      { title:'Starboy',            artist:'The Weeknd',       videoId:'34Ig3X59_qA' },
+      { title:'bad guy',            artist:'Billie Eilish',    videoId:'DyDfgMOUjCI' },
+      { title:'Happier Than Ever',  artist:'Billie Eilish',    videoId:'5GJWxDKyk3A' },
+      { title:'As It Was',          artist:'Harry Styles',     videoId:'H5v3kku4y6Q' },
+      { title:'drivers license',    artist:'Olivia Rodrigo',   videoId:'ZmDBbnmKpqQ' },
+      { title:'Stay',               artist:'Justin Bieber',    videoId:'kTJczUoc26U' },
+      { title:'Levitating',         artist:'Dua Lipa',         videoId:'IXQZu38hEsA' },
+      { title:'Faded',              artist:'Alan Walker',      videoId:'60ItHLz5WEA' },
+      { title:'Alone',              artist:'Alan Walker',      videoId:'1-xGerv5FOk' },
+      { title:'Sugar',              artist:'Maroon 5',         videoId:'09R8_2nJtjg' },
+      { title:'Girls Like You',     artist:'Maroon 5',         videoId:'aJOTlE1K90k' },
+      { title:'Hello',              artist:'Adele',            videoId:'YQHsXMglC9A' },
+      { title:'Rolling in the Deep',artist:'Adele',            videoId:'rYEDA3JcQqw' },
+      { title:'Circles',            artist:'Post Malone',      videoId:'xLHRaDxhEgA' },
+      { title:'Stressed Out',       artist:'Twenty One Pilots',videoId:'pXRviuL6vMY' },
+      { title:'Yellow',             artist:'Coldplay',         videoId:'yKNxeF4KMsY' },
+      { title:'A Sky Full of Stars',artist:'Coldplay',         videoId:'VPRjCeoBqrI' },
+      { title:'24K Magic',          artist:'Bruno Mars',       videoId:'UqyT8IEBkvY' },
+      { title:"That's What I Like", artist:'Bruno Mars',       videoId:'PMivT9TuJ3U' },
+      { title:'See You Again',      artist:'Charlie Puth',     videoId:'RgKAFK5djSk' },
+      { title:'Attention',          artist:'Charlie Puth',     videoId:'nfs8NYg7yQM' },
+      { title:'Cheap Thrills',      artist:'Sia',              videoId:'CyvgWHB-3bk' },
+      // ── J-Pop ──
+      { title:'Lemon',              artist:'米津玄師',          videoId:'SX_ViTNl31s' },
+      { title:'夜に駆ける',         artist:'YOASOBI',           videoId:'x8bRad5pWWI' },
+      { title:'怪物',               artist:'YOASOBI',           videoId:'d1LBHEQZ14o' },
+      { title:'うっせぇわ',         artist:'Ado',               videoId:'Yq6EZGFRJuM' },
+      { title:'新時代',             artist:'Ado',               videoId:'gKnVGikRFvM' },
+      { title:'Pretender',          artist:'Official髭男dism',  videoId:'XQ8rs3I1Uf0' },
+      { title:'白日',               artist:'King Gnu',          videoId:'ony539T074w' },
+      { title:'廻廻奇譚',           artist:'Eve',               videoId:'UnIgEGHRNzU' },
+      { title:'前前前世',           artist:'RADWIMPS',          videoId:'PDSkFeMVNFs' },
+      { title:'紅蓮華',             artist:'LiSA',              videoId:'CwkzK-F0Y0I' },
+      // ── K-Pop ──
+      { title:'Dynamite',           artist:'BTS',               videoId:'gdZLi9oWNZg' },
+      { title:'Spring Day',         artist:'BTS',               videoId:'xEeFrLSkMm8' },
+      { title:'Butter',             artist:'BTS',               videoId:'WMweEpGlu_U' },
+      { title:'Celebrity',          artist:'IU',                videoId:'0-q1KafFCLU' },
+      { title:'LILAC',              artist:'IU',                videoId:'D1MHe3gIKos' },
+      { title:'How You Like That',  artist:'BLACKPINK',         videoId:'ioNng23DkIM' },
+      { title:'Hype Boy',           artist:'NewJeans',          videoId:'H9_09O2IQBU' },
+    ].map(function (t, i) {
+      t.mark    = t.title.slice(0, 2);
+      t.palette = PALETTES[i % PALETTES.length];
+      return t;
+    });
+
+    const ACTIVE_TRACKS = USE_YOUTUBE ? YT_TRACKS : TRACKS;
+
     const DEFAULT_VOLUME = 50;
     const SHORT_TRACK_MAX_SECONDS = 30;
 
@@ -1493,6 +1634,11 @@
     let queueIndex = 0;
     let consecutiveErrors = 0;
 
+    /* ── YouTube 状态 ── */
+    let ytPlayer = null;
+    let ytReady = false;
+    let ytPendingLoad = null; /* {index, autoPlay} — player 就绪前缓存 */
+
     function shuffleTracks(list) {
       const result = list.slice();
       for (let i = result.length - 1; i > 0; i -= 1) {
@@ -1504,18 +1650,16 @@
 
     function ensureQueue() {
       if (!queue.length) {
-        queue = shuffleTracks(FREE_TRACKS);
+        queue = shuffleTracks(ACTIVE_TRACKS);
         queueIndex = 0;
       }
     }
 
     function normalizeQueueIndex(index) {
       ensureQueue();
-      if (index < 0) {
-        return queue.length - 1;
-      }
+      if (index < 0) return queue.length - 1;
       if (index >= queue.length) {
-        queue = shuffleTracks(FREE_TRACKS);
+        queue = shuffleTracks(ACTIVE_TRACKS);
         return 0;
       }
       return index;
@@ -1535,9 +1679,13 @@
 
     function syncVolume() {
       const value = Math.max(0, Math.min(100, Number(volSlider.value) || DEFAULT_VOLUME));
-      musicAudio.volume = value / 100;
       volSlider.value = String(value);
       volNum.textContent = value + '%';
+      if (USE_YOUTUBE) {
+        if (ytPlayer && ytReady) ytPlayer.setVolume(value);
+      } else {
+        musicAudio.volume = value / 100;
+      }
     }
 
     function refreshMeta(track) {
@@ -1547,19 +1695,20 @@
     }
 
     function attemptPlay() {
-      const playPromise = musicAudio.play();
-      if (!playPromise || typeof playPromise.then !== 'function') {
-        autoplayBlocked = false;
-        setPlayingState(true);
+      if (USE_YOUTUBE) {
+        if (ytPlayer && ytReady) {
+          ytPlayer.playVideo();
+        } else {
+          autoplayBlocked = true;
+        }
         return;
       }
-      playPromise.then(() => {
-        autoplayBlocked = false;
-        setPlayingState(true);
-      }).catch(() => {
-        autoplayBlocked = true;
-        setPlayingState(false);
-      });
+      const playPromise = musicAudio.play();
+      if (!playPromise || typeof playPromise.then !== 'function') {
+        autoplayBlocked = false; setPlayingState(true); return;
+      }
+      playPromise.then(() => { autoplayBlocked = false; setPlayingState(true); })
+                 .catch(() => { autoplayBlocked = true;  setPlayingState(false); });
     }
 
     function loadTrack(index, autoPlay) {
@@ -1567,20 +1716,65 @@
       queueIndex = normalizeQueueIndex(index);
       const track = queue[queueIndex];
       refreshMeta(track);
+      if (USE_YOUTUBE) {
+        if (ytPlayer && ytReady) {
+          if (autoPlay) { userPaused = false; ytPlayer.loadVideoById(track.videoId); }
+          else           { ytPlayer.cueVideoById(track.videoId); setPlayingState(false); }
+        } else {
+          ytPendingLoad = { index: queueIndex, autoPlay };
+          setPlayingState(false);
+        }
+        return;
+      }
       musicAudio.src = track.url;
       musicAudio.load();
-      if (autoPlay) {
-        userPaused = false;
-        attemptPlay();
-      } else {
-        setPlayingState(false);
-      }
+      if (autoPlay) { userPaused = false; attemptPlay(); }
+      else          { setPlayingState(false); }
+    }
+
+    /* ── YouTube IFrame API 初始化 ── */
+    if (USE_YOUTUBE) {
+      window.onYouTubeIframeAPIReady = function () {
+        const el = document.createElement('div');
+        el.style.cssText = 'position:fixed;width:1px;height:1px;bottom:0;left:-9px;opacity:0;pointer-events:none;';
+        document.body.appendChild(el);
+        ytPlayer = new YT.Player(el, {
+          width: 1, height: 1,
+          playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0,
+                        iv_load_policy: 3, modestbranding: 1, rel: 0, playsinline: 1 },
+          events: {
+            onReady: function () {
+              ytReady = true;
+              ytPlayer.setVolume(Math.max(0, Math.min(100, Number(volSlider.value) || DEFAULT_VOLUME)));
+              if (ytPendingLoad) {
+                const p = ytPendingLoad; ytPendingLoad = null;
+                loadTrack(p.index, p.autoPlay);
+              }
+            },
+            onStateChange: function (e) {
+              if (e.data === YT.PlayerState.PLAYING) {
+                consecutiveErrors = 0; autoplayBlocked = false; setPlayingState(true);
+              } else if (e.data === YT.PlayerState.PAUSED) {
+                setPlayingState(false);
+              } else if (e.data === YT.PlayerState.ENDED) {
+                userPaused = false; loadTrack(queueIndex + 1, true);
+              }
+            },
+            onError: function () {
+              consecutiveErrors += 1;
+              if (consecutiveErrors >= Math.max(queue.length, 3)) { setPlayingState(false); return; }
+              window.setTimeout(function () { loadTrack(queueIndex + 1, true); }, 300);
+            },
+          },
+        });
+      };
+      const ytScript = document.createElement('script');
+      ytScript.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(ytScript);
     }
 
     toggleBtn.addEventListener('click', () => {
-      if (wasDragged) {
-        return;
-      }
+      if (wasDragged) return;
       panelOpen = !panelOpen;
       bubble.classList.toggle('mio-open', panelOpen);
     });
@@ -1590,67 +1784,46 @@
       bubble.classList.remove('mio-open');
     });
 
-    btnPrev.addEventListener('click', () => {
-      loadTrack(queueIndex - 1, true);
-    });
-
-    btnNext.addEventListener('click', () => {
-      loadTrack(queueIndex + 1, true);
-    });
+    btnPrev.addEventListener('click', () => { loadTrack(queueIndex - 1, true); });
+    btnNext.addEventListener('click', () => { loadTrack(queueIndex + 1, true); });
 
     btnPlay.addEventListener('click', () => {
-      if (!musicAudio.src) {
-        loadTrack(queueIndex, true);
+      if (USE_YOUTUBE) {
+        if (!ytPlayer || !ytReady) { loadTrack(queueIndex, true); return; }
+        const state = ytPlayer.getPlayerState();
+        if (state === YT.PlayerState.PLAYING) {
+          userPaused = true; ytPlayer.pauseVideo();
+        } else {
+          userPaused = false; ytPlayer.playVideo();
+        }
         return;
       }
-      if (musicAudio.paused) {
-        userPaused = false;
-        attemptPlay();
-      } else {
-        userPaused = true;
-        autoplayBlocked = false;
-        musicAudio.pause();
-      }
+      if (!musicAudio.src) { loadTrack(queueIndex, true); return; }
+      if (musicAudio.paused) { userPaused = false; attemptPlay(); }
+      else { userPaused = true; autoplayBlocked = false; musicAudio.pause(); }
     });
 
     volSlider.addEventListener('input', syncVolume);
 
-    musicAudio.addEventListener('loadedmetadata', () => {
-      if (Number.isFinite(musicAudio.duration) && musicAudio.duration <= SHORT_TRACK_MAX_SECONDS) {
+    /* ── 网易云 audio 事件（仅非 YouTube 模式生效） ── */
+    if (!USE_YOUTUBE) {
+      musicAudio.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(musicAudio.duration) && musicAudio.duration <= SHORT_TRACK_MAX_SECONDS) {
+          window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
+        }
+      });
+      musicAudio.addEventListener('playing', () => { consecutiveErrors = 0; setPlayingState(true); });
+      musicAudio.addEventListener('pause',   () => { if (!musicAudio.ended) setPlayingState(false); });
+      musicAudio.addEventListener('ended',   () => { userPaused = false; loadTrack(queueIndex + 1, true); });
+      musicAudio.addEventListener('error',   () => {
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= Math.max(queue.length, 3)) { setPlayingState(false); return; }
         window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
-      }
-    });
-
-    musicAudio.addEventListener('playing', () => {
-      consecutiveErrors = 0;
-      setPlayingState(true);
-    });
-
-    musicAudio.addEventListener('pause', () => {
-      if (musicAudio.ended) {
-        return;
-      }
-      setPlayingState(false);
-    });
-
-    musicAudio.addEventListener('ended', () => {
-      userPaused = false;
-      loadTrack(queueIndex + 1, true);
-    });
-
-    musicAudio.addEventListener('error', () => {
-      consecutiveErrors += 1;
-      if (consecutiveErrors >= FREE_TRACKS.length) {
-        setPlayingState(false);
-        return;
-      }
-      window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
-    });
+      });
+    }
 
     document.addEventListener('pointerdown', () => {
-      if (autoplayBlocked && !userPaused) {
-        attemptPlay();
-      }
+      if (autoplayBlocked && !userPaused) attemptPlay();
     }, { passive: true });
 
     let isDragging = false;
@@ -1730,7 +1903,7 @@
       }
     }, { passive: false });
 
-    queue = shuffleTracks(FREE_TRACKS);
+    queue = shuffleTracks(TRACKS);
     queueIndex = 0;
     volSlider.value = String(DEFAULT_VOLUME);
     syncVolume();
