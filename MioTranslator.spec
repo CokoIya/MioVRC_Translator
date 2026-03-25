@@ -64,7 +64,12 @@ def _sanitize_analysis_binaries(entries) -> TOC:
         sanitized.append((name, src, kind))
 
     return TOC(sanitized)
-datas = [("config.example.json", "."), ("assets", "assets")]
+datas = [
+    ("config.example.json", "."),
+    ("assets", "assets"),
+    # Silero VAD model — pre-downloaded so users don't need internet at runtime
+    ("src/audio/models/silero_vad.jit", "src/audio/models"),
+]
 bundle_models = os.environ.get("MIO_TRANSLATOR_BUNDLE_MODELS", "0") == "1"
 models_root = Path("models")
 sensevoice_bundle_dir = models_root / "sensevoice-small"

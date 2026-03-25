@@ -3,10 +3,18 @@ from __future__ import annotations
 import collections
 import queue
 import threading
+from math import gcd
 from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
+
+try:
+    from scipy.signal import resample_poly as _scipy_resample_poly
+
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
 
 from .adaptive_denoiser import AdaptiveDenoiser
 from .chunk_streamer import ChunkStreamer
@@ -342,6 +350,12 @@ class AudioRecorder:
         if audio.size == 0 or source_rate == target_rate:
             return audio.astype(np.float32, copy=False)
 
+        if _HAS_SCIPY:
+            g = gcd(target_rate, source_rate)
+            resampled = _scipy_resample_poly(audio, target_rate // g, source_rate // g)
+            return resampled.astype(np.float32)
+
+        # Fallback: linear interpolation (no scipy)
         target_size = max(int(round(audio.size * target_rate / source_rate)), 1)
         if target_size == audio.size:
             return audio.astype(np.float32, copy=False)

@@ -1,7 +1,12 @@
 import collections
+import os
+import threading
 
 import numpy as np
 import webrtcvad
+
+# Pre-bundled Silero VAD TorchScript model (downloaded at build time)
+_SILERO_LOCAL_JIT = os.path.join(os.path.dirname(__file__), "models", "silero_vad.jit")
 
 
 class VADDetector:
@@ -98,3 +103,158 @@ class VADDetector:
         self._trailing_silence = 0
         self._speech_frames = 0
         self.in_speech = False
+
+
+class SileroVADDetector:
+    """Neural-network VAD using Silero VAD, tolerant of background music / SFX."""
+
+    # Silero VAD requires exactly 512 samples per inference at 16 kHz (32 ms)
+    CHUNK_SAMPLES = 512
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        frame_duration_ms: int = 30,
+        silence_threshold_s: float = 1.2,
+        speech_ratio: float = 0.72,
+        activation_threshold_s: float = 0.24,
+        min_rms: float = 0.05,
+        max_speech_s: float = 12.0,
+        speech_threshold: float = 0.5,
+    ):
+        if sample_rate != 16000:
+            raise ValueError("SileroVADDetector only supports sample_rate=16000")
+
+        self.sample_rate = sample_rate
+        self.frame_duration_ms = frame_duration_ms
+        self._min_rms = max(float(min_rms), 0.0)
+        self._speech_threshold = speech_threshold
+
+        activation_frames = max(1, int(activation_threshold_s * 1000 / frame_duration_ms))
+        self._activation_window = collections.deque(maxlen=activation_frames)
+        self._silence_frames = max(1, int(silence_threshold_s * 1000 / frame_duration_ms))
+        self._speech_ratio = speech_ratio
+        self._max_speech_frames = (
+            max(1, int(max_speech_s * 1000 / frame_duration_ms))
+            if max_speech_s and max_speech_s > 0
+            else None
+        )
+
+        self._trailing_silence = 0
+        self._speech_frames = 0
+        self.in_speech = False
+        self._sample_buffer = np.zeros(0, dtype=np.float32)
+
+        self._model = None
+        self._model_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Model loading (lazy, thread-safe)
+    # ------------------------------------------------------------------
+
+    def _get_model(self):
+        if self._model is not None:
+            return self._model
+        with self._model_lock:
+            if self._model is None:
+                import torch
+
+                if os.path.isfile(_SILERO_LOCAL_JIT):
+                    # Load from the bundled .jit file — no internet required
+                    model = torch.jit.load(_SILERO_LOCAL_JIT, map_location="cpu")
+                else:
+                    # Fallback: download via torch.hub (requires internet)
+                    try:
+                        model, _ = torch.hub.load(
+                            "snakers4/silero-vad",
+                            "silero_vad",
+                            trust_repo=True,
+                            verbose=False,
+                        )
+                    except TypeError:
+                        model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad")
+                model.eval()
+                self._model = model
+        return self._model
+
+    # ------------------------------------------------------------------
+    # Public interface (matches VADDetector)
+    # ------------------------------------------------------------------
+
+    def process_frame(self, pcm_bytes: bytes) -> bool:
+        """Accept int16 PCM bytes (same contract as VADDetector) and return in_speech."""
+        audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        self._sample_buffer = np.concatenate([self._sample_buffer, audio])
+
+        while len(self._sample_buffer) >= self.CHUNK_SAMPLES:
+            chunk = self._sample_buffer[: self.CHUNK_SAMPLES]
+            self._sample_buffer = self._sample_buffer[self.CHUNK_SAMPLES :]
+            voiced = self._is_voiced(chunk)
+            self._update_state(voiced)
+
+        return self.in_speech
+
+    def reset(self):
+        self._activation_window.clear()
+        self._trailing_silence = 0
+        self._speech_frames = 0
+        self.in_speech = False
+        self._sample_buffer = np.zeros(0, dtype=np.float32)
+        if self._model is not None:
+            try:
+                self._model.reset_states()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _is_voiced(self, chunk: np.ndarray) -> bool:
+        rms = float(np.sqrt(np.mean(np.square(chunk))))
+        if rms < self._min_rms:
+            return False
+        try:
+            import torch
+
+            model = self._get_model()
+            with torch.no_grad():
+                tensor = torch.from_numpy(chunk).unsqueeze(0)
+                prob = model(tensor, self.sample_rate).item()
+            return prob >= self._speech_threshold
+        except Exception:
+            return False
+
+    def _update_state(self, voiced: bool) -> None:
+        self._activation_window.append(voiced)
+
+        if self.in_speech:
+            self._speech_frames += 1
+            if (
+                self._max_speech_frames is not None
+                and self._speech_frames >= self._max_speech_frames
+            ):
+                self._finish_speech()
+                return
+            if voiced:
+                self._trailing_silence = 0
+            else:
+                self._trailing_silence += 1
+                if self._trailing_silence >= self._silence_frames:
+                    self._finish_speech()
+            return
+
+        ratio = sum(self._activation_window) / len(self._activation_window)
+        if (
+            len(self._activation_window) == self._activation_window.maxlen
+            and ratio >= self._speech_ratio
+        ):
+            self.in_speech = True
+            self._trailing_silence = 0
+            self._speech_frames = 1
+
+    def _finish_speech(self):
+        self.in_speech = False
+        self._trailing_silence = 0
+        self._speech_frames = 0
+        self._activation_window.clear()

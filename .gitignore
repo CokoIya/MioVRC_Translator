@@ -12,7 +12,8 @@ build/
 runtime_cache/
 runtime_models/
 models/
+!src/audio/models/
+!src/audio/models/silero_vad.jit
 upload_release.py
 
-.claude/
 .wrangler/

@@ -7,6 +7,7 @@ import numpy as np
 import sounddevice as sd
 
 from .recorder import AudioRecorder
+from .vad_detector import SileroVADDetector
 
 
 def _import_soundcard():
@@ -84,8 +85,8 @@ class DesktopAudioRecorder(AudioRecorder):
         on_segment: Callable[[np.ndarray], None],
         sample_rate: int = 16000,
         frame_duration_ms: int = 30,
-        vad_sensitivity: int = 2,
-        silence_threshold_s: float = 0.8,
+        vad_sensitivity: int = 1,
+        silence_threshold_s: float = 1.2,
         vad_speech_ratio: float = 0.72,
         vad_activation_threshold_s: float = 0.24,
         output_device_name: str | None = None,
@@ -98,9 +99,10 @@ class DesktopAudioRecorder(AudioRecorder):
         recent_speech_hold_s: float = 0.8,
         min_segment_s: float = 0.45,
         partial_min_speech_s: float = 0.45,
-        vad_min_rms: float = 0.012,
+        vad_min_rms: float = 0.05,
         max_segment_s: float = 12.0,
         denoise_strength: float = 0.0,
+        silero_speech_threshold: float = 0.5,
     ):
         super().__init__(
             on_segment=on_segment,
@@ -123,6 +125,19 @@ class DesktopAudioRecorder(AudioRecorder):
             vad_min_rms=vad_min_rms,
             max_segment_s=max_segment_s,
             denoise_strength=denoise_strength,
+        )
+        # Replace the webrtcvad-based VAD with Silero VAD for desktop audio.
+        # Mic path (AudioRecorder) keeps webrtcvad; this path uses the neural model
+        # which is much more robust to background music and game SFX.
+        self.vad = SileroVADDetector(
+            sample_rate=sample_rate,
+            frame_duration_ms=frame_duration_ms,
+            silence_threshold_s=silence_threshold_s,
+            speech_ratio=vad_speech_ratio,
+            activation_threshold_s=vad_activation_threshold_s,
+            min_rms=vad_min_rms,
+            max_speech_s=max_segment_s,
+            speech_threshold=silero_speech_threshold,
         )
         self._output_device_name = str(output_device_name or "").strip()
         self._capture_thread: Optional[threading.Thread] = None
