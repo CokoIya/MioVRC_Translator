@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 from typing import Callable, Optional
 
@@ -77,6 +78,53 @@ def default_output_device_name() -> str | None:
 
 def desktop_audio_supported() -> bool:
     return bool(list_output_devices())
+
+
+def _loopback_name_candidates(name: str) -> list[str]:
+    """Return normalized candidate forms to handle cross-library naming differences.
+
+    Windows audio devices surface under three different name formats:
+      - Windows COM / WASAPI:  "Speakers (Realtek High Definition Audio)"
+      - sounddevice/PortAudio: "Speakers (Realtek HD Aud"  (hard-truncated to ~31 chars)
+      - soundcard:             "Realtek High Definition Audio"  (model name only, no prefix)
+
+    We emit the full lowercased name, the outer prefix ("speakers"), and the inner model
+    name ("realtek high definition audio") so that any two of the three schemes can match.
+    """
+    s = str(name or "").strip().lower()
+    results: list[str] = [" ".join(s.split())]
+    # outer prefix before first "(" → "speakers"
+    prefix = re.split(r"\s*\(", s, maxsplit=1)[0].strip()
+    if prefix and prefix not in results:
+        results.append(prefix)
+    # inner model name inside first "(…)" → "realtek high definition audio"
+    m = re.search(r"\(([^)]+)\)", s)
+    if m:
+        inner = " ".join(m.group(1).strip().split())
+        if inner and inner not in results:
+            results.append(inner)
+    return results
+
+
+def _fuzzy_match_loopback(preferred_name: str, loopbacks: list) -> object | None:
+    """Return the first loopback microphone whose name matches *preferred_name*."""
+    pref_candidates = _loopback_name_candidates(preferred_name)
+
+    # Pass 1: any candidate form equals any candidate form of a loopback device
+    for mic in loopbacks:
+        mic_name = str(getattr(mic, "name", "") or "").strip()
+        mic_candidates = _loopback_name_candidates(mic_name)
+        if set(pref_candidates) & set(mic_candidates):
+            return mic
+
+    # Pass 2: substring — one normalized form contains the other
+    for mic in loopbacks:
+        mic_name = str(getattr(mic, "name", "") or "").strip().lower()
+        for pc in pref_candidates:
+            if pc and (pc in mic_name or mic_name in pc):
+                return mic
+
+    return None
 
 
 class DesktopAudioRecorder(AudioRecorder):
@@ -205,6 +253,8 @@ class DesktopAudioRecorder(AudioRecorder):
             print(f"[DesktopAudioRecorder] capture loop error: {exc}")
 
     def _resolve_loopback_microphone(self, sc):
+        # Build ordered list of candidate output-device names to search for.
+        # Priority: user-specified → soundcard default speaker → sounddevice default output.
         preferred_names: list[str] = []
         if self._output_device_name:
             preferred_names.append(self._output_device_name)
@@ -219,29 +269,46 @@ class DesktopAudioRecorder(AudioRecorder):
         if default_sd_name and default_sd_name not in preferred_names:
             preferred_names.append(default_sd_name)
 
+        # Collect every loopback-capable microphone from soundcard.
+        # We never use non-loopback (input) devices — that would silently capture the mic.
+        try:
+            all_loopbacks = [
+                m
+                for m in sc.all_microphones(include_loopback=True)
+                if bool(getattr(m, "isloopback", False))
+            ]
+        except Exception:
+            all_loopbacks = []
+
+        # Pass 1: try soundcard's native lookup (exact id match).
         for name in preferred_names:
             try:
-                return sc.get_microphone(id=name, include_loopback=True)
+                mic = sc.get_microphone(id=name, include_loopback=True)
+                if mic is not None and bool(getattr(mic, "isloopback", False)):
+                    return mic
             except Exception:
                 pass
 
-        try:
-            microphones = list(sc.all_microphones(include_loopback=True))
-        except Exception:
-            microphones = []
-
+        # Pass 2: fuzzy match across naming-scheme differences
+        # (COM full name / sounddevice truncated / soundcard model-only).
         for name in preferred_names:
-            for microphone in microphones:
-                microphone_name = str(getattr(microphone, "name", "") or "").strip()
-                if microphone_name == name:
-                    return microphone
+            matched = _fuzzy_match_loopback(name, all_loopbacks)
+            if matched is not None:
+                return matched
 
-        for microphone in microphones:
-            if bool(getattr(microphone, "isloopback", False)):
-                return microphone
-
+        # No match found — never fall back to a non-loopback device.
+        if all_loopbacks:
+            available = ", ".join(
+                str(getattr(m, "name", "") or "") for m in all_loopbacks
+            )
+            raise RuntimeError(
+                f"No loopback device matched the selected output device "
+                f"({self._output_device_name!r}). "
+                f"Available loopback devices: {available}"
+            )
         raise RuntimeError(
-            "No desktop loopback capture source is available for the selected output device"
+            "No desktop loopback capture source is available. "
+            "Make sure a WASAPI loopback device exists for the selected output."
         )
 
 

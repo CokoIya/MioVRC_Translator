@@ -1599,35 +1599,70 @@ class MainWindow(ctk.CTk):
         return self._vrc_listen_config()
 
     def _load_desktop_devices(self) -> None:
-        self._desktop_devices = {
-            str(device.get("name", "")).strip(): int(device.get("index", -1))
-            for device in AudioRecorder.list_loopback_devices()
-            if str(device.get("name", "")).strip()
-        }
+        # Use soundcard names as the canonical key — the same library used by
+        # DesktopAudioRecorder — so matching later is in the same namespace.
+        devices: dict[str, int] = {}
+        try:
+            from src.audio.desktop_recorder import _import_soundcard
+            sc = _import_soundcard()
+            for speaker in sc.all_speakers():
+                name = str(getattr(speaker, "name", "") or "").strip()
+                if name and name not in devices:
+                    devices[name] = 0  # index unused; presence is what matters
+        except Exception:
+            pass
+        if not devices:
+            # Fallback: sounddevice WASAPI output list
+            for device in AudioRecorder.list_loopback_devices():
+                name = str(device.get("name", "")).strip()
+                if name and name not in devices:
+                    devices[name] = int(device.get("index", -1))
+        self._desktop_devices = devices
 
     def _match_desktop_device_name(self, preferred_name: str | None) -> str | None:
         configured = str(preferred_name or "").strip()
         if not configured:
             return None
+        # Exact match
         if configured in self._desktop_devices:
             return configured
-
-        normalized = self._normalize_audio_device_name(configured)
+        # Cross-scheme fuzzy match: handles
+        #   COM full name  "Speakers (Realtek High Definition Audio)"
+        #   sounddevice    "Speakers (Realtek HD Aud"   (truncated)
+        #   soundcard      "Realtek High Definition Audio"  (model only)
+        from src.audio.desktop_recorder import _loopback_name_candidates
+        pref_candidates = set(_loopback_name_candidates(configured))
         for name in self._desktop_devices:
-            if normalized == self._normalize_audio_device_name(name):
+            if pref_candidates & set(_loopback_name_candidates(name)):
                 return name
+        # Last-resort substring match on normalized names
+        norm = self._normalize_audio_device_name(configured)
         for name in self._desktop_devices:
             candidate = self._normalize_audio_device_name(name)
-            if normalized and (normalized in candidate or candidate in normalized):
+            if norm and (norm in candidate or candidate in norm):
                 return name
         return None
 
     def _auto_detect_listen_device_name(self) -> str | None:
+        # 1. VRChat process — most specific signal
         detected = self._match_desktop_device_name(
             detect_process_output_device_name(("VRChat.exe",))
         )
         if detected is not None:
             return detected
+        # 2. soundcard default speaker — same naming scheme as DesktopAudioRecorder
+        try:
+            from src.audio.desktop_recorder import _import_soundcard
+            sc = _import_soundcard()
+            default_speaker = sc.default_speaker()
+            sc_default = str(getattr(default_speaker, "name", "") or "").strip()
+            if sc_default:
+                matched = self._match_desktop_device_name(sc_default)
+                if matched is not None:
+                    return matched
+        except Exception:
+            pass
+        # 3. sounddevice default output — different naming but try anyway
         return self._match_desktop_device_name(default_output_device_name())
 
     def _desktop_output_device_name(self) -> str | None:
@@ -1720,22 +1755,31 @@ class MainWindow(ctk.CTk):
             raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
 
         audio_cfg = self._config.get("audio", {})
+        # Chunk params for desktop: fixed-interval cutting so VAD isn't the only trigger.
+        # Keys are desktop-specific so they don't conflict with mic streaming params.
+        desktop_chunk_interval_ms = audio_cfg.get("desktop_chunk_interval_ms", 2000)
+        desktop_chunk_window_s = audio_cfg.get("desktop_chunk_window_s", 3.0)
         self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
-            on_chunk=None,
+            # Each fixed-time chunk is also a complete segment: route through the
+            # final (transcription + translation + OSC) path, not the partial preview path.
+            on_chunk=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
             sample_rate=audio_cfg.get("sample_rate", 16000),
             frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
-            vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
-            silence_threshold_s=audio_cfg.get("vad_silence_threshold", 0.8),
+            # Use DesktopAudioRecorder's game-audio defaults when not explicitly configured
+            vad_sensitivity=audio_cfg.get("vad_sensitivity", 1),
+            silence_threshold_s=audio_cfg.get("vad_silence_threshold", 1.2),
             vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
             vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
-            vad_min_rms=audio_cfg.get("vad_min_rms", 0.012),
+            vad_min_rms=audio_cfg.get("vad_min_rms", 0.05),
             min_segment_s=audio_cfg.get("min_segment_s", 0.45),
             partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
             max_segment_s=audio_cfg.get("max_segment_s", 12.0),
             denoise_strength=audio_cfg.get("denoise_strength", 0.0),
             output_device_name=device_name,
             on_vad_state=lambda state: self._on_source_vad_state(DESKTOP_SOURCE, state),
+            chunk_interval_ms=desktop_chunk_interval_ms,
+            chunk_window_s=desktop_chunk_window_s,
         )
         try:
             self._listen_recorder.start()
@@ -2083,6 +2127,9 @@ class MainWindow(ctk.CTk):
             with self._merge_lock:
                 text = self._source_merger(source).ingest_final(text)
             if not text:
+                return
+            # Drop noise-only ASR outputs for desktop audio (single chars, punctuation, etc.)
+            if source == DESKTOP_SOURCE and len(text.strip()) < 2:
                 return
             if not self._running or session_id != self._listen_session:
                 return
