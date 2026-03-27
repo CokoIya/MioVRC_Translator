@@ -7,6 +7,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from src.utils import config_manager
+from src.audio.desktop_recorder import list_output_devices as _list_desktop_output_devices
 from src.audio.recorder import AudioRecorder
 from src.asr.text_corrections import dictionary_status, update_official_dictionary
 from src.utils.i18n import tr
@@ -1491,7 +1492,9 @@ class SettingsWindow(ctk.CTkToplevel):
         }
 
         section_label(vrc_listen_card, self._ui_copy("vrc_listen_device"))
-        loopback_devices = AudioRecorder.list_loopback_devices()
+        loopback_devices = _list_desktop_output_devices()
+        if not loopback_devices:
+            loopback_devices = AudioRecorder.list_loopback_devices()
         self._loopback_devices = {
             str(device.get("name", "")).strip(): int(device.get("index", -1))
             for device in loopback_devices

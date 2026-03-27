@@ -23,7 +23,11 @@ from src.utils.ui_config import (
     target_language_osc_value,
 )
 from src.audio.recorder import AudioRecorder
-from src.audio.desktop_recorder import DesktopAudioRecorder
+from src.audio.desktop_recorder import (
+    DesktopAudioRecorder,
+    list_output_devices as _list_desktop_output_devices,
+    _loopback_name_candidates,
+)
 from src.audio.windows_audio import (
     default_output_device_name,
     detect_process_output_device_name,
@@ -138,6 +142,13 @@ MAIN_COPY = {
         "ja": "VRC 音声リスンの開始に失敗しました: {message}",
         "ru": "VRC listen failed: {message}",
         "ko": "VRC 음성 리슨 시작 실패: {message}",
+    },
+    "desktop_audio_runtime_stopped": {
+        "zh-CN": "桌面音频采集已中断，请检查当前播放设备后重新开启反向翻译。",
+        "en": "Desktop audio capture stopped. Check the current playback device and enable VRC listen again.",
+        "ja": "デスクトップ音声の取り込みが中断しました。現在の再生デバイスを確認して、もう一度有効にしてください。",
+        "ru": "Desktop audio capture stopped. Check the current playback device and enable VRC listen again.",
+        "ko": "데스크톱 오디오 캡처가 중단되었습니다. 현재 재생 장치를 확인한 뒤 다시 켜 주세요.",
     },
     "desktop_audio_saved": {
         "zh-CN": "反向翻译已切换",
@@ -254,7 +265,11 @@ class MainWindow(ctk.CTk):
         self._bottom_progress_running = False
         self._model_prepare_running = False
         self._config_save_after_id: str | None = None
+        self._desktop_audio_watch_after_id: str | None = None
         self._destroying = False
+        self._active_listen_output_device_name: str | None = None
+        self._last_desktop_device_signature: tuple[tuple[str, ...], str | None] | None = None
+        self._listen_recovery_in_progress = False
 
         self._set_window_icon()
         self._start_background_workers()
@@ -265,6 +280,7 @@ class MainWindow(ctk.CTk):
         self._sync_all_avatar_params(force=True)
         self.after(420, self._maybe_prepare_runtime_model)
         self.after(300, self._maybe_show_osc_guide)
+        self._schedule_desktop_audio_watch(2200)
 
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._ui_lang, key, **kwargs)
@@ -1599,20 +1615,15 @@ class MainWindow(ctk.CTk):
         return self._vrc_listen_config()
 
     def _load_desktop_devices(self) -> None:
-        # Use soundcard names as the canonical key — the same library used by
-        # DesktopAudioRecorder — so matching later is in the same namespace.
+        # PyAudioWPatch (= PortAudio) names are identical to sounddevice names, so
+        # there is no cross-library mismatch between device list and loopback lookup.
         devices: dict[str, int] = {}
-        try:
-            from src.audio.desktop_recorder import _import_soundcard
-            sc = _import_soundcard()
-            for speaker in sc.all_speakers():
-                name = str(getattr(speaker, "name", "") or "").strip()
-                if name and name not in devices:
-                    devices[name] = 0  # index unused; presence is what matters
-        except Exception:
-            pass
+        for device in _list_desktop_output_devices():
+            name = str(device.get("name", "")).strip()
+            if name and name not in devices:
+                devices[name] = 0  # value unused; presence is what matters
         if not devices:
-            # Fallback: sounddevice WASAPI output list
+            # Fallback: sounddevice WASAPI output list (same PortAudio names)
             for device in AudioRecorder.list_loopback_devices():
                 name = str(device.get("name", "")).strip()
                 if name and name not in devices:
@@ -1623,14 +1634,11 @@ class MainWindow(ctk.CTk):
         configured = str(preferred_name or "").strip()
         if not configured:
             return None
-        # Exact match
+        # Exact match (common case — all names now in PortAudio namespace)
         if configured in self._desktop_devices:
             return configured
-        # Cross-scheme fuzzy match: handles
-        #   COM full name  "Speakers (Realtek High Definition Audio)"
-        #   sounddevice    "Speakers (Realtek HD Aud"   (truncated)
-        #   soundcard      "Realtek High Definition Audio"  (model only)
-        from src.audio.desktop_recorder import _loopback_name_candidates
+        # Fuzzy match: handles COM full names ("Speakers (Realtek HD Audio)")
+        # vs. PortAudio names ("Speakers (Realtek HD Aud", truncated to ~31 chars)
         pref_candidates = set(_loopback_name_candidates(configured))
         for name in self._desktop_devices:
             if pref_candidates & set(_loopback_name_candidates(name)):
@@ -1644,25 +1652,14 @@ class MainWindow(ctk.CTk):
         return None
 
     def _auto_detect_listen_device_name(self) -> str | None:
-        # 1. VRChat process — most specific signal
+        # 1. VRChat process detection — most specific signal
         detected = self._match_desktop_device_name(
             detect_process_output_device_name(("VRChat.exe",))
         )
         if detected is not None:
             return detected
-        # 2. soundcard default speaker — same naming scheme as DesktopAudioRecorder
-        try:
-            from src.audio.desktop_recorder import _import_soundcard
-            sc = _import_soundcard()
-            default_speaker = sc.default_speaker()
-            sc_default = str(getattr(default_speaker, "name", "") or "").strip()
-            if sc_default:
-                matched = self._match_desktop_device_name(sc_default)
-                if matched is not None:
-                    return matched
-        except Exception:
-            pass
-        # 3. sounddevice default output — different naming but try anyway
+        # 2. Default output device — PyAudioWPatch and sounddevice share PortAudio
+        #    so the name from either matches our device list directly.
         return self._match_desktop_device_name(default_output_device_name())
 
     def _desktop_output_device_name(self) -> str | None:
@@ -1679,6 +1676,16 @@ class MainWindow(ctk.CTk):
         if not device_name:
             return None
         return self._desktop_devices.get(device_name)
+
+    def _listen_uses_auto_output_device(self) -> bool:
+        # 用户未手动指定回环设备时为自动模式
+        configured = str(self._desktop_capture_config().get("loopback_device") or "").strip()
+        return not configured
+
+    def _desktop_device_signature(self) -> tuple[tuple[str, ...], str | None]:
+        # 返回 (当前设备名称集合, 活动设备名)，用于检测设备列表或默认输出的变化
+        self._load_desktop_devices()
+        return tuple(sorted(self._desktop_devices)), self._desktop_output_device_name()
 
     def _listen_target_language(self) -> str:
         listen_cfg = self._desktop_capture_config()
@@ -1733,7 +1740,14 @@ class MainWindow(ctk.CTk):
     def _set_listen_overlay_enabled(self, enabled: bool, *, persist: bool) -> None:
         self._listen_overlay_enabled = bool(enabled)
         self._refresh_listen_overlay_button()
-        if not self._listen_overlay_enabled and self._floating_window is not None:
+        if self._listen_overlay_enabled:
+            if self._floating_window is None:
+                self._floating_window = FloatingWindow(self, self._ui_lang)
+            try:
+                self._floating_window.reveal()
+            except Exception:
+                pass
+        elif self._floating_window is not None:
             try:
                 self._floating_window.hide()
             except Exception:
@@ -1780,13 +1794,19 @@ class MainWindow(ctk.CTk):
             on_vad_state=lambda state: self._on_source_vad_state(DESKTOP_SOURCE, state),
             chunk_interval_ms=desktop_chunk_interval_ms,
             chunk_window_s=desktop_chunk_window_s,
+            on_runtime_error=lambda message: self._call_in_ui(
+                lambda m=message: self._handle_desktop_capture_runtime_error(m)
+            ),
         )
         try:
             self._listen_recorder.start()
             self._listen_running = True
+            self._active_listen_output_device_name = device_name
+            self._last_desktop_device_signature = (tuple(sorted(self._desktop_devices)), device_name)
         except Exception:
             self._listen_recorder = None
             self._listen_running = False
+            self._active_listen_output_device_name = None
             raise
 
     def _start_desktop_capture(self) -> None:
@@ -1795,6 +1815,8 @@ class MainWindow(ctk.CTk):
     def _stop_listen(self) -> None:
         self._desktop_in_speech = False
         self._listen_running = False
+        self._active_listen_output_device_name = None
+        self._last_desktop_device_signature = None
         self._reset_streaming_state(DESKTOP_SOURCE)
         if self._listen_recorder is not None:
             self._listen_recorder.stop()
@@ -1862,6 +1884,110 @@ class MainWindow(ctk.CTk):
             self._copy("desktop_audio_failed", message=message),
         )
 
+    def _handle_desktop_capture_runtime_error(self, message: str) -> None:
+        # 桌面录音运行时报错的 UI 线程回调，触发重启流程
+        if self._destroying or not self._running or not self._desktop_capture_enabled:
+            return
+        self._restart_desktop_capture(message=message)
+
+    def _restart_desktop_capture(self, message: str | None = None) -> None:
+        # 停止当前采集 → 重新加载设备 → 重新启动；重启失败则关闭功能并弹窗提示
+        if self._listen_recovery_in_progress or self._destroying:
+            return
+
+        recorder = self._listen_recorder
+        self._listen_recovery_in_progress = True
+        try:
+            self._desktop_in_speech = False
+            self._listen_running = False
+            self._active_listen_output_device_name = None
+            self._last_desktop_device_signature = None
+            self._reset_streaming_state(DESKTOP_SOURCE)
+
+            if recorder is not None:
+                self._listen_recorder = None
+                try:
+                    recorder.stop()
+                except Exception:
+                    pass
+
+            self._sync_avatar_speaking_state(force=True)
+            self._refresh_runtime_status()
+
+            if not self._running or not self._desktop_capture_enabled:
+                return
+
+            self._load_desktop_devices()
+            self._start_listen()
+            self._refresh_runtime_status()
+        except Exception as exc:
+            self._desktop_capture_enabled = False
+            self._desktop_capture_config()["enabled"] = False
+            self._refresh_desktop_capture_button()
+            self._schedule_config_save()
+            failure = str(exc).strip() or str(message or "").strip()
+            if not failure:
+                failure = self._copy("desktop_audio_runtime_stopped")
+            self._on_desktop_capture_start_failed(failure)
+        finally:
+            self._listen_recovery_in_progress = False
+
+    def _schedule_desktop_audio_watch(self, delay_ms: int = 2500) -> None:
+        # 调度下次轮询，取消旧的待执行任务后重新注册
+        if self._destroying:
+            return
+        if self._desktop_audio_watch_after_id is not None:
+            try:
+                self.after_cancel(self._desktop_audio_watch_after_id)
+            except Exception:
+                pass
+        self._desktop_audio_watch_after_id = self.after(delay_ms, self._poll_desktop_audio_watch)
+
+    def _poll_desktop_audio_watch(self) -> None:
+        self._desktop_audio_watch_after_id = None
+        if self._destroying:
+            return
+
+        try:
+            recorder = self._listen_recorder
+            # 检查1：录音线程意外停止 → 重启
+            if (
+                recorder is not None
+                and not recorder.is_running
+                and self._running
+                and self._desktop_capture_enabled
+            ):
+                self._restart_desktop_capture(
+                    message=recorder.last_error or self._copy("desktop_audio_runtime_stopped")
+                )
+                return
+
+            # 检查2：仅自动模式下监测默认输出设备变更 → 重启以跟随新设备
+            if not (
+                self._running
+                and self._desktop_capture_enabled
+                and self._listen_recorder is not None
+                and self._listen_uses_auto_output_device()
+            ):
+                self._last_desktop_device_signature = None
+                return
+
+            signature = self._desktop_device_signature()
+            previous = self._last_desktop_device_signature
+            self._last_desktop_device_signature = signature
+            if previous is None:
+                return
+
+            previous_active = self._normalize_audio_device_name(previous[1] or "")
+            current_active = self._normalize_audio_device_name(signature[1] or "")
+            if current_active and current_active != previous_active:
+                self._restart_desktop_capture()
+        except Exception:
+            pass
+        finally:
+            if not self._destroying:
+                self._schedule_desktop_audio_watch()
+
     def _format_listen_text(self, text: str) -> str:
         clean = str(text or "").strip()
         if not clean:
@@ -1877,6 +2003,18 @@ class MainWindow(ctk.CTk):
         if self._floating_window is None:
             self._floating_window = FloatingWindow(self, self._ui_lang)
         self._floating_window.show_translation(translated, source=source)
+
+    def _add_mic_history(self, text: str) -> None:
+        # 将自身麦克风翻译写入悬浮窗历史（悬浮窗不存在时跳过）
+        if self._floating_window is None:
+            return
+        msg = str(text or "").strip()
+        if not msg:
+            return
+        try:
+            self._floating_window.add_history_entry(msg, source="mic")
+        except Exception:
+            pass
 
     @staticmethod
     def _format_listen_translation(original: str, translated: str) -> str:
@@ -2191,6 +2329,11 @@ class MainWindow(ctk.CTk):
                 sent = self._ensure_sender().send_chatbox(chatbox_text)
                 if sent:
                     self._own_msgs.add(sent)
+                if self._desktop_capture_enabled:
+                    mic_display = translated or text
+                    self._call_in_ui(
+                        lambda t=mic_display: self._add_mic_history(t)
+                    )
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__
             self._call_in_ui(
@@ -2933,6 +3076,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._config_save_after_id = None
+        if self._desktop_audio_watch_after_id is not None:
+            try:
+                self.after_cancel(self._desktop_audio_watch_after_id)
+            except Exception:
+                pass
+            self._desktop_audio_watch_after_id = None
 
         try:
             config_manager.save_config(self._config)

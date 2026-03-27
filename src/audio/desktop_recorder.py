@@ -11,58 +11,76 @@ from .recorder import AudioRecorder
 from .vad_detector import SileroVADDetector
 
 
-def _import_soundcard():
+# ---------------------------------------------------------------------------
+# PyAudioWPatch import helper
+# ---------------------------------------------------------------------------
+
+def _import_pyaudio():
     try:
-        import soundcard as sc
+        import pyaudiowpatch as pyaudio
     except ImportError as exc:
         raise RuntimeError(
             "Desktop audio capture component is unavailable in the current runtime. "
-            "If you are running from source, install `soundcard`; if you are using the packaged app, rebuild the bundle with soundcard included."
+            "If you are running from source, install `PyAudioWPatch`; "
+            "if you are using the packaged app, rebuild the bundle with PyAudioWPatch included."
         ) from exc
-    return sc
+    return pyaudio
 
+
+# ---------------------------------------------------------------------------
+# Public device enumeration (uses PyAudioWPatch / PortAudio — same names as sounddevice)
+# ---------------------------------------------------------------------------
 
 def list_output_devices() -> list[dict[str, object]]:
+    """Return all active WASAPI output devices.
+
+    Names are in PortAudio format, identical to sounddevice, so there is no
+    cross-library name mismatch when the user picks a device.
+    """
     result: list[dict[str, object]] = []
     seen: set[str] = set()
-    default_name = _default_output_device_name_from_sounddevice()
-
+    p = None
     try:
-        sc = _import_soundcard()
+        pa = _import_pyaudio()
+        p = pa.PyAudio()
         try:
-            default_speaker = sc.default_speaker()
-            soundcard_default = str(getattr(default_speaker, "name", "") or "").strip()
-            if soundcard_default:
-                default_name = soundcard_default
-        except Exception:
-            pass
+            wasapi_info = p.get_host_api_info_by_type(pa.paWASAPI)
+        except OSError:
+            return result
 
-        for speaker in sc.all_speakers():
-            name = str(getattr(speaker, "name", "") or "").strip()
+        wasapi_index = int(wasapi_info["index"])
+        default_out_idx = int(wasapi_info.get("defaultOutputDevice", -1))
+        default_name = ""
+        if default_out_idx >= 0:
+            try:
+                default_name = str(
+                    p.get_device_info_by_index(default_out_idx).get("name", "")
+                ).strip()
+            except Exception:
+                pass
+
+        for i in range(int(p.get_device_count())):
+            try:
+                info = p.get_device_info_by_index(i)
+            except Exception:
+                continue
+            if int(info.get("hostApi", -1)) != wasapi_index:
+                continue
+            if int(info.get("maxOutputChannels", 0)) <= 0:
+                continue
+            name = str(info.get("name", "")).strip()
             if not name or name in seen:
                 continue
             seen.add(name)
-            result.append(
-                {
-                    "name": name,
-                    "is_default": name == default_name,
-                }
-            )
+            result.append({"name": name, "is_default": name == default_name})
     except Exception:
         pass
-
-    # SoundCard 枚举不全时用 PortAudio 兜底，补漏掉的输出设备
-    for device in _sounddevice_output_devices():
-        name = str(device.get("name", "")).strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        result.append(
-            {
-                "name": name,
-                "is_default": name == default_name,
-            }
-        )
+    finally:
+        if p is not None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
     return result
 
 
@@ -80,18 +98,20 @@ def desktop_audio_supported() -> bool:
     return bool(list_output_devices())
 
 
+# ---------------------------------------------------------------------------
+# Name-matching helpers
+# ---------------------------------------------------------------------------
+
 def _loopback_name_candidates(name: str) -> list[str]:
-    """Return normalized candidate forms to handle cross-library naming differences.
+    """Return normalized candidate forms for cross-library name matching.
 
-    Windows audio devices surface under three different name formats:
-      - Windows COM / WASAPI:  "Speakers (Realtek High Definition Audio)"
-      - sounddevice/PortAudio: "Speakers (Realtek HD Aud"  (hard-truncated to ~31 chars)
-      - soundcard:             "Realtek High Definition Audio"  (model name only, no prefix)
-
-    We emit the full lowercased name, the outer prefix ("speakers"), and the inner model
-    name ("realtek high definition audio") so that any two of the three schemes can match.
+    PyAudioWPatch loopback names are "<output_name> [Loopback]", so the full
+    lowercased name, the outer prefix ("speakers"), and the inner model name
+    ("realtek high definition audio") all serve as match candidates.
     """
     s = str(name or "").strip().lower()
+    # Strip trailing " [loopback]" suffix so candidates represent the output name
+    s = re.sub(r"\s*\[loopback\]\s*$", "", s).strip()
     results: list[str] = [" ".join(s.split())]
     # outer prefix before first "(" → "speakers"
     prefix = re.split(r"\s*\(", s, maxsplit=1)[0].strip()
@@ -107,25 +127,36 @@ def _loopback_name_candidates(name: str) -> list[str]:
 
 
 def _fuzzy_match_loopback(preferred_name: str, loopbacks: list) -> object | None:
-    """Return the first loopback microphone whose name matches *preferred_name*."""
+    """Return the first loopback device whose name matches *preferred_name*.
+
+    Works with both dicts (PyAudioWPatch) and attribute-style objects.
+    """
     pref_candidates = _loopback_name_candidates(preferred_name)
 
-    # Pass 1: any candidate form equals any candidate form of a loopback device
-    for mic in loopbacks:
-        mic_name = str(getattr(mic, "name", "") or "").strip()
-        mic_candidates = _loopback_name_candidates(mic_name)
-        if set(pref_candidates) & set(mic_candidates):
-            return mic
+    def _name(item) -> str:
+        if isinstance(item, dict):
+            return str(item.get("name", "") or "").strip()
+        return str(getattr(item, "name", "") or "").strip()
 
-    # Pass 2: substring — one normalized form contains the other
-    for mic in loopbacks:
-        mic_name = str(getattr(mic, "name", "") or "").strip().lower()
+    # Pass 1: candidate set intersection (catches exact normalised matches)
+    for lb in loopbacks:
+        lb_candidates = _loopback_name_candidates(_name(lb))
+        if set(pref_candidates) & set(lb_candidates):
+            return lb
+
+    # Pass 2: substring (catches truncated sounddevice names vs. full COM names)
+    for lb in loopbacks:
+        lb_name = _name(lb).lower()
         for pc in pref_candidates:
-            if pc and (pc in mic_name or mic_name in pc):
-                return mic
+            if pc and (pc in lb_name or lb_name in pc):
+                return lb
 
     return None
 
+
+# ---------------------------------------------------------------------------
+# DesktopAudioRecorder
+# ---------------------------------------------------------------------------
 
 class DesktopAudioRecorder(AudioRecorder):
     def __init__(
@@ -151,6 +182,7 @@ class DesktopAudioRecorder(AudioRecorder):
         max_segment_s: float = 12.0,
         denoise_strength: float = 0.0,
         silero_speech_threshold: float = 0.5,
+        on_runtime_error: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(
             on_segment=on_segment,
@@ -189,22 +221,55 @@ class DesktopAudioRecorder(AudioRecorder):
         )
         self._output_device_name = str(output_device_name or "").strip()
         self._capture_thread: Optional[threading.Thread] = None
-        self._loopback_microphone = None
+        self._loopback_device_info: Optional[dict] = None
+        self._on_runtime_error = on_runtime_error
+        self._last_error: str | None = None
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self._running)
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def _report_runtime_error(self, exc: BaseException | str) -> None:
+        # 记录错误并通过回调通知 UI
+        message = str(exc).strip()
+        if not message:
+            message = exc.__class__.__name__ if isinstance(exc, BaseException) else "Unknown error"
+        self._last_error = message
+        if self._on_runtime_error is not None:
+            try:
+                self._on_runtime_error(message)
+            except Exception:
+                pass
 
     def start(self):
         if self._running:
             return
-        sc = _import_soundcard()
-        self._loopback_microphone = self._resolve_loopback_microphone(sc)
+
+        # Resolve and validate the loopback device before doing anything else.
+        pa = _import_pyaudio()
+        p = pa.PyAudio()
+        try:
+            self._loopback_device_info = self._resolve_loopback_device_info(p, pa)
+        finally:
+            p.terminate()
+
+        native_rate = int(self._loopback_device_info.get("defaultSampleRate", 48000))
+        channels = max(int(self._loopback_device_info.get("maxInputChannels", 2)), 1)
+
         self._running = True
         self.vad.reset()
         self._buffer.clear()
         self._pre_speech_buffer.clear()
         self._speech_samples = 0
         self._was_in_speech = False
-        self._capture_rate = self.sample_rate
-        self._capture_channels = 2
+        self._capture_rate = native_rate
+        self._capture_channels = min(channels, 2)
         self._capture_dtype = "float32"
+        self._last_error = None
         self._clear_frame_queue()
         self._denoiser.reset()
         if self._chunk_streamer is not None:
@@ -217,9 +282,9 @@ class DesktopAudioRecorder(AudioRecorder):
 
     def stop(self):
         self._running = False
-        self._enqueue_frame(None)
+        self._enqueue_frame(None)  # unblock worker thread
         if self._capture_thread:
-            self._capture_thread.join(timeout=2.0)
+            self._capture_thread.join(timeout=3.0)
             self._capture_thread = None
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
@@ -227,90 +292,153 @@ class DesktopAudioRecorder(AudioRecorder):
         self._clear_frame_queue()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
-        self._loopback_microphone = None
+        self._loopback_device_info = None
+
+    # ------------------------------------------------------------------
+    # Capture loop — runs in a dedicated daemon thread
+    # ------------------------------------------------------------------
 
     def _capture_loop(self) -> None:
-        microphone = self._loopback_microphone
-        if microphone is None:
-            sc = _import_soundcard()
-            microphone = self._resolve_loopback_microphone(sc)
-        blocksize = max(int(self.sample_rate * self.frame_duration_ms / 1000), 1)
-
-        # Windows 下录的是选中扬声器的回环，浏览器、播放器等走同一设备的音都会进来
-        try:
-            with microphone.recorder(
-                samplerate=self.sample_rate,
-                blocksize=blocksize,
-            ) as recorder:
-                while self._running:
-                    frame = recorder.record(numframes=blocksize)
-                    if frame is None:
-                        continue
-                    self._enqueue_frame(np.asarray(frame, dtype=np.float32, order="C"))
-        except Exception as exc:
+        device_info = self._loopback_device_info
+        if device_info is None:
             self._running = False
             self._enqueue_frame(None)
-            print(f"[DesktopAudioRecorder] capture loop error: {exc}")
+            return
 
-    def _resolve_loopback_microphone(self, sc):
-        # Build ordered list of candidate output-device names to search for.
-        # Priority: user-specified → soundcard default speaker → sounddevice default output.
+        native_rate = int(device_info.get("defaultSampleRate", 48000))
+        channels = max(min(int(device_info.get("maxInputChannels", 2)), 2), 1)
+        device_index = int(device_info["index"])
+        # blocksize based on the *native* rate so each frame is frame_duration_ms long
+        blocksize = max(int(native_rate * self.frame_duration_ms / 1000), 1)
+
+        pa = None
+        p = None
+        stream = None
+        runtime_error: BaseException | None = None
+        try:
+            pa = _import_pyaudio()
+            p = pa.PyAudio()
+            stream = p.open(
+                format=pa.paFloat32,
+                channels=channels,
+                rate=native_rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=blocksize,
+            )
+            while self._running:
+                try:
+                    data = stream.read(blocksize, exception_on_overflow=False)
+                except Exception as exc:
+                    if self._running:
+                        runtime_error = exc
+                    break
+                arr = np.frombuffer(data, dtype=np.float32)
+                if arr.size == 0:
+                    continue
+                # Reshape to (frames, channels) so _prepare_frame can mix down
+                frame = arr.reshape(-1, channels) if channels > 1 else arr
+                self._enqueue_frame(frame.copy())
+        except Exception as exc:
+            if self._running:
+                runtime_error = exc
+        finally:
+            if runtime_error is not None:
+                print(f"[DesktopAudioRecorder] capture loop error: {runtime_error}")
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if p is not None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+            self._running = False
+            self._enqueue_frame(None)
+            if runtime_error is not None:
+                self._report_runtime_error(runtime_error)
+
+    # ------------------------------------------------------------------
+    # Loopback device resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_loopback_device_info(self, p, pa) -> dict:
+        """Find the WASAPI loopback device for the selected output device.
+
+        Priority:
+          1. User-specified / UI-detected output device name
+          2. sounddevice default output (PortAudio naming, same as PyAudioWPatch)
+          3. WASAPI defaultOutputDevice from the host API info
+        Never falls back to a non-loopback input device.
+        """
+        try:
+            wasapi_info = p.get_host_api_info_by_type(pa.paWASAPI)
+        except OSError as exc:
+            raise RuntimeError("WASAPI host API is not available on this system") from exc
+
+        # Build ordered list of preferred output-device names
         preferred_names: list[str] = []
         if self._output_device_name:
             preferred_names.append(self._output_device_name)
-        try:
-            default_speaker = sc.default_speaker()
-            default_name = str(getattr(default_speaker, "name", "") or "").strip()
-            if default_name and default_name not in preferred_names:
-                preferred_names.append(default_name)
-        except Exception:
-            pass
-        default_sd_name = _default_output_device_name_from_sounddevice()
-        if default_sd_name and default_sd_name not in preferred_names:
-            preferred_names.append(default_sd_name)
+        sd_default = _default_output_device_name_from_sounddevice()
+        if sd_default and sd_default not in preferred_names:
+            preferred_names.append(sd_default)
 
-        # Collect every loopback-capable microphone from soundcard.
-        # We never use non-loopback (input) devices — that would silently capture the mic.
+        # Enumerate all loopback devices (PyAudioWPatch extension)
         try:
-            all_loopbacks = [
-                m
-                for m in sc.all_microphones(include_loopback=True)
-                if bool(getattr(m, "isloopback", False))
-            ]
+            all_loopbacks: list[dict] = list(p.get_loopback_device_info_generator())
         except Exception:
             all_loopbacks = []
 
-        # Pass 1: try soundcard's native lookup (exact id match).
-        for name in preferred_names:
-            try:
-                mic = sc.get_microphone(id=name, include_loopback=True)
-                if mic is not None and bool(getattr(mic, "isloopback", False)):
-                    return mic
-            except Exception:
-                pass
+        if not all_loopbacks:
+            raise RuntimeError(
+                "No WASAPI loopback devices found. "
+                "Ensure you are on Windows with an active WASAPI output device."
+            )
 
-        # Pass 2: fuzzy match across naming-scheme differences
-        # (COM full name / sounddevice truncated / soundcard model-only).
-        for name in preferred_names:
-            matched = _fuzzy_match_loopback(name, all_loopbacks)
+        # Pass 1: substring match — loopback name is "<output_name> [Loopback]"
+        # PyAudioWPatch and sounddevice share PortAudio, so names are identical.
+        for pref in preferred_names:
+            pref_lower = pref.lower()
+            for lb in all_loopbacks:
+                lb_name = str(lb.get("name", "")).strip().lower()
+                if pref_lower in lb_name:
+                    return lb
+
+        # Pass 2: fuzzy match for edge cases (e.g. truncated or differently formatted names)
+        for pref in preferred_names:
+            matched = _fuzzy_match_loopback(pref, all_loopbacks)
             if matched is not None:
                 return matched
 
-        # No match found — never fall back to a non-loopback device.
-        if all_loopbacks:
-            available = ", ".join(
-                str(getattr(m, "name", "") or "") for m in all_loopbacks
-            )
-            raise RuntimeError(
-                f"No loopback device matched the selected output device "
-                f"({self._output_device_name!r}). "
-                f"Available loopback devices: {available}"
-            )
+        # Pass 3: WASAPI default output device's loopback
+        default_out_idx = int(wasapi_info.get("defaultOutputDevice", -1))
+        if default_out_idx >= 0:
+            try:
+                default_info = p.get_device_info_by_index(default_out_idx)
+                default_name = str(default_info.get("name", "")).strip().lower()
+                for lb in all_loopbacks:
+                    lb_name = str(lb.get("name", "")).strip().lower()
+                    if default_name and default_name in lb_name:
+                        return lb
+            except Exception:
+                pass
+
+        # Never fall back to a non-loopback input device.
+        available = ", ".join(str(lb.get("name", "")) for lb in all_loopbacks)
         raise RuntimeError(
-            "No desktop loopback capture source is available. "
-            "Make sure a WASAPI loopback device exists for the selected output."
+            f"No loopback device matched the selected output device "
+            f"({self._output_device_name!r}). "
+            f"Available loopback devices: {available}"
         )
 
+
+# ---------------------------------------------------------------------------
+# Sounddevice helpers (mic path still uses sounddevice — keep these)
+# ---------------------------------------------------------------------------
 
 def _default_output_device_name_from_sounddevice() -> str:
     try:
@@ -320,36 +448,3 @@ def _default_output_device_name_from_sounddevice() -> str:
         return str(sd.query_devices(int(default_out))["name"]).strip()
     except Exception:
         return ""
-
-
-def _sounddevice_output_devices() -> list[dict[str, object]]:
-    default_name = _default_output_device_name_from_sounddevice()
-    devices: list[dict[str, object]] = []
-    try:
-        hostapis = sd.query_hostapis()
-        preferred_hostapi_ids = [
-            index
-            for index, hostapi in enumerate(hostapis)
-            if "WASAPI" in str(hostapi.get("name", "")).upper()
-        ]
-        if not preferred_hostapi_ids:
-            preferred_hostapi_ids = list(range(len(hostapis)))
-
-        for index, dev in enumerate(sd.query_devices()):
-            if int(dev.get("max_output_channels", 0)) <= 0:
-                continue
-            if int(dev.get("hostapi", -1)) not in preferred_hostapi_ids:
-                continue
-            name = str(dev.get("name", "")).strip()
-            if not name:
-                continue
-            devices.append(
-                {
-                    "name": name,
-                    "is_default": name == default_name,
-                    "index": index,
-                }
-            )
-    except Exception:
-        return []
-    return devices
