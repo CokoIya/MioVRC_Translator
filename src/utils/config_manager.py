@@ -39,6 +39,9 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if not isinstance(legacy_cfg, dict):
         legacy_cfg = {}
     loaded = loaded if isinstance(loaded, dict) else {}
+    loaded_vrc_cfg = loaded.get("vrc_listen", {})
+    if not isinstance(loaded_vrc_cfg, dict):
+        loaded_vrc_cfg = {}
     vrc_cfg = config.get("vrc_listen", {})
     if not isinstance(vrc_cfg, dict):
         vrc_cfg = {}
@@ -53,6 +56,8 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "loopback_device": None,
         "source_language": "auto",
         "target_language": "zh",
+        "segment_duration_s": 2.0,
+        "tail_silence_s": 1.2,
         "self_suppress": False,
         "self_suppress_seconds": 0.65,
         "show_overlay": False,
@@ -81,6 +86,47 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if not str(vrc_cfg.get("target_language", "")).strip():
         vrc_cfg["target_language"] = "zh"
         changed = True
+    if "segment_duration_s" not in loaded_vrc_cfg:
+        legacy_interval_ms = audio_cfg.get("desktop_chunk_interval_ms")
+        legacy_window_s = audio_cfg.get("desktop_chunk_window_s")
+        try:
+            if legacy_interval_ms is not None:
+                migrated_segment_s = float(legacy_interval_ms) / 1000.0
+            elif legacy_window_s is not None:
+                migrated_segment_s = float(legacy_window_s)
+            else:
+                migrated_segment_s = 2.0
+            if migrated_segment_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            migrated_segment_s = 2.0
+        vrc_cfg["segment_duration_s"] = migrated_segment_s
+        changed = True
+    else:
+        try:
+            segment_duration_s = float(vrc_cfg.get("segment_duration_s", 2.0))
+            if segment_duration_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            vrc_cfg["segment_duration_s"] = 2.0
+            changed = True
+    if "tail_silence_s" not in loaded_vrc_cfg:
+        try:
+            migrated_tail_s = float(audio_cfg.get("vad_silence_threshold", 1.2))
+            if migrated_tail_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            migrated_tail_s = 1.2
+        vrc_cfg["tail_silence_s"] = migrated_tail_s
+        changed = True
+    else:
+        try:
+            tail_silence_s = float(vrc_cfg.get("tail_silence_s", 1.2))
+            if tail_silence_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            vrc_cfg["tail_silence_s"] = 1.2
+            changed = True
     if "self_suppress" not in vrc_cfg:
         vrc_cfg["self_suppress"] = False
         changed = True

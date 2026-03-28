@@ -16,10 +16,6 @@ def main() -> int:
     if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1":
         return _run_selftest()
 
-    from src.utils.log_setup import setup_logging
-    log_path = setup_logging()
-    print(f"[MioTranslator] Log file: {log_path}", flush=True)
-
     from src.ui.main_window import MainWindow
     from src.utils import config_manager
 
@@ -31,4 +27,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -44,8 +44,6 @@ from .floating_window import FloatingWindow
 from .settings_window import SettingsWindow
 from .window_effects import apply_window_icon, present_popup
 
-_log = logging.getLogger(__name__)
-
 BG_PRIMARY = "#f5f5f7"
 BG_SECONDARY = "#eef2f7"
 BG_TOP = "#f3f4f6"
@@ -88,6 +86,8 @@ DESKTOP_SOURCE = LISTEN_SOURCE
 LISTEN_PREFIX = "[听]"
 MIN_CHATBOX_COOLDOWN_S = 1.6
 DEFAULT_LISTEN_SELF_SUPPRESS_S = 0.65
+DEFAULT_LISTEN_SEGMENT_DURATION_S = 2.0
+DEFAULT_LISTEN_TAIL_SILENCE_S = 1.2
 
 MAIN_COPY = {
     "settings_short": {
@@ -159,6 +159,13 @@ MAIN_COPY = {
         "ja": "VRC 音声リスンを更新しました",
         "ru": "VRC listen updated",
         "ko": "VRC 음성 리슨이 변경되었습니다",
+    },
+    "history_resend_sent": {
+        "zh-CN": "已将选中记录重新发送到 VRC",
+        "en": "Resent the selected record to VRC",
+        "ja": "選択した履歴を VRC に再送しました",
+        "ru": "Выбранная запись снова отправлена в VRC",
+        "ko": "선택한 기록을 VRC로 다시 보냈습니다",
     },
     "desktop_audio_requires_vrchat": {
         "zh-CN": "请先运行 VRChat 后再开启反向翻译。",
@@ -1602,6 +1609,25 @@ class MainWindow(ctk.CTk):
             listen_cfg["source_language"] = "auto"
         if not str(listen_cfg.get("target_language", "")).strip():
             listen_cfg["target_language"] = "zh"
+        try:
+            segment_duration_s = float(
+                listen_cfg.get("segment_duration_s", DEFAULT_LISTEN_SEGMENT_DURATION_S)
+            )
+            if segment_duration_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            listen_cfg["segment_duration_s"] = DEFAULT_LISTEN_SEGMENT_DURATION_S
+        try:
+            tail_silence_s = float(
+                listen_cfg.get("tail_silence_s", self._config.get("audio", {}).get(
+                    "vad_silence_threshold",
+                    DEFAULT_LISTEN_TAIL_SILENCE_S,
+                ))
+            )
+            if tail_silence_s <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            listen_cfg["tail_silence_s"] = DEFAULT_LISTEN_TAIL_SILENCE_S
         if "self_suppress" not in listen_cfg:
             listen_cfg["self_suppress"] = False
         try:
@@ -1632,11 +1658,6 @@ class MainWindow(ctk.CTk):
                 if name and name not in devices:
                     devices[name] = int(device.get("index", -1))
         self._desktop_devices = devices
-        _log.debug(
-            "_load_desktop_devices: found %d loopback device(s): %s",
-            len(devices),
-            [(n, idx) for n, idx in devices.items()] or "(none)",
-        )
 
     def _match_desktop_device_name(self, preferred_name: str | None) -> str | None:
         configured = str(preferred_name or "").strip()
@@ -1662,30 +1683,13 @@ class MainWindow(ctk.CTk):
     def _auto_detect_listen_device_name(self) -> str | None:
         # 1. VRChat process detection — most specific signal
         raw_vrc = detect_process_output_device_name(("VRChat.exe",))
-        _log.debug(
-            "_auto_detect_listen_device_name: detect_process_output_device_name('VRChat.exe') "
-            "returned %r",
-            raw_vrc,
-        )
         detected = self._match_desktop_device_name(raw_vrc)
-        _log.debug(
-            "_auto_detect_listen_device_name: VRChat device match result: %r",
-            detected,
-        )
         if detected is not None:
             return detected
         # 2. Default output device — PyAudioWPatch and sounddevice share PortAudio
         #    so the name from either matches our device list directly.
         raw_default = default_output_device_name()
-        _log.debug(
-            "_auto_detect_listen_device_name: default_output_device_name() returned %r",
-            raw_default,
-        )
         matched_default = self._match_desktop_device_name(raw_default)
-        _log.debug(
-            "_auto_detect_listen_device_name: fallback to system default — match result: %r",
-            matched_default,
-        )
         return matched_default
 
     def _desktop_output_device_name(self) -> str | None:
@@ -1739,6 +1743,48 @@ class MainWindow(ctk.CTk):
             return source
         return None
 
+    def _listen_segment_duration_s(self) -> float:
+        listen_cfg = self._desktop_capture_config()
+        try:
+            value = float(
+                listen_cfg.get("segment_duration_s", DEFAULT_LISTEN_SEGMENT_DURATION_S)
+            )
+            if value <= 0:
+                raise ValueError
+            return value
+        except (TypeError, ValueError):
+            legacy_interval_ms = self._config.get("audio", {}).get("desktop_chunk_interval_ms")
+            try:
+                fallback = float(legacy_interval_ms) / 1000.0
+                if fallback <= 0:
+                    raise ValueError
+                return fallback
+            except (TypeError, ValueError):
+                return DEFAULT_LISTEN_SEGMENT_DURATION_S
+
+    def _listen_tail_silence_s(self) -> float:
+        listen_cfg = self._desktop_capture_config()
+        try:
+            value = float(
+                listen_cfg.get("tail_silence_s", DEFAULT_LISTEN_TAIL_SILENCE_S)
+            )
+            if value <= 0:
+                raise ValueError
+            return value
+        except (TypeError, ValueError):
+            try:
+                fallback = float(
+                    self._config.get("audio", {}).get(
+                        "vad_silence_threshold",
+                        DEFAULT_LISTEN_TAIL_SILENCE_S,
+                    )
+                )
+                if fallback <= 0:
+                    raise ValueError
+                return fallback
+            except (TypeError, ValueError):
+                return DEFAULT_LISTEN_TAIL_SILENCE_S
+
     def _listen_feature_configured(self) -> bool:
         return (
             self._desktop_capture_enabled
@@ -1768,7 +1814,11 @@ class MainWindow(ctk.CTk):
         self._refresh_listen_overlay_button()
         if self._listen_overlay_enabled:
             if self._floating_window is None:
-                self._floating_window = FloatingWindow(self, self._ui_lang)
+                self._floating_window = FloatingWindow(
+                    self,
+                    self._ui_lang,
+                    on_resend=self._resend_history_to_vrc,
+                )
             try:
                 self._floating_window.reveal()
             except Exception:
@@ -1791,16 +1841,17 @@ class MainWindow(ctk.CTk):
 
         self._load_desktop_devices()
         device_name = self._desktop_output_device_name()
-        _log.debug("_start_listen: resolved output device name: %r", device_name)
         if device_name is None:
-            _log.warning("_start_listen: no output device resolved — cannot start desktop capture")
             raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
 
         audio_cfg = self._config.get("audio", {})
-        # Chunk params for desktop: fixed-interval cutting so VAD isn't the only trigger.
-        # Keys are desktop-specific so they don't conflict with mic streaming params.
-        desktop_chunk_interval_ms = audio_cfg.get("desktop_chunk_interval_ms", 2000)
-        desktop_chunk_window_s = audio_cfg.get("desktop_chunk_window_s", 3.0)
+        listen_segment_duration_s = self._listen_segment_duration_s()
+        listen_tail_silence_s = self._listen_tail_silence_s()
+        # For desktop listen we expose a single user-facing "segment length".
+        # Keep the chunk interval and window aligned so each fixed cut is one
+        # distinct slice instead of overlapping 2-3 second windows.
+        desktop_chunk_interval_ms = max(int(round(listen_segment_duration_s * 1000.0)), 1)
+        desktop_chunk_window_s = listen_segment_duration_s
         self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
             # Each fixed-time chunk is also a complete segment: route through the
@@ -1810,7 +1861,7 @@ class MainWindow(ctk.CTk):
             frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
             # Use DesktopAudioRecorder's game-audio defaults when not explicitly configured
             vad_sensitivity=audio_cfg.get("vad_sensitivity", 1),
-            silence_threshold_s=audio_cfg.get("vad_silence_threshold", 1.2),
+            silence_threshold_s=listen_tail_silence_s,
             vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
             vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
             vad_min_rms=audio_cfg.get("vad_min_rms", 0.02),
@@ -1826,19 +1877,12 @@ class MainWindow(ctk.CTk):
                 lambda m=message: self._handle_desktop_capture_runtime_error(m)
             ),
         )
-        _log.debug("_start_listen: starting DesktopAudioRecorder with device_name=%r", device_name)
         try:
             self._listen_recorder.start()
             self._listen_running = True
             self._active_listen_output_device_name = device_name
             self._last_desktop_device_signature = (tuple(sorted(self._desktop_devices)), device_name)
-            _log.debug("_start_listen: DesktopAudioRecorder started successfully for %r", device_name)
         except Exception:
-            _log.error(
-                "_start_listen: failed to start DesktopAudioRecorder for device %r",
-                device_name,
-                exc_info=True,
-            )
             self._listen_recorder = None
             self._listen_running = False
             self._active_listen_output_device_name = None
@@ -2029,17 +2073,34 @@ class MainWindow(ctk.CTk):
             return ""
         return f"{LISTEN_PREFIX} {clean}"
 
-    def _show_listen_translation(self, text: str, *, source: str = "listen") -> None:
+    def _ensure_floating_window(self) -> FloatingWindow:
+        if self._floating_window is None:
+            self._floating_window = FloatingWindow(
+                self,
+                self._ui_lang,
+                on_resend=self._resend_history_to_vrc,
+            )
+        return self._floating_window
+
+    def _show_listen_translation(
+        self,
+        text: str,
+        *,
+        source: str = "listen",
+        payload: str | None = None,
+    ) -> None:
         if not self._listen_overlay_enabled:
             return
         translated = str(text or "").strip()
         if not translated:
             return
-        if self._floating_window is None:
-            self._floating_window = FloatingWindow(self, self._ui_lang)
-        self._floating_window.show_translation(translated, source=source)
+        self._ensure_floating_window().show_translation(
+            translated,
+            source=source,
+            payload=payload,
+        )
 
-    def _add_mic_history(self, text: str) -> None:
+    def _add_mic_history(self, text: str, payload: str | None = None) -> None:
         # 将自身麦克风翻译写入悬浮窗历史（悬浮窗不存在时跳过）
         if self._floating_window is None:
             return
@@ -2047,9 +2108,29 @@ class MainWindow(ctk.CTk):
         if not msg:
             return
         try:
-            self._floating_window.add_history_entry(msg, source="mic")
+            self._floating_window.add_history_entry(msg, source="mic", payload=payload)
         except Exception:
             pass
+
+    def _resend_history_to_vrc(self, text: str, source: str = "listen") -> None:
+        message = VRCOSCSender._normalize_text(text)
+        if not message:
+            return
+        if not self._is_vrchat_running():
+            messagebox.showwarning(
+                self._t("game_not_running_title"),
+                self._t("game_not_running_message"),
+            )
+            return
+
+        try:
+            sent = self._ensure_sender().send_chatbox(message, force=True)
+            if sent:
+                self._own_msgs.add(sent)
+                self._set_bottom(self._copy("history_resend_sent"))
+        except Exception as exc:
+            self._pulse_avatar_error()
+            messagebox.showerror(self._t("send_failed_title"), str(exc))
 
     @staticmethod
     def _format_listen_translation(original: str, translated: str) -> str:
@@ -2329,7 +2410,12 @@ class MainWindow(ctk.CTk):
                 listen_text = self._format_listen_translation(text, translated)
                 chatbox_text = self._format_listen_text(listen_text)
                 self._call_in_ui(lambda t=chatbox_text: self._show_tgt(t))
-                self._call_in_ui(lambda t=listen_text: self._show_listen_translation(t))
+                self._call_in_ui(
+                    lambda t=listen_text, payload=chatbox_text: self._show_listen_translation(
+                        t,
+                        payload=payload,
+                    )
+                )
             elif fmt == "original_only":
                 chatbox_text = text
             else:
@@ -2367,7 +2453,10 @@ class MainWindow(ctk.CTk):
                 if self._desktop_capture_enabled:
                     mic_display = translated or text
                     self._call_in_ui(
-                        lambda t=mic_display: self._add_mic_history(t)
+                        lambda t=mic_display, payload=chatbox_text: self._add_mic_history(
+                            t,
+                            payload=payload,
+                        )
                     )
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__

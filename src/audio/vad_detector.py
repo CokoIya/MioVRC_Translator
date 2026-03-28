@@ -1,14 +1,11 @@
 import collections
 from io import BytesIO
-import logging
 import os
 from pathlib import Path
 import threading
 
 import numpy as np
 import webrtcvad
-
-_log = logging.getLogger(__name__)
 
 # Pre-bundled Silero VAD TorchScript model (downloaded at build time).
 _SILERO_LOCAL_JIT = os.path.join(os.path.dirname(__file__), "models", "silero_vad.jit")
@@ -150,7 +147,6 @@ class SileroVADDetector:
 
         self._model = None
         self._model_error = None
-        self._model_error_logged = False
         self._model_lock = threading.Lock()
 
     def _get_model(self):
@@ -215,19 +211,8 @@ class SileroVADDetector:
     def _is_voiced(self, chunk: np.ndarray) -> bool:
         rms = float(np.sqrt(np.mean(np.square(chunk))))
         if rms < self._min_rms:
-            # Log roughly once per second while audio is too quiet.
-            self._rms_log_counter = getattr(self, "_rms_log_counter", 0) + 1
-            if self._rms_log_counter >= 32:
-                _log.debug(
-                    "SileroVAD: audio below min_rms threshold - peak_rms=%.4f min_rms=%.4f "
-                    "(audio too quiet; check system volume or lower vad_min_rms)",
-                    rms,
-                    self._min_rms,
-                )
-                self._rms_log_counter = 0
             return False
 
-        self._rms_log_counter = 0
         try:
             import torch
 
@@ -235,18 +220,8 @@ class SileroVADDetector:
             with torch.no_grad():
                 tensor = torch.from_numpy(chunk).unsqueeze(0)
                 prob = model(tensor, self.sample_rate).item()
-            _log.debug(
-                "SileroVAD: rms=%.4f prob=%.4f threshold=%.4f voiced=%s",
-                rms,
-                prob,
-                self._speech_threshold,
-                prob >= self._speech_threshold,
-            )
             return prob >= self._speech_threshold
         except Exception:
-            if not self._model_error_logged:
-                _log.error("SileroVAD: inference failed - VAD will not activate", exc_info=True)
-                self._model_error_logged = True
             return False
 
     def _update_state(self, voiced: bool) -> None:

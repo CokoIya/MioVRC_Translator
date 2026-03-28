@@ -94,6 +94,8 @@
     "loopback_device": null,
     "source_language": "auto",
     "target_language": "zh",
+    "segment_duration_s": 2.0,
+    "tail_silence_s": 1.2,
     "self_suppress": false,
     "self_suppress_seconds": 0.65,
     "show_overlay": false

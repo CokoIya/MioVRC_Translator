@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 import threading
 from typing import Callable, Optional
@@ -10,8 +9,6 @@ import sounddevice as sd
 
 from .recorder import AudioRecorder
 from .vad_detector import SileroVADDetector
-
-_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +301,6 @@ class DesktopAudioRecorder(AudioRecorder):
     def _capture_loop(self) -> None:
         device_info = self._loopback_device_info
         if device_info is None:
-            _log.error("_capture_loop: device_info is None — aborting capture thread")
             self._running = False
             self._enqueue_frame(None)
             return
@@ -312,16 +308,8 @@ class DesktopAudioRecorder(AudioRecorder):
         native_rate = int(device_info.get("defaultSampleRate", 48000))
         channels = max(min(int(device_info.get("maxInputChannels", 2)), 2), 1)
         device_index = int(device_info["index"])
-        device_name = str(device_info.get("name", "")).strip()
-        is_lb = "[Loopback]" in device_name or "[loopback]" in device_name.lower()
         # blocksize based on the *native* rate so each frame is frame_duration_ms long
         blocksize = max(int(native_rate * self.frame_duration_ms / 1000), 1)
-
-        _log.debug(
-            "_capture_loop: opening device index=%s  name=%r  isloopback=%s  "
-            "rate=%d  channels=%d  blocksize=%d",
-            device_index, device_name, is_lb, native_rate, channels, blocksize,
-        )
 
         pa = None
         p = None
@@ -338,7 +326,6 @@ class DesktopAudioRecorder(AudioRecorder):
                 input_device_index=device_index,
                 frames_per_buffer=blocksize,
             )
-            _log.debug("_capture_loop: stream opened successfully for %r", device_name)
             while self._running:
                 try:
                     data = stream.read(blocksize, exception_on_overflow=False)
@@ -356,14 +343,6 @@ class DesktopAudioRecorder(AudioRecorder):
             if self._running:
                 runtime_error = exc
         finally:
-            if runtime_error is not None:
-                _log.error(
-                    "_capture_loop: error on device %r — %s",
-                    device_name, runtime_error,
-                    exc_info=True,
-                )
-            else:
-                _log.debug("_capture_loop: exiting cleanly for device %r", device_name)
             if stream is not None:
                 try:
                     stream.stop_stream()
@@ -406,51 +385,17 @@ class DesktopAudioRecorder(AudioRecorder):
         if sd_default and sd_default not in preferred_names:
             preferred_names.append(sd_default)
 
-        _log.debug("_resolve_loopback_device_info: preferred_names=%r", preferred_names)
-
         # Enumerate all loopback devices (PyAudioWPatch extension)
         try:
             all_loopbacks: list[dict] = list(p.get_loopback_device_info_generator())
         except Exception:
             all_loopbacks = []
 
-        _log.debug(
-            "_resolve_loopback_device_info: enumerated %d loopback device(s):",
-            len(all_loopbacks),
-        )
-        for lb in all_loopbacks:
-            lb_name = str(lb.get("name", "")).strip()
-            is_lb = "[Loopback]" in lb_name or "[loopback]" in lb_name.lower()
-            _log.debug(
-                "  index=%s  name=%r  isloopback=%s",
-                lb.get("index", "?"),
-                lb_name,
-                is_lb,
-            )
-
         if not all_loopbacks:
             raise RuntimeError(
                 "No WASAPI loopback devices found. "
                 "Ensure you are on Windows with an active WASAPI output device."
             )
-
-        def _return_device(device: dict, pass_name: str) -> dict:
-            name = str(device.get("name", "")).strip()
-            is_lb = "[Loopback]" in name or "[loopback]" in name.lower()
-            _log.debug(
-                "_resolve_loopback_device_info: selected via %s — index=%s  name=%r  isloopback=%s",
-                pass_name,
-                device.get("index", "?"),
-                name,
-                is_lb,
-            )
-            if not is_lb:
-                _log.warning(
-                    "_resolve_loopback_device_info: selected device %r does NOT appear to be a "
-                    "loopback device (isloopback=False) — audio capture may not work correctly",
-                    name,
-                )
-            return device
 
         # Pass 1: substring match — loopback name is "<output_name> [Loopback]"
         # PyAudioWPatch and sounddevice share PortAudio, so names are identical.
@@ -459,13 +404,13 @@ class DesktopAudioRecorder(AudioRecorder):
             for lb in all_loopbacks:
                 lb_name = str(lb.get("name", "")).strip().lower()
                 if pref_lower in lb_name:
-                    return _return_device(lb, f"pass1/substring (pref={pref!r})")
+                    return lb
 
         # Pass 2: fuzzy match for edge cases (e.g. truncated or differently formatted names)
         for pref in preferred_names:
             matched = _fuzzy_match_loopback(pref, all_loopbacks)
             if matched is not None:
-                return _return_device(matched, f"pass2/fuzzy (pref={pref!r})")
+                return matched
 
         # Pass 3: WASAPI default output device's loopback
         default_out_idx = int(wasapi_info.get("defaultOutputDevice", -1))
@@ -476,7 +421,7 @@ class DesktopAudioRecorder(AudioRecorder):
                 for lb in all_loopbacks:
                     lb_name = str(lb.get("name", "")).strip().lower()
                     if default_name and default_name in lb_name:
-                        return _return_device(lb, f"pass3/wasapi-default (default={default_name!r})")
+                        return lb
             except Exception:
                 pass
 

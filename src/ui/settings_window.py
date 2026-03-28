@@ -85,6 +85,22 @@ DENOISE_PRESET_LABELS = {
         "title": "ノイズ除去強度",
         "hint": "ローカルのマイク前処理だけに作用します。強くするほど環境ノイズと誤反応を抑えますが、小さな声も削られやすくなります。",
     },
+    "ru": {
+        "off": "Выкл",
+        "low": "Низкий",
+        "medium": "Средний",
+        "high": "Высокий",
+        "title": "Сила шумоподавления",
+        "hint": "Влияет только на локальную предварительную обработку микрофона. Чем выше значение, тем сильнее подавляется окружающий шум, но очень тихая речь тоже может ослабляться.",
+    },
+    "ko": {
+        "off": "끔",
+        "low": "낮음",
+        "medium": "중간",
+        "high": "높음",
+        "title": "노이즈 제거 강도",
+        "hint": "로컬 마이크 전처리에만 적용됩니다. 값을 높일수록 주변 소음 억제가 강해지지만, 아주 작은 목소리도 함께 약해질 수 있습니다.",
+    },
 }
 
 ROLEPLAY_PRESETS: dict[str, dict[str, object]] = {
@@ -470,6 +486,26 @@ WINDOW_COPY.update(
             "en": "Suppression Time (sec)",
             "ja": "抑制時間（秒）",
         },
+        "vrc_listen_segment_duration": {
+            "zh-CN": "监听截取时长（秒）",
+            "en": "Listen Segment Length (sec)",
+            "ja": "リスン分割長さ（秒）",
+        },
+        "vrc_listen_segment_duration_hint": {
+            "zh-CN": "持续说话时，每隔这么久就截一段这么长的桌面音频送去识别。调小会更快出字，但句子会更碎。",
+            "en": "During continuous speech, desktop audio is cut into slices of this length and sent for recognition. Lower values feel faster, but sentences become more fragmented.",
+            "ja": "相手が話し続けている間、この長さごとに同じ長さのデスクトップ音声を切り出して認識へ送ります。短くすると表示は速くなりますが、文は細切れになりやすいです。",
+        },
+        "vrc_listen_tail_silence": {
+            "zh-CN": "尾音判定（秒）",
+            "en": "Tail Silence (sec)",
+            "ja": "語尾の無音判定（秒）",
+        },
+        "vrc_listen_tail_silence_hint": {
+            "zh-CN": "只影响反向翻译。静音达到这个时长后，当前一句才会被判定结束。它和上面的“监听截取时长”是分开的。",
+            "en": "This only affects VRC listen. The current line ends after this much trailing silence. It is separate from the segment length above.",
+            "ja": "VRC リスンだけに影響します。この長さだけ無音が続くと、その発話を終了扱いにします。上の分割長さとは別設定です。",
+        },
         "vrc_listen_self_suppress_seconds_hint": {
             "zh-CN": "默认 0.65 秒。开了变声器、麦克风监听，或者反向翻译会把自己的原话一起识别进去时，可以适当调大一点；太大则可能把别人刚开口的内容也一起跳过。",
             "en": "Default: 0.65 seconds. Increase this if a voice changer, mic monitoring, or reverse translation is still picking up your own voice. If it's too large, the start of other people's speech may also be skipped.",
@@ -668,6 +704,10 @@ _extend_window_copy_language(
         "vrc_listen_self_suppress": "Подавлять свой голос",
         "vrc_listen_self_suppress_hint": "Включите это, если войсчейнджер, мониторинг микрофона или обратный перевод подхватывают вашу собственную речь.",
         "vrc_listen_self_suppress_seconds": "Время подавления (сек)",
+        "vrc_listen_segment_duration": "Длина сегмента прослушивания (сек)",
+        "vrc_listen_segment_duration_hint": "Пока собеседник говорит без паузы, программа будет раз в столько секунд вырезать фрагмент такой же длины и отправлять его на распознавание. Меньше значение дает более быстрый вывод, но фразы чаще дробятся.",
+        "vrc_listen_tail_silence": "Хвостовая тишина (сек)",
+        "vrc_listen_tail_silence_hint": "Влияет только на обратный перевод. После такой длительности тишины текущая фраза считается завершенной. Это отдельная настройка, не связанная с длиной сегмента выше.",
         "vrc_listen_self_suppress_seconds_hint": "По умолчанию 0.65 сек. Увеличьте это значение, если программа все еще цепляет ваш голос. Слишком большое значение может пропускать начало чужой речи.",
         "avatar_section": "Синхронизация Avatar",
         "avatar_subtitle": "Отправляет состояние перевода в Avatar. Если не нужно, можно не трогать.",
@@ -760,6 +800,10 @@ _extend_window_copy_language(
         "vrc_listen_self_suppress": "내 목소리 억제",
         "vrc_listen_self_suppress_hint": "보이스체인저, 마이크 모니터링, 역방향 번역 때문에 내 목소리까지 잡힐 때 켜세요.",
         "vrc_listen_self_suppress_seconds": "억제 시간 (초)",
+        "vrc_listen_segment_duration": "듣기 분할 길이 (초)",
+        "vrc_listen_segment_duration_hint": "상대가 계속 말하는 동안 이 길이만큼의 데스크톱 오디오를 같은 간격으로 잘라 인식에 보냅니다. 값을 줄이면 더 빨리 뜨지만 문장이 더 잘게 나뉩니다.",
+        "vrc_listen_tail_silence": "말끝 무음 판정 (초)",
+        "vrc_listen_tail_silence_hint": "역방향 번역에만 적용됩니다. 이 시간만큼 조용하면 현재 문장이 끝난 것으로 봅니다. 위의 분할 길이와는 별도 설정입니다.",
         "vrc_listen_self_suppress_seconds_hint": "기본값은 0.65초입니다. 아직도 내 목소리를 잡으면 조금 늘려 보세요. 너무 크면 다른 사람이 막 말하기 시작한 부분도 건너뛸 수 있습니다.",
         "avatar_section": "Avatar 동기화",
         "avatar_subtitle": "번역 상태를 Avatar로 보냅니다. 필요 없으면 건드리지 않아도 됩니다.",
@@ -1470,6 +1514,32 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_hint_box(
             vrc_listen_card,
             self._ui_copy("vrc_listen_self_suppress_seconds_hint"),
+        )
+        self._listen_segment_duration_var = ctk.StringVar(
+            value=str(vrc_cfg.get("segment_duration_s", 2.0))
+        )
+        self._build_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_segment_duration"),
+            self._listen_segment_duration_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_segment_duration_hint"),
+        )
+        self._listen_tail_silence_var = ctk.StringVar(
+            value=str(vrc_cfg.get("tail_silence_s", 1.2))
+        )
+        self._build_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_tail_silence"),
+            self._listen_tail_silence_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_tail_silence_hint"),
         )
 
         target_language_options = get_target_language_options(ui_language=self._ui_lang)
@@ -2251,6 +2321,14 @@ class SettingsWindow(ctk.CTkToplevel):
                 self._listen_self_suppress_seconds_var.get(),
                 self._ui_copy("vrc_listen_self_suppress_seconds"),
             )
+            listen_segment_duration_s = self._parse_positive_float(
+                self._listen_segment_duration_var.get(),
+                self._ui_copy("vrc_listen_segment_duration"),
+            )
+            listen_tail_silence_s = self._parse_positive_float(
+                self._listen_tail_silence_var.get(),
+                self._ui_copy("vrc_listen_tail_silence"),
+            )
         except ValueError as exc:
             messagebox.showerror(self._t("error_title"), str(exc))
             return
@@ -2321,6 +2399,8 @@ class SettingsWindow(ctk.CTkToplevel):
             self._listen_target_lang_var.get(),
             target_language_options[0][1],
         )
+        vrc_cfg["segment_duration_s"] = listen_segment_duration_s
+        vrc_cfg["tail_silence_s"] = listen_tail_silence_s
         vrc_cfg["self_suppress"] = self._listen_self_suppress_var.get() == "1"
         vrc_cfg["self_suppress_seconds"] = listen_self_suppress_seconds
 

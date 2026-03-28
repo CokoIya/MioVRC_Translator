@@ -17,12 +17,12 @@ VSVersionInfo(
           [
             StringStruct(u"CompanyName", u"\u307f\u304a_Mio"),
             StringStruct(u"FileDescription", u"Mio RealTime Translator"),
-            StringStruct(u"FileVersion", u"v1.2.3_Beta6"),
+            StringStruct(u"FileVersion", u"v1.2.3"),
             StringStruct(u"InternalName", u"MioTranslator"),
             StringStruct(u"LegalCopyright", u"Copyright (C) 2026 \u307f\u304a_Mio"),
             StringStruct(u"OriginalFilename", u"MioTranslator.exe"),
             StringStruct(u"ProductName", u"Mio RealTime Translator"),
-            StringStruct(u"ProductVersion", u"v1.2.3_Beta6"),
+            StringStruct(u"ProductVersion", u"v1.2.3"),
           ]
         )
       ]

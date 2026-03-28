@@ -82,7 +82,13 @@ class VRCOSCSender:
         except queue.Full:
             pass
 
-    def send_chatbox(self, text: str, immediate: bool = True) -> str:
+    def send_chatbox(
+        self,
+        text: str,
+        immediate: bool = True,
+        *,
+        force: bool = False,
+    ) -> str:
         safe = self._normalize_text(text)
         if not safe:
             return ""
@@ -90,8 +96,11 @@ class VRCOSCSender:
         now = time.monotonic()
         with self._state_lock:
             if (
+                not force
+                and (
                 safe == self._last_enqueued_text
                 and (now - self._last_enqueued_at) < DUPLICATE_WINDOW_S
+                )
             ):
                 return safe
             self._last_enqueued_text = safe
