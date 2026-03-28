@@ -16,12 +16,22 @@ def main() -> int:
     if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1":
         return _run_selftest()
 
+    from src.utils.app_paths import writable_app_dir
+    from src.utils.logger import get_logger, setup_logging
+
+    log_file = setup_logging(log_dir=writable_app_dir() / "logs")
+    logger = get_logger("main")
+    if log_file:
+        print(f"[MioTranslator] Log file: {log_file}", flush=True)
+    logger.info("MioTranslator starting. Python %s, platform %s", sys.version, sys.platform)
+
     from src.ui.main_window import MainWindow
     from src.utils import config_manager
 
     config = config_manager.load_config()
     app = MainWindow(config)
     app.mainloop()
+    logger.info("MioTranslator exiting.")
     return 0
 
 

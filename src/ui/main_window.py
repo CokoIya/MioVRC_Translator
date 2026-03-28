@@ -29,6 +29,9 @@ from src.audio.windows_audio import (
     detect_process_output_device_name,
     is_process_running,
 )
+from src.utils.logger import get_logger
+
+_log = get_logger("ui.main_window")
 from src.asr.factory import create_asr
 from src.asr.sensevoice_model_manager import ensure_model, model_exists
 from src.asr.streaming_merger import StreamingMerger
@@ -1599,11 +1602,16 @@ class MainWindow(ctk.CTk):
         return self._vrc_listen_config()
 
     def _load_desktop_devices(self) -> None:
+        loopback_list = AudioRecorder.list_loopback_devices()
         self._desktop_devices = {
             str(device.get("name", "")).strip(): int(device.get("index", -1))
-            for device in AudioRecorder.list_loopback_devices()
+            for device in loopback_list
             if str(device.get("name", "")).strip()
         }
+        _log.info(
+            "_load_desktop_devices: sounddevice loopback devices found: %s",
+            [(d.get("name"), d.get("index")) for d in loopback_list],
+        )
 
     def _match_desktop_device_name(self, preferred_name: str | None) -> str | None:
         configured = str(preferred_name or "").strip()
@@ -1623,12 +1631,20 @@ class MainWindow(ctk.CTk):
         return None
 
     def _auto_detect_listen_device_name(self) -> str | None:
-        detected = self._match_desktop_device_name(
-            detect_process_output_device_name(("VRChat.exe",))
-        )
+        vrchat_device_raw = detect_process_output_device_name(("VRChat.exe",))
+        _log.info("detect_process_output_device_name(VRChat.exe) returned: %r", vrchat_device_raw)
+        detected = self._match_desktop_device_name(vrchat_device_raw)
+        _log.info("VRChat device matched in loopback list: %r", detected)
         if detected is not None:
             return detected
-        return self._match_desktop_device_name(default_output_device_name())
+
+        sys_default_raw = default_output_device_name()
+        _log.info(
+            "VRChat device not matched; falling back to system default output: %r  matched: %r",
+            sys_default_raw,
+            self._match_desktop_device_name(sys_default_raw),
+        )
+        return self._match_desktop_device_name(sys_default_raw)
 
     def _desktop_output_device_name(self) -> str | None:
         desktop_cfg = self._desktop_capture_config()
@@ -1716,7 +1732,14 @@ class MainWindow(ctk.CTk):
 
         self._load_desktop_devices()
         device_name = self._desktop_output_device_name()
+        _log.info("_start_listen: final device_name selected = %r", device_name)
         if device_name is None:
+            _log.error(
+                "_start_listen: no loopback device available. "
+                "desktop_devices=%r  configured=%r",
+                list(self._desktop_devices.keys()),
+                self._desktop_capture_config().get("loopback_device"),
+            )
             raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
 
         audio_cfg = self._config.get("audio", {})
@@ -1740,7 +1763,9 @@ class MainWindow(ctk.CTk):
         try:
             self._listen_recorder.start()
             self._listen_running = True
-        except Exception:
+            _log.info("_start_listen: DesktopAudioRecorder started successfully on %r", device_name)
+        except Exception as exc:
+            _log.error("_start_listen: DesktopAudioRecorder.start() failed on %r: %s", device_name, exc, exc_info=True)
             self._listen_recorder = None
             self._listen_running = False
             raise

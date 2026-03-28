@@ -7,12 +7,16 @@ import numpy as np
 import sounddevice as sd
 
 from .recorder import AudioRecorder
+from src.utils.logger import get_logger
+
+_log = get_logger("audio.desktop")
 
 
 def _import_soundcard():
     try:
         import soundcard as sc
     except ImportError as exc:
+        _log.error("soundcard library not available: %s", exc)
         raise RuntimeError(
             "Desktop audio capture component is unavailable in the current runtime. "
             "If you are running from source, install `soundcard`; if you are using the packaged app, rebuild the bundle with soundcard included."
@@ -131,8 +135,18 @@ class DesktopAudioRecorder(AudioRecorder):
     def start(self):
         if self._running:
             return
+        _log.info("DesktopAudioRecorder.start() requested output_device_name=%r", self._output_device_name)
         sc = _import_soundcard()
         self._loopback_microphone = self._resolve_loopback_microphone(sc)
+        mic_name = str(getattr(self._loopback_microphone, "name", "unknown"))
+        mic_is_loopback = bool(getattr(self._loopback_microphone, "isloopback", None))
+        _log.info("Loopback device resolved: name=%r  isloopback=%s", mic_name, mic_is_loopback)
+        if not mic_is_loopback:
+            _log.warning(
+                "Selected device %r does NOT have isloopback=True. "
+                "This may cause microphone audio to be captured instead of game audio.",
+                mic_name,
+            )
         self._running = True
         self.vad.reset()
         self._buffer.clear()
@@ -172,6 +186,12 @@ class DesktopAudioRecorder(AudioRecorder):
             sc = _import_soundcard()
             microphone = self._resolve_loopback_microphone(sc)
         blocksize = max(int(self.sample_rate * self.frame_duration_ms / 1000), 1)
+        mic_name = str(getattr(microphone, "name", "unknown"))
+        mic_is_loopback = bool(getattr(microphone, "isloopback", None))
+        _log.info(
+            "_capture_loop starting: device=%r  isloopback=%s  samplerate=%d  blocksize=%d",
+            mic_name, mic_is_loopback, self.sample_rate, blocksize,
+        )
 
         # Windows 下录的是选中扬声器的回环，浏览器、播放器等走同一设备的音都会进来
         try:
@@ -179,6 +199,7 @@ class DesktopAudioRecorder(AudioRecorder):
                 samplerate=self.sample_rate,
                 blocksize=blocksize,
             ) as recorder:
+                _log.info("_capture_loop: recorder opened successfully on %r", mic_name)
                 while self._running:
                     frame = recorder.record(numframes=blocksize)
                     if frame is None:
@@ -187,44 +208,79 @@ class DesktopAudioRecorder(AudioRecorder):
         except Exception as exc:
             self._running = False
             self._enqueue_frame(None)
+            _log.error("_capture_loop error on device %r: %s", mic_name, exc, exc_info=True)
             print(f"[DesktopAudioRecorder] capture loop error: {exc}")
 
     def _resolve_loopback_microphone(self, sc):
         preferred_names: list[str] = []
         if self._output_device_name:
             preferred_names.append(self._output_device_name)
+
         try:
             default_speaker = sc.default_speaker()
             default_name = str(getattr(default_speaker, "name", "") or "").strip()
+            _log.debug("soundcard default_speaker: %r", default_name)
             if default_name and default_name not in preferred_names:
                 preferred_names.append(default_name)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("soundcard default_speaker() failed: %s", exc)
+
         default_sd_name = _default_output_device_name_from_sounddevice()
+        _log.debug("sounddevice default output device: %r", default_sd_name)
         if default_sd_name and default_sd_name not in preferred_names:
             preferred_names.append(default_sd_name)
 
+        _log.info("_resolve_loopback_microphone: preferred_names=%r", preferred_names)
+
+        # --- 方法1：用名字直接从 soundcard 查 ---
         for name in preferred_names:
             try:
-                return sc.get_microphone(id=name, include_loopback=True)
-            except Exception:
-                pass
+                mic = sc.get_microphone(id=name, include_loopback=True)
+                mic_name = str(getattr(mic, "name", "unknown"))
+                mic_is_loopback = bool(getattr(mic, "isloopback", None))
+                _log.info("sc.get_microphone(%r) succeeded: result_name=%r  isloopback=%s", name, mic_name, mic_is_loopback)
+                return mic
+            except Exception as exc:
+                _log.debug("sc.get_microphone(%r) failed: %s", name, exc)
 
+        # --- 方法2：枚举全部 microphone（含loopback），再手动匹配 ---
         try:
             microphones = list(sc.all_microphones(include_loopback=True))
-        except Exception:
+        except Exception as exc:
+            _log.error("sc.all_microphones(include_loopback=True) failed: %s", exc)
             microphones = []
+
+        _log.info(
+            "sc.all_microphones(include_loopback=True) returned %d devices: %s",
+            len(microphones),
+            [(str(getattr(m, "name", "?")), bool(getattr(m, "isloopback", None))) for m in microphones],
+        )
 
         for name in preferred_names:
             for microphone in microphones:
                 microphone_name = str(getattr(microphone, "name", "") or "").strip()
                 if microphone_name == name:
+                    mic_is_loopback = bool(getattr(microphone, "isloopback", None))
+                    _log.info("Name-matched microphone: %r  isloopback=%s", microphone_name, mic_is_loopback)
                     return microphone
 
+        # --- 方法3：退回到第一个 isloopback=True 的设备 ---
         for microphone in microphones:
             if bool(getattr(microphone, "isloopback", False)):
+                mic_name = str(getattr(microphone, "name", "unknown"))
+                _log.warning(
+                    "Falling back to first loopback device: %r  "
+                    "(preferred names %r not found in soundcard enumeration)",
+                    mic_name, preferred_names,
+                )
                 return microphone
 
+        _log.error(
+            "No loopback device found. preferred_names=%r  "
+            "all_microphones=%s",
+            preferred_names,
+            [(str(getattr(m, "name", "?")), bool(getattr(m, "isloopback", None))) for m in microphones],
+        )
         raise RuntimeError(
             "No desktop loopback capture source is available for the selected output device"
         )
