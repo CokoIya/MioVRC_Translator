@@ -6,8 +6,11 @@ from collections import OrderedDict
 from threading import Lock
 
 _TRANSLATION_SYSTEM_PROMPT = (
-    "You translate short VR chat messages between languages. "
-    "Return only the translated text. Do not add explanations, notes, or quotes."
+    "You are a real-time translator for VR social chat (VRChat). "
+    "Produce natural, colloquial translations that sound like something a real person would casually say — "
+    "never stiff, word-for-word, or textbook-like. "
+    "Preserve emotion, humor, slang, internet expressions, and gaming/VR-specific terms. "
+    "Return only the translated text with no explanations, notes, or quotes."
 )
 
 
@@ -54,8 +57,9 @@ class BaseTranslator(ABC):
         src = self._language_name(src_lang)
         tgt = self._language_name(tgt_lang)
         requirements = [
-            "keep the meaning accurate",
-            "preserve the speaker intent",
+            "sound natural and colloquial, as a real person would casually say it",
+            "preserve emotion, tone, humor, slang, and gaming/VR terms",
+            "keep meaning accurate but prioritize natural flow over word-for-word literalness",
             "output only the translation",
         ]
         profile_lines = self._prompt_profile_lines()

@@ -29,7 +29,12 @@ class OpenAITranslator(BaseTranslator):
         )
         self.model = model
         model_name = str(model).lower()
-        self._is_reasoning_model = "reasoner" in model_name or "thinking" in model_name
+        self._is_reasoning_model = (
+            model_name.startswith("gpt-5")
+            or "reasoner" in model_name
+            or "thinking" in model_name
+        )
+        self._use_responses_api = "gpt-5.4-pro" in model_name
         min_output_tokens = 512 if self._is_reasoning_model else 48
         self._max_output_tokens = max(int(max_output_tokens), min_output_tokens)
         self._extra_body = extra_body or {}
@@ -60,6 +65,26 @@ class OpenAITranslator(BaseTranslator):
         if cached is not None:
             return cached
 
+        if self._use_responses_api:
+            translated = self._translate_with_responses(text, src_lang, tgt_lang)
+        else:
+            translated = self._translate_with_chat_completions(text, src_lang, tgt_lang)
+        if not translated:
+            raise RuntimeError("Translation API returned an empty response")
+        return self._store_cached_translation(
+            text,
+            src_lang,
+            tgt_lang,
+            self.model,
+            translated,
+        )
+
+    def _translate_with_chat_completions(
+        self,
+        text: str,
+        src_lang: str,
+        tgt_lang: str,
+    ) -> str:
         kwargs = dict(
             model=self.model,
             messages=self._build_messages(text, src_lang, tgt_lang),
@@ -70,13 +95,23 @@ class OpenAITranslator(BaseTranslator):
             kwargs["extra_body"] = self._extra_body
 
         response = self._client.chat.completions.create(**kwargs)
-        translated = (response.choices[0].message.content or "").strip()
-        if not translated:
-            raise RuntimeError("Translation API returned an empty response")
-        return self._store_cached_translation(
-            text,
-            src_lang,
-            tgt_lang,
-            self.model,
-            translated,
+        return (response.choices[0].message.content or "").strip()
+
+    def _translate_with_responses(
+        self,
+        text: str,
+        src_lang: str,
+        tgt_lang: str,
+    ) -> str:
+        prompt = self._build_messages(text, src_lang, tgt_lang)[0]["content"]
+        kwargs = dict(
+            model=self.model,
+            input=prompt,
+            temperature=0.0,
+            max_output_tokens=self._estimate_max_tokens(text),
         )
+        if self._extra_body:
+            kwargs["extra_body"] = self._extra_body
+
+        response = self._client.responses.create(**kwargs)
+        return str(response.output_text or "").strip()

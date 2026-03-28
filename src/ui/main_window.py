@@ -1,4 +1,5 @@
-﻿import queue
+﻿import logging
+import queue
 import re
 import threading
 import time
@@ -42,6 +43,8 @@ from src.utils.lang_detect import detect_language
 from .floating_window import FloatingWindow
 from .settings_window import SettingsWindow
 from .window_effects import apply_window_icon, present_popup
+
+_log = logging.getLogger(__name__)
 
 BG_PRIMARY = "#f5f5f7"
 BG_SECONDARY = "#eef2f7"
@@ -1629,6 +1632,11 @@ class MainWindow(ctk.CTk):
                 if name and name not in devices:
                     devices[name] = int(device.get("index", -1))
         self._desktop_devices = devices
+        _log.debug(
+            "_load_desktop_devices: found %d loopback device(s): %s",
+            len(devices),
+            [(n, idx) for n, idx in devices.items()] or "(none)",
+        )
 
     def _match_desktop_device_name(self, preferred_name: str | None) -> str | None:
         configured = str(preferred_name or "").strip()
@@ -1653,14 +1661,32 @@ class MainWindow(ctk.CTk):
 
     def _auto_detect_listen_device_name(self) -> str | None:
         # 1. VRChat process detection — most specific signal
-        detected = self._match_desktop_device_name(
-            detect_process_output_device_name(("VRChat.exe",))
+        raw_vrc = detect_process_output_device_name(("VRChat.exe",))
+        _log.debug(
+            "_auto_detect_listen_device_name: detect_process_output_device_name('VRChat.exe') "
+            "returned %r",
+            raw_vrc,
+        )
+        detected = self._match_desktop_device_name(raw_vrc)
+        _log.debug(
+            "_auto_detect_listen_device_name: VRChat device match result: %r",
+            detected,
         )
         if detected is not None:
             return detected
         # 2. Default output device — PyAudioWPatch and sounddevice share PortAudio
         #    so the name from either matches our device list directly.
-        return self._match_desktop_device_name(default_output_device_name())
+        raw_default = default_output_device_name()
+        _log.debug(
+            "_auto_detect_listen_device_name: default_output_device_name() returned %r",
+            raw_default,
+        )
+        matched_default = self._match_desktop_device_name(raw_default)
+        _log.debug(
+            "_auto_detect_listen_device_name: fallback to system default — match result: %r",
+            matched_default,
+        )
+        return matched_default
 
     def _desktop_output_device_name(self) -> str | None:
         desktop_cfg = self._desktop_capture_config()
@@ -1765,7 +1791,9 @@ class MainWindow(ctk.CTk):
 
         self._load_desktop_devices()
         device_name = self._desktop_output_device_name()
+        _log.debug("_start_listen: resolved output device name: %r", device_name)
         if device_name is None:
+            _log.warning("_start_listen: no output device resolved — cannot start desktop capture")
             raise RuntimeError(self._copy("desktop_audio_unavailable_body"))
 
         audio_cfg = self._config.get("audio", {})
@@ -1785,7 +1813,7 @@ class MainWindow(ctk.CTk):
             silence_threshold_s=audio_cfg.get("vad_silence_threshold", 1.2),
             vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
             vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
-            vad_min_rms=audio_cfg.get("vad_min_rms", 0.05),
+            vad_min_rms=audio_cfg.get("vad_min_rms", 0.02),
             min_segment_s=audio_cfg.get("min_segment_s", 0.45),
             partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
             max_segment_s=audio_cfg.get("max_segment_s", 12.0),
@@ -1798,12 +1826,19 @@ class MainWindow(ctk.CTk):
                 lambda m=message: self._handle_desktop_capture_runtime_error(m)
             ),
         )
+        _log.debug("_start_listen: starting DesktopAudioRecorder with device_name=%r", device_name)
         try:
             self._listen_recorder.start()
             self._listen_running = True
             self._active_listen_output_device_name = device_name
             self._last_desktop_device_signature = (tuple(sorted(self._desktop_devices)), device_name)
+            _log.debug("_start_listen: DesktopAudioRecorder started successfully for %r", device_name)
         except Exception:
+            _log.error(
+                "_start_listen: failed to start DesktopAudioRecorder for device %r",
+                device_name,
+                exc_info=True,
+            )
             self._listen_recorder = None
             self._listen_running = False
             self._active_listen_output_device_name = None

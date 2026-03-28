@@ -97,6 +97,24 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     return changed
 
 
+def _ensure_translation_config(config: dict) -> bool:
+    changed = False
+    trans_cfg = config.get("translation", {})
+    if not isinstance(trans_cfg, dict):
+        return False
+
+    openai_cfg = trans_cfg.get("openai", {})
+    if not isinstance(openai_cfg, dict):
+        return False
+
+    model = str(openai_cfg.get("model", "") or "").strip().lower()
+    if model.startswith("gpt-4"):
+        openai_cfg["model"] = "gpt-5.4-mini"
+        changed = True
+
+    return changed
+
+
 def load_config() -> dict:
     config_path = _config_path()
     created_new = False
@@ -118,6 +136,8 @@ def load_config() -> dict:
         loaded = json.load(f)
     merged = _merge_defaults(defaults, loaded)
     config_changed = _ensure_vrc_listen_config(merged, loaded)
+    if _ensure_translation_config(merged):
+        config_changed = True
     if bootstrap_ui_language(merged, prefer_auto=created_new) or config_changed:
         save_config(merged)
     return merged

@@ -254,7 +254,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "openai": {
         "label": "GPT",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o-mini",
+        "model": "gpt-5.4-mini",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -263,7 +263,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "deepseek": {
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-reasoner",
+        "model": "deepseek-chat",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -314,7 +314,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "anthropic": {
         "label": "Claude",
         "base_url": "https://api.anthropic.com",
-        "model": "claude-3-5-haiku-20241022",
+        "model": "claude-haiku-4-5-20251001",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "model_input": "select",
@@ -323,14 +323,14 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
 
 TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "openai": (
-        "gpt-4o-mini",
-        "gpt-4.1-mini",
-        "gpt-4.1",
-        "gpt-4.1-nano",
+        "gpt-5.4-pro",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.4",
     ),
     "deepseek": (
-        "deepseek-reasoner",
         "deepseek-chat",
+        "deepseek-reasoner",
     ),
     "zhipu": (
         "glm-4.7-flash",
@@ -343,63 +343,64 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "qianwen": (
         "qwen-mt-flash",
         "qwen-mt-plus",
-        "qwen-mt-lite",
         "qwen-mt-turbo",
+        "qwen-mt-lite",
     ),
     "gemini": (
-        "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
     ),
     "doubao": (),
     "anthropic": (
+        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6",
         "claude-3-5-haiku-20241022",
-        "claude-3-5-haiku-latest",
         "claude-sonnet-4-20250514",
-        "claude-sonnet-4-0",
-        "claude-3-7-sonnet-20250219",
-        "claude-3-7-sonnet-latest",
     ),
 }
 
 TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "openai": {
-        "gpt-4o-mini": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "live_default",
-        },
-        "gpt-4.1-mini": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "gpt-4.1": {
+        "gpt-5.4-pro": {
             "speed": "slow",
             "quality": "high",
             "fit": "not_recommended",
             "note": "quality_first",
         },
-        "gpt-4.1-nano": {
+        "gpt-5.4-mini": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "gpt-5.4-nano": {
             "speed": "very_fast",
-            "quality": "basic",
+            "quality": "balanced",
             "fit": "general",
             "note": "economy_first",
         },
+        "gpt-5.4": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
     },
     "deepseek": {
+        "deepseek-chat": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
         "deepseek-reasoner": {
             "speed": "slow",
             "quality": "high",
             "fit": "not_recommended",
             "note": "reasoning",
-        },
-        "deepseek-chat": {
-            "speed": "balanced",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "live_default",
         },
     },
     "zhipu": {
@@ -453,65 +454,71 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "very_recommended",
             "note": "mt_quality",
         },
-        "qwen-mt-lite": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
         "qwen-mt-turbo": {
             "speed": "balanced",
             "quality": "balanced",
             "fit": "general",
             "note": "legacy_mt",
         },
+        "qwen-mt-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
     },
     "gemini": {
+        "gemini-2.5-flash-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "live_default",
+        },
         "gemini-2.5-flash": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "balanced_quality",
+        },
+        "gemini-2.5-pro": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "quality_first",
+        },
+    },
+    "anthropic": {
+        "claude-haiku-4-5-20251001": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "claude-haiku-4-5": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "claude-sonnet-4-6": {
             "speed": "balanced",
             "quality": "high",
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "gemini-2.5-flash-lite": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "live_default",
+        "claude-opus-4-6": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "quality_first",
         },
-    },
-    "anthropic": {
         "claude-3-5-haiku-20241022": {
             "speed": "fast",
             "quality": "balanced",
-            "fit": "recommended",
-            "note": "live_default",
-        },
-        "claude-3-5-haiku-latest": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "recommended",
+            "fit": "general",
             "note": "live_default",
         },
         "claude-sonnet-4-20250514": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "claude-sonnet-4-0": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "claude-3-7-sonnet-20250219": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "claude-3-7-sonnet-latest": {
             "speed": "slow",
             "quality": "high",
             "fit": "not_recommended",
