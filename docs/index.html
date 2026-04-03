@@ -570,6 +570,12 @@
     .site-footer a { color: #c8f7ff; text-decoration: none; }
     .site-footer a:hover { text-decoration: underline; }
 
+    .fp-section-anchor {
+      display: block;
+      width: 100%;
+      height: 0;
+      pointer-events: none;
+    }
     .fp-section {
       position: sticky;
       top: 0;
@@ -865,6 +871,14 @@
 
 <script>
   const sections = Array.from(document.querySelectorAll('.fp-section'));
+  const sectionAnchors = sections.map((section, index) => {
+    const anchor = document.createElement('span');
+    anchor.className = 'fp-section-anchor';
+    anchor.setAttribute('aria-hidden', 'true');
+    anchor.dataset.i = String(index);
+    section.parentNode.insertBefore(anchor, section);
+    return anchor;
+  });
   const dots = Array.from(document.querySelectorAll('.fp-dot'));
   const navBar = document.querySelector('nav');
   const navLinks = [
@@ -888,11 +902,12 @@
   }
   function scrollToSection(index) {
     const target = sections[index];
-    if (!target) return;
-    setActiveSection(index);
-    updateNavBar();
+    const anchor = sectionAnchors[index];
+    if (!target || !anchor) return;
+
+    const top = anchor.getBoundingClientRect().top + window.scrollY;
     window.scrollTo({
-      top: target.offsetTop,
+      top,
       behavior: 'smooth'
     });
   }
