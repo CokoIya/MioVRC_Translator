@@ -405,10 +405,15 @@
     #features,
     #guide,
     #download {
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(12px) saturate(118%);
+      -webkit-backdrop-filter: blur(12px) saturate(118%);
     }
-    #features { z-index: 2; background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(8, 10, 18, 0.12) 100%); }
+    #features {
+      z-index: 2;
+      background:
+        linear-gradient(180deg, rgba(7, 10, 18, 0.58) 0%, rgba(8, 10, 18, 0.66) 100%),
+        radial-gradient(circle at 22% 18%, rgba(123, 109, 242, 0.07), transparent 34%);
+    }
     .features-grid {
       display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
       width: min(100%, var(--maxw));
@@ -444,8 +449,8 @@
     #guide {
       z-index: 3;
       background:
-        linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(8, 10, 18, .14)),
-        radial-gradient(ellipse at 50% 100%, rgba(123, 109, 242, .04), transparent 60%);
+        linear-gradient(180deg, rgba(7, 10, 18, 0.62), rgba(8, 10, 18, 0.7)),
+        radial-gradient(ellipse at 50% 100%, rgba(123, 109, 242, 0.06), transparent 60%);
     }
     .guide-grid {
       display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;
@@ -483,7 +488,12 @@
     }
     .guide-step.full { grid-column: 1 / -1; }
 
-    #download { background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(8, 10, 18, .16)); z-index: 4; }
+    #download {
+      background:
+        linear-gradient(180deg, rgba(7, 10, 18, 0.68), rgba(8, 10, 18, 0.76)),
+        radial-gradient(circle at 78% 20%, rgba(45, 198, 239, 0.05), transparent 34%);
+      z-index: 4;
+    }
     .dl-cards {
       display: grid; gap: 18px; width: min(100%, var(--maxw));
       grid-template-columns: repeat(2, minmax(0, 1fr));
