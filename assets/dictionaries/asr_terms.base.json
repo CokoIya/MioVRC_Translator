@@ -1,28 +1,5949 @@
 {
-  "version": "bundled-2026.03.19",
+  "version": "bundled-2026.03.23",
   "source": "bundled",
   "description": "Bundled baseline ASR correction rules.",
   "entries": [
     {
       "replacement": "VRChat",
-      "patterns": ["VR chat", "Vrchat", "vr chat"],
+      "patterns": [
+        "VR chat",
+        "Vrchat",
+        "vr chat",
+        "VR Cat"
+      ],
       "mode": "substring"
     },
     {
       "replacement": "OSC",
-      "patterns": ["O S C"],
+      "patterns": [
+        "O S C",
+        "o s c"
+      ],
       "mode": "substring"
     },
     {
       "replacement": "VRC",
-      "patterns": ["V R C"],
+      "patterns": [
+        "V R C",
+        "v r c"
+      ],
       "mode": "substring"
     },
     {
-      "replacement": "\u516b\u5343\u4ee3",
-      "patterns": ["8000\u5e26"],
-      "languages": ["ja", "zh", "en"],
+      "replacement": "VRCX",
+      "patterns": [
+        "V R C X",
+        "V R C ex"
+      ],
       "mode": "substring"
+    },
+    {
+      "replacement": "PhysBones",
+      "patterns": [
+        "fiz bones",
+        "fizz bones",
+        "physics bones",
+        "Phys Bones",
+        "phis bones"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "FBT",
+      "patterns": [
+        "F B T",
+        "f b t"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "EAC",
+      "patterns": [
+        "E A C",
+        "e a c"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Mio Translator",
+      "patterns": [
+        "Mio translator"
+      ],
+      "mode": "substring",
+      "case_sensitive": false
+    },
+    {
+      "replacement": "ChatGPT",
+      "patterns": [
+        "Chat G P T",
+        "chat G P T",
+        "Chat GPT",
+        "チャットGPT",
+        "チャット G P T"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "GPT",
+      "patterns": [
+        "G P T",
+        "g p t"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "DeepSeek",
+      "patterns": [
+        "Deep Seek",
+        "Deep Seeker",
+        "deep seek",
+        "ディープシーク"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Claude",
+      "patterns": [
+        "Cloud AI",
+        "Claud",
+        "クロード"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Gemini",
+      "patterns": [
+        "ジェミニ",
+        "Gemni",
+        "Gemeni"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Grok",
+      "patterns": [
+        "Groc",
+        "グロック"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Copilot",
+      "patterns": [
+        "Co pilot",
+        "co-pilot",
+        "コパイロット"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "LLM",
+      "patterns": [
+        "L L M",
+        "l l m"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "AGI",
+      "patterns": [
+        "A G I",
+        "a g i"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "RAG",
+      "patterns": [
+        "R A G",
+        "r a g"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "API",
+      "patterns": [
+        "A P I",
+        "a p i"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "AI",
+      "patterns": [
+        "A I",
+        "a i"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh",
+        "en"
+      ]
+    },
+    {
+      "replacement": "大模型",
+      "patterns": [
+        "大磨型",
+        "大默型",
+        "大摸型"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "满血版",
+      "patterns": [
+        "慢血版",
+        "满学版"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "提示词",
+      "patterns": [
+        "提示次",
+        "提示辞"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "yyds",
+      "patterns": [
+        "y y d s",
+        "Y Y D S",
+        "YYDS"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "MBTI",
+      "patterns": [
+        "M B T I",
+        "m b t i",
+        "M B T"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "E人",
+      "patterns": [
+        "e人",
+        "易人",
+        "E型人"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "I人",
+      "patterns": [
+        "i人",
+        "艾人",
+        "I型人"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "摆烂",
+      "patterns": [
+        "拜烂",
+        "败烂",
+        "摆兰"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "破防",
+      "patterns": [
+        "泼防",
+        "破法",
+        "破风"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "拿捏",
+      "patterns": [
+        "纳捏",
+        "那捏",
+        "拿你"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "整活",
+      "patterns": [
+        "整合",
+        "整火",
+        "争活"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "显眼包",
+      "patterns": [
+        "现眼包",
+        "鲜眼包",
+        "宪眼包"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "倒反天罡",
+      "patterns": [
+        "道返天罡",
+        "倒犯天罡",
+        "到反天罡"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "遥遥领先",
+      "patterns": [
+        "摇摇领先",
+        "遥遥灵先"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "发癫",
+      "patterns": [
+        "发颠",
+        "发颤",
+        "发巅"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "草台班子",
+      "patterns": [
+        "草台板子",
+        "草抬班子"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "情绪价值",
+      "patterns": [
+        "情绪假值",
+        "情绪嫁值"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "班味",
+      "patterns": [
+        "搬味",
+        "般味"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "泼天的富贵",
+      "patterns": [
+        "波天的富贵",
+        "泼天地富贵"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "搭子",
+      "patterns": [
+        "答子",
+        "塔子"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "松弛感",
+      "patterns": [
+        "松驰感",
+        "松弛赶"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "多巴胺",
+      "patterns": [
+        "多芭胺",
+        "多巴氨"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "小红书",
+      "patterns": [
+        "小红树",
+        "小红属"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "赛博",
+      "patterns": [
+        "赛伯",
+        "塞博"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "内卷",
+      "patterns": [
+        "内娟",
+        "内圈"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "PUA",
+      "patterns": [
+        "P U A",
+        "p u a"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "OOTD",
+      "patterns": [
+        "O O T D",
+        "outfit of the day"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "八千代",
+      "patterns": [
+        "8000代"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja",
+        "zh",
+        "en"
+      ]
+    },
+    {
+      "replacement": "VTuber",
+      "patterns": [
+        "V Tuber",
+        "B Tuber",
+        "VTUBER",
+        "Vtuber",
+        "ビーチューバー",
+        "ブイチューバー"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "にじさんじ",
+      "patterns": [
+        "虹さんじ",
+        "ニジさんじ",
+        "にじ三時",
+        "虹三時",
+        "虹サンジ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ホロライブ",
+      "patterns": [
+        "掘るライブ",
+        "ほろライブ",
+        "ホロ live",
+        "ホロ Live"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ぶいすぽ",
+      "patterns": [
+        "ブイスポ",
+        "V スポ",
+        "Vスポ",
+        "ぶいスポ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "推し",
+      "patterns": [
+        "押し"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "推し活",
+      "patterns": [
+        "押し活",
+        "推活"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ぬい活",
+      "patterns": [
+        "縫い活",
+        "ヌイ活"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "スパチャ",
+      "patterns": [
+        "スーパーチャット",
+        "スーパー チャット"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "切り抜き",
+      "patterns": [
+        "切り貫き"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "同接",
+      "patterns": [
+        "同席",
+        "同接続",
+        "どう接"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "メンバーシップ",
+      "patterns": [
+        "メンバーシプ",
+        "メンバー ship"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エモい",
+      "patterns": [
+        "絵もいい",
+        "絵も良い",
+        "えもい"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ぴえん",
+      "patterns": [
+        "ピエン",
+        "ぴ絵ん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ワンチャン",
+      "patterns": [
+        "ワン チャン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "バズる",
+      "patterns": [
+        "ばずる"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "サブスク",
+      "patterns": [
+        "サブ スク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "インフルエンサー",
+      "patterns": [
+        "インフルエンサ",
+        "インフルエンザー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フォロバ",
+      "patterns": [
+        "フォロー バック",
+        "フォローバック"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "地雷系",
+      "patterns": [
+        "地雷けい",
+        "地雷形"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "量産型",
+      "patterns": [
+        "量産がた",
+        "量産かた"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "メタバース",
+      "patterns": [
+        "メタ バース",
+        "メタバーズ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フルトラ",
+      "patterns": [
+        "フル トラ",
+        "フルトラッキング"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ハーフトラ",
+      "patterns": [
+        "ハーフ トラ",
+        "ハーフトラッキング"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アバター",
+      "patterns": [
+        "アバタ",
+        "アバーター"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ワールド",
+      "patterns": [
+        "ワールヅ",
+        "ワルド"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "NPC",
+      "patterns": [
+        "N P C",
+        "n p c"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "GG",
+      "patterns": [
+        "G G",
+        "g g"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "GG WP",
+      "patterns": [
+        "G G W P",
+        "gg w p"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "AFK",
+      "patterns": [
+        "A F K",
+        "a f k"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "POV",
+      "patterns": [
+        "P O V",
+        "p o v"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "GOAT",
+      "patterns": [
+        "G O A T",
+        "g o a t"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "NGL",
+      "patterns": [
+        "N G L",
+        "n g l"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "LMAO",
+      "patterns": [
+        "L M A O",
+        "l m a o"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "IRL",
+      "patterns": [
+        "I R L",
+        "i r l"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "IYKYK",
+      "patterns": [
+        "I Y K Y K",
+        "i y k y k"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "TL;DR",
+      "patterns": [
+        "T L D R",
+        "tl dr"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "FOMO",
+      "patterns": [
+        "F O M O",
+        "f o m o"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Rizz",
+      "patterns": [
+        "Riz",
+        "Ryz"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "situationship",
+      "patterns": [
+        "situation ship",
+        "situashionship"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "鬼滅の刃",
+      "patterns": [
+        "鬼滅のは",
+        "鬼滅の葉",
+        "きめつのやいば"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "竈門炭治郎",
+      "patterns": [
+        "炭次郎",
+        "炭治郎",
+        "たん治郎",
+        "かまどたんじろう"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "竈門禰豆子",
+      "patterns": [
+        "ねずこ",
+        "ねずっこ",
+        "禰豆子",
+        "禰塚子"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "我妻善逸",
+      "patterns": [
+        "善逸",
+        "ぜんいつ",
+        "ぜん逸"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "嘴平伊之助",
+      "patterns": [
+        "伊之助",
+        "いのすけ",
+        "い之助"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鬼舞辻無惨",
+      "patterns": [
+        "無惨",
+        "むざん",
+        "無残",
+        "むさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "煉獄杏寿郎",
+      "patterns": [
+        "煉獄さん",
+        "れんごく",
+        "レンゴク",
+        "炎柱"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "宇髄天元",
+      "patterns": [
+        "うずい",
+        "宇随",
+        "音柱"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "時透無一郎",
+      "patterns": [
+        "ときとう",
+        "霞柱",
+        "時透"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "甘露寺蜜璃",
+      "patterns": [
+        "かんろじ",
+        "恋柱",
+        "蜜璃"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "呪術廻戦",
+      "patterns": [
+        "呪術会戦",
+        "術廻戦",
+        "じゅじゅつかいせん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "虎杖悠仁",
+      "patterns": [
+        "虎杖",
+        "いたどり",
+        "伊太刀"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "五条悟",
+      "patterns": [
+        "ごじょう",
+        "五条先生",
+        "五城悟"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "伏黒恵",
+      "patterns": [
+        "伏黒",
+        "ふしぐろ",
+        "伏栗"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "釘崎野薔薇",
+      "patterns": [
+        "釘崎",
+        "くぎさき",
+        "釘嵜"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "両面宿儺",
+      "patterns": [
+        "宿儺",
+        "すくな",
+        "宿名",
+        "両面すくな"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "乙骨憂太",
+      "patterns": [
+        "乙骨",
+        "おっこつ",
+        "乙骨ゆうた"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "東堂葵",
+      "patterns": [
+        "東堂",
+        "とうどう",
+        "トウドウ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "進撃の巨人",
+      "patterns": [
+        "進撃の鬼人",
+        "しんげきのきょじん",
+        "進撃の機人"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エレン・イェーガー",
+      "patterns": [
+        "エレン",
+        "エレン・イエーガー",
+        "イェーガー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ミカサ・アッカーマン",
+      "patterns": [
+        "ミカサ",
+        "アッカーマン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リヴァイ",
+      "patterns": [
+        "リバイ",
+        "リビアイ",
+        "リヴァイ兵長"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エルヴィン",
+      "patterns": [
+        "エルウィン",
+        "エルビン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "葬送のフリーレン",
+      "patterns": [
+        "葬送フリーレン",
+        "送葬フリーレン",
+        "そうそうのフリーレン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フリーレン",
+      "patterns": [
+        "フリレン",
+        "フリーレン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フェルン",
+      "patterns": [
+        "フェルーン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シュタルク",
+      "patterns": [
+        "シュタールク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヒンメル",
+      "patterns": [
+        "ヒメル",
+        "ひんめる",
+        "ヒンメール"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アイゼン",
+      "patterns": [
+        "アイゼーン",
+        "あいぜん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "スパイファミリー",
+      "patterns": [
+        "スパイ家族",
+        "スパイ ファミリー",
+        "スパイ×ファミリー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アーニャ",
+      "patterns": [
+        "あーにゃ",
+        "アニャ",
+        "アーニャ・フォージャー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ロイド・フォージャー",
+      "patterns": [
+        "ロイド",
+        "黄昏"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヨル・フォージャー",
+      "patterns": [
+        "ヨル",
+        "ヨルさん",
+        "夜"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ぼっち・ざ・ろっく",
+      "patterns": [
+        "ぼっちざろっく",
+        "ぼっちロック",
+        "ぼっち・ざ・ロック"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "後藤ひとり",
+      "patterns": [
+        "後藤",
+        "ぼっちちゃん",
+        "ひとりちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "山田リョウ",
+      "patterns": [
+        "リョウ",
+        "りょうさん",
+        "山田"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "喜多郁代",
+      "patterns": [
+        "きたちゃん",
+        "喜多",
+        "きたいくよ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ダンジョン飯",
+      "patterns": [
+        "ダンジョンめし",
+        "洞窟飯",
+        "ダンジョン御飯"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ライオス",
+      "patterns": [
+        "らいおす",
+        "ライオス・トーデン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "マルシル",
+      "patterns": [
+        "マルシル・ドナト",
+        "まるしる"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "チルチャック",
+      "patterns": [
+        "ちるちゃっく"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "チェンソーマン",
+      "patterns": [
+        "チェーンソーマン",
+        "chainsaw man",
+        "チェンソー マン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "デンジ",
+      "patterns": [
+        "でんじ",
+        "電地"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "パワー",
+      "patterns": [
+        "ぱわー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "マキマ",
+      "patterns": [
+        "まきま",
+        "牧間"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リコリス・リコイル",
+      "patterns": [
+        "リコリコ",
+        "リコリスリコイル",
+        "lycoris recoil"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "井ノ上たきな",
+      "patterns": [
+        "たきな",
+        "タキナ",
+        "たきなちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "錦木千束",
+      "patterns": [
+        "ちさと",
+        "チサト",
+        "千束"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "かぐや様は告らせたい",
+      "patterns": [
+        "かぐや様は言わせたい",
+        "かぐや様は断らせたい",
+        "かぐやさまはこくらせたい"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "四宮かぐや",
+      "patterns": [
+        "四宮",
+        "しのみやかぐや",
+        "四の宮かぐや"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "白銀御行",
+      "patterns": [
+        "白銀",
+        "しろがねみゆき",
+        "白銀みゆき"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "藤原千花",
+      "patterns": [
+        "藤原",
+        "ちかちゃん",
+        "藤原ちか"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "石上優",
+      "patterns": [
+        "石上",
+        "いしがみゆう",
+        "石上ゆう"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "早坂愛",
+      "patterns": [
+        "早坂",
+        "はやさか",
+        "はやさかあい"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "超かぐや姫！",
+      "patterns": [
+        "超かぐや姫",
+        "超香具夜姫",
+        "超カグヤ姫",
+        "超かぐや",
+        "長かぐや姫"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "かぐや",
+      "patterns": [
+        "香具夜",
+        "カグヤ",
+        "かぐや姫"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "竹取物語",
+      "patterns": [
+        "竹取り物語",
+        "たけとりものがたり",
+        "竹採物語"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "蓬莱の玉の枝",
+      "patterns": [
+        "ほうらいのたまのえ",
+        "蓬莱の玉枝",
+        "蓬来の玉の枝"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "火鼠の裘",
+      "patterns": [
+        "かねずみのかわごろも",
+        "火鼠の皮衣"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "龍の頸の玉",
+      "patterns": [
+        "竜の頸の玉",
+        "たつのくびのたま",
+        "龍の首の玉"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "燕の子安貝",
+      "patterns": [
+        "つばめのこやすがい"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "仏の御石の鉢",
+      "patterns": [
+        "ほとけのみいしのはち"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ONE PIECE",
+      "patterns": [
+        "One Piece",
+        "one piece",
+        "ワンピース"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "モンキー・D・ルフィ",
+      "patterns": [
+        "ルフィ",
+        "麦わらのルフィ",
+        "ルフィー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ロロノア・ゾロ",
+      "patterns": [
+        "ゾロ",
+        "ゾロさん",
+        "三刀流"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヴィンスモーク・サンジ",
+      "patterns": [
+        "サンジ",
+        "さんじ",
+        "料理長"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ニコ・ロビン",
+      "patterns": [
+        "ロビン",
+        "ロビンさん",
+        "考古学者"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "覇気",
+      "patterns": [
+        "はき",
+        "刷気",
+        "破気"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ギア5",
+      "patterns": [
+        "ギアファイブ",
+        "ギア 5",
+        "ギア五"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "四皇",
+      "patterns": [
+        "よんこう",
+        "四王",
+        "4皇"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "七武海",
+      "patterns": [
+        "しちぶかい",
+        "七部海",
+        "七武会"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "麦わら海賊団",
+      "patterns": [
+        "麦わら",
+        "むぎわら海賊団",
+        "麦藁海賊団"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ポーネグリフ",
+      "patterns": [
+        "歴史の本文",
+        "ぽーねぐりふ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "悪魔の実",
+      "patterns": [
+        "あくまのみ",
+        "악마の実"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "うずまきナルト",
+      "patterns": [
+        "ナルト",
+        "なると"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "うちはサスケ",
+      "patterns": [
+        "サスケ",
+        "サスケくん",
+        "うちはさすけ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "写輪眼",
+      "patterns": [
+        "しゃりんがん",
+        "斜林眼"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "螺旋丸",
+      "patterns": [
+        "らせんがん",
+        "羅旋丸"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "木ノ葉隠れ",
+      "patterns": [
+        "木の葉",
+        "このは",
+        "コノハ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "暁",
+      "patterns": [
+        "アカツキ",
+        "あかつき"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "うちはイタチ",
+      "patterns": [
+        "イタチ",
+        "いたち",
+        "うちはいたち"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "はたけカカシ",
+      "patterns": [
+        "カカシ",
+        "かかし先生",
+        "カカシ先生"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "孫悟空",
+      "patterns": [
+        "ごくう",
+        "語句",
+        "悟空"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "超サイヤ人",
+      "patterns": [
+        "超さいやじん",
+        "スーパーサイヤ人",
+        "超サイア人"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ベジータ",
+      "patterns": [
+        "べじーた",
+        "ベジーター"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "かめはめ波",
+      "patterns": [
+        "カメハメハ",
+        "かめはめは",
+        "カメハメ波"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "元気玉",
+      "patterns": [
+        "げんきだま",
+        "元気弾",
+        "元気球"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フリーザ",
+      "patterns": [
+        "フリーザー",
+        "フリーサ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "セル",
+      "patterns": [
+        "せる",
+        "セル完全体"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "魔人ブウ",
+      "patterns": [
+        "まじんぶう",
+        "魔人ブー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Re:ゼロ",
+      "patterns": [
+        "リゼロ",
+        "Re:Zero",
+        "リ・ゼロ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エミリア",
+      "patterns": [
+        "えみりあ",
+        "エミリア様"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レム",
+      "patterns": [
+        "rem",
+        "れむ",
+        "レムさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ラム",
+      "patterns": [
+        "ram",
+        "らむ",
+        "ラムさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ベアトリス",
+      "patterns": [
+        "ベアトリクス",
+        "ベアちゃん",
+        "べあとりす"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ソードアート・オンライン",
+      "patterns": [
+        "SAO",
+        "ソードアート",
+        "ソードアートオンライン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "キリト",
+      "patterns": [
+        "きりと",
+        "キリトくん",
+        "黒の剣士"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アスナ",
+      "patterns": [
+        "あすな",
+        "アスナちゃん",
+        "閃光"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "転生したらスライムだった件",
+      "patterns": [
+        "転スラ",
+        "てんすら",
+        "スライム転生"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リムル",
+      "patterns": [
+        "リムル様",
+        "rimuru"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シオン",
+      "patterns": [
+        "しおん",
+        "シオンさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ミリム",
+      "patterns": [
+        "みりむ",
+        "ミリムちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "盾の勇者の成り上がり",
+      "patterns": [
+        "盾勇者",
+        "たての勇者",
+        "盾の勇者"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "岩谷尚文",
+      "patterns": [
+        "ナオフミ",
+        "なおふみ",
+        "岩谷"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ラフタリア",
+      "patterns": [
+        "らふたりあ",
+        "ラフタリアちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "無職転生",
+      "patterns": [
+        "むしょくてんせい",
+        "無色転生"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ルーデウス",
+      "patterns": [
+        "るーでうす",
+        "ルーデウスさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エリス",
+      "patterns": [
+        "えりす",
+        "エリスさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シルフィ",
+      "patterns": [
+        "しるふぃ",
+        "シルフィエット",
+        "シルフィちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "魔法少女まどか☆マギカ",
+      "patterns": [
+        "まどマギ",
+        "まどかマギカ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "暁美ほむら",
+      "patterns": [
+        "ほむら",
+        "ほむほむ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鹿目まどか",
+      "patterns": [
+        "まどか",
+        "まどかちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "原神",
+      "patterns": [
+        "元神",
+        "げんしん",
+        "原神impact"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja",
+        "zh"
+      ]
+    },
+    {
+      "replacement": "Genshin Impact",
+      "patterns": [
+        "Genshin",
+        "genshin impact"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "パイモン",
+      "patterns": [
+        "ぱいもん",
+        "Paimon",
+        "パイモンさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "雷電将軍",
+      "patterns": [
+        "らいでんしょうぐん",
+        "雷電大将軍"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "神里綾華",
+      "patterns": [
+        "かみさとあやか",
+        "綾華"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "八重神子",
+      "patterns": [
+        "やえみこ",
+        "八重さん",
+        "神子"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "胡桃",
+      "patterns": [
+        "フータオ",
+        "ふうたお"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鍾離",
+      "patterns": [
+        "ジョンリー",
+        "しょうり",
+        "鐘離"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ナヴィア",
+      "patterns": [
+        "なびあ",
+        "Navia"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フリーナ",
+      "patterns": [
+        "Furina",
+        "ふりーな"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヌヴィレット",
+      "patterns": [
+        "ぬびれっと",
+        "Neuvillette"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リネット",
+      "patterns": [
+        "りねっと",
+        "Lyney",
+        "Lynette"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シュヴルーズ",
+      "patterns": [
+        "Chevreuse",
+        "しゅぶるーず"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "崩壊スターレイル",
+      "patterns": [
+        "崩スタ",
+        "崩壊star rail",
+        "ホンカイスターレイル"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "崩坏星穹铁道",
+      "patterns": [
+        "崩铁",
+        "星铁",
+        "崩坏星穹"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "ゼンレスゾーンゼロ",
+      "patterns": [
+        "ゼンゼロ",
+        "zen zero",
+        "ZZZ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "绝区零",
+      "patterns": [
+        "绝零",
+        "区零",
+        "ZZZ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "Wuthering Waves",
+      "patterns": [
+        "wuthering wave",
+        "Wutering Waves"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "鳴潮",
+      "patterns": [
+        "めいちょう",
+        "鳴り潮",
+        "鸣超"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja",
+        "zh"
+      ]
+    },
+    {
+      "replacement": "ブルーアーカイブ",
+      "patterns": [
+        "ブルアカ",
+        "blue archive",
+        "ブルー アーカイブ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "マインクラフト",
+      "patterns": [
+        "マイクラ",
+        "マイン クラフト",
+        "minecraft"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Minecraft",
+      "patterns": [
+        "mine craft",
+        "mincraft"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "クリーパー",
+      "patterns": [
+        "クリーパ",
+        "creeper"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エンダードラゴン",
+      "patterns": [
+        "エンダードラゴン",
+        "エンドラ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ネザー",
+      "patterns": [
+        "ネザー",
+        "ネーザー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エンダーマン",
+      "patterns": [
+        "エンダーマン",
+        "エンダーマーン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Apex Legends",
+      "patterns": [
+        "apex legend",
+        "Apex Legend",
+        "Apec Legends"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "エーペックス",
+      "patterns": [
+        "エイペックス",
+        "apex",
+        "エイペクス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ランパート",
+      "patterns": [
+        "らんぱーと",
+        "Rampart"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ライフライン",
+      "patterns": [
+        "らいふらいん",
+        "Lifeline"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "パスファインダー",
+      "patterns": [
+        "ぱすふぁいんだー",
+        "Pathfinder"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "VALORANT",
+      "patterns": [
+        "Valorant",
+        "valorant"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "ヴァロラント",
+      "patterns": [
+        "バロラント",
+        "ヴァロ",
+        "バロ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ジェット",
+      "patterns": [
+        "じぇっと",
+        "Jett"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レイナ",
+      "patterns": [
+        "れいな",
+        "Reyna"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "セージ",
+      "patterns": [
+        "せいじ",
+        "Sage"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "League of Legends",
+      "patterns": [
+        "League of Legend",
+        "league of legends"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "リーグ・オブ・レジェンド",
+      "patterns": [
+        "LoL",
+        "リーグオブレジェンド"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "王者荣耀",
+      "patterns": [
+        "王者荣跃",
+        "王者荣曜"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "フォートナイト",
+      "patterns": [
+        "フォート ナイト",
+        "フォトナ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エルデンリング",
+      "patterns": [
+        "エルデン リング"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "モンスターハンター",
+      "patterns": [
+        "モンハン",
+        "モンスター ハンター"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ポケモン",
+      "patterns": [
+        "ポケットモンスター",
+        "Pokemon",
+        "ぽけもん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ファイナルファンタジー",
+      "patterns": [
+        "Final Fantasy",
+        "FF",
+        "ファイナル ファンタジー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ニーア",
+      "patterns": [
+        "NieR",
+        "Nier",
+        "ニアー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ゼルダの伝説",
+      "patterns": [
+        "ゼルダ",
+        "The Legend of Zelda",
+        "ゼルダ伝説"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "スプラトゥーン",
+      "patterns": [
+        "スプラ",
+        "Splatoon"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "スマブラ",
+      "patterns": [
+        "大乱闘スマッシュブラザーズ",
+        "Smash Bros"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "あつまれ どうぶつの森",
+      "patterns": [
+        "あつ森",
+        "どうぶつの森",
+        "Animal Crossing"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "マリオカート",
+      "patterns": [
+        "マリオ カート",
+        "Mario Kart"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "崩坏三",
+      "patterns": [
+        "崩坏3",
+        "崩崩三"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "光遇",
+      "patterns": [
+        "光愈",
+        "光欲",
+        "Sky游戏"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "明日方舟",
+      "patterns": [
+        "明日方州",
+        "Arknights"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "GPU",
+      "patterns": [
+        "G P U",
+        "g p u"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "CPU",
+      "patterns": [
+        "C P U",
+        "c p u"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "SSD",
+      "patterns": [
+        "S S D"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en",
+        "zh"
+      ]
+    },
+    {
+      "replacement": "Wi-Fi",
+      "patterns": [
+        "WiFi",
+        "wifi",
+        "Wifi",
+        "wife"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Bluetooth",
+      "patterns": [
+        "Blue Tooth",
+        "blue tooth"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "USB-C",
+      "patterns": [
+        "U S B C",
+        "USB C",
+        "type c",
+        "Type-C"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "RTX",
+      "patterns": [
+        "R T X",
+        "r t x"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Meta Quest",
+      "patterns": [
+        "quest",
+        "Quest 3",
+        "quest 3",
+        "メタクエスト"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Steam Deck",
+      "patterns": [
+        "steam deck",
+        "スチームデック",
+        "スチームデキ"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Discord",
+      "patterns": [
+        "Discort",
+        "discort",
+        "ディスコ",
+        "ディスコード"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Twitter",
+      "patterns": [
+        "ツイッター",
+        "Twiter"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "TikTok",
+      "patterns": [
+        "Tick Tock",
+        "tick tock",
+        "ティックトック"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Instagram",
+      "patterns": [
+        "インスタ",
+        "insta",
+        "instgram"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "YouTube",
+      "patterns": [
+        "ユーチューブ",
+        "You Tube",
+        "you tube"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Twitch",
+      "patterns": [
+        "トウィッチ"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "Patreon",
+      "patterns": [
+        "パトレオン",
+        "patron"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "LINE",
+      "patterns": [
+        "ライン",
+        "line app"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja",
+        "zh"
+      ]
+    },
+    {
+      "replacement": "NATO",
+      "patterns": [
+        "N A T O",
+        "n a t o"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "G7",
+      "patterns": [
+        "G 7",
+        "g 7",
+        "ジー7"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "G20",
+      "patterns": [
+        "G 20",
+        "g 20",
+        "ジー20"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "SDGs",
+      "patterns": [
+        "S D G s",
+        "s d g s",
+        "エスディージーズ"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "ESG",
+      "patterns": [
+        "E S G",
+        "e s g"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "乌克兰",
+      "patterns": [
+        "于克南",
+        "乌可兰",
+        "乌克南"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "半导体",
+      "patterns": [
+        "半道体",
+        "半导地"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "芯片",
+      "patterns": [
+        "心片",
+        "新片"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "人工智能",
+      "patterns": [
+        "人工指能",
+        "人工制能",
+        "人工只能"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "ウクライナ",
+      "patterns": [
+        "ウクレイナ",
+        "ウクライナ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "パレスチナ",
+      "patterns": [
+        "パレスチーナ",
+        "パレスティナ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "半導体",
+      "patterns": [
+        "半道体",
+        "はんどうたい"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "転生",
+      "patterns": [
+        "転成",
+        "てんせい",
+        "転聖"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "異世界",
+      "patterns": [
+        "異性界",
+        "いせかい",
+        "移世界"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "チート",
+      "patterns": [
+        "チーと",
+        "チィート"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ラスボス",
+      "patterns": [
+        "ラスト ボス",
+        "last boss",
+        "らすぼす"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ステータス",
+      "patterns": [
+        "ステタス",
+        "ステータース"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レベルアップ",
+      "patterns": [
+        "レベル アップ",
+        "level up"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ガチャ",
+      "patterns": [
+        "がちゃ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "課金",
+      "patterns": [
+        "家金",
+        "かきん",
+        "過金"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "無課金",
+      "patterns": [
+        "無家金",
+        "むかきん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "廃課金",
+      "patterns": [
+        "廃家金",
+        "はいかきん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リセマラ",
+      "patterns": [
+        "リセット マラソン",
+        "りせまら"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "天井",
+      "patterns": [
+        "てんじょう",
+        "天女"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "抽卡",
+      "patterns": [
+        "抽咔",
+        "丑卡"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "保底",
+      "patterns": [
+        "保地",
+        "宝底",
+        "保弟"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "非酋",
+      "patterns": [
+        "非仇"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "欧皇",
+      "patterns": [
+        "哦皇"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "大佬",
+      "patterns": [
+        "大捞",
+        "大牢"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "萌新",
+      "patterns": [
+        "萌心",
+        "蒙新"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "VOCALOID",
+      "patterns": [
+        "Vocaloid",
+        "vocaloid",
+        "ボカロ"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "初音ミク",
+      "patterns": [
+        "初音みく",
+        "ミク",
+        "はつねみく",
+        "Hatsune Miku"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鏡音リン",
+      "patterns": [
+        "鏡音りん",
+        "リン",
+        "かがみねりん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鏡音レン",
+      "patterns": [
+        "鏡音れん",
+        "レン",
+        "かがみねれん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "巡音ルカ",
+      "patterns": [
+        "ルカ",
+        "めぐりねるか",
+        "巡音るか"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ずんだもん",
+      "patterns": [
+        "ずんだ餅",
+        "ずんだもーん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "四国めたん",
+      "patterns": [
+        "しこくめたん",
+        "めたんちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "コスプレ",
+      "patterns": [
+        "コスプレイ",
+        "cos",
+        "コス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "コミケ",
+      "patterns": [
+        "コミックマーケット",
+        "コミッケ",
+        "コミケット"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "同人誌",
+      "patterns": [
+        "どうじんし",
+        "同人雑誌"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "聖地巡礼",
+      "patterns": [
+        "せいちじゅんれい",
+        "聖地 巡礼"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アクスタ",
+      "patterns": [
+        "アクリルスタンド",
+        "アクリル スタンド"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "フィギュア",
+      "patterns": [
+        "フィギア",
+        "フィーギャ",
+        "figure"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "グッズ",
+      "patterns": [
+        "グッヅ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "オタク",
+      "patterns": [
+        "おたく",
+        "ヲタク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "尊い",
+      "patterns": [
+        "とうとい",
+        "尊"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "神曲",
+      "patterns": [
+        "かみきょく"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "沼る",
+      "patterns": [
+        "ぬまる"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "僕のヒーローアカデミア",
+      "patterns": [
+        "僕のヒーロー アカデミア",
+        "俺のヒーローアカデミア",
+        "ヒロアカ",
+        "MHA"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "緑谷出久",
+      "patterns": [
+        "みどりや",
+        "デク",
+        "緑谷",
+        "でく"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "爆豪勝己",
+      "patterns": [
+        "爆豪",
+        "ばくごう",
+        "かつき",
+        "ばくかつ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "轟焦凍",
+      "patterns": [
+        "轟",
+        "とどろき",
+        "しょうと",
+        "ショウト"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "オールマイト",
+      "patterns": [
+        "オール マイト",
+        "All Might",
+        "オールマイト"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ワン・フォー・オール",
+      "patterns": [
+        "ワンフォーオール",
+        "One for All"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "麗日お茶子",
+      "patterns": [
+        "お茶子",
+        "うらちゃん",
+        "うらら"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "飯田天哉",
+      "patterns": [
+        "飯田",
+        "いいだ",
+        "テンヤ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "相澤消太",
+      "patterns": [
+        "消しゴム先生",
+        "イレイザーヘッド",
+        "あいざわ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "志村菜奈",
+      "patterns": [
+        "しむら",
+        "グラン・トリノ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "死柄木弔",
+      "patterns": [
+        "しがらき",
+        "死柄木",
+        "シガラキ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ハイキュー!!",
+      "patterns": [
+        "ハイキュー",
+        "排球",
+        "はいきゅー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "日向翔陽",
+      "patterns": [
+        "ひなた",
+        "日向",
+        "しょうよう",
+        "ひなたしょうよう"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "影山飛雄",
+      "patterns": [
+        "影山",
+        "かげやま",
+        "とびお"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "烏野高校",
+      "patterns": [
+        "からすの高校",
+        "烏野",
+        "カラスノ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "澤村大地",
+      "patterns": [
+        "さわむら",
+        "澤村"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "西谷夕",
+      "patterns": [
+        "にしのや",
+        "西谷",
+        "ニシノヤ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "月島蛍",
+      "patterns": [
+        "つきしま",
+        "月島",
+        "ツキシマ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ブルーロック",
+      "patterns": [
+        "Blue Lock",
+        "ブルー ロック",
+        "青い監獄"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "潔世一",
+      "patterns": [
+        "いさぎよいち",
+        "潔",
+        "イサギヨイチ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "糸師凛",
+      "patterns": [
+        "いとしりん",
+        "糸師",
+        "イトシリン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "糸師冴",
+      "patterns": [
+        "いとしさえ",
+        "糸師冴",
+        "イトシサエ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "蜂楽廻",
+      "patterns": [
+        "はちらめぐる",
+        "バチラ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "馬狼照英",
+      "patterns": [
+        "ばろうてるひで",
+        "バロウ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "【推しの子】",
+      "patterns": [
+        "推しの子",
+        "おしのこ",
+        "Oshi no Ko"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アクア",
+      "patterns": [
+        "あくあ",
+        "アクアさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ルビー",
+      "patterns": [
+        "るびー",
+        "ルビーちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "有馬かな",
+      "patterns": [
+        "ありまかな",
+        "かなちゃん",
+        "有馬"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "黒川あかね",
+      "patterns": [
+        "くろかわあかね",
+        "あかねちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "MEMちょ",
+      "patterns": [
+        "めむちょ",
+        "MEM-cho"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "この素晴らしい世界に祝福を！",
+      "patterns": [
+        "このすば",
+        "このすばらしい世界",
+        "konosuba"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "カズマ",
+      "patterns": [
+        "かずま",
+        "和真",
+        "カズマくん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "めぐみん",
+      "patterns": [
+        "メグミン",
+        "芽ぐみん",
+        "めぐみんちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ダクネス",
+      "patterns": [
+        "ダークネス",
+        "だくねす"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "オーバーロード",
+      "patterns": [
+        "Overlord",
+        "オーバー ロード"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アインズ",
+      "patterns": [
+        "あいんず",
+        "アインズ・ウール・ゴウン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アルベド",
+      "patterns": [
+        "あるべど",
+        "アルベドさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シャルティア",
+      "patterns": [
+        "しゃるてぃあ",
+        "シャルティアちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ナザリック",
+      "patterns": [
+        "ナザリック地下大墳墓",
+        "ナザリック"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "陰の実力者になりたくて",
+      "patterns": [
+        "陰実",
+        "かげじつ",
+        "The Eminence in Shadow"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シャドウ",
+      "patterns": [
+        "shadow",
+        "シャドーガーデン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シド・カゲノウ",
+      "patterns": [
+        "シド",
+        "しど",
+        "カゲノウ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ダンまち",
+      "patterns": [
+        "ダンジョンに出会いを求めるのは間違っているだろうか",
+        "danmachi"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ベル・クラネル",
+      "patterns": [
+        "ベル",
+        "べるくらねる",
+        "ベルくん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヘスティア",
+      "patterns": [
+        "へすてぃあ",
+        "ヘスティアさん",
+        "ヘスティア様"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "コードギアス",
+      "patterns": [
+        "コード ギアス",
+        "Code Geass"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ルルーシュ",
+      "patterns": [
+        "ルルーシュ・ランペルージ",
+        "ルル"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "C.C.",
+      "patterns": [
+        "シーツー",
+        "C C"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "枢木スザク",
+      "patterns": [
+        "スザク",
+        "すざく",
+        "枢木"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "デスノート",
+      "patterns": [
+        "Death Note",
+        "デス ノート",
+        "死神の手帳"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "夜神月",
+      "patterns": [
+        "やがみらいと",
+        "ライト",
+        "夜神ライト",
+        "Light"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "L",
+      "patterns": [
+        "エル",
+        "L・ローライト"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リューク",
+      "patterns": [
+        "りゅーく",
+        "リューク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ニア",
+      "patterns": [
+        "にあ",
+        "Near"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "メロ",
+      "patterns": [
+        "めろ",
+        "Mello"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "鋼の錬金術師",
+      "patterns": [
+        "ハガレン",
+        "FMAB",
+        "鋼の錬金術師 BROTHERHOOD",
+        "はがねのれんきんじゅつし"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エドワード・エルリック",
+      "patterns": [
+        "エド",
+        "エドワード",
+        "エルリック"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アルフォンス・エルリック",
+      "patterns": [
+        "アル",
+        "アルフォンス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "錬成",
+      "patterns": [
+        "れんせい",
+        "炼成"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ロイ・マスタング",
+      "patterns": [
+        "マスタング",
+        "ロイ",
+        "焔の錬金術師"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ウィンリィ",
+      "patterns": [
+        "ウィンリィ・ロックベル",
+        "ウィンリー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シュタインズ・ゲート",
+      "patterns": [
+        "シュタゲ",
+        "Steins Gate",
+        "シュタインズゲート"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "岡部倫太郎",
+      "patterns": [
+        "岡部",
+        "おかべ",
+        "鳳凰院凶真",
+        "ホウオウインキョウマ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "牧瀬紅莉栖",
+      "patterns": [
+        "クリス",
+        "まきせ",
+        "クリスティーナ",
+        "まきせくりす"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "椎名まゆり",
+      "patterns": [
+        "まゆしい",
+        "まゆりん",
+        "まゆり"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ダイバージェンス",
+      "patterns": [
+        "だいばーじぇんす",
+        "Divergence"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "新世紀エヴァンゲリオン",
+      "patterns": [
+        "エヴァ",
+        "Eva",
+        "エバンゲリオン",
+        "エバ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "碇シンジ",
+      "patterns": [
+        "シンジ",
+        "いかりしんじ",
+        "シンジくん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "綾波レイ",
+      "patterns": [
+        "レイ",
+        "あやなみれい",
+        "綾波"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "式波アスカ",
+      "patterns": [
+        "アスカ",
+        "あすか",
+        "惣流"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "葛城ミサト",
+      "patterns": [
+        "ミサト",
+        "かつらぎ",
+        "ミサトさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "けいおん！",
+      "patterns": [
+        "K-ON",
+        "けいおん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "平沢唯",
+      "patterns": [
+        "ゆいちゃん",
+        "ひらさわゆい",
+        "唯ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "秋山澪",
+      "patterns": [
+        "みおちゃん",
+        "あきやまみお",
+        "澪ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "田井中律",
+      "patterns": [
+        "りっちゃん",
+        "たいなかりつ",
+        "律ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "琴吹紬",
+      "patterns": [
+        "つむぎちゃん",
+        "ことぶきつむぎ",
+        "紬ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野梓",
+      "patterns": [
+        "あずにゃん",
+        "なかのあずさ",
+        "梓ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ラブライブ！",
+      "patterns": [
+        "ラブライブ",
+        "Love Live"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "μ's",
+      "patterns": [
+        "ミューズ",
+        "ミュース"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Aqours",
+      "patterns": [
+        "アクア",
+        "アクワーズ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "虹ヶ咲学園",
+      "patterns": [
+        "にじがさき",
+        "虹ヶ崎",
+        "ニジガサキ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Liella!",
+      "patterns": [
+        "リエラ",
+        "Liella"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "機動戦士ガンダム",
+      "patterns": [
+        "ガンダム",
+        "モビルスーツ",
+        "MS",
+        "Gundam"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ガンプラ",
+      "patterns": [
+        "ガンダムプラモデル",
+        "ガンプラ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "νガンダム",
+      "patterns": [
+        "ニューガンダム",
+        "ν ガンダム"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "シャア・アズナブル",
+      "patterns": [
+        "シャア",
+        "赤い彗星",
+        "シャアさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アムロ・レイ",
+      "patterns": [
+        "アムロ",
+        "アムロ行きます"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "HUNTER×HUNTER",
+      "patterns": [
+        "ハンターハンター",
+        "HxH",
+        "hunter hunter"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ゴン・フリークス",
+      "patterns": [
+        "ゴン",
+        "ごん",
+        "ゴンさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "キルア・ゾルディック",
+      "patterns": [
+        "キルア",
+        "きるあ",
+        "キルアくん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "クラピカ",
+      "patterns": [
+        "くらぴか",
+        "クラピカさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レオリオ",
+      "patterns": [
+        "れおりお",
+        "レオリオさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "念",
+      "patterns": [
+        "ネン",
+        "ねん能力"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヒソカ",
+      "patterns": [
+        "ひそか",
+        "ヒソカさん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "幻影旅団",
+      "patterns": [
+        "げんえいりょだん",
+        "クモ",
+        "蜘蛛"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "メイドインアビス",
+      "patterns": [
+        "Made in Abyss",
+        "メイドインアビ",
+        "メイド イン アビス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リコ",
+      "patterns": [
+        "りこ",
+        "リコちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レグ",
+      "patterns": [
+        "れぐ",
+        "レグくん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ナナチ",
+      "patterns": [
+        "ななち",
+        "ナナチちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ボンドルド",
+      "patterns": [
+        "ぼんどるど",
+        "探窟家"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "五等分の花嫁",
+      "patterns": [
+        "五等分",
+        "ごとうぶん",
+        "Quintessential Quintuplets"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野一花",
+      "patterns": [
+        "いちか",
+        "なかのいちか",
+        "一花ちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野二乃",
+      "patterns": [
+        "にの",
+        "にのちゃん",
+        "中野にの"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野三玖",
+      "patterns": [
+        "みく",
+        "みくちゃん",
+        "中野みく"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野四葉",
+      "patterns": [
+        "よつば",
+        "よつばちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "中野五月",
+      "patterns": [
+        "いつき",
+        "いつきちゃん"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ペルソナ5",
+      "patterns": [
+        "P5",
+        "ペルソナ ファイブ",
+        "Persona 5"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ペルソナ4",
+      "patterns": [
+        "P4",
+        "ペルソナ フォー",
+        "Persona 4"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ペルソナ3",
+      "patterns": [
+        "P3",
+        "ペルソナ スリー",
+        "Persona 3"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "プロジェクトセカイ",
+      "patterns": [
+        "プロセカ",
+        "Project Sekai"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "あんさんぶるスターズ",
+      "patterns": [
+        "あんスタ",
+        "Ensemble Stars"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ツイステッドワンダーランド",
+      "patterns": [
+        "ツイステ",
+        "Twisted Wonderland"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "アイドルマスター",
+      "patterns": [
+        "アイマス",
+        "imas",
+        "iM@S"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Dark Souls",
+      "patterns": [
+        "dark soul",
+        "Darksouls"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "ダークソウル",
+      "patterns": [
+        "ダークソール",
+        "Dark Souls"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Sekiro",
+      "patterns": [
+        "sekiro",
+        "セキロ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "隻狼",
+      "patterns": [
+        "せきろう",
+        "セキロ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Bloodborne",
+      "patterns": [
+        "Blood Borne",
+        "blood borne"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "ブラッドボーン",
+      "patterns": [
+        "ブラドボ",
+        "ブラッド ボーン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Cyberpunk 2077",
+      "patterns": [
+        "Cyber Punk",
+        "cyberpunk",
+        "Cyberpunk2077"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "サイバーパンク2077",
+      "patterns": [
+        "サイバーパンク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Counter-Strike 2",
+      "patterns": [
+        "CS2",
+        "Counter Strike",
+        "CS GO",
+        "カウスト"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Call of Duty",
+      "patterns": [
+        "CoD",
+        "cod",
+        "Call of Duty",
+        "コール オブ デューティ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "PUBG",
+      "patterns": [
+        "P U B G",
+        "PlayerUnknown"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Overwatch",
+      "patterns": [
+        "over watch",
+        "オーバーウォッチ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Stardew Valley",
+      "patterns": [
+        "Stardew valley",
+        "star dew valley"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Hollow Knight",
+      "patterns": [
+        "Hallow Knight",
+        "hollow knight"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Among Us",
+      "patterns": [
+        "among us",
+        "アマングアス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Rocket League",
+      "patterns": [
+        "rocket league",
+        "ロケットリーグ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Terraria",
+      "patterns": [
+        "terraria",
+        "テラリア"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Hades",
+      "patterns": [
+        "hades",
+        "ハデス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Celeste",
+      "patterns": [
+        "celeste",
+        "セレステ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "Balatro",
+      "patterns": [
+        "balatro",
+        "バラトロ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "en"
+      ]
+    },
+    {
+      "replacement": "ゼノブレイド",
+      "patterns": [
+        "Xenoblade",
+        "ゼノブレ",
+        "ゼノ ブレイド"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "テイルズ",
+      "patterns": [
+        "Tales of",
+        "テイルズ オブ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ファイアーエムブレム",
+      "patterns": [
+        "FE",
+        "ファイエム",
+        "Fire Emblem"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "プーチン",
+      "patterns": [
+        "プーチン大統領",
+        "ぷーちん",
+        "Putin"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ゼレンスキー",
+      "patterns": [
+        "ゼレンスキー大統領",
+        "Zelensky",
+        "ゼレンスキ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "バイデン",
+      "patterns": [
+        "Biden",
+        "びゃいでん",
+        "バイデン大統領"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "トランプ",
+      "patterns": [
+        "Trump",
+        "とらんぷ",
+        "トランプ大統領"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "イーロン・マスク",
+      "patterns": [
+        "Elon Musk",
+        "マスク",
+        "イーロンマスク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "SpaceX",
+      "patterns": [
+        "Space X",
+        "space x",
+        "スペースX"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "スターリンク",
+      "patterns": [
+        "Starlink",
+        "スター リンク"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "普京",
+      "patterns": [
+        "普经",
+        "Putin"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "泽连斯基",
+      "patterns": [
+        "泽联斯基",
+        "澤连斯基"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "拜登",
+      "patterns": [
+        "拜灯",
+        "Biden"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "特朗普",
+      "patterns": [
+        "特朗浦",
+        "Trump",
+        "特郎普"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "马斯克",
+      "patterns": [
+        "马斯刻",
+        "Elon Musk",
+        "马师克"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "台湾有事",
+      "patterns": [
+        "たいわんゆうじ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "BRICS",
+      "patterns": [
+        "金砖",
+        "金砖国家",
+        "ブリックス"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "ASEAN",
+      "patterns": [
+        "A S E A N",
+        "东盟",
+        "アセアン"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "WHO",
+      "patterns": [
+        "W H O",
+        "世界保健機関",
+        "世卫"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "IMF",
+      "patterns": [
+        "I M F"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "BTS",
+      "patterns": [
+        "B T S",
+        "防弾少年団",
+        "ビーティーエス"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "BLACKPINK",
+      "patterns": [
+        "Black Pink",
+        "ブラックピンク",
+        "黑粉"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "aespa",
+      "patterns": [
+        "エスパ",
+        "Aespa",
+        "에스파"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "NewJeans",
+      "patterns": [
+        "New Jeans",
+        "ニュージーンズ",
+        "뉴진스"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "TWICE",
+      "patterns": [
+        "Twice",
+        "twice",
+        "トワイス"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "SEVENTEEN",
+      "patterns": [
+        "seventeen",
+        "セブンティーン"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "STRAY KIDS",
+      "patterns": [
+        "Stray Kids",
+        "ストレイキッズ"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "IVE",
+      "patterns": [
+        "아이브",
+        "Ive"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "LE SSERAFIM",
+      "patterns": [
+        "le sserafim",
+        "ルセラフィム",
+        "ル・セラフィム"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "米津玄師",
+      "patterns": [
+        "よねづけんし",
+        "米津",
+        "よねず"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "YOASOBI",
+      "patterns": [
+        "ヨアソビ",
+        "yoasobi"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Ado",
+      "patterns": [
+        "あど",
+        "ADO"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Official髭男dism",
+      "patterns": [
+        "ヒゲダン",
+        "髭男",
+        "official hige dandism"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "藤井風",
+      "patterns": [
+        "ふじいかぜ",
+        "藤井 風"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Mrs. GREEN APPLE",
+      "patterns": [
+        "ミセスグリーンアップル",
+        "mrs green apple"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Eve",
+      "patterns": [
+        "イブ",
+        "eve"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "back number",
+      "patterns": [
+        "バックナンバー",
+        "バック ナンバー"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "King Gnu",
+      "patterns": [
+        "キングヌー",
+        "キング ヌー",
+        "king gnu"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "Creepy Nuts",
+      "patterns": [
+        "クリーピーナッツ",
+        "クリーピー ナッツ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "緑黄色社会",
+      "patterns": [
+        "りょくおうしょくしゃかい",
+        "リョクシャカ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ずっと真夜中でいいのに。",
+      "patterns": [
+        "ずとまよ",
+        "ずっと真夜中"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ima",
+      "patterns": [
+        "イマ",
+        "i m a"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ノイズキャンセリング",
+      "patterns": [
+        "ノイズ キャンセリング",
+        "ANC",
+        "ノイキャン"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ハイレゾ",
+      "patterns": [
+        "Hi-Res",
+        "ハイレゾリューション",
+        "high res"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ワイヤレス",
+      "patterns": [
+        "wireless",
+        "ワイヤーレス"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "イヤホン",
+      "patterns": [
+        "イヤフォン",
+        "耳機"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ヘッドセット",
+      "patterns": [
+        "ヘッドセット",
+        "headset",
+        "ヘッドセット"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "キャプチャーボード",
+      "patterns": [
+        "キャプチャー ボード",
+        "capture card"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "エルガト",
+      "patterns": [
+        "Elgato",
+        "エルガット"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "NDI",
+      "patterns": [
+        "N D I",
+        "n d i"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "OBS",
+      "patterns": [
+        "O B S",
+        "o b s"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "HMD",
+      "patterns": [
+        "H M D",
+        "h m d"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "IPD",
+      "patterns": [
+        "I P D",
+        "i p d"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "FOV",
+      "patterns": [
+        "F O V",
+        "f o v"
+      ],
+      "mode": "substring"
+    },
+    {
+      "replacement": "フレームレート",
+      "patterns": [
+        "フレーム レート",
+        "fps",
+        "FPS"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "リフレッシュレート",
+      "patterns": [
+        "リフレッシュ レート",
+        "refresh rate"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "レイテンシ",
+      "patterns": [
+        "レイテンシー",
+        "latency",
+        "遅延"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "ピング",
+      "patterns": [
+        "ping",
+        "ピング値",
+        "ぴんぐ"
+      ],
+      "mode": "substring",
+      "languages": [
+        "ja"
+      ]
+    },
+    {
+      "replacement": "斗罗大陆",
+      "patterns": [
+        "斗罗大路",
+        "斗萝大陆"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "斗破苍穹",
+      "patterns": [
+        "斗破苍苦",
+        "斗破苍天"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "完美世界",
+      "patterns": [
+        "完美时界",
+        "完美时间"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "遮天",
+      "patterns": [
+        "遮天界",
+        "这天"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "圣墟",
+      "patterns": [
+        "神墟",
+        "生墟"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "剑来",
+      "patterns": [
+        "剑到",
+        "见来"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "诡秘之主",
+      "patterns": [
+        "鬼秘之主",
+        "诡密之主"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "万相之王",
+      "patterns": [
+        "万象之王",
+        "万像之王"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "庆余年",
+      "patterns": [
+        "庆鱼年",
+        "庆于年"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "长安的荔枝",
+      "patterns": [
+        "长安的荔技",
+        "长安的力枝"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "脱单",
+      "patterns": [
+        "托单",
+        "脱蛋"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "恋爱脑",
+      "patterns": [
+        "恋爱闹",
+        "恋爱能"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "内耗",
+      "patterns": [
+        "内好",
+        "内浩"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "绷不住",
+      "patterns": [
+        "崩不住",
+        "绷不注"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "整顿",
+      "patterns": [
+        "整动",
+        "正顿"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "人设",
+      "patterns": [
+        "人社",
+        "仁设"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "塌房",
+      "patterns": [
+        "踏房",
+        "塌方"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "顶流",
+      "patterns": [
+        "顶留",
+        "鼎流"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "粉丝",
+      "patterns": [
+        "粉丝们",
+        "粉"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "脑子没了",
+      "patterns": [
+        "脑子没累",
+        "脑子没了"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "失去理智",
+      "patterns": [
+        "失去力气",
+        "失去历史"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "铁子",
+      "patterns": [
+        "铁姐",
+        "铁自"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "老铁",
+      "patterns": [
+        "老贴",
+        "老铁"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "家人们",
+      "patterns": [
+        "加人们",
+        "家仁们"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "主打一个",
+      "patterns": [
+        "主打一个",
+        "主搭一个"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "含金量",
+      "patterns": [
+        "汉金量",
+        "含斤量"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "超绝",
+      "patterns": [
+        "超劫",
+        "超绝了"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "嘎嘎乱杀",
+      "patterns": [
+        "嘎嘎乱煞",
+        "嘎嘎烂杀"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
+    },
+    {
+      "replacement": "上分",
+      "patterns": [
+        "上份",
+        "伤分"
+      ],
+      "mode": "substring",
+      "languages": [
+        "zh"
+      ]
     }
   ]
 }

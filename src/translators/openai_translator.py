@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import BaseTranslator
+from .base import BaseTranslator, _TRANSLATION_SYSTEM_PROMPT
 
 
 class OpenAITranslator(BaseTranslator):
@@ -28,11 +28,21 @@ class OpenAITranslator(BaseTranslator):
             max_retries=max(int(max_retries), 0),
         )
         self.model = model
+        self._base_url = str(base_url or "").strip().lower()
         model_name = str(model).lower()
         self._is_reasoning_model = (
             model_name.startswith("gpt-5")
             or "reasoner" in model_name
             or "thinking" in model_name
+        )
+        self._uses_max_completion_tokens = (
+            "api.openai.com" in self._base_url and model_name.startswith("gpt-5")
+        )
+        self._uses_qwen_mt_translation_options = (
+            "dashscope" in self._base_url and model_name.startswith("qwen-mt-")
+        )
+        self._omits_temperature = (
+            "api.deepseek.com" in self._base_url and model_name == "deepseek-reasoner"
         )
         self._use_responses_api = "gpt-5.4-pro" in model_name
         min_output_tokens = 512 if self._is_reasoning_model else 48
@@ -61,38 +71,77 @@ class OpenAITranslator(BaseTranslator):
         return max(48, min(self._max_output_tokens, estimated))
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
-        cached = self._get_cached_translation(text, src_lang, tgt_lang, self.model)
+        context_snapshot = self._context_snapshot(src_lang, tgt_lang)
+        cached = self._get_cached_translation(
+            text,
+            src_lang,
+            tgt_lang,
+            self.model,
+            context_snapshot=context_snapshot,
+        )
         if cached is not None:
             return cached
 
         if self._use_responses_api:
-            translated = self._translate_with_responses(text, src_lang, tgt_lang)
+            translated = self._translate_with_responses(
+                text,
+                src_lang,
+                tgt_lang,
+                context_snapshot=context_snapshot,
+            )
         else:
-            translated = self._translate_with_chat_completions(text, src_lang, tgt_lang)
+            translated = self._translate_with_chat_completions(
+                text,
+                src_lang,
+                tgt_lang,
+                context_snapshot=context_snapshot,
+            )
         if not translated:
             raise RuntimeError("Translation API returned an empty response")
-        return self._store_cached_translation(
+        translated = self._store_cached_translation(
             text,
             src_lang,
             tgt_lang,
             self.model,
             translated,
+            context_snapshot=context_snapshot,
         )
+        self._remember_context_turn(text, translated, src_lang, tgt_lang)
+        return translated
 
     def _translate_with_chat_completions(
         self,
         text: str,
         src_lang: str,
         tgt_lang: str,
+        context_snapshot: tuple[tuple[str, str], ...] | None = None,
     ) -> str:
+        output_tokens = self._estimate_max_tokens(text)
+        messages = self._build_messages(
+            text,
+            src_lang,
+            tgt_lang,
+            context_snapshot=context_snapshot,
+        )
+        extra_body = dict(self._extra_body)
+        if self._uses_qwen_mt_translation_options:
+            messages = [{"role": "user", "content": str(text or "")}]
+            extra_body["translation_options"] = {
+                "source_lang": self._translation_option_language(src_lang),
+                "target_lang": self._translation_option_language(tgt_lang),
+            }
         kwargs = dict(
             model=self.model,
-            messages=self._build_messages(text, src_lang, tgt_lang),
-            temperature=0.0,
-            max_tokens=self._estimate_max_tokens(text),
+            messages=messages,
         )
-        if self._extra_body:
-            kwargs["extra_body"] = self._extra_body
+        if not self._omits_temperature:
+            kwargs["temperature"] = 0.0
+        if self._uses_max_completion_tokens:
+            kwargs["max_completion_tokens"] = output_tokens
+        else:
+            kwargs["max_tokens"] = output_tokens
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         response = self._client.chat.completions.create(**kwargs)
         return (response.choices[0].message.content or "").strip()
@@ -102,8 +151,12 @@ class OpenAITranslator(BaseTranslator):
         text: str,
         src_lang: str,
         tgt_lang: str,
+        context_snapshot: tuple[tuple[str, str], ...] | None = None,
     ) -> str:
-        prompt = self._build_messages(text, src_lang, tgt_lang)[0]["content"]
+        prompt = (
+            f"{_TRANSLATION_SYSTEM_PROMPT}\n\n"
+            f"{self._build_prompt(text, src_lang, tgt_lang, context_snapshot=context_snapshot)}"
+        )
         kwargs = dict(
             model=self.model,
             input=prompt,
@@ -115,3 +168,9 @@ class OpenAITranslator(BaseTranslator):
 
         response = self._client.responses.create(**kwargs)
         return str(response.output_text or "").strip()
+
+    def _translation_option_language(self, code: str) -> str:
+        normalized = str(code or "").strip().lower()
+        if not normalized or normalized == "auto":
+            return "auto"
+        return self._language_name(normalized)

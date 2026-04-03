@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .base import BaseTranslator
+from .base import BaseTranslator, _TRANSLATION_SYSTEM_PROMPT
 
 
 class AnthropicTranslator(BaseTranslator):
@@ -24,22 +24,43 @@ class AnthropicTranslator(BaseTranslator):
         self._max_output_tokens = max(int(max_output_tokens), 48)
 
     def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
-        cached = self._get_cached_translation(text, src_lang, tgt_lang, self.model)
+        context_snapshot = self._context_snapshot(src_lang, tgt_lang)
+        cached = self._get_cached_translation(
+            text,
+            src_lang,
+            tgt_lang,
+            self.model,
+            context_snapshot=context_snapshot,
+        )
         if cached is not None:
             return cached
 
         message = self._client.messages.create(
             model=self.model,
+            system=_TRANSLATION_SYSTEM_PROMPT,
             max_tokens=self._max_output_tokens,
-            messages=[{"role": "user", "content": self._build_prompt(text, src_lang, tgt_lang)}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": self._build_prompt(
+                        text,
+                        src_lang,
+                        tgt_lang,
+                        context_snapshot=context_snapshot,
+                    ),
+                }
+            ],
         )
         translated = message.content[0].text.strip()
         if not translated:
             raise RuntimeError("Translation API returned an empty response")
-        return self._store_cached_translation(
+        translated = self._store_cached_translation(
             text,
             src_lang,
             tgt_lang,
             self.model,
             translated,
+            context_snapshot=context_snapshot,
         )
+        self._remember_context_turn(text, translated, src_lang, tgt_lang)
+        return translated
