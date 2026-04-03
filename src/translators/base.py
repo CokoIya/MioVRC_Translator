@@ -31,7 +31,7 @@ class BaseTranslator(ABC):
         self._cache: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
         self._cache_lock = Lock()
         self._context_lock = Lock()
-        self._recent_context: dict[tuple[str, str], deque[tuple[float, str, str]]] = {}
+        self._recent_context: dict[tuple[str, str, str], deque[tuple[float, str, str]]] = {}
         self._prompt_profile = prompt_profile or {}
         self._prompt_signature = json.dumps(
             self._prompt_profile,
@@ -40,11 +40,18 @@ class BaseTranslator(ABC):
         )
 
     @abstractmethod
-    def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
+    def translate(
+        self,
+        text: str,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str = "default",
+    ) -> str:
         pass
 
     def _language_name(self, code: str) -> str:
         lang_map = {
+            "auto": "Auto-detect",
             "zh": "Chinese",
             "ja": "Japanese",
             "en": "English",
@@ -62,6 +69,12 @@ class BaseTranslator(ABC):
         }
         return lang_map.get(str(code or "").strip(), str(code or "").strip() or "Unknown")
 
+    def _source_language_label(self, code: str) -> str:
+        normalized = str(code or "").strip()
+        if normalized == "auto":
+            return "Auto-detect from the current text"
+        return self._language_name(normalized)
+
     def _build_prompt(
         self,
         text: str,
@@ -69,7 +82,7 @@ class BaseTranslator(ABC):
         tgt_lang: str,
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
     ) -> str:
-        src = self._language_name(src_lang)
+        src = self._source_language_label(src_lang)
         tgt = self._language_name(tgt_lang)
         requirements = [
             "sound natural and colloquial, as a real person would casually say it",
@@ -121,8 +134,12 @@ class BaseTranslator(ABC):
         tgt_lang: str,
         model: str,
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
+        context_source: str = "default",
     ) -> tuple[str, str, str, str]:
         signature = f"{model}|{self._prompt_signature}"
+        normalized_source = str(context_source or "").strip() or "default"
+        if normalized_source != "default":
+            signature = f"{signature}|source={normalized_source}"
         if context_snapshot:
             signature = (
                 f"{signature}|ctx="
@@ -196,8 +213,17 @@ class BaseTranslator(ABC):
             return normalized
         return normalized[: _CONTEXT_TEXT_LIMIT - 3].rstrip() + "..."
 
-    def _context_key(self, src_lang: str, tgt_lang: str) -> tuple[str, str]:
-        return (str(src_lang).strip(), str(tgt_lang).strip())
+    def _context_key(
+        self,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str = "default",
+    ) -> tuple[str, str, str]:
+        return (
+            str(src_lang).strip(),
+            str(tgt_lang).strip(),
+            str(context_source or "").strip() or "default",
+        )
 
     def _prune_context_queue(
         self,
@@ -208,8 +234,13 @@ class BaseTranslator(ABC):
         while queue and queue[0][0] < cutoff:
             queue.popleft()
 
-    def _context_snapshot(self, src_lang: str, tgt_lang: str) -> tuple[tuple[str, str], ...]:
-        key = self._context_key(src_lang, tgt_lang)
+    def _context_snapshot(
+        self,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str = "default",
+    ) -> tuple[tuple[str, str], ...]:
+        key = self._context_key(src_lang, tgt_lang, context_source=context_source)
         now = monotonic()
         with self._context_lock:
             queue = self._recent_context.get(key)
@@ -238,13 +269,14 @@ class BaseTranslator(ABC):
         translated: str,
         src_lang: str,
         tgt_lang: str,
+        context_source: str = "default",
     ) -> None:
         source_text = " ".join(str(text or "").split()).strip()
         translated_text = " ".join(str(translated or "").split()).strip()
         if not source_text or not translated_text:
             return
 
-        key = self._context_key(src_lang, tgt_lang)
+        key = self._context_key(src_lang, tgt_lang, context_source=context_source)
         now = monotonic()
         with self._context_lock:
             queue = self._recent_context.get(key)
@@ -264,6 +296,7 @@ class BaseTranslator(ABC):
         tgt_lang: str,
         model: str,
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
+        context_source: str = "default",
     ) -> str | None:
         if self._cache_size <= 0:
             return None
@@ -273,6 +306,7 @@ class BaseTranslator(ABC):
             tgt_lang,
             model,
             context_snapshot=context_snapshot,
+            context_source=context_source,
         )
         with self._cache_lock:
             cached = self._cache.get(key)
@@ -289,6 +323,7 @@ class BaseTranslator(ABC):
         model: str,
         translated: str,
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
+        context_source: str = "default",
     ) -> str:
         if self._cache_size <= 0:
             return translated
@@ -298,6 +333,7 @@ class BaseTranslator(ABC):
             tgt_lang,
             model,
             context_snapshot=context_snapshot,
+            context_source=context_source,
         )
         with self._cache_lock:
             self._cache[key] = translated

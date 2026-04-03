@@ -92,6 +92,7 @@ MIN_CHATBOX_COOLDOWN_S = 1.6
 DEFAULT_LISTEN_SELF_SUPPRESS_S = 0.65
 DEFAULT_LISTEN_SEGMENT_DURATION_S = 2.0
 DEFAULT_LISTEN_TAIL_SILENCE_S = 1.2
+LISTEN_RESULT_DEDUPE_WINDOW_S = 1.6
 
 MAIN_COPY = {
     "settings_short": {
@@ -271,6 +272,7 @@ class MainWindow(ctk.CTk):
         self._last_mic_activity_at = 0.0
         self._last_mic_result_at = 0.0
         self._recent_mic_texts: deque[tuple[float, str]] = deque(maxlen=8)
+        self._recent_listen_texts: deque[tuple[float, str]] = deque(maxlen=8)
         self._avatar_error_after_id: str | None = None
         self._device_picker_win: ctk.CTkToplevel | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
@@ -1898,9 +1900,7 @@ class MainWindow(ctk.CTk):
         desktop_chunk_window_s = listen_segment_duration_s
         self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
-            # Each fixed-time chunk is also a complete segment: route through the
-            # final (transcription + translation + OSC) path, not the partial preview path.
-            on_chunk=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
+            on_chunk=lambda audio: self._on_audio_chunk(audio, DESKTOP_SOURCE),
             sample_rate=audio_cfg.get("sample_rate", 16000),
             frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
             # Use DesktopAudioRecorder's game-audio defaults when not explicitly configured
@@ -2205,6 +2205,41 @@ class MainWindow(ctk.CTk):
         while self._recent_mic_texts and self._recent_mic_texts[0][0] < cutoff:
             self._recent_mic_texts.popleft()
 
+    def _remember_recent_listen_text(self, text: str) -> None:
+        normalized = self._normalize_compare_text(text)
+        if not normalized:
+            return
+        now = time.monotonic()
+        self._prune_recent_listen_texts(now)
+        self._recent_listen_texts.append((now, normalized))
+
+    def _prune_recent_listen_texts(self, now: float | None = None) -> None:
+        cutoff = (time.monotonic() if now is None else now) - LISTEN_RESULT_DEDUPE_WINDOW_S
+        while self._recent_listen_texts and self._recent_listen_texts[0][0] < cutoff:
+            self._recent_listen_texts.popleft()
+
+    def _is_recent_duplicate_listen_text(self, text: str) -> bool:
+        normalized = self._normalize_compare_text(text)
+        if not normalized:
+            return False
+        now = time.monotonic()
+        self._prune_recent_listen_texts(now)
+        return any(normalized == recent for _, recent in self._recent_listen_texts)
+
+    @staticmethod
+    def _translation_context_source(source: str) -> str:
+        if source == DESKTOP_SOURCE:
+            return "listen"
+        if source == MIC_SOURCE:
+            return "mic"
+        return "default"
+
+    @staticmethod
+    def _listen_translation_source_language(selected_src_lang: str | None) -> str:
+        if selected_src_lang:
+            return selected_src_lang
+        return "auto"
+
     def _should_suppress_listen_result(self, text: str) -> bool:
         if not bool(self._desktop_capture_config().get("self_suppress", False)):
             return False
@@ -2440,19 +2475,28 @@ class MainWindow(ctk.CTk):
                 return
 
             translator = self._translator
+            context_source = self._translation_context_source(source)
             rendered_source = self._format_listen_text(text) if source == DESKTOP_SOURCE else text
             self._call_in_ui(lambda t=rendered_source: self._set_source_text(t))
 
             translated = None
             if source == DESKTOP_SOURCE:
-                src_lang = selected_src_lang if selected_src_lang else detect_language(text)
+                if self._is_recent_duplicate_listen_text(text):
+                    return
+                self._remember_recent_listen_text(text)
+                src_lang = self._listen_translation_source_language(selected_src_lang)
                 tgt_lang = self._listen_target_language()
-                if src_lang == tgt_lang:
+                if src_lang != "auto" and src_lang == tgt_lang:
                     translated = text
                 elif translator is None:
                     raise RuntimeError("Translator is not ready")
                 else:
-                    translated = translator.translate(text, src_lang, tgt_lang)
+                    translated = translator.translate(
+                        text,
+                        src_lang,
+                        tgt_lang,
+                        context_source=context_source,
+                    )
                 if not self._running or session_id != self._listen_session:
                     return
 
@@ -2475,7 +2519,12 @@ class MainWindow(ctk.CTk):
                 elif translator is None:
                     raise RuntimeError("Translator is not ready")
                 else:
-                    translated = translator.translate(text, src_lang, tgt_lang)
+                    translated = translator.translate(
+                        text,
+                        src_lang,
+                        tgt_lang,
+                        context_source=context_source,
+                    )
                 if not self._running or session_id != self._listen_session:
                     return
 
@@ -2590,7 +2639,12 @@ class MainWindow(ctk.CTk):
 
     def _do_translate(self, text: str, src_lang: str, tgt_lang: str):
         try:
-            result = self._translator.translate(text, src_lang, tgt_lang)
+            result = self._translator.translate(
+                text,
+                src_lang,
+                tgt_lang,
+                context_source="manual",
+            )
             self._call_in_ui(lambda: self._show_tgt(result))
         except Exception as e:
             friendly = self._format_translation_error(e)
@@ -2790,6 +2844,7 @@ class MainWindow(ctk.CTk):
         self._last_mic_activity_at = 0.0
         self._last_mic_result_at = 0.0
         self._recent_mic_texts.clear()
+        self._recent_listen_texts.clear()
         with self._translation_state_lock:
             self._active_translation_jobs = 0
         self._clear_avatar_error()
@@ -2885,6 +2940,7 @@ class MainWindow(ctk.CTk):
         self._last_mic_activity_at = 0.0
         self._last_mic_result_at = 0.0
         self._recent_mic_texts.clear()
+        self._recent_listen_texts.clear()
         with self._translation_state_lock:
             self._active_translation_jobs = 0
         self._drain_queue(self._partial_task_queue)

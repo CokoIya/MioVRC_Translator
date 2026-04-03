@@ -23,14 +23,25 @@ class AnthropicTranslator(BaseTranslator):
         self.model = model
         self._max_output_tokens = max(int(max_output_tokens), 48)
 
-    def translate(self, text: str, src_lang: str, tgt_lang: str) -> str:
-        context_snapshot = self._context_snapshot(src_lang, tgt_lang)
+    def translate(
+        self,
+        text: str,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str = "default",
+    ) -> str:
+        context_snapshot = self._context_snapshot(
+            src_lang,
+            tgt_lang,
+            context_source=context_source,
+        )
         cached = self._get_cached_translation(
             text,
             src_lang,
             tgt_lang,
             self.model,
             context_snapshot=context_snapshot,
+            context_source=context_source,
         )
         if cached is not None:
             return cached
@@ -61,6 +72,13 @@ class AnthropicTranslator(BaseTranslator):
             self.model,
             translated,
             context_snapshot=context_snapshot,
+            context_source=context_source,
         )
-        self._remember_context_turn(text, translated, src_lang, tgt_lang)
+        self._remember_context_turn(
+            text,
+            translated,
+            src_lang,
+            tgt_lang,
+            context_source=context_source,
+        )
         return translated

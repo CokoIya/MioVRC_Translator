@@ -16,6 +16,7 @@ from src.utils.ui_config import (
     DEFAULT_ASR_ENGINE,
     OUTPUT_FORMAT_OPTIONS,
     UI_LANGUAGE_OPTIONS,
+    get_backend_config_value,
     backend_model_is_selectable,
     get_backend_label,
     get_backend_model_hint,
@@ -2139,7 +2140,7 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._add_backend_field(
             self._t("base_url"),
-            get_backend_value(backend, "base_url"),
+            get_backend_config_value(trans_cfg, backend, "base_url"),
             readonly=True,
         )
         if backend_model_is_selectable(backend):
@@ -2230,21 +2231,36 @@ class SettingsWindow(ctk.CTkToplevel):
         self._set_dictionary_updating(True)
         threading.Thread(target=self._run_dictionary_update, daemon=True).start()
 
+    def _schedule_if_alive(self, callback) -> bool:
+        try:
+            if not self.winfo_exists():
+                return False
+        except Exception:
+            return False
+        try:
+            self.after(0, callback)
+            return True
+        except Exception:
+            return False
+
     def _run_dictionary_update(self) -> None:
         try:
             result = update_official_dictionary(self._config)
         except Exception as exc:
-            self.after(
-                0,
-                lambda m=str(exc): self._on_dictionary_update_failed(m),
+            self._schedule_if_alive(
+                lambda m=str(exc): self._on_dictionary_update_failed(m)
             )
             return
-        self.after(
-            0,
-            lambda r=result: self._on_dictionary_update_finished(r),
+        self._schedule_if_alive(
+            lambda r=result: self._on_dictionary_update_finished(r)
         )
 
     def _on_dictionary_update_finished(self, result: dict) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
         self._set_dictionary_updating(False)
         self._refresh_dictionary_status()
         if result.get("changed"):
@@ -2263,6 +2279,11 @@ class SettingsWindow(ctk.CTkToplevel):
         )
 
     def _on_dictionary_update_failed(self, message: str) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
         self._set_dictionary_updating(False)
         messagebox.showerror(
             self._t("dictionary_update_failed_title"),
@@ -2368,7 +2389,11 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         translation_cfg.setdefault(backend, {})
         translation_cfg[backend]["api_key"] = self._field_vars["api_key"].get().strip()
-        translation_cfg[backend]["base_url"] = get_backend_value(backend, "base_url")
+        translation_cfg[backend]["base_url"] = get_backend_config_value(
+            translation_cfg,
+            backend,
+            "base_url",
+        )
         translation_cfg[backend]["model"] = (
             self._field_vars["model"].get().strip() or get_backend_value(backend, "model")
         )

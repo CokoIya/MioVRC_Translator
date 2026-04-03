@@ -38,8 +38,35 @@ class VRCOSCSender:
         self._last_enqueued_at = 0.0
         self._last_sent_at = 0.0
         self._avatar_state: dict[str, object] = {}
+        self._worker: threading.Thread | None = None
+        self._last_error = ""
+        self._start_worker()
+
+    def _start_worker(self) -> None:
         self._worker = threading.Thread(target=self._send_loop, daemon=True)
         self._worker.start()
+
+    def _ensure_worker_running(self) -> None:
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            return
+
+        pending: list[_QueuedOSCMessage] = []
+        while True:
+            try:
+                payload = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if payload is not None:
+                pending.append(payload)
+
+        for payload in pending[-SEND_QUEUE_MAXSIZE:]:
+            try:
+                self._queue.put_nowait(payload)
+            except queue.Full:
+                break
+
+        self._start_worker()
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -54,17 +81,24 @@ class VRCOSCSender:
             if payload is None:
                 return
 
-            if payload.rate_limited:
-                wait_s = self._min_send_interval_s - (time.monotonic() - self._last_sent_at)
-                if wait_s > 0:
-                    time.sleep(wait_s)
-
-            self._client.send_message(payload.address, list(payload.arguments))
-            with self._state_lock:
+            try:
                 if payload.rate_limited:
-                    self._last_sent_at = time.monotonic()
+                    wait_s = self._min_send_interval_s - (time.monotonic() - self._last_sent_at)
+                    if wait_s > 0:
+                        time.sleep(wait_s)
+
+                self._client.send_message(payload.address, list(payload.arguments))
+                with self._state_lock:
+                    self._last_error = ""
+                    if payload.rate_limited:
+                        self._last_sent_at = time.monotonic()
+            except Exception as exc:
+                with self._state_lock:
+                    self._last_error = str(exc).strip() or exc.__class__.__name__
 
     def _enqueue_payload(self, payload: _QueuedOSCMessage | None) -> None:
+        if payload is not None:
+            self._ensure_worker_running()
         try:
             self._queue.put_nowait(payload)
             return
@@ -93,6 +127,7 @@ class VRCOSCSender:
         if not safe:
             return ""
 
+        self._ensure_worker_running()
         now = time.monotonic()
         with self._state_lock:
             if (
@@ -129,6 +164,7 @@ class VRCOSCSender:
         if not param_name:
             return False
 
+        self._ensure_worker_running()
         with self._state_lock:
             previous = self._avatar_state.get(param_name)
             if not force and previous == value:
@@ -156,6 +192,7 @@ class VRCOSCSender:
             self.send_avatar_parameter(name, value, force=True)
 
     def close(self) -> None:
-        if self._worker.is_alive():
+        worker = self._worker
+        if worker is not None and worker.is_alive():
             self._enqueue_payload(None)
-            self._worker.join(timeout=1.0)
+            worker.join(timeout=1.0)
