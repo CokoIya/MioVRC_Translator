@@ -11,7 +11,7 @@ ANIMATION_OFFSET_Y = 18
 ANIMATION_STEPS = 8
 ANIMATION_INTERVAL_MS = 16
 APP_ICON_ICO_FILE = "app_icon_mio.ico"
-PREFERRED_APP_ICON_ICO_PATH = Path(r"B:\python_project\vrc-translator\assets\icons\app_icon_mio.ico")
+PREFERRED_APP_ICON_ICO_PATH = Path(__file__).resolve().parents[2] / "assets" / "icons" / APP_ICON_ICO_FILE
 WM_SETICON = 0x0080
 ICON_SMALL = 0
 ICON_BIG = 1
@@ -234,6 +234,10 @@ def apply_window_icon(window) -> None:
         pass
     try:
         window.after(80, _apply)
+    except Exception:
+        pass
+    try:
+        window.after(300, _apply)
     except Exception:
         pass
 

@@ -14,6 +14,7 @@ import sounddevice as sd
 
 from src.utils import config_manager
 from src.utils.i18n import tr
+from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     ASR_HINT_LANGUAGE_CODES,
     UI_LANGUAGE_OPTIONS,
@@ -35,7 +36,8 @@ from src.audio.windows_audio import (
     is_process_running,
 )
 from src.asr.factory import create_asr
-from src.asr.sensevoice_model_manager import ensure_model, model_exists
+from src.asr.model_manager import download_model, model_exists
+from src.asr.model_registry import get_asr_runtime_spec
 from src.asr.streaming_merger import StreamingMerger
 from src.translators.factory import create_translator
 from src.osc.sender import VRCOSCSender
@@ -43,6 +45,8 @@ from src.utils.lang_detect import detect_language
 from .floating_window import FloatingWindow
 from .settings_window import SettingsWindow
 from .window_effects import apply_window_icon, present_popup
+from src.updater.update_checker import check_for_update
+from src.ui.update_window import UpdateWindow
 
 BG_PRIMARY = "#f5f5f7"
 BG_SECONDARY = "#eef2f7"
@@ -195,6 +199,13 @@ MAIN_COPY = {
         "ru": "Overlay",
         "ko": "오버레이",
     },
+    "update_badge": {
+        "zh-CN": "有更新",
+        "en": "Update",
+        "ja": "更新あり",
+        "ru": "Обновление",
+        "ko": "업데이트",
+    },
 }
 
 ctk.set_appearance_mode("light")
@@ -268,7 +279,11 @@ class MainWindow(ctk.CTk):
         self._window_icon: PhotoImage | None = None
         self._status_text = self._t("status_ready")
         self._status_color = SUCCESS
-        self._bottom_text = self._t("model_unloaded")
+        self._bottom_text = (
+            self._t("model_ready")
+            if model_exists(self._asr_model_spec())
+            else self._t("model_unloaded")
+        )
         self._bottom_progress_visible = False
         self._bottom_progress_value = 0.0
         self._bottom_progress_indeterminate = False
@@ -288,9 +303,9 @@ class MainWindow(ctk.CTk):
         self._build()
         self._load_devices()
         self._sync_all_avatar_params(force=True)
-        self.after(420, self._maybe_prepare_runtime_model)
         self.after(300, self._maybe_show_osc_guide)
         self._schedule_desktop_audio_watch(2200)
+        self.after(3000, self._check_for_update)
 
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._ui_lang, key, **kwargs)
@@ -312,6 +327,11 @@ class MainWindow(ctk.CTk):
         if kwargs:
             return template.format(**kwargs)
         return template
+
+    def _format_translation_error(self, error: object):
+        translation_cfg = self._config.get("translation", {})
+        backend = translation_cfg.get("backend")
+        return format_translation_error(error, backend=backend, ui_language=self._ui_lang)
 
     def _start_background_workers(self) -> None:
         self._partial_worker = threading.Thread(
@@ -455,6 +475,21 @@ class MainWindow(ctk.CTk):
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._open_device_picker,
         ).grid(row=0, column=1, padx=2, pady=2)
+
+        self._update_badge_btn = ctk.CTkButton(
+            control_row,
+            text=self._copy("update_badge"),
+            width=80,
+            height=28,
+            fg_color="#ff9f0a",
+            hover_color="#e08800",
+            corner_radius=14,
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._open_update_window,
+        )
+        if getattr(self, "_pending_update", None):
+            self._update_badge_btn.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         action_buttons = ctk.CTkFrame(control_row, fg_color="transparent")
         action_buttons.grid(row=0, column=3, sticky="e")
@@ -601,7 +636,7 @@ class MainWindow(ctk.CTk):
 
         ctk.CTkButton(
             hdr,
-            text="<->",
+            text="⇄",
             width=34,
             height=22,
             fg_color="transparent",
@@ -1089,6 +1124,17 @@ class MainWindow(ctk.CTk):
         )
 
     def _swap_langs(self):
+        src_code = self._src_lang_codes.get(self._src_lang_var.get(), "auto")
+        tgt_code = self._target_lang_codes.get(self._tgt_var.get())
+
+        if src_code and src_code != "auto" and tgt_code:
+            src_reverse = {code: label for label, code in self._all_manual_lang_options}
+            new_src_label = src_reverse.get(tgt_code)
+            new_tgt_label = self._target_lang_reverse.get(src_code)
+            if new_src_label and new_tgt_label:
+                self._src_lang_var.set(new_src_label)
+                self._tgt_var.set(new_tgt_label)
+
         src_text = self._src_text
         tgt_text = self._tgt_output.get("1.0", "end").strip()
         self._set_source_text(tgt_text)
@@ -1122,7 +1168,7 @@ class MainWindow(ctk.CTk):
 
         self._ui_lang = new_lang
         self.title(self._t("window_title"))
-        model_id, _model_revision = self._sensevoice_model_spec()
+        model_spec = self._asr_model_spec()
         if self._running:
             self._status_text = self._t("status_listening")
             self._status_color = SUCCESS
@@ -1130,24 +1176,22 @@ class MainWindow(ctk.CTk):
             self._status_text = self._t("status_ready")
         if self._model_prepare_running:
             self._bottom_text = self._t("model_downloading")
-        elif model_exists(model_id):
+        elif model_exists(model_spec):
             self._bottom_text = self._t("model_ready")
+        else:
+            self._bottom_text = self._t("model_unloaded")
 
         self._rebuild_ui(device_name=device_name)
 
-    def _sensevoice_model_spec(self) -> tuple[str, str]:
-        asr_cfg = self._config.get("asr", {})
-        sensevoice_cfg = asr_cfg.get("sensevoice", {})
-        model_id = str(sensevoice_cfg.get("model_id", "iic/SenseVoiceSmall"))
-        model_revision = str(sensevoice_cfg.get("model_revision", "master"))
-        return model_id, model_revision
+    def _asr_model_spec(self):
+        return get_asr_runtime_spec(self._config)
 
     def _maybe_prepare_runtime_model(self):
         if self._model_prepare_running:
             return
 
-        model_id, model_revision = self._sensevoice_model_spec()
-        if model_exists(model_id):
+        model_spec = self._asr_model_spec()
+        if model_exists(model_spec):
             if self._bottom_text == self._t("model_unloaded"):
                 self._set_bottom(self._t("model_ready"))
             return
@@ -1158,15 +1202,14 @@ class MainWindow(ctk.CTk):
         self._show_bottom_progress(0.0, indeterminate=True)
         threading.Thread(
             target=self._prepare_runtime_model,
-            args=(model_id, model_revision),
+            args=(model_spec,),
             daemon=True,
         ).start()
 
-    def _prepare_runtime_model(self, model_id: str, model_revision: str):
+    def _prepare_runtime_model(self, model_spec):
         try:
-            ensure_model(
-                model_id=model_id,
-                model_revision=model_revision,
+            download_model(
+                model_spec,
                 progress_callback=lambda event: self._call_in_ui(
                     lambda e=event: self._handle_model_progress(e)
                 ),
@@ -1818,6 +1861,7 @@ class MainWindow(ctk.CTk):
                     self,
                     self._ui_lang,
                     on_resend=self._resend_history_to_vrc,
+                    on_close=lambda: self._set_listen_overlay_enabled(False, persist=True),
                 )
             try:
                 self._floating_window.reveal()
@@ -2079,6 +2123,7 @@ class MainWindow(ctk.CTk):
                 self,
                 self._ui_lang,
                 on_resend=self._resend_history_to_vrc,
+                on_close=lambda: self._set_listen_overlay_enabled(False, persist=True),
             )
         return self._floating_window
 
@@ -2244,7 +2289,11 @@ class MainWindow(ctk.CTk):
             )
             return False
         except Exception as e:
-            messagebox.showerror(self._t("translation_init_failed_title"), str(e))
+            friendly = self._format_translation_error(e)
+            messagebox.showerror(
+                self._t("translation_init_failed_title"),
+                friendly.detailed_message,
+            )
             return False
 
     def _get_output_format(self) -> str:
@@ -2459,14 +2508,14 @@ class MainWindow(ctk.CTk):
                         )
                     )
         except Exception as exc:
-            error_text = str(exc).strip() or exc.__class__.__name__
+            friendly = self._format_translation_error(exc)
             self._call_in_ui(
-                lambda m=error_text[:120]: self._set_bottom(f"语音处理失败: {m}")
+                lambda message=friendly.short_message: self._set_bottom(message)
             )
             if source == DESKTOP_SOURCE:
                 self._call_in_ui(
-                    lambda m=error_text[:120]: self._show_listen_translation(
-                        f"[Error] {m}",
+                    lambda message=friendly.inline_message: self._show_listen_translation(
+                        message,
                         source="error",
                     )
                 )
@@ -2544,14 +2593,17 @@ class MainWindow(ctk.CTk):
             result = self._translator.translate(text, src_lang, tgt_lang)
             self._call_in_ui(lambda: self._show_tgt(result))
         except Exception as e:
-            msg = str(e)
+            friendly = self._format_translation_error(e)
             self._call_in_ui(self._pulse_avatar_error)
-            self._call_in_ui(lambda: self._show_tgt(f"[Error] {msg}"))
+            self._call_in_ui(lambda: self._set_bottom(friendly.short_message))
+            self._call_in_ui(
+                lambda: self._show_tgt(friendly.inline_message, is_error=True)
+            )
         finally:
             self._call_in_ui(self._reset_translate_btn)
 
-    def _show_tgt(self, text: str):
-        if not text.startswith("[Error]"):
+    def _show_tgt(self, text: str, *, is_error: bool = False):
+        if not is_error:
             self._last_tgt_text = text
         if text == self._tgt_rendered_text:
             return
@@ -2726,11 +2778,6 @@ class MainWindow(ctk.CTk):
             self._set_bottom(self._t("model_download_wait"))
             return
 
-        model_id, _model_revision = self._sensevoice_model_spec()
-        if not model_exists(model_id):
-            self._maybe_prepare_runtime_model()
-            return
-
         self._start()
 
     def _start(self):
@@ -2890,6 +2937,40 @@ class MainWindow(ctk.CTk):
     def _open_settings(self):
         SettingsWindow(self, self._config, on_save=self._on_config_saved)
 
+    def _check_for_update(self) -> None:
+        def _on_update_available(version: str, url: str, notes: str) -> None:
+            self._pending_update = (version, url, notes)
+            self.after(0, self._show_update_badge)
+
+        check_for_update(_on_update_available)
+
+    def _show_update_badge(self) -> None:
+        badge = getattr(self, "_update_badge_btn", None)
+        if badge is None:
+            return
+        try:
+            badge.configure(text=self._copy("update_badge"))
+            badge.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        except Exception:
+            pass
+
+    def _open_update_window(self) -> None:
+        pending = getattr(self, "_pending_update", None)
+        if not pending:
+            return
+        version, url, notes = pending
+        win = getattr(self, "_update_win", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.deiconify()
+                    win.lift()
+                    return
+            except Exception:
+                pass
+        self._update_win = UpdateWindow(self, version, url, notes, self._ui_lang)
+        present_popup(self._update_win, parent=self)
+
     def _current_device_name(self) -> str | None:
         if hasattr(self, "_device_var"):
             return self._device_var.get()
@@ -2902,6 +2983,7 @@ class MainWindow(ctk.CTk):
         for child in list(self.winfo_children()):
             child.destroy()
 
+        self._floating_window = None
         self._char_label = None
         self._src_input = None
         self._tgt_output = None
@@ -3156,16 +3238,17 @@ class MainWindow(ctk.CTk):
         self._reset_streaming_state()
 
         self._rebuild_ui(device_name=device_name)
-        if self._floating_window is not None:
-            self._floating_window.update_language(self._ui_lang)
-            if not self._listen_overlay_enabled:
-                self._floating_window.hide()
+        if self._listen_overlay_enabled:
+            self._set_listen_overlay_enabled(True, persist=False)
         self._sync_all_avatar_params(force=True)
-        self.after(120, self._maybe_prepare_runtime_model)
         if was_running:
             self.after(100, self._start)
         else:
-            self._set_bottom(self._t("settings_saved"))
+            self._set_bottom(
+                self._t("model_ready")
+                if model_exists(self._asr_model_spec())
+                else self._t("model_unloaded")
+            )
 
     def _set_status(self, text: str, color: str = "white"):
         if text == self._status_text and color == self._status_color:

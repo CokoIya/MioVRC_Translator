@@ -1,7 +1,9 @@
+from src.asr.model_registry import (
+    DEFAULT_ASR_ENGINE,
+    get_asr_runtime_spec,
+    normalize_asr_engine,
+)
 from src.asr.text_corrections import LayeredASRCorrector
-from src.utils.ui_config import DEFAULT_ASR_ENGINE
-
-AVAILABLE_ASR_ENGINES = ("sensevoice-small",)
 
 
 def _resolve_device(device: str) -> str:
@@ -19,17 +21,16 @@ def _resolve_device(device: str) -> str:
 
 def create_asr(config: dict):
     asr_cfg = config.get("asr", {})
-    engine = asr_cfg.get("engine", DEFAULT_ASR_ENGINE)
+    engine = normalize_asr_engine(asr_cfg.get("engine", DEFAULT_ASR_ENGINE))
     device = _resolve_device(asr_cfg.get("device", "cpu"))
-    if engine not in AVAILABLE_ASR_ENGINES:
-        engine = DEFAULT_ASR_ENGINE
 
+    spec = get_asr_runtime_spec(config, engine)
+    corrector = LayeredASRCorrector(config)
     from src.asr.sensevoice_asr import SenseVoiceASR
 
-    sensevoice_cfg = asr_cfg.get("sensevoice", {})
     return SenseVoiceASR(
         device=device,
-        model_id=sensevoice_cfg.get("model_id", "iic/SenseVoiceSmall"),
-        model_revision=sensevoice_cfg.get("model_revision", "master"),
-        corrector=LayeredASRCorrector(config),
+        model_id=spec.model_id,
+        model_revision=spec.model_revision,
+        corrector=corrector,
     )

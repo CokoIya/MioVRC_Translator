@@ -283,7 +283,6 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "label": "Qwen",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": "qwen-mt-flash",
-        "extra_body": {"enable_thinking": False},
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,

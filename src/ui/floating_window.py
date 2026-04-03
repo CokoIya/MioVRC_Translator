@@ -107,6 +107,7 @@ class FloatingWindow(ctk.CTkToplevel):
         parent,
         ui_language: str,
         on_resend: Callable[[str, str], None] | None = None,
+        on_close: Callable[[], None] | None = None,
     ):
         super().__init__(parent)
         self._ui_lang = ui_language
@@ -116,6 +117,7 @@ class FloatingWindow(ctk.CTkToplevel):
         self._history_seq = 0
         self._selected_history_id: int | None = None
         self._on_resend = on_resend
+        self._on_close = on_close
         self._last_layout_width = 0
         self._layout_refresh_after_id: str | None = None
 
@@ -582,5 +584,9 @@ class FloatingWindow(ctk.CTkToplevel):
         self.lift()
 
     def hide(self) -> None:
+        if not self._visible:
+            return
         self._visible = False
         self.withdraw()
+        if self._on_close is not None:
+            self._on_close()

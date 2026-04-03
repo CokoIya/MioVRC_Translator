@@ -1,0 +1,32 @@
+﻿VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u"080404B0",
+          [
+            StringStruct(u"CompanyName", u"\u307f\u304a_Mio"),
+            StringStruct(u"FileDescription", u"Mio VRC Downloader"),
+            StringStruct(u"FileVersion", u"v1.0.0"),
+            StringStruct(u"InternalName", u"Mio_vrc_download"),
+            StringStruct(u"LegalCopyright", u"Copyright (C) 2026 \u307f\u304a_Mio"),
+            StringStruct(u"OriginalFilename", u"Mio_vrc_download.exe"),
+            StringStruct(u"ProductName", u"Mio VRC Downloader"),
+            StringStruct(u"ProductVersion", u"v1.0.0"),
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct(u"Translation", [2052, 1200])])
+  ]
+)

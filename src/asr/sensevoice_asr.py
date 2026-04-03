@@ -8,14 +8,11 @@ from typing import Optional
 import numpy as np
 
 from src.asr.funasr_runtime_compat import patch_sentencepiece_unicode_path_support
-from src.asr.sensevoice_model_manager import (
-    MODEL_ID,
-    MODEL_REVISION,
-    ensure_model,
-    model_exists,
-    resolve_model_path,
-)
+from src.asr.model_manager import download_model, model_exists, resolve_model_path
+from src.asr.model_registry import get_asr_engine_spec
 from src.asr.text_corrections import LayeredASRCorrector
+
+_DEFAULT_SPEC = get_asr_engine_spec("sensevoice-small")
 
 _LANGUAGE_MAP = {
     "zh": "zh",
@@ -68,8 +65,8 @@ class SenseVoiceASR:
         self,
         device: str = "cpu",
         ncpu: int | None = None,
-        model_id: str = MODEL_ID,
-        model_revision: str = MODEL_REVISION,
+        model_id: str = _DEFAULT_SPEC.model_id,
+        model_revision: str = _DEFAULT_SPEC.model_revision,
         corrector: LayeredASRCorrector | None = None,
     ):
         self.device = device
@@ -81,6 +78,17 @@ class SenseVoiceASR:
         self._lock = threading.Lock()
         self._corrector = corrector
 
+    def _runtime_spec(self):
+        return _DEFAULT_SPEC.__class__(
+            engine=_DEFAULT_SPEC.engine,
+            label=_DEFAULT_SPEC.label,
+            config_key=_DEFAULT_SPEC.config_key,
+            model_id=self.model_id,
+            model_revision=self.model_revision,
+            bundled_dir_names=_DEFAULT_SPEC.bundled_dir_names,
+            required_files=_DEFAULT_SPEC.required_files,
+        )
+
     def load(self, progress_callback=None):
         with self._lock:
             if self._model is not None:
@@ -90,15 +98,15 @@ class SenseVoiceASR:
             except (ImportError, OSError) as exc:
                 raise RuntimeError(_dependency_error_message(exc)) from exc
 
-            if not model_exists(self.model_id):
-                ensure_model(
-                    model_id=self.model_id,
-                    model_revision=self.model_revision,
+            spec = self._runtime_spec()
+            if not model_exists(spec):
+                download_model(
+                    spec,
                     progress_callback=progress_callback,
                 )
             _emit_progress(progress_callback, stage="loading", message="loading")
 
-            model_path = resolve_model_path(self.model_id)
+            model_path = resolve_model_path(spec)
             self._model = AutoModel(
                 model=model_path,
                 device=self.device,

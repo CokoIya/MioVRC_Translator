@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.utils.app_paths import resource_base_dirs, writable_app_dir
 from src.utils.ui_language_detection import bootstrap_ui_language
+from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
 
 def _config_path() -> Path:
@@ -161,6 +162,32 @@ def _ensure_translation_config(config: dict) -> bool:
     return changed
 
 
+def _ensure_asr_config(config: dict) -> bool:
+    changed = False
+    asr_cfg = config.get("asr", {})
+    if not isinstance(asr_cfg, dict):
+        return False
+
+    engine = str(asr_cfg.get("engine", DEFAULT_ASR_ENGINE)).strip()
+    if engine != DEFAULT_ASR_ENGINE:
+        asr_cfg["engine"] = DEFAULT_ASR_ENGINE
+        changed = True
+
+    sensevoice_cfg = asr_cfg.get("sensevoice", {})
+    if not isinstance(sensevoice_cfg, dict):
+        sensevoice_cfg = {}
+        asr_cfg["sensevoice"] = sensevoice_cfg
+        changed = True
+    if not str(sensevoice_cfg.get("model_id", "")).strip():
+        sensevoice_cfg["model_id"] = "iic/SenseVoiceSmall"
+        changed = True
+    if not str(sensevoice_cfg.get("model_revision", "")).strip():
+        sensevoice_cfg["model_revision"] = "master"
+        changed = True
+
+    return changed
+
+
 def load_config() -> dict:
     config_path = _config_path()
     created_new = False
@@ -183,6 +210,8 @@ def load_config() -> dict:
     merged = _merge_defaults(defaults, loaded)
     config_changed = _ensure_vrc_listen_config(merged, loaded)
     if _ensure_translation_config(merged):
+        config_changed = True
+    if _ensure_asr_config(merged):
         config_changed = True
     if bootstrap_ui_language(merged, prefer_auto=created_new) or config_changed:
         save_config(merged)
