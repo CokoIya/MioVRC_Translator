@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -8,692 +8,612 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:        #f5f5f7;
-      --bg-dark:   #1d1d1f;
-      --text:      #1d1d1f;
-      --text-sub:  #6e6e73;
-      --text-light:#f5f5f7;
-      --accent:    #0071e3;
-      --accent-h:  #0077ed;
-      --card:      #ffffff;
-      --radius:    18px;
+      --acc1: #7b6df2;
+      --acc2: #2dc6ef;
+      --bg: #04050a;
+      --card: rgba(255, 255, 255, 0.07);
+      --bdr: rgba(255, 255, 255, 0.12);
+      --txt1: #f4f6ff;
+      --txt2: #b4bbd9;
+      --txt3: #7c84a6;
+      --rad: 24px;
+      --maxw: 1040px;
+      --shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
     }
 
-    html { scroll-behavior: smooth; }
+    html {
+      font-family: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB",
+                   "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+      background: var(--bg);
+      color: var(--txt1);
+      -webkit-font-smoothing: antialiased;
+      scroll-behavior: smooth;
+    }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
-                   "Helvetica Neue", Arial, sans-serif;
-      background: #0d0d12;
-      background-image: url('./assets/icons/IMG_0600.PNG');
-      background-size: cover;
-      background-attachment: fixed;
-      background-position: center center;
-      color: var(--text);
+      min-height: 100vh;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      background: var(--bg);
+      color: var(--txt1);
       overflow-x: hidden;
     }
 
-    /* ── NAV ── */
-    nav {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      height: 52px;
-      background: rgba(15,15,20,0.72);
-      backdrop-filter: saturate(200%) blur(28px);
-      -webkit-backdrop-filter: saturate(200%) blur(28px);
-      border-bottom: 1px solid rgba(255,255,255,.10);
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 32px;
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      display: none;
     }
-    nav .logo {
-      font-size: 17px; font-weight: 700; letter-spacing: -.3px;
-      color: rgba(255,255,255,0.95);
-      text-decoration: none;
-      text-shadow: 0 1px 8px rgba(0,0,0,0.4);
+
+    body::before {
+      z-index: -2;
+      background: url('./assets/icons/2.png') center / cover no-repeat;
+      transform: scale(1.06);
+      opacity: 0.6;
+      filter: brightness(0.72) saturate(1.02);
     }
-    nav ul {
-      list-style: none; display: flex; gap: 28px;
+
+    body::after {
+      z-index: -1;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(123, 109, 242, 0.22), transparent 34%),
+        radial-gradient(circle at 80% 28%, rgba(45, 198, 239, 0.16), transparent 30%),
+        linear-gradient(180deg, rgba(4, 5, 10, 0.1) 0%, rgba(4, 5, 10, 0.28) 38%, rgba(4, 5, 10, 0.62) 100%);
     }
-    nav ul li a {
-      font-size: 13px; color: rgba(210,210,215,0.85); text-decoration: none;
-      transition: color .2s;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+
+    body::-webkit-scrollbar {
+      width: 10px;
     }
-    nav ul li a:hover { color: #60b0ff; }
-    .nav-actions {
-      display: flex;
-      align-items: center;
-      gap: 16px;
+
+    body::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.02);
     }
-    .lang-switcher {
-      height: 32px;
+
+    body::-webkit-scrollbar-thumb {
+      background: rgba(123, 109, 242, 0.45);
       border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.12);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      color: rgba(255,255,255,0.9);
-      padding: 0 12px;
-      font-size: 13px;
-      outline: none;
-    }
-    .lang-switcher option {
-      background: #1a1a2e;
-      color: #f0f0f0;
+      border: 2px solid transparent;
+      background-clip: padding-box;
     }
 
-    /* ── SECTIONS ── */
-    section {
-      min-height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      padding: 100px 24px 60px;
-      position: relative;
-    }
-
-    /* ── HERO ── */
-    #hero {
-      background: rgba(8,8,14,0.50);
-      backdrop-filter: saturate(180%) blur(24px);
-      -webkit-backdrop-filter: saturate(180%) blur(24px);
-      overflow: hidden;
-    }
-    #hero::before {
-      content: '';
-      position: absolute; inset: 0;
-      background: radial-gradient(ellipse 80% 60% at 50% 30%,
-                  rgba(99,102,241,.20) 0%, transparent 70%),
-                  radial-gradient(ellipse 60% 50% at 80% 80%,
-                  rgba(58,159,216,.15) 0%, transparent 60%);
+    .page-backdrop,
+    .page-backdrop-image,
+    .page-backdrop-grid,
+    .page-backdrop-scrim,
+    .page-backdrop-glow {
+      position: fixed;
+      inset: 0;
       pointer-events: none;
     }
-    .hero-eyebrow {
-      font-size: 14px; font-weight: 600; letter-spacing: 2px;
+
+    .page-backdrop { z-index: 0; }
+    .page-backdrop-image {
+      background: url('./assets/icons/2.png') center / cover no-repeat;
+      transform: scale(1.01);
+      opacity: 1;
+      filter: saturate(1.02) brightness(1.02);
+    }
+    .page-backdrop-grid {
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+      background-size: 52px 52px;
+      opacity: 0.04;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.55));
+    }
+    .page-backdrop-glow.glow-a {
+      inset: auto auto -12% -10%;
+      width: 44vw;
+      height: 44vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(123, 109, 242, 0.04), transparent 70%);
+      filter: blur(40px);
+    }
+    .page-backdrop-glow.glow-b {
+      inset: -10% -8% auto auto;
+      width: 34vw;
+      height: 34vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(45, 198, 239, 0.04), transparent 68%);
+      filter: blur(50px);
+    }
+    .page-backdrop-scrim {
+      background:
+        linear-gradient(180deg, rgba(4, 5, 10, 0.01) 0%, rgba(4, 5, 10, 0.04) 38%, rgba(4, 5, 10, 0.08) 100%),
+        radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.02), transparent 55%);
+      backdrop-filter: blur(1.5px);
+      -webkit-backdrop-filter: blur(1.5px);
+    }
+
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 240;
+      height: 64px;
+      background: rgba(5, 6, 12, 0);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px;
+      gap: 24px;
+      transition: background-color .28s ease, border-bottom-color .28s ease, backdrop-filter .28s ease, -webkit-backdrop-filter .28s ease;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 12px;
+      text-decoration: none;
+      color: inherit;
+      flex-shrink: 0;
+    }
+    .nav-logo-img {
+      width: 30px; height: 30px; border-radius: 9px;
+      object-fit: cover;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
+    }
+    .nav-logo-text {
+      font-size: 16px; font-weight: 700; letter-spacing: -.02em;
+      background: linear-gradient(90deg, var(--acc1), var(--acc2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    nav ul { list-style: none; display: flex; align-items: center; gap: 30px; margin-left: auto; }
+    nav ul li a {
+      font-size: 13px; color: var(--txt3); text-decoration: none;
+      transition: color .22s ease, opacity .22s ease;
+    }
+    nav ul li a:hover, nav ul li a.active { color: var(--txt1); }
+    .nav-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+    .lang-switcher {
+      height: 34px; border-radius: 999px;
+      border: 1px solid var(--bdr);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--txt2); padding: 0 14px; font-size: 13px; outline: none;
+      cursor: pointer; transition: border-color .22s ease, color .22s ease;
+    }
+    .lang-switcher:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); }
+    .lang-switcher option { background: #0f111a; color: var(--txt1); }
+
+    .fp-dots {
+      position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
+      z-index: 260; display: flex; flex-direction: column; gap: 12px;
+      pointer-events: auto;
+    }
+    .fp-dot {
+      position: relative;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+    }
+        .fp-dot::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.34);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      transition: all .22s ease;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    }
+    .fp-dot:hover::before { background: rgba(255, 255, 255, 0.62); transform: translate(-50%, -50%) scale(1.08); }
+    .fp-dot.active::before {
+      background: var(--acc1);
+      border-color: rgba(255, 255, 255, 0.36);
+      transform: translate(-50%, -50%) scale(1.08);
+      box-shadow: 0 0 0 7px rgba(123, 109, 242, 0.16), 0 0 18px rgba(123, 109, 242, 0.28);
+    }
+
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 999px;
+      border: 1px solid rgba(123, 109, 242, 0.2);
+      background: rgba(123, 109, 242, 0.1);
+      color: #c8c3ff; margin-bottom: 16px;
+      font-size: 11.5px; font-weight: 700; letter-spacing: .16em;
       text-transform: uppercase;
-      color: #86868b; margin-bottom: 18px;
-      opacity: 0; transform: translateY(30px);
-      animation: fadeUp .8s .1s forwards;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
     }
-    .hero-title {
-      font-size: clamp(48px, 8vw, 96px);
-      font-weight: 700; line-height: 1.05;
-      letter-spacing: -2px; text-align: center;
-      color: rgba(255,255,255,0.97);
-      text-shadow: 0 2px 20px rgba(0,0,0,0.5);
-      opacity: 0; transform: translateY(40px);
-      animation: fadeUp .8s .25s forwards;
+    .sec-title {
+      font-size: clamp(34px, 4.8vw, 58px); font-weight: 800;
+      line-height: 1.08; text-align: center; color: var(--txt1);
+      margin-bottom: 12px; letter-spacing: -.04em;
+      text-shadow: 0 10px 40px rgba(0, 0, 0, 0.28);
     }
-    .hero-title span {
-      background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%);
+    .sec-sub {
+      font-size: 15px; color: var(--txt2); text-align: center;
+      width: min(100%, 650px); line-height: 1.76; margin-bottom: 40px;
+    }
+    
+    .grad-text {
+      background: linear-gradient(120deg, var(--acc1) 0%, var(--acc2) 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
-    .hero-sub {
-      margin-top: 24px;
-      font-size: clamp(17px, 2.5vw, 21px);
-      color: rgba(200,200,210,0.92); text-align: center; max-width: 620px;
-      line-height: 1.6;
-      text-shadow: 0 1px 8px rgba(0,0,0,0.4);
-      opacity: 0; transform: translateY(30px);
-      animation: fadeUp .8s .4s forwards;
+    .hero-wordmark {
+      display: inline-block;
+      line-height: 1.08;
+      padding-bottom: .08em;
+      margin-bottom: .12em;
+      text-rendering: geometricPrecision;
     }
-    .hero-cta {
-      margin-top: 40px; display: flex; gap: 14px; flex-wrap: wrap;
+
+    #hero {
+      z-index: 1;
       justify-content: center;
-      opacity: 0; transform: translateY(20px);
-      animation: fadeUp .8s .55s forwards;
+      text-align: center;
+      overflow: hidden;
+    }
+    #hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: rgba(5, 6, 12, 0.15);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+    }
+    .hero-bg { display: none; }
+    .hero-blob {
+      position: absolute; border-radius: 50%; filter: blur(90px); z-index: 0;
+      pointer-events: none;
+    }
+    .hero-blob.b1 {
+      width: 420px; height: 420px; top: 4%; left: -8%;
+      background: radial-gradient(circle, rgba(123, 109, 242, 0.24), transparent 70%);
+    }
+    .hero-blob.b2 {
+      width: 360px; height: 360px; right: -4%; bottom: 12%;
+      background: radial-gradient(circle, rgba(45, 198, 239, 0.2), transparent 70%);
+    }
+    .hero-blob.b3 {
+      width: 240px; height: 240px; top: 18%; left: 50%; transform: translateX(-50%);
+      background: radial-gradient(circle, rgba(207, 137, 255, 0.14), transparent 72%);
+    }
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 980px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .hero-icon-wrap {
+      display: flex; justify-content: center; margin-bottom: 14px;
+      flex-shrink: 0;
+    }
+    .hero-icon {
+      width: 72px; height: 72px; border-radius: 20px;
+      object-fit: cover;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      animation: icon-float 4.2s ease-in-out infinite;
+    }
+    @keyframes icon-float {
+      0%,100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 11.5px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase; color: #c8f7ff;
+      border: 1px solid rgba(45, 198, 239, 0.24);
+      background: rgba(45, 198, 239, 0.08);
+      padding: 6px 18px; border-radius: 999px; margin-bottom: 16px;
+    }
+    .hero-title {
+      font-size: clamp(42px, 7vw, 82px); font-weight: 900;
+      line-height: 1.06; letter-spacing: -.06em;
+      color: #ffffff; margin-bottom: 14px;
+      text-shadow: 0 20px 60px rgba(0, 0, 0, 0.46);
+    }
+    .hero-sub {
+      font-size: clamp(15px, 1.7vw, 18px);
+      color: rgba(244, 246, 255, 0.9);
+      width: min(100%, 680px);
+      margin: 0 auto 24px;
+      line-height: 1.76;
+      text-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+    }
+    .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .btn-primary,
+    .btn-ghost {
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      min-height: 50px; padding: 0 26px; border-radius: 999px; font-size: 14.5px; font-weight: 700;
+      text-decoration: none; transition: all .22s ease; white-space: nowrap;
     }
     .btn-primary {
-      padding: 14px 32px; border-radius: 980px;
-      background: rgba(0,113,227,0.82);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(100,170,255,0.45);
-      color: #fff;
-      font-size: 17px; font-weight: 600;
-      cursor: pointer; text-decoration: none;
-      transition: background .2s, transform .15s, border-color .2s, box-shadow .2s;
-      display: inline-block;
-      box-shadow: 0 4px 20px rgba(0,113,227,0.35);
-      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      background: linear-gradient(120deg, var(--acc1), var(--acc2));
+      color: #fff; border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 12px 30px rgba(123, 109, 242, 0.26);
     }
-    .btn-primary:hover {
-      background: rgba(0,130,255,0.92);
-      border-color: rgba(140,200,255,0.6);
-      transform: scale(1.03);
-      box-shadow: 0 6px 28px rgba(0,113,227,0.5);
-    }
+    .btn-primary:hover { opacity: .92; transform: translateY(-2px); box-shadow: 0 16px 36px rgba(123, 109, 242, 0.34); }
     .btn-ghost {
-      padding: 14px 32px; border-radius: 980px;
-      background: rgba(255,255,255,0.12);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.28);
-      color: rgba(255,255,255,0.95);
-      font-size: 17px; font-weight: 500;
-      cursor: pointer; text-decoration: none;
-      transition: background .2s, transform .15s, border-color .2s;
-      display: inline-block;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+      border: 1px solid var(--bdr); color: var(--txt2);
+      text-decoration: none; background: rgba(255, 255, 255, 0.05);
     }
-    .btn-ghost:hover {
-      background: rgba(255,255,255,0.20);
-      border-color: rgba(255,255,255,0.45);
-      transform: scale(1.03);
-    }
-
-    .privacy-badge {
-      margin-top: 32px;
+    .btn-ghost:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); transform: translateY(-2px); }
+    .hero-badge {
       display: inline-flex; align-items: center; gap: 8px;
-      padding: 8px 18px; border-radius: 980px;
-      background: rgba(46,204,113,.12);
-      border: 1px solid rgba(46,204,113,.3);
-      color: #2ecc71; font-size: 13px;
-      opacity: 0; animation: fadeUp .8s .7s forwards;
+      min-height: 38px; font-size: 12px; color: var(--txt2);
+      padding: 0 16px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.05);
+      margin-bottom: 10px;
     }
-
     .scroll-hint {
-      position: absolute; bottom: 36px;
-      display: flex; flex-direction: column;
-      align-items: center; gap: 6px;
-      color: #6e6e73; font-size: 12px;
-      animation: bounce 2s infinite;
+      position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      font-size: 10.5px; color: var(--txt3); letter-spacing: .14em;
+      text-transform: uppercase; animation: hint-bob 2.2s ease-in-out infinite;
+      z-index: 1;
     }
-    .scroll-hint svg { width: 20px; opacity: .6; }
+    .scroll-hint svg { opacity: .7; }
+    @keyframes hint-bob { 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(8px)} }
 
-    /* ── FEATURES SECTION ── */
-    #features {
-      background: rgba(235,235,240,0.50);
-      backdrop-filter: saturate(180%) blur(24px);
-      -webkit-backdrop-filter: saturate(180%) blur(24px);
+    #features,
+    #guide,
+    #download {
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-    .section-eyebrow {
-      font-size: 13px; font-weight: 700; letter-spacing: 2px;
-      text-transform: uppercase; color: var(--accent);
-      margin-bottom: 14px;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.15);
-    }
-    .section-title {
-      font-size: clamp(36px, 5vw, 56px);
-      font-weight: 700; line-height: 1.1;
-      letter-spacing: -1.5px; text-align: center;
-      max-width: 800px;
-      color: rgba(18,18,22,0.97);
-      text-shadow: 0 1px 6px rgba(0,0,0,0.08);
-    }
-    .section-sub {
-      margin-top: 16px; font-size: 19px;
-      color: rgba(80,80,90,0.9); text-align: center;
-      max-width: 580px; line-height: 1.6;
-    }
-
+    #features { z-index: 2; background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(8, 10, 18, 0.12) 100%); }
     .features-grid {
-      margin-top: 64px;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px; width: 100%; max-width: 1100px;
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+      width: min(100%, var(--maxw));
     }
     .feature-card {
-      background: rgba(255,255,255,0.50);
-      backdrop-filter: saturate(160%) blur(18px);
-      -webkit-backdrop-filter: saturate(160%) blur(18px);
-      border: 1px solid rgba(255,255,255,0.45);
-      border-radius: var(--radius);
-      padding: 32px 28px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.10), 0 1px 0 rgba(255,255,255,0.6) inset;
-      transition: transform .25s, box-shadow .25s, background .25s;
-      opacity: 0; transform: translateY(40px);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: var(--rad); padding: 24px 22px;
+      transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
+      opacity: 1; transform: translateY(0);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
     }
     .feature-card.visible {
-      animation: fadeUp .6s forwards;
+      opacity: 1; transform: translateY(0);
     }
     .feature-card:hover {
-      transform: translateY(-4px);
-      background: rgba(255,255,255,0.62);
-      box-shadow: 0 12px 40px rgba(0,0,0,0.14), 0 1px 0 rgba(255,255,255,0.7) inset;
+      transform: translateY(-2px);
+      border-color: rgba(123, 109, 242, .32);
+      box-shadow: 0 28px 60px rgba(0, 0, 0, .44);
     }
-    .feature-icon {
-      width: 48px; height: 48px; border-radius: 12px;
+    .feat-icon {
+      width: 46px; height: 46px; border-radius: 14px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 24px; margin-bottom: 18px;
+      font-size: 22px; margin-bottom: 14px;
+      background: linear-gradient(135deg, rgba(123, 109, 242, .2), rgba(45, 198, 239, .12));
+      border: 1px solid rgba(255, 255, 255, .06);
     }
-    .feature-card h3 {
-      font-size: 19px; font-weight: 700;
-      letter-spacing: -.3px; margin-bottom: 8px;
-      color: rgba(18,18,22,0.97);
-    }
-    .feature-card p {
-      font-size: 15px; color: rgba(60,60,70,0.88); line-height: 1.6;
-    }
+    .feature-card h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; color: var(--txt1); }
+    .feature-card p { font-size: 13px; color: var(--txt2); line-height: 1.7; }
 
-    /* ── GUIDE SECTION ── */
     #guide {
-      background: rgba(8,8,14,0.50);
-      backdrop-filter: saturate(180%) blur(24px);
-      -webkit-backdrop-filter: saturate(180%) blur(24px);
+      z-index: 3;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(8, 10, 18, .14)),
+        radial-gradient(ellipse at 50% 100%, rgba(123, 109, 242, .04), transparent 60%);
     }
-    .guide-wrap {
-      width: 100%; max-width: 860px;
-      margin-top: 56px; display: flex;
-      flex-direction: column; gap: 0;
+    .guide-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;
+      width: min(100%, var(--maxw));
     }
     .guide-step {
-      display: flex; gap: 24px; align-items: flex-start;
-      padding: 28px 0;
-      border-bottom: 1px solid rgba(255,255,255,.10);
-      opacity: 0; transform: translateX(-30px);
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 18px 18px 17px; border-radius: var(--rad);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      opacity: 1; transform: translateY(0);
+      transition: opacity .45s ease, transform .45s ease, border-color .24s ease;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
     }
-    .guide-step.visible { animation: slideIn .55s forwards; }
+    .guide-step.visible { opacity: 1; transform: translateY(0); }
+    .guide-step:hover { border-color: rgba(45, 198, 239, .3); transform: translateY(-2px); }
     .step-num {
-      flex-shrink: 0;
-      width: 40px; height: 40px; border-radius: 50%;
-      background: rgba(0,113,227,0.85);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(100,170,255,0.4);
+      flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      font-size: 16px; font-weight: 700; color: #fff;
-      box-shadow: 0 2px 12px rgba(0,113,227,0.4);
-    }
-    .step-body h4 {
-      font-size: 19px; font-weight: 700;
-      color: rgba(245,245,250,0.97); margin-bottom: 6px;
-      text-shadow: 0 1px 6px rgba(0,0,0,0.3);
-    }
-    .step-body p {
-      font-size: 15px; color: rgba(190,190,200,0.9); line-height: 1.6;
-    }
-    .step-body code {
-      display: inline-block;
-      margin-top: 10px;
-      padding: 10px 16px; border-radius: 10px;
-      background: rgba(255,255,255,0.10);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255,255,255,0.12);
-      font-family: "SF Mono", "Menlo", monospace;
-      font-size: 13px; color: #a5f3fc;
-      letter-spacing: .3px;
-    }
-
-    /* ── DOWNLOAD SECTION ── */
-    #download {
-      background: rgba(235,235,240,0.50);
-      backdrop-filter: saturate(180%) blur(24px);
-      -webkit-backdrop-filter: saturate(180%) blur(24px);
-    }
-    .download-card {
-      margin-top: 48px;
-      background: rgba(12,12,18,0.50);
-      backdrop-filter: saturate(180%) blur(28px);
-      -webkit-backdrop-filter: saturate(180%) blur(28px);
-      border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 24px;
-      padding: 48px 56px;
-      max-width: 700px; width: 100%;
-      text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,.28), 0 1px 0 rgba(255,255,255,0.06) inset;
-      position: relative; overflow: hidden;
-      opacity: 0; transform: translateY(50px);
-    }
-    .download-card.visible { animation: fadeUp .7s forwards; }
-    .download-card::before {
-      content: '';
-      position: absolute; top: -60px; left: -60px;
-      width: 300px; height: 300px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(0,113,227,.18) 0%, transparent 70%);
-      pointer-events: none;
-    }
-    .dl-icon {
-      font-size: 56px; margin-bottom: 16px;
-      display: block;
-    }
-    .download-card h3 {
-      font-size: 28px; font-weight: 700;
-      color: rgba(250,250,255,0.97); letter-spacing: -.5px;
-      margin-bottom: 10px;
-      text-shadow: 0 2px 12px rgba(0,0,0,0.4);
-    }
-    .download-card p {
-      font-size: 16px; color: rgba(185,185,200,0.92); margin-bottom: 32px;
-      line-height: 1.6;
-    }
-    .btn-download {
-      display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-      width: min(100%, 380px);
-      min-height: 66px;
-      padding: 16px 32px; border-radius: 980px;
-      background: rgba(0,113,227,0.82);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(100,170,255,0.4);
+      font-size: 14px; font-weight: 800;
+      background: linear-gradient(135deg, var(--acc1), var(--acc2));
       color: #fff;
-      font-size: 17px; font-weight: 600;
-      text-decoration: none;
-      transition: background .2s, transform .15s, box-shadow .2s, border-color .2s;
-      box-shadow: 0 4px 24px rgba(0,113,227,.38);
-      text-shadow: 0 1px 4px rgba(0,0,0,0.25);
+      box-shadow: 0 12px 26px rgba(123, 109, 242, 0.26);
     }
-    .btn-download:hover {
-      background: rgba(0,130,255,0.92);
-      border-color: rgba(140,200,255,0.55);
-      transform: scale(1.04);
-      box-shadow: 0 8px 32px rgba(0,113,227,.52);
+    .step-body h4 { font-size: 14.5px; font-weight: 700; margin-bottom: 6px; color: var(--txt1); }
+    .step-body p { font-size: 13px; color: var(--txt2); line-height: 1.72; }
+    .step-body code {
+      display: inline-flex; margin-top: 8px;
+      font-size: 12px; padding: 0 11px; min-height: 32px; border-radius: 999px;
+      background: rgba(45, 198, 239, .08); border: 1px solid rgba(45, 198, 239, .18);
+      color: #d7f8ff; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      align-items: center;
     }
-    .btn-download.secondary {
-      background: rgba(255,255,255,0.10);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.22);
-      box-shadow: none;
+    .guide-step.full { grid-column: 1 / -1; }
+
+    #download { background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(8, 10, 18, .16)); z-index: 4; }
+    .dl-cards {
+      display: grid; gap: 18px; width: min(100%, var(--maxw));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 18px;
     }
-    .btn-download.secondary:hover {
-      background: rgba(255,255,255,0.18);
-      border-color: rgba(255,255,255,0.38);
-      box-shadow: 0 8px 24px rgba(0,0,0,.20);
+    .dl-card {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: calc(var(--rad) + 2px); padding: 26px 24px 22px;
+      opacity: 1; transform: translateY(0);
+      transition: opacity .5s ease, transform .5s ease, border-color .24s ease;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
     }
-    .download-actions {
+    .dl-card.visible { opacity: 1; transform: translateY(0); }
+    .dl-card:hover { border-color: rgba(123, 109, 242, .28); transform: translateY(-2px); }
+    .dl-icon-wrap {
+      width: 48px; height: 48px; border-radius: 15px; font-size: 24px;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, rgba(123, 109, 242, .2), rgba(45, 198, 239, .12));
+      border: 1px solid rgba(255, 255, 255, .06);
+      margin-bottom: 15px;
+    }
+    .dl-card h3 { font-size: 17px; font-weight: 800; margin-bottom: 8px; color: var(--txt1); }
+    .dl-card p { font-size: 13px; color: var(--txt2); line-height: 1.76; margin-bottom: 16px; }
+    .dl-btns { display: flex; flex-direction: column; gap: 10px; }
+    .btn-dl {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 0 16px; min-height: 42px; border-radius: 12px;
+      font-size: 13.5px; font-weight: 700; text-decoration: none;
+      transition: all .22s ease; cursor: pointer;
+    }
+    .btn-dl.prim {
+      background: linear-gradient(120deg, var(--acc1), var(--acc2));
+      color: #fff; border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 12px 28px rgba(123, 109, 242, 0.24);
+    }
+    .btn-dl.prim:hover { opacity: .92; transform: translateY(-2px); box-shadow: 0 16px 34px rgba(123, 109, 242, 0.3); }
+    .btn-dl.sec {
+      background: rgba(255, 255, 255, .04); border: 1px solid var(--bdr);
+      color: var(--txt2);
+    }
+    .btn-dl.sec:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); transform: translateY(-2px); }
+    .dl-note {
+      font-size: 11.5px; color: var(--txt3); margin-top: 2px; line-height: 1.65;
+    }
+    .privacy-block {
+      width: min(100%, var(--maxw));
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: var(--rad); padding: 18px 20px;
+      display: flex; gap: 12px; align-items: flex-start;
+      opacity: 1; transform: translateY(0);
+      transition: opacity .5s .2s ease, transform .5s .2s ease;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+      margin-bottom: 22px;
+    }
+    .privacy-block.visible { opacity: 1; transform: translateY(0); }
+    .privacy-block svg { flex-shrink: 0; margin-top: 2px; color: #c8c3ff; }
+    .privacy-block h4 { font-size: 14px; font-weight: 800; margin-bottom: 6px; color: var(--txt1); }
+    .privacy-block p { font-size: 13px; color: var(--txt2); line-height: 1.76; }
+    .site-footer {
+      width: min(100%, var(--maxw));
+      padding: 18px 0 0;
+      border-top: 1px solid rgba(255, 255, 255, .08);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    }
+    .site-footer p { font-size: 11.5px; color: var(--txt3); text-align: center; line-height: 1.7; }
+    .site-footer a { color: #c8f7ff; text-decoration: none; }
+    .site-footer a:hover { text-decoration: underline; }
+
+    .fp-section {
+      position: sticky;
+      top: 0;
+      min-height: 100vh;
+      width: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 14px;
-    }
-    .download-note {
-      max-width: 520px;
-      font-size: 14px;
-      color: rgba(165,165,180,0.9);
-      line-height: 1.7;
-    }
-    .privacy-note {
-      margin-top: 40px;
-      padding: 18px 24px; border-radius: 14px;
-      background: rgba(46,204,113,0.10);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(46,204,113,.25);
-      text-align: left;
-      max-width: 700px; width: 100%;
-      opacity: 0;
-    }
-    .privacy-note.visible { animation: fadeUp .7s .2s forwards; }
-    .privacy-note h4 {
-      font-size: 14px; font-weight: 600;
-      color: #2ecc71; margin-bottom: 8px;
-      display: flex; align-items: center; gap: 6px;
-    }
-    .privacy-note p {
-      font-size: 14px; color: rgba(80,80,90,0.92); line-height: 1.7;
+      justify-content: center;
+      position: sticky;
+      padding: 104px 32px 70px;
+      isolation: isolate;
     }
 
-    /* ── FOOTER ── */
-    footer {
-      background: rgba(8,8,14,0.75);
-      backdrop-filter: saturate(180%) blur(24px);
-      -webkit-backdrop-filter: saturate(180%) blur(24px);
-      border-top: 1px solid rgba(255,255,255,0.08);
-      padding: 40px 32px;
-      text-align: center;
-      color: rgba(160,160,170,0.9); font-size: 13px;
-    }
-    footer a { color: rgba(190,190,205,0.85); text-decoration: none; }
-    footer a:hover { color: rgba(245,245,250,0.97); }
-
-    /* ── ANIMATIONS ── */
-    @keyframes fadeUp {
-      to { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes slideIn {
-      to { opacity: 1; transform: translateX(0); }
-    }
-    @keyframes bounce {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(8px); }
-    }
-
-    /* ── RESPONSIVE ── */
-    @media (max-width: 600px) {
+    @media (max-width: 900px) {
+      nav { padding: 0 18px; }
       nav ul { display: none; }
-      .nav-actions { width: 100%; justify-content: flex-end; }
-      .download-card { padding: 36px 24px; }
-      .hero-cta { flex-direction: column; align-items: center; }
+      .fp-section { padding-inline: 22px; }
+      .features-grid, .guide-grid, .dl-cards { grid-template-columns: 1fr; }
+      .guide-step.full { grid-column: 1; }
+      .fp-dots { right: 12px; }
     }
-
-    /* ── FLOATING MUSIC PLAYER ── */
-    #music-bubble {
-      position: fixed;
-      bottom: 72px;
-      right: 22px;
-      z-index: 9990;
-      user-select: none;
-      touch-action: none;
+    @media (max-height: 820px) {
+      .fp-section { padding-top: 84px; padding-bottom: 46px; }
+      .hero-eyebrow { margin-bottom: 12px; }
+      .hero-title { font-size: clamp(36px, 6vw, 68px); margin-bottom: 10px; }
+      .hero-sub { font-size: 14px; margin-bottom: 18px; line-height: 1.68; }
+      .hero-cta { margin-bottom: 12px; }
+      .hero-badge { margin-bottom: 4px; }
+      .scroll-hint { bottom: 14px; }
     }
-    .music-toggle-btn {
-      width: 52px; height: 52px;
-      border-radius: 50%;
-      background: rgba(20,20,28,0.72);
-      backdrop-filter: saturate(200%) blur(22px);
-      -webkit-backdrop-filter: saturate(200%) blur(22px);
-      border: 1.5px solid rgba(255,255,255,0.20);
-      box-shadow: 0 4px 24px rgba(0,0,0,0.38), 0 1px 0 rgba(255,255,255,0.06) inset;
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      transition: box-shadow .25s, transform .2s, background .2s;
-      color: rgba(255,255,255,0.88);
-      position: relative; overflow: hidden;
+    @media (max-height: 720px) {
+      .hero-title { font-size: clamp(34px, 5.6vw, 60px); }
+      .hero-sub { width: min(100%, 620px); }
     }
-    .music-toggle-btn:hover {
-      transform: scale(1.08);
-      background: rgba(30,30,40,0.85);
-      box-shadow: 0 6px 32px rgba(0,0,0,.45), 0 0 0 3px rgba(0,113,227,.28);
-    }
-    .music-icon-note {
-      width: 24px; height: 24px;
-      position: absolute;
-      transition: opacity .25s, transform .25s;
-    }
-    .music-eq-bars {
-      display: flex; align-items: flex-end; gap: 3px; height: 22px;
-      position: absolute;
-      opacity: 0;
-      transition: opacity .25s;
-    }
-    .music-eq-bars span {
-      width: 3px;
-      background: rgba(255,255,255,0.85);
-      border-radius: 2px;
-      transform-origin: bottom;
-    }
-    .music-eq-bars span:nth-child(1) { height: 8px;  animation: mio-eq 0.75s 0.0s ease-in-out infinite alternate; }
-    .music-eq-bars span:nth-child(2) { height: 16px; animation: mio-eq 0.75s 0.18s ease-in-out infinite alternate; }
-    .music-eq-bars span:nth-child(3) { height: 11px; animation: mio-eq 0.75s 0.09s ease-in-out infinite alternate; }
-    @keyframes mio-eq {
-      from { transform: scaleY(0.35); }
-      to   { transform: scaleY(1.0); }
-    }
-    #music-bubble.mio-playing .music-icon-note { opacity: 0; transform: scale(0.7); }
-    #music-bubble.mio-playing .music-eq-bars { opacity: 1; }
-    #music-bubble.mio-paused .music-icon-note { opacity: 1; transform: scale(1); }
-    #music-bubble.mio-paused .music-eq-bars { opacity: 0; }
-    #music-bubble.mio-paused .music-eq-bars span { animation-play-state: paused; }
-
-    .music-panel {
-      position: absolute;
-      bottom: 62px;
-      right: 0;
-      width: 284px;
-      background: rgba(14,14,20,0.50);
-      backdrop-filter: saturate(180%) blur(28px);
-      -webkit-backdrop-filter: saturate(180%) blur(28px);
-      border: 1px solid rgba(255,255,255,0.16);
-      border-radius: 22px;
-      padding: 14px 14px 12px;
-      box-shadow: 0 20px 56px rgba(0,0,0,.42), 0 1px 0 rgba(255,255,255,0.07) inset;
-      opacity: 0;
-      transform: translateY(10px) scale(0.94);
-      pointer-events: none;
-      transition: opacity .28s cubic-bezier(.22,.68,0,1.2), transform .28s cubic-bezier(.22,.68,0,1.2);
-    }
-    #music-bubble.mio-open .music-panel {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-      pointer-events: all;
-    }
-    .music-panel-hdr {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 10px; padding: 0 2px;
-    }
-    .music-brand-label {
-      font-size: 12px; font-weight: 600; letter-spacing: .5px;
-      color: rgba(220,220,230,0.88);
-      display: flex; align-items: center; gap: 6px;
-    }
-    .music-brand-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: #4ade80;
-      box-shadow: 0 0 8px rgba(74,222,128,.72);
-      animation: mio-pulse 2s infinite;
-    }
-    @keyframes mio-pulse {
-      0%,100% { opacity: 1; transform: scale(1); }
-      50% { opacity: .65; transform: scale(0.82); }
-    }
-    .music-close-btn {
-      width: 22px; height: 22px; border-radius: 50%;
-      background: rgba(255,255,255,0.10);
-      border: 1px solid rgba(255,255,255,0.12);
-      cursor: pointer; color: rgba(255,255,255,0.65);
-      font-size: 15px; line-height: 1;
-      display: flex; align-items: center; justify-content: center;
-      transition: background .2s, color .2s;
-      padding: 0;
-    }
-    .music-close-btn:hover { background: rgba(220,50,50,0.4); color: #fff; }
-
-    .music-track-card {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      border-radius: 16px;
-      background: rgba(0,0,0,0.24);
-      border: 1px solid rgba(255,255,255,0.10);
-      padding: 12px;
-    }
-    #music-cover {
-      width: 54px; height: 54px;
-      border-radius: 16px;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-      font-size: 18px; font-weight: 700; letter-spacing: 1px;
-      color: rgba(255,255,255,0.96);
-      background: linear-gradient(135deg, #4568dc, #43cea2);
-      box-shadow: 0 10px 24px rgba(0,0,0,0.26);
-    }
-    .music-track-meta {
-      min-width: 0;
+    @media (max-width: 640px) {
+      .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 980px);
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
-    #music-song-name {
-      font-size: 15px;
-      font-weight: 700;
-      color: rgba(255,255,255,0.96);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    @media (max-width: 480px) {
+      nav { height: 58px; padding: 0 12px; }
+      .nav-logo-text { font-size: 14px; }
+      .lang-switcher { max-width: 116px; padding: 0 10px; }
+      .fp-section { padding-inline: 16px; }
+      .feature-card, .guide-step, .dl-card, .privacy-block { border-radius: 20px; }
+      .fp-dots { right: 8px; }
     }
-    #music-song-artist {
-      font-size: 12px;
-      color: rgba(220,220,230,0.78);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .music-ctrl-row {
-      display: flex; align-items: center; justify-content: center;
-      gap: 10px; margin-top: 12px; padding: 0 2px;
-    }
-    .music-ctrl-btn {
-      width: 34px; height: 34px; border-radius: 50%;
-      background: rgba(255,255,255,0.10);
-      border: 1px solid rgba(255,255,255,0.14);
-      color: rgba(255,255,255,0.82);
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      transition: background .18s, transform .15s, box-shadow .18s;
-      padding: 0; flex-shrink: 0;
-    }
-    .music-ctrl-btn:hover {
-      background: rgba(255,255,255,0.22);
-      transform: scale(1.10);
-      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
-    }
-    .music-ctrl-btn:active { transform: scale(0.95); }
-    .music-ctrl-btn svg { width: 17px; height: 17px; pointer-events: none; }
-    .music-ctrl-play {
-      width: 42px; height: 42px;
-      background: rgba(255,255,255,0.16);
-    }
-    .music-ctrl-play .ctrl-icon-pause { display: none; }
-    .music-ctrl-play.is-playing .ctrl-icon-play { display: none; }
-    .music-ctrl-play.is-playing .ctrl-icon-pause { display: block; }
-
-    .music-vol-row {
-      display: flex; align-items: center; gap: 10px;
-      margin-top: 12px;
-      color: rgba(255,255,255,0.78);
-    }
-    .music-vol-slider {
-      flex: 1;
-      -webkit-appearance: none;
-      appearance: none;
-      height: 4px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.18);
-      outline: none;
-    }
-    .music-vol-slider:hover { background: rgba(255,255,255,0.32); }
-    .music-vol-slider::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 14px; height: 14px; border-radius: 50%;
-      background: rgba(255,255,255,0.92);
-      border: 0;
-      box-shadow: 0 0 0 2px rgba(0,0,0,0.16);
-      cursor: pointer;
-    }
-    .music-vol-slider::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%;
-      background: rgba(255,255,255,0.92);
-      border: 0;
-      box-shadow: 0 0 0 2px rgba(0,0,0,0.16);
-      cursor: pointer;
-    }
-    .music-vol-num {
-      min-width: 38px;
-      text-align: right;
-      font-size: 12px;
-      color: rgba(255,255,255,0.74);
-    }
-    #music-audio { display: none; }
-
-    @media (max-width: 600px) {
-      #music-bubble { right: 16px; bottom: 68px; }
-      .music-panel { width: min(284px, calc(100vw - 32px)); }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
     }
   </style>
 </head>
 <body>
+  <div class="page-backdrop" aria-hidden="true">
+    <div class="page-backdrop-image"></div>
+    <div class="page-backdrop-glow glow-a"></div>
+    <div class="page-backdrop-glow glow-b"></div>
+    <div class="page-backdrop-grid"></div>
+    <div class="page-backdrop-scrim"></div>
+  </div>
 
 <!-- NAV -->
 <nav>
-  <a class="logo" href="#">Mio Translator</a>
-  <div class="nav-actions">
-    <ul>
-      <li><a id="nav-intro" href="#hero">介绍</a></li>
-      <li><a id="nav-guide" href="#guide">使用说明</a></li>
-      <li><a id="nav-download" href="#download">下载</a></li>
-      <li><a id="nav-github" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></li>
-    </ul>
-    <select id="lang-switcher" class="lang-switcher" aria-label="Language selector">
+  <a class="nav-logo" href="#" onclick="scrollToSection(0);return false;">
+    <img class="nav-logo-img" src="./assets/icons/app_icon_mio.png" alt="Mio" />
+    <span class="nav-logo-text">Mio Translator</span>
+  </a>
+  <ul>
+    <li><a id="nav-intro" href="#" onclick="scrollToSection(0);return false;">介绍</a></li>
+    <li><a id="nav-features" href="#" onclick="scrollToSection(1);return false;">功能</a></li>
+    <li><a id="nav-guide" href="#" onclick="scrollToSection(2);return false;">使用说明</a></li>
+    <li><a id="nav-download" href="#" onclick="scrollToSection(3);return false;">下载</a></li>
+    <li><a id="nav-github" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></li>
+  </ul>
+  <div class="nav-right">
+    <select id="lang-switcher" class="lang-switcher" aria-label="Language">
       <option value="zh-CN">简体中文</option>
       <option value="en">English</option>
       <option value="ja">日本語</option>
@@ -703,84 +623,108 @@
   </div>
 </nav>
 
-<!-- HERO -->
-<section id="hero">
-  <p class="hero-eyebrow" id="hero-eyebrow">VRChat 实时翻译工具</p>
-  <h1 class="hero-title">Mio<br><span>RealTime Translator</span></h1>
-  <p class="hero-sub" id="hero-sub">本地语音识别 + AI 双向互译，打破 VRChat 语言壁垒。<br>说给对方听，也能听懂对方说话。全程本地处理，零数据上传，开源免费。</p>
-  <div class="hero-cta">
-    <a id="hero-download" href="#download" class="btn-primary">立即下载</a>
-    <a id="hero-source" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" class="btn-ghost">查看源码</a>
+<!-- DOT NAV -->
+<div class="fp-dots" aria-label="Section navigation" role="navigation">
+  <button class="fp-dot active" data-i="0" aria-label="Hero"></button>
+  <button class="fp-dot" data-i="1" aria-label="Features"></button>
+  <button class="fp-dot" data-i="2" aria-label="Guide"></button>
+  <button class="fp-dot" data-i="3" aria-label="Download"></button>
+</div>
+
+<!-- 0: HERO -->
+<section class="fp-section" id="hero">
+  <div class="hero-bg" aria-hidden="true"></div>
+  <div class="hero-blob b1" aria-hidden="true"></div>
+  <div class="hero-blob b2" aria-hidden="true"></div>
+  <div class="hero-blob b3" aria-hidden="true"></div>
+  <div class="hero-inner">
+    <div class="hero-eyebrow">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg>
+      <span id="hero-eyebrow">VRChat 实时翻译工具</span>
+    </div>
+    <h1 class="hero-title">
+      <span class="grad-text hero-wordmark">Mio</span><br>
+      RealTime Translator
+    </h1>
+    <p class="hero-sub" id="hero-sub">本地语音识别 + AI 双向互译，打破 VRChat 语言壁垒。<br>说给对方听，也能听懂对方说话。全程本地处理，零数据上传，开源免费。</p>
+    <div class="hero-cta">
+      <a id="hero-download" href="#" onclick="scrollToSection(3);return false;" class="btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        立即下载
+      </a>
+      <a id="hero-source" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" class="btn-ghost">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+        查看源码
+      </a>
+    </div>
+    <div class="hero-badge">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+      <span id="privacy-badge">零数据收集 · 聊天内容发送后自动销毁</span>
+    </div>
   </div>
-  <div class="privacy-badge">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-    <span id="privacy-badge">零数据收集 · 聊天内容发送后自动销毁</span>
-  </div>
-  <div class="scroll-hint">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+  <div class="scroll-hint" onclick="scrollToSection(1)" style="cursor:pointer">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
     <span id="scroll-hint-text">向下滚动</span>
   </div>
 </section>
 
-<!-- FEATURES -->
-<section id="features">
-  <p class="section-eyebrow" id="features-eyebrow">功能特性</p>
-  <h2 class="section-title" id="features-title">为 VRChat 玩家量身打造</h2>
-  <p class="section-sub" id="features-sub">轻量、快速、隐私优先，让跨语言沟通变得自然流畅。</p>
-
+<!-- 1: FEATURES -->
+<section class="fp-section" id="features">
+  <p class="eyebrow" id="features-eyebrow">功能特性</p>
+  <h2 class="sec-title" id="features-title">为 VRChat 玩家量身打造</h2>
+  <p class="sec-sub" id="features-sub">轻量、快速、隐私优先，让跨语言沟通变得自然流畅。</p>
   <div class="features-grid">
     <div class="feature-card">
-      <div class="feature-icon" style="background:#dbeafe;">🎙️</div>
+      <div class="feat-icon">🎙️</div>
       <h3 id="feature-1-title">本地语音识别</h3>
       <p id="feature-1-body">基于 SenseVoice Small，正式版安装包内置语音模型，全程本地推理，无需常驻联网，低延迟实时转录。</p>
     </div>
     <div class="feature-card">
-      <div class="feature-icon" style="background:#ede9fe;">🌐</div>
+      <div class="feat-icon">🌐</div>
       <h3 id="feature-2-title">多翻译后端</h3>
       <p id="feature-2-body">支持 OpenAI、DeepSeek、Qianwen、Anthropic 及任意 OpenAI 兼容接口，自由切换。</p>
     </div>
     <div class="feature-card">
-      <div class="feature-icon" style="background:#dcfce7;">💬</div>
+      <div class="feat-icon">💬</div>
       <h3 id="feature-3-title">VRChat 直发</h3>
       <p id="feature-3-body">通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。</p>
     </div>
     <div class="feature-card">
-      <div class="feature-icon" style="background:#fef3c7;">🔄</div>
+      <div class="feat-icon">🔄</div>
       <h3 id="feature-4-title">语音双向互译</h3>
       <p id="feature-4-body">不只是翻译自己说的话——现在也能通过麦克风采集对方声音，实时识别并反向翻译他人语言，结果显示在置顶悬浮窗，真正实现双向语音互译。</p>
     </div>
     <div class="feature-card">
-      <div class="feature-icon" style="background:#ffe4e6;">✏️</div>
+      <div class="feat-icon">✏️</div>
       <h3 id="feature-5-title">手动翻译面板</h3>
-      <p id="feature-5-body">Google Translate 风格的双栏布局，输入文字后一键翻译并发送到 VRC 聊天框。</p>
+      <p id="feature-5-body">双栏输入输出布局，输入文字后一键翻译并发送到 VRC 聊天框。</p>
     </div>
     <div class="feature-card">
-      <div class="feature-icon" style="background:#f0fdf4;">🔒</div>
+      <div class="feat-icon">🔒</div>
       <h3 id="feature-6-title">隐私优先</h3>
       <p id="feature-6-body">无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。</p>
     </div>
   </div>
 </section>
 
-<!-- GUIDE -->
-<section id="guide">
-  <p class="section-eyebrow" id="guide-eyebrow" style="color:#60a5fa;">使用说明</p>
-  <h2 class="section-title" id="guide-title" style="color:#f5f5f7;">五步开始使用</h2>
-  <p class="section-sub" id="guide-sub" style="color:#86868b;">从下载到 VRChat 实时翻译，只需几分钟。</p>
-
-  <div class="guide-wrap">
+<!-- 2: GUIDE -->
+<section class="fp-section" id="guide">
+  <p class="eyebrow" id="guide-eyebrow">使用说明</p>
+  <h2 class="sec-title" id="guide-title">五步开始使用</h2>
+  <p class="sec-sub" id="guide-sub">从下载到 VRChat 实时翻译，只需几分钟。</p>
+  <div class="guide-grid">
     <div class="guide-step">
       <div class="step-num">1</div>
       <div class="step-body">
         <h4 id="guide-step-1-title">下载并安装</h4>
-        <p id="guide-step-1-body">点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f5f5f7;">MioTranslator.exe</strong> 即可。</p>
+        <p id="guide-step-1-body">点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。</p>
       </div>
     </div>
     <div class="guide-step">
       <div class="step-num">2</div>
       <div class="step-body">
         <h4 id="guide-step-2-title">配置翻译后端</h4>
-        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key 和翻译模型信息。</p>
+        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。</p>
       </div>
     </div>
     <div class="guide-step">
@@ -798,7 +742,7 @@
         <p id="guide-step-4-body">正式版安装包已内置 SenseVoice Small 语音模型，安装后无需额外下载，直接点击「▶ 开始监听」即可离线使用。</p>
       </div>
     </div>
-    <div class="guide-step" style="border-bottom: none;">
+    <div class="guide-step full">
       <div class="step-num">5</div>
       <div class="step-body">
         <h4 id="guide-step-5-title">开始实时翻译</h4>
@@ -808,1110 +752,585 @@
   </div>
 </section>
 
-<!-- DOWNLOAD -->
-<section id="download">
-  <p class="section-eyebrow" id="download-eyebrow">下载</p>
-  <h2 class="section-title" id="download-title">下载即用</h2>
-  <p class="section-sub" id="download-sub">v1.2.3 正式版现已发布，内置语音模型，支持语音双向互译，下载即用。</p>
-
-  <div class="download-card">
-    <span class="dl-icon">&#11015;</span>
-    <h3 id="download-card-title">Mio RealTime Translator</h3>
-    <p id="download-card-body">Windows x64 · v1.2.3 正式版 · 内置 SenseVoice 语音模型 · 支持语音双向互译</p>
-    <div class="download-actions">
-      <a href="https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.3.exe"
-         download="MioTranslator-Setup-v1.2.3.exe"
-         id="download-direct-link"
-         class="btn-download">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span id="download-button-text">正式版下载</span>
-      </a>
-      <a href="javascript:void(0)"
-         id="download-releases-link"
-         class="btn-download secondary"
-         onclick="alert('当前暂无 beta 版，请下载正式版。')">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
-        <span id="download-releases-text">beta 版下载</span>
-      </a>
-      <p class="download-note" id="download-releases-note">当前正式版 v1.2.3 已包含全部最新功能，暂无独立 beta 版。</p>
-    </div>
-  </div>
-
-  <div class="download-card">
-    <span class="dl-icon">&#128218;</span>
-    <h3 id="download-dict-title">ASR 官方词典</h3>
-    <p id="download-dict-body">这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。</p>
-    <div class="download-actions">
-      <a href="./dictionaries/"
-         target="_blank" rel="noopener"
-         class="btn-download secondary">
-        <span id="download-dict-module-text">打开词典页面</span>
-      </a>
-      <a href="./dictionaries/asr_dictionary_manifest.json"
-         target="_blank" rel="noopener"
-         class="btn-download secondary">
-        <span id="download-dict-manifest-text">查看更新清单</span>
-      </a>
-      <a href="./dictionaries/asr_terms.official.json"
-         target="_blank" rel="noopener"
-         class="btn-download secondary">
-        <span id="download-dict-json-text">下载词典文件</span>
-      </a>
-    </div>
-    <p class="download-note" id="download-dict-note">软件里的“更新词典”会从这里获取官方词典。</p>
-  </div>
-  <div class="privacy-note">
-    <h4>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-      <span id="privacy-title">隐私声明</span>
-    </h4>
-    <p id="privacy-body">本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。</p>
-  </div>
-</section>
-
-<!-- FOOTER -->
-<footer>
-  <p id="footer-main">
-    制作者：VRC 玩家 <strong style="color:#f5f5f7;">酒寄 みお</strong> ·
-    开源项目，禁止任何形式的收费分发 ·
-    <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>
-  </p>
-  <p id="footer-sub" style="margin-top:8px; color:#444;">
-    本项目无任何数据收集，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。
-  </p>
-</footer>
-
-<!-- FLOATING MUSIC PLAYER -->
-<div id="music-bubble" class="mio-paused">
-  <div class="music-panel" id="music-panel">
-    <div class="music-panel-hdr">
-      <span class="music-brand-label">
-        <span class="music-brand-dot"></span>
-        音乐
-      </span>
-      <button class="music-close-btn" id="music-close-btn" aria-label="关闭播放器">×</button>
-    </div>
-    <div class="music-track-card">
-      <div id="music-cover" aria-hidden="true">FM</div>
-      <div class="music-track-meta">
-        <div id="music-song-name"></div>
-        <div id="music-song-artist"></div>
+<!-- 3: DOWNLOAD -->
+<section class="fp-section" id="download">
+  <p class="eyebrow" id="download-eyebrow">下载</p>
+  <h2 class="sec-title" id="download-title">下载即用</h2>
+  <p class="sec-sub" id="download-sub">v1.2.3 正式版现已发布，内置语音模型，支持语音双向互译，下载即用。</p>
+  <div class="dl-cards">
+    <div class="dl-card">
+      <div class="dl-icon-wrap">⬇️</div>
+      <h3 id="download-card-title">Mio RealTime Translator</h3>
+      <p id="download-card-body">Windows x64 · v1.2.3 正式版 · 内置 SenseVoice 语音模型 · 支持语音双向互译</p>
+      <div class="dl-btns">
+        <a href="https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.3.exe"
+           download="MioTranslator-Setup-v1.2.3.exe"
+           id="download-direct-link" class="btn-dl prim">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="download-button-text">正式版下载</span>
+        </a>
+        <a href="javascript:void(0)" id="download-releases-link" class="btn-dl sec"
+           onclick="return false;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
+          <span id="download-releases-text">beta 版下载</span>
+        </a>
+        <p class="dl-note" id="download-releases-note">当前正式版 v1.2.3 已包含全部最新功能，暂无独立 beta 版。</p>
       </div>
     </div>
-    <div class="music-ctrl-row">
-      <button class="music-ctrl-btn" id="btn-prev" aria-label="上一首">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
-      </button>
-      <button class="music-ctrl-btn music-ctrl-play" id="btn-play" aria-label="播放/暂停">
-        <svg class="ctrl-icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-        <svg class="ctrl-icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-      </button>
-      <button class="music-ctrl-btn" id="btn-next" aria-label="下一首">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18 14.5 12 6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/></svg>
-      </button>
+    <div class="dl-card">
+      <div class="dl-icon-wrap">📖</div>
+      <h3 id="download-dict-title">ASR 官方词典</h3>
+      <p id="download-dict-body">这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。</p>
+      <div class="dl-btns">
+        <a href="./dictionaries/" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-module-text">打开词典页面</span>
+        </a>
+        <a href="./dictionaries/asr_dictionary_manifest.json" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-manifest-text">查看更新清单</span>
+        </a>
+        <a href="./dictionaries/asr_terms.official.json" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-json-text">下载词典文件</span>
+        </a>
+        <p class="dl-note" id="download-dict-note">软件里的“更新词典”会从这里获取官方词典。</p>
+      </div>
     </div>
-    <div class="music-vol-row">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77 0-4.28-2.99-7.86-7-8.77z"/>
-      </svg>
-      <input type="range" class="music-vol-slider" id="music-vol-slider" min="0" max="100" value="50" aria-label="音量">
-      <span class="music-vol-num" id="music-vol-num">50%</span>
-    </div>
-    <audio id="music-audio" preload="none"></audio>
   </div>
-  <button class="music-toggle-btn" id="music-toggle-btn" aria-label="音乐播放器">
-    <svg class="music-icon-note" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
-    </svg>
-    <div class="music-eq-bars">
-      <span></span><span></span><span></span>
+  <div class="privacy-block">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+    <div>
+      <h4 id="privacy-title">隐私声明</h4>
+      <p id="privacy-body">本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。</p>
     </div>
-  </button>
-</div>
+  </div>
+  <footer class="site-footer">
+    <p id="footer-main">制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></p>
+    <p id="footer-sub">本项目无任何数据收集，不保存任何聊天内容，每条消息发送后都会自动销毁。</p>
+  </footer>
+</section>
 
 <script>
+  const sections = Array.from(document.querySelectorAll('.fp-section'));
+  const dots = Array.from(document.querySelectorAll('.fp-dot'));
+  const navBar = document.querySelector('nav');
+  const navLinks = [
+    document.getElementById('nav-intro'),
+    document.getElementById('nav-features'),
+    document.getElementById('nav-guide'),
+    document.getElementById('nav-download')
+  ];
+
+  let activeSectionIndex = -1;
+
+  function scrollToSection(index) {
+    const target = sections[index];
+    if (!target) return;
+    setActiveSection(index);
+    updateNavBar();
+    window.scrollTo({
+      top: target.offsetTop,
+      behavior: 'smooth'
+    });
+  }
+
+  window.scrollToSection = scrollToSection;
+
+  function setActiveSection(index) {
+    if (index === activeSectionIndex || index < 0 || index >= sections.length) return;
+    activeSectionIndex = index;
+    dots.forEach((dot, dotIndex) => dot.classList.toggle('active', dotIndex === index));
+    navLinks.forEach((link, linkIndex) => {
+      if (link) link.classList.toggle('active', linkIndex === index);
+    });
+  }
+
+
+  function updateNavBar() {
+    if (!navBar) return;
+    const progress = Math.max(0, Math.min(window.scrollY / Math.max(window.innerHeight * 0.35, 1), 1));
+    const alpha = (0.56 * progress).toFixed(3);
+    const borderAlpha = (0.08 * progress).toFixed(3);
+    const blur = (18 * progress).toFixed(2);
+    navBar.style.backgroundColor = `rgba(5, 6, 12, ${alpha})`;
+    navBar.style.borderBottomColor = `rgba(255, 255, 255, ${borderAlpha})`;
+    if (progress > 0.01) {
+      const filterValue = `saturate(150%) blur(${blur}px)`;
+      navBar.style.backdropFilter = filterValue;
+      navBar.style.webkitBackdropFilter = filterValue;
+    } else {
+      navBar.style.backdropFilter = 'none';
+      navBar.style.webkitBackdropFilter = 'none';
+    }
+  }
+  function getActiveSectionIndex() {
+    const navHeight = navBar ? navBar.offsetHeight : 0;
+    const threshold = window.scrollY + navHeight + 4;
+    let current = 0;
+    sections.forEach((section, index) => {
+      if (threshold >= section.offsetTop) {
+        current = index;
+      }
+    });
+    return current;
+  }
+
+  let ticking = false;
+  function updateSectionState() {
+    setActiveSection(getActiveSectionIndex());
+    updateNavBar();
+    ticking = false;
+  }
+
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    window.requestAnimationFrame(updateSectionState);
+  }, { passive: true });
+
+  window.addEventListener('resize', updateSectionState, { passive: true });
+
+  dots.forEach((dot, index) => {
+    dot.addEventListener('click', () => scrollToSection(index));
+  });
+
+  window.addEventListener('keydown', (event) => {
+    const tagName = document.activeElement && document.activeElement.tagName;
+    const isTyping = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+    if (isTyping) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') {
+      event.preventDefault();
+      scrollToSection(Math.min(activeSectionIndex + 1, sections.length - 1));
+    }
+
+    if (event.key === 'ArrowUp' || event.key === 'PageUp') {
+      event.preventDefault();
+      scrollToSection(Math.max(activeSectionIndex - 1, 0));
+    }
+  });
+
   const translations = {
-    "zh-CN": {
-      pageTitle: "Mio RealTime Translator",
-      "nav-intro": "介绍",
-      "nav-guide": "使用说明",
-      "nav-download": "下载",
-      "nav-github": "GitHub",
-      "hero-eyebrow": "VRChat 实时翻译工具",
-      "hero-sub": "本地语音识别 + AI 双向互译，打破 VRChat 语言壁垒。<br>说给对方听，也能听懂对方说话。全程本地处理，零数据上传，开源免费。",
-      "hero-download": "立即下载",
-      "hero-source": "查看源码",
-      "privacy-badge": "零数据收集 · 聊天内容发送后自动销毁",
-      "scroll-hint-text": "向下滚动",
-      "features-eyebrow": "功能特性",
-      "features-title": "为 VRChat 玩家量身打造",
-      "features-sub": "轻量、快速、隐私优先，让跨语言沟通变得自然流畅。",
-      "feature-1-title": "本地语音识别",
-      "feature-1-body": "基于 SenseVoice Small，正式版安装包内置语音模型，全程本地推理，无需常驻联网，低延迟实时转录。",
-      "feature-2-title": "多翻译后端",
-      "feature-2-body": "支持 OpenAI、DeepSeek、Qianwen、Anthropic，自由切换，Base URL 与模型由后端自动固定。",
-      "feature-3-title": "VRChat 直发",
-      "feature-3-body": "通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。",
-      "feature-4-title": "语音双向互译",
-      "feature-4-body": "不只是翻译自己说的话——现在也能通过麦克风采集对方声音，实时识别并反向翻译他人语言，结果显示在置顶悬浮窗，真正实现双向语音互译。",
-      "feature-5-title": "手动翻译面板",
-      "feature-5-body": "双栏输入输出布局，输入文字后一键翻译并发送到 VRC 聊天框。",
-      "feature-6-title": "隐私优先",
-      "feature-6-body": "无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。",
-      "guide-eyebrow": "使用说明",
-      "guide-title": "五步开始使用",
-      "guide-sub": "从下载到 VRChat 实时翻译，只需几分钟。",
-      "guide-step-1-title": "下载并安装",
-      "guide-step-1-body": "点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong> 即可。",
-      "guide-step-2-title": "配置翻译后端",
-      "guide-step-2-body": "启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。",
-      "guide-step-3-title": "在 VRChat 开启 OSC",
-      "guide-step-3-body": "进入 VRChat，打开 Action Menu，依次点击：",
-      "guide-step-4-title": "语音模型已内置，开箱即用",
-      "guide-step-4-body": "正式版安装包已内置 SenseVoice Small 语音模型，安装后无需额外下载，直接点击「▶ 开始监听」即可离线使用。",
-      "guide-step-5-title": "开始实时翻译",
-      "guide-step-5-body": "模型加载完成后，对着麦克风说话，翻译结果将自动出现在你的 VRChat 聊天框中。",
-      "download-eyebrow": "下载",
-      "download-title": "下载即用",
-      "download-sub": "v1.2.3 正式版现已发布，内置语音模型，支持语音双向互译，下载即用。",
-      "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · v1.2.3 正式版 · 内置 SenseVoice 语音模型 · 支持语音双向互译",
-      "download-button-text": "正式版下载",
-      "download-button-loading": "正在准备下载...",
-      "download-releases-text": "beta 版下载",
-      "download-releases-loading": "暂无 beta 版",
-      "download-releases-note": "当前正式版 v1.2.3 已包含全部最新功能，暂无独立 beta 版。",
-      "download-dict-title": "ASR 官方词典",
-      "download-dict-body": "这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。",
-      "download-dict-module-text": "打开词典页面",
-      "download-dict-manifest-text": "查看更新清单",
-      "download-dict-json-text": "下载词典文件",
-      "download-dict-note": "软件里的“更新词典”会从这里获取官方词典。",
-      "privacy-title": "隐私声明",
-      "privacy-body": "本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。",
-      "footer-main": "制作者：VRC 玩家 <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
-      "footer-sub": "本项目无任何数据收集，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。"
+    'zh-CN': {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '介绍',
+      'nav-features': '功能',
+      'nav-guide': '使用说明',
+      'nav-download': '下载',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'VRChat 实时翻译工具',
+      'hero-sub': '本地语音识别 + AI 双向互译，打破 VRChat 语言壁垒。<br>说给对方听，也能听懂对方说话。全程本地处理，零数据上传，开源免费。',
+      'hero-download': '立即下载',
+      'hero-source': '查看源码',
+      'privacy-badge': '零数据收集 · 聊天内容发送后自动销毁',
+      'scroll-hint-text': '向下滚动',
+      'features-eyebrow': '功能特性',
+      'features-title': '为 VRChat 玩家量身打造',
+      'features-sub': '轻量、快速、隐私优先，让跨语言沟通变得自然流畅。',
+      'feature-1-title': '本地语音识别',
+      'feature-1-body': '基于 SenseVoice Small，正式版安装包内置语音模型，全程本地推理，无需常驻联网，低延迟实时转录。',
+      'feature-2-title': '多翻译后端',
+      'feature-2-body': '支持 OpenAI、DeepSeek、Qianwen、Anthropic 及任意 OpenAI 兼容接口，自由切换。',
+      'feature-3-title': 'VRChat 直发',
+      'feature-3-body': '通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。',
+      'feature-4-title': '语音双向互译',
+      'feature-4-body': '不只是翻译自己说的话，现在也能通过麦克风采集对方声音，实时识别并反向翻译他人语言，结果显示在置顶悬浮窗，真正实现双向语音互译。',
+      'feature-5-title': '手动翻译面板',
+      'feature-5-body': '双栏输入输出布局，输入文字后一键翻译并发送到 VRC 聊天框。',
+      'feature-6-title': '隐私优先',
+      'feature-6-body': '无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。',
+      'guide-eyebrow': '使用说明',
+      'guide-title': '五步开始使用',
+      'guide-sub': '从下载到 VRChat 实时翻译，只需几分钟。',
+      'guide-step-1-title': '下载并安装',
+      'guide-step-1-body': '点击下方“立即下载安装”按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。',
+      'guide-step-2-title': '配置翻译后端',
+      'guide-step-2-body': '启动 MioTranslator.exe，点击右上角设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。',
+      'guide-step-3-title': '在 VRChat 开启 OSC',
+      'guide-step-3-body': '进入 VRChat，打开 Action Menu，依次点击：',
+      'guide-step-4-title': '语音模型已内置，开箱即用',
+      'guide-step-4-body': '正式版安装包已内置 SenseVoice Small 语音模型，安装后无需额外下载，直接点击“▶ 开始监听”即可离线使用。',
+      'guide-step-5-title': '开始实时翻译',
+      'guide-step-5-body': '模型加载完成后，对着麦克风说话，翻译结果将自动出现在你的 VRChat 聊天框中。',
+      'download-eyebrow': '下载',
+      'download-title': '下载即用',
+      'download-sub': 'v1.2.3 正式版现已发布，内置语音模型，支持语音双向互译，下载即用。',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.2.3 正式版 · 内置 SenseVoice 语音模型 · 支持语音双向互译',
+      'download-button-text': '正式版下载',
+      'download-button-loading': '正在准备下载...',
+      'download-releases-text': 'beta 版下载',
+      'download-releases-loading': '暂无 beta 版',
+      'download-releases-note': '当前正式版 v1.2.3 已包含全部最新功能，暂无独立 beta 版。',
+      'download-dict-title': 'ASR 官方词典',
+      'download-dict-body': '这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。',
+      'download-dict-module-text': '打开词典页面',
+      'download-dict-manifest-text': '查看更新清单',
+      'download-dict-json-text': '下载词典文件',
+      'download-dict-note': '软件里的“更新词典”会从这里获取官方词典。',
+      'privacy-title': '隐私声明',
+      'privacy-body': '本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。',
+      'footer-main': '制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': '本项目无任何数据收集，不保存任何聊天内容，每条消息发送后都会自动销毁。'
     },
-    "en": {
-      pageTitle: "Mio RealTime Translator",
-      "nav-intro": "Overview",
-      "nav-guide": "Guide",
-      "nav-download": "Download",
-      "nav-github": "GitHub",
-      "hero-eyebrow": "VRChat Real-Time Translator",
-      "hero-sub": "Local speech recognition + AI bidirectional translation for VRChat.<br>Speak to others and understand them back — processed locally, no telemetry, fully open-source.",
-      "hero-download": "Download Now",
-      "hero-source": "View Source",
-      "privacy-badge": "No data collection · Messages are discarded after sending",
-      "scroll-hint-text": "Scroll down",
-      "features-eyebrow": "Features",
-      "features-title": "Built for VRChat players",
-      "features-sub": "Lightweight, fast, and privacy-first communication across languages.",
-      "feature-1-title": "Local Speech Recognition",
-      "feature-1-body": "Powered by SenseVoice Small. The official installer includes the speech model out of the box for low-latency local transcription.",
-      "feature-2-title": "Multiple Translation Backends",
-      "feature-2-body": "Switch between OpenAI, DeepSeek, Qianwen, and Anthropic. Base URL and model are locked to the selected backend for safer setup.",
-      "feature-3-title": "Direct VRChat Sending",
-      "feature-3-body": "Send translated text straight to the VRChat chatbox through the official OSC interface.",
-      "feature-4-title": "Two-Way Voice Translation",
-      "feature-4-body": "Not just translating your own speech — now you can also pick up others' voice via microphone, transcribe it in real time, and show the reverse translation in a pinned overlay. True two-way voice translation.",
-      "feature-5-title": "Manual Translation Panel",
-      "feature-5-body": "A two-column layout for typing, translating, and sending messages to VRC in one flow.",
-      "feature-6-title": "Privacy First",
-      "feature-6-body": "No data collection, no log files, no project-owned cloud service. Messages are destroyed after sending.",
-      "guide-eyebrow": "Guide",
-      "guide-title": "Get started in five steps",
-      "guide-sub": "From download to real-time VRChat translation in just a few minutes.",
-      "guide-step-1-title": "Download and install",
-      "guide-step-1-body": "Click the download button below to grab the installer. Run it to install, then launch <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
-      "guide-step-2-title": "Configure your translation backend",
-      "guide-step-2-body": "Launch MioTranslator.exe, open ⚙ Settings, and fill in your API Key. Base URL and Model are locked automatically by backend.",
-      "guide-step-3-title": "Enable OSC in VRChat",
-      "guide-step-3-body": "In VRChat, open the Action Menu and go to:",
-      "guide-step-4-title": "Speech model included — ready out of the box",
-      "guide-step-4-body": "The official installer already bundles SenseVoice Small. No extra download needed — just click ▶ Start Listening and go.",
-      "guide-step-5-title": "Start translating in real time",
-      "guide-step-5-body": "Once the model is loaded, speak into your microphone and the translated result will appear in your VRChat chatbox.",
-      "download-eyebrow": "Download",
-      "download-title": "Ready to use",
-      "download-sub": "v1.2.3 official release is now available — speech model included, two-way voice translation supported.",
-      "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · v1.2.3 Official Release · Bundled SenseVoice model · Two-way voice translation",
-      "download-button-text": "Download Official Release",
-      "download-button-loading": "Preparing download...",
-      "download-releases-text": "Download Beta",
-      "download-releases-loading": "No beta available",
-      "download-releases-note": "v1.2.3 includes all the latest features. There is no separate beta build at this time.",
-      "download-dict-title": "ASR Dictionary",
-      "download-dict-body": "Official recognition terms and update files. The app only connects when you open it manually.",
-      "download-dict-module-text": "Open Dictionary Page",
-      "download-dict-manifest-text": "View Update List",
-      "download-dict-json-text": "Download Dictionary File",
-      "download-dict-note": "The app uses this page as the source for official dictionary updates.",
-      "privacy-title": "Privacy Notice",
-      "privacy-body": "This project performs <strong>no data collection</strong>, stores no chat logs, and destroys each message after sending.<br>It is a purely local project with no first-party cloud server, so your API keys are not uploaded or reused by this project.<br>No analytics, tracking, or local chat log persistence is built into the app.",
-      "footer-main": "Created by VRC player <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · Open-source project · No paid redistribution · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
-      "footer-sub": "No data collection, no saved chat logs, and every message is discarded after sending."
+    en: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': 'Overview',
+      'nav-features': 'Features',
+      'nav-guide': 'Guide',
+      'nav-download': 'Download',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'VRChat Real-Time Translator',
+      'hero-sub': 'Local speech recognition + AI bidirectional translation for VRChat.<br>Speak to others and understand them back. Everything is processed locally with no telemetry and fully open-source.',
+      'hero-download': 'Download Now',
+      'hero-source': 'View Source',
+      'privacy-badge': 'No data collection · Messages are discarded after sending',
+      'scroll-hint-text': 'Scroll down',
+      'features-eyebrow': 'Features',
+      'features-title': 'Built for VRChat players',
+      'features-sub': 'Lightweight, fast, and privacy-first communication across languages.',
+      'feature-1-title': 'Local Speech Recognition',
+      'feature-1-body': 'Powered by SenseVoice Small. The official installer already includes the speech model for low-latency local transcription.',
+      'feature-2-title': 'Multiple Translation Backends',
+      'feature-2-body': 'Switch between OpenAI, DeepSeek, Qianwen, Anthropic, and any OpenAI-compatible endpoint.',
+      'feature-3-title': 'Direct VRChat Sending',
+      'feature-3-body': 'Send translated text straight to the VRChat chatbox through the official OSC interface.',
+      'feature-4-title': 'Two-Way Voice Translation',
+      'feature-4-body': 'It is not limited to translating your own speech. You can also capture other voices through the microphone, transcribe them in real time, and pin the reverse translation in an overlay window.',
+      'feature-5-title': 'Manual Translation Panel',
+      'feature-5-body': 'A two-column layout for typing, translating, and sending messages to VRC in one flow.',
+      'feature-6-title': 'Privacy First',
+      'feature-6-body': 'No data collection, no log files, and no project-owned cloud service. Messages are destroyed after sending.',
+      'guide-eyebrow': 'Guide',
+      'guide-title': 'Get started in five steps',
+      'guide-sub': 'From download to real-time VRChat translation in just a few minutes.',
+      'guide-step-1-title': 'Download and install',
+      'guide-step-1-body': 'Click the button below to download the installer. Run it, then launch <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
+      'guide-step-2-title': 'Configure your translation backend',
+      'guide-step-2-body': 'Launch MioTranslator.exe, open Settings, and enter your API Key. Base URL and Model are automatically locked to the backend you choose.',
+      'guide-step-3-title': 'Enable OSC in VRChat',
+      'guide-step-3-body': 'In VRChat, open the Action Menu and go to:',
+      'guide-step-4-title': 'Speech model included and ready out of the box',
+      'guide-step-4-body': 'The official installer already bundles SenseVoice Small. No extra download is required. Just click “▶ Start Listening” and use it offline right away.',
+      'guide-step-5-title': 'Start translating in real time',
+      'guide-step-5-body': 'Once the model is loaded, speak into your microphone and the translated result will appear in your VRChat chatbox automatically.',
+      'download-eyebrow': 'Download',
+      'download-title': 'Ready to use',
+      'download-sub': 'v1.2.3 official release is available now with the speech model bundled and two-way voice translation ready to use.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.2.3 Official Release · Bundled SenseVoice model · Two-way voice translation',
+      'download-button-text': 'Download Official Release',
+      'download-button-loading': 'Preparing download...',
+      'download-releases-text': 'Download Beta',
+      'download-releases-loading': 'No beta available',
+      'download-releases-note': 'The current v1.2.3 release already includes the latest features, so there is no separate beta build right now.',
+      'download-dict-title': 'ASR Official Dictionary',
+      'download-dict-body': 'Official recognition terms and update files are provided here. The app only connects when you open these links manually.',
+      'download-dict-module-text': 'Open Dictionary Page',
+      'download-dict-manifest-text': 'View Update List',
+      'download-dict-json-text': 'Download Dictionary File',
+      'download-dict-note': 'The in-app Update Dictionary action reads from this official source.',
+      'privacy-title': 'Privacy Notice',
+      'privacy-body': 'This project performs <strong>no data collection</strong>, stores no chat logs, and destroys every message after sending.<br>It is a purely local project with no first-party cloud server, so your API keys are not uploaded or reused by this project.<br>No analytics, tracking, or local chat-log persistence is built into the app.',
+      'footer-main': 'Created by VRC player <strong style="color:#f0f0fa;">酒寄 みお</strong> · Open-source project · No paid redistribution · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'No data collection, no chat history retention, and every message is discarded after sending.'
     },
-    "ja": {
-      pageTitle: "Mio RealTime Translator",
-      "nav-intro": "紹介",
-      "nav-guide": "使い方",
-      "nav-download": "ダウンロード",
-      "nav-github": "GitHub",
-      "hero-eyebrow": "VRChat リアルタイム翻訳ツール",
-      "hero-sub": "ローカル音声認識 + AI 双方向翻訳で、VRChat の言語の壁をやわらかく越える。<br>自分の声を相手に伝えるだけでなく、相手の声も理解できる。ローカル処理・ゼロデータ収集・完全オープンソース。",
-      "hero-download": "今すぐダウンロード",
-      "hero-source": "ソースを見る",
-      "privacy-badge": "データ収集なし · 送信後にメッセージを自動破棄",
-      "scroll-hint-text": "スクロール",
-      "features-eyebrow": "特徴",
-      "features-title": "VRChat プレイヤー向けに設計",
-      "features-sub": "軽量・高速・プライバシー優先で、多言語会話を自然に。",
-      "feature-1-title": "ローカル音声認識",
-      "feature-1-body": "SenseVoice Small ベース。公式インストーラーには音声モデルが同梱されており、低遅延でローカル文字起こしできます。",
-      "feature-2-title": "複数の翻訳バックエンド",
-      "feature-2-body": "OpenAI、DeepSeek、Qianwen、Anthropic を切り替え可能。Base URL と Model は選択中バックエンドで固定されます。",
-      "feature-3-title": "VRChat へ直接送信",
-      "feature-3-body": "公式 OSC インターフェース経由で、翻訳文をそのまま VRChat のチャットボックスへ送れます。",
-      "feature-4-title": "双方向音声翻訳",
-      "feature-4-body": "自分の声を翻訳するだけでなく、マイクで相手の声を拾い、リアルタイムで認識・逆翻訳して常時表示ウィンドウに出せます。真の双方向音声翻訳を実現します。",
-      "feature-5-title": "手動翻訳パネル",
-      "feature-5-body": "2 カラムの入力/出力レイアウトで、入力・翻訳・送信までを素早く行えます。",
-      "feature-6-title": "プライバシー優先",
-      "feature-6-body": "データ収集なし、ログ保存なし、専用クラウドなし。各メッセージは送信後に破棄されます。",
-      "guide-eyebrow": "使い方",
-      "guide-title": "5 ステップで開始",
-      "guide-sub": "ダウンロードから VRChat リアルタイム翻訳まで、数分で完了します。",
-      "guide-step-1-title": "ダウンロードしてインストール",
-      "guide-step-1-body": "下のボタンをクリックしてインストーラーを取得してください。インストール後、<strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong> を起動します。",
-      "guide-step-2-title": "翻訳バックエンドを設定",
-      "guide-step-2-body": "MioTranslator.exe を起動し、右上の ⚙ 設定から API Key を入力してください。Base URL と Model はバックエンドに合わせて固定されます。",
-      "guide-step-3-title": "VRChat で OSC を有効化",
-      "guide-step-3-body": "VRChat で Action Menu を開き、次へ進みます:",
-      "guide-step-4-title": "音声モデル同梱済み、すぐ使える",
-      "guide-step-4-body": "公式インストーラーには SenseVoice Small が同梱されています。追加ダウンロード不要で、「▶ 監聴開始」をクリックするだけでオフライン使用できます。",
-      "guide-step-5-title": "リアルタイム翻訳開始",
-      "guide-step-5-body": "モデルの読み込みが終わったら、マイクに向かって話すだけで翻訳結果が VRChat のチャットボックスに表示されます。",
-      "download-eyebrow": "ダウンロード",
-      "download-title": "すぐ使える",
-      "download-sub": "v1.2.3 正式版リリース — 音声モデル同梱・双方向音声翻訳対応、すぐ使えます。",
-      "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · v1.2.3 正式版 · SenseVoice モデル同梱 · 双方向音声翻訳対応",
-      "download-button-text": "正式版をダウンロード",
-      "download-button-loading": "ダウンロードを準備中…",
-      "download-releases-text": "beta 版をダウンロード",
-      "download-releases-loading": "beta 版なし",
-      "download-releases-note": "v1.2.3 には最新機能がすべて含まれています。現在 beta 版の配布はありません。",
-      "download-dict-title": "ASR 公式辞書",
-      "download-dict-body": "公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。",
-      "download-dict-module-text": "辞書ページを開く",
-      "download-dict-manifest-text": "更新リストを確認",
-      "download-dict-json-text": "辞書ファイルをダウンロード",
-      "download-dict-note": "アプリの「辞書を更新」はここから公式辞書を取得します。",
-      "privacy-title": "プライバシーについて",
-      "privacy-body": "本プロジェクトは<strong>データ収集を一切行わず</strong>、チャット内容を保存しません。各メッセージは送信後に破棄されます。<br>プロジェクト専用のクラウドサーバーは存在せず、API Key が本プロジェクト側へ送信・再利用されることはありません。<br>解析、トラッキング、ローカルチャットログ保存は実装していません。",
-      "footer-main": "制作者: VRC プレイヤー <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · オープンソース · 有料配布禁止 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
-      "footer-sub": "データ収集なし、チャットログ保存なし、各メッセージは送信後に破棄されます。"
+    ja: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '紹介',
+      'nav-features': '機能',
+      'nav-guide': '使い方',
+      'nav-download': 'ダウンロード',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'VRChat リアルタイム翻訳ツール',
+      'hero-sub': 'ローカル音声認識と AI 双方向翻訳で、VRChat の言語の壁を自然に越えます。<br>相手に話しかけるだけでなく、相手の声も理解できます。ローカル処理・データ収集なし・完全オープンソースです。',
+      'hero-download': '今すぐダウンロード',
+      'hero-source': 'ソースを見る',
+      'privacy-badge': 'データ収集なし · 送信後にメッセージを自動破棄',
+      'scroll-hint-text': 'スクロール',
+      'features-eyebrow': '機能',
+      'features-title': 'VRChat プレイヤー向けに設計',
+      'features-sub': '軽量・高速・プライバシー優先で、多言語コミュニケーションを自然にします。',
+      'feature-1-title': 'ローカル音声認識',
+      'feature-1-body': 'SenseVoice Small ベース。公式インストーラーには音声モデルが同梱されており、低遅延でローカル文字起こしできます。',
+      'feature-2-title': '複数の翻訳バックエンド',
+      'feature-2-body': 'OpenAI、DeepSeek、Qianwen、Anthropic、および OpenAI 互換エンドポイントを自由に切り替えられます。',
+      'feature-3-title': 'VRChat へ直接送信',
+      'feature-3-body': '公式 OSC インターフェース経由で、翻訳文をそのまま VRChat のチャットボックスへ送れます。',
+      'feature-4-title': '双方向音声翻訳',
+      'feature-4-body': '自分の声を翻訳するだけではありません。マイクで相手の声を拾い、リアルタイムで認識・逆翻訳して、オーバーレイに固定表示できます。',
+      'feature-5-title': '手動翻訳パネル',
+      'feature-5-body': '2 カラムの入力・出力レイアウトで、入力から翻訳、送信までをすばやく行えます。',
+      'feature-6-title': 'プライバシー優先',
+      'feature-6-body': 'データ収集なし、ログ保存なし、専用クラウドなし。各メッセージは送信後に破棄されます。',
+      'guide-eyebrow': '使い方',
+      'guide-title': '5 ステップで開始',
+      'guide-sub': 'ダウンロードから VRChat リアルタイム翻訳まで、数分で完了します。',
+      'guide-step-1-title': 'ダウンロードしてインストール',
+      'guide-step-1-body': '下のボタンからインストーラーを取得し、実行してください。インストール後、<strong style="color:#f0f0fa;">MioTranslator.exe</strong> を起動します。',
+      'guide-step-2-title': '翻訳バックエンドを設定',
+      'guide-step-2-body': 'MioTranslator.exe を起動し、設定から API Key を入力してください。Base URL と Model は選択したバックエンドに合わせて自動固定されます。',
+      'guide-step-3-title': 'VRChat で OSC を有効化',
+      'guide-step-3-body': 'VRChat で Action Menu を開き、次へ進みます：',
+      'guide-step-4-title': '音声モデル同梱済み、すぐ使える',
+      'guide-step-4-body': '公式インストーラーには SenseVoice Small が同梱されています。追加ダウンロード不要で、「▶ 開始」を押すだけでオフライン利用できます。',
+      'guide-step-5-title': 'リアルタイム翻訳開始',
+      'guide-step-5-body': 'モデルの読み込みが終わったら、マイクに向かって話すだけで翻訳結果が VRChat のチャットボックスに表示されます。',
+      'download-eyebrow': 'ダウンロード',
+      'download-title': 'すぐ使える',
+      'download-sub': 'v1.2.3 正式版が公開中です。音声模型同梱、双方向音声翻訳対応で、すぐ使えます。',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.2.3 正式版 · SenseVoice モデル同梱 · 双方向音声翻訳対応',
+      'download-button-text': '正式版をダウンロード',
+      'download-button-loading': 'ダウンロードを準備中...',
+      'download-releases-text': 'beta 版をダウンロード',
+      'download-releases-loading': 'beta 版なし',
+      'download-releases-note': '現在の v1.2.3 正式版には最新機能が含まれているため、別配布の beta 版はありません。',
+      'download-dict-title': 'ASR 公式辞書',
+      'download-dict-body': '公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。',
+      'download-dict-module-text': '辞書ページを開く',
+      'download-dict-manifest-text': '更新リストを確認',
+      'download-dict-json-text': '辞書ファイルをダウンロード',
+      'download-dict-note': 'アプリ内の「辞書を更新」はここから公式辞書を取得します。',
+      'privacy-title': 'プライバシーについて',
+      'privacy-body': '本プロジェクトは<strong>データ収集を一切行わず</strong>、チャット内容を保存しません。各メッセージは送信後に破棄されます。<br>プロジェクト専用のクラウドサーバーは存在せず、API Key が本プロジェクト側へ送信・再利用されることはありません。<br>解析、トラッキング、ローカルチャットログ保存は実装していません。',
+      'footer-main': '制作者：VRC プレイヤー <strong style="color:#f0f0fa;">酒寄 みお</strong> · オープンソース · 有料配布禁止 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'データ収集なし、チャット保存なし、各メッセージは送信後に自動破棄されます。'
     },
-    "ru": {
-      pageTitle: "Mio RealTime Translator",
-      "nav-intro": "Обзор",
-      "nav-guide": "Инструкция",
-      "nav-download": "Скачать",
-      "nav-github": "GitHub",
-      "hero-eyebrow": "Переводчик в реальном времени для VRChat",
-      "hero-sub": "Локальное распознавание речи + двусторонний AI-перевод для VRChat.<br>Говорите с другими и понимайте их — локальная обработка, ноль телеметрии, полностью open-source.",
-      "hero-download": "Скачать",
-      "hero-source": "Исходный код",
-      "privacy-badge": "Без сбора данных · Сообщения уничтожаются после отправки",
-      "scroll-hint-text": "Прокрутите вниз",
-      "features-eyebrow": "Возможности",
-      "features-title": "Сделано для игроков VRChat",
-      "features-sub": "Лёгкий, быстрый и приватный способ общаться между языками.",
-      "feature-1-title": "Локальное распознавание речи",
-      "feature-1-body": "Основано на SenseVoice Small. Официальный установщик уже содержит речевую модель для локальной расшифровки с низкой задержкой.",
-      "feature-2-title": "Несколько переводческих бэкендов",
-      "feature-2-body": "Поддерживаются OpenAI, DeepSeek, Qianwen и Anthropic. Base URL и Model фиксируются выбранным бэкендом.",
-      "feature-3-title": "Прямая отправка в VRChat",
-      "feature-3-body": "Отправляйте переведённый текст прямо в чат VRChat через официальный OSC-интерфейс.",
-      "feature-4-title": "Двусторонний голосовой перевод",
-      "feature-4-body": "Не только переводит вашу речь — теперь можно улавливать голос собеседника через микрофон, распознавать его в реальном времени и показывать обратный перевод в закреплённом окне. Настоящий двусторонний голосовой перевод.",
-      "feature-5-title": "Панель ручного перевода",
-      "feature-5-body": "Двухколоночный режим для ввода, перевода и отправки сообщений в VRC.",
-      "feature-6-title": "Приватность прежде всего",
-      "feature-6-body": "Без сбора данных, без логов, без собственного облака. Сообщения удаляются после отправки.",
-      "guide-eyebrow": "Инструкция",
-      "guide-title": "Старт за пять шагов",
-      "guide-sub": "От скачивания до перевода в VRChat в реальном времени всего за несколько минут.",
-      "guide-step-1-title": "Скачайте и установите",
-      "guide-step-1-body": "Нажмите кнопку скачивания ниже, чтобы получить установщик. Запустите его, затем откройте <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>.",
-      "guide-step-2-title": "Настройте переводческий бэкенд",
-      "guide-step-2-body": "Запустите MioTranslator.exe, откройте ⚙ Settings и введите API Key. Base URL и Model будут зафиксированы автоматически.",
-      "guide-step-3-title": "Включите OSC в VRChat",
-      "guide-step-3-body": "В VRChat откройте Action Menu и перейдите сюда:",
-      "guide-step-4-title": "Речевая модель уже включена",
-      "guide-step-4-body": "Официальный установщик уже содержит SenseVoice Small. Дополнительная загрузка не нужна — просто нажмите ▶ Начать прослушивание.",
-      "guide-step-5-title": "Начните перевод в реальном времени",
-      "guide-step-5-body": "После загрузки модели просто говорите в микрофон, и перевод появится в чатбоксе VRChat.",
-      "download-eyebrow": "Скачать",
-      "download-title": "Готово к использованию",
-      "download-sub": "Официальный релиз v1.2.3 уже доступен — речевая модель включена, поддерживается двусторонний голосовой перевод.",
-      "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · Официальный релиз v1.2.3 · Модель SenseVoice включена · Двусторонний голосовой перевод",
-      "download-button-text": "Скачать официальную версию",
-      "download-button-loading": "Подготовка загрузки...",
-      "download-releases-text": "Скачать beta версию",
-      "download-releases-loading": "Beta недоступна",
-      "download-releases-note": "v1.2.3 включает все последние функции. Отдельной beta-версии сейчас нет.",
-      "download-dict-title": "Официальный словарь ASR",
-      "download-dict-body": "Официальные слова для распознавания и файлы обновлений. Подключается только когда вы открываете вручную.",
-      "download-dict-module-text": "Открыть страницу словаря",
-      "download-dict-manifest-text": "Посмотреть список обновлений",
-      "download-dict-json-text": "Скачать файл словаря",
-      "download-dict-note": "Функция «Обновить словарь» в приложении берёт официальный словарь отсюда.",
-      "privacy-title": "Конфиденциальность",
-      "privacy-body": "Проект <strong>не собирает никаких данных</strong>, не хранит журналы чатов и уничтожает каждое сообщение после отправки.<br>Это полностью локальный проект без собственного облачного сервера, поэтому API-ключи не выгружаются и не используются повторно.<br>В приложении нет аналитики, трекинга или записи чатов на диск.",
-      "footer-main": "Автор: игрок VRC <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · Open-source · Платное распространение запрещено · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
-      "footer-sub": "Без сбора данных, без сохранения логов чата, каждое сообщение уничтожается после отправки."
+    ru: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': 'Обзор',
+      'nav-features': 'Функции',
+      'nav-guide': 'Инструкция',
+      'nav-download': 'Скачать',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'Переводчик в реальном времени для VRChat',
+      'hero-sub': 'Локальное распознавание речи и двусторонний AI-перевод для VRChat.<br>Вы можете не только говорить с другими, но и понимать их речь. Всё обрабатывается локально, без сбора данных и с открытым исходным кодом.',
+      'hero-download': 'Скачать',
+      'hero-source': 'Исходный код',
+      'privacy-badge': 'Без сбора данных · Сообщения уничтожаются после отправки',
+      'scroll-hint-text': 'Прокрутите вниз',
+      'features-eyebrow': 'Возможности',
+      'features-title': 'Сделано для игроков VRChat',
+      'features-sub': 'Лёгкий, быстрый и приватный способ общаться между языками.',
+      'feature-1-title': 'Локальное распознавание речи',
+      'feature-1-body': 'Основано на SenseVoice Small. Официальный установщик уже содержит речевую модель для локальной расшифровки с низкой задержкой.',
+      'feature-2-title': 'Несколько переводческих бэкендов',
+      'feature-2-body': 'Поддерживаются OpenAI, DeepSeek, Qianwen, Anthropic и любые OpenAI-совместимые endpoints.',
+      'feature-3-title': 'Прямая отправка в VRChat',
+      'feature-3-body': 'Отправляйте переведённый текст прямо в чат VRChat через официальный OSC-интерфейс.',
+      'feature-4-title': 'Двусторонний голосовой перевод',
+      'feature-4-body': 'Сервис переводит не только вашу речь. Он может улавливать голос собеседника через микрофон, распознавать его в реальном времени и показывать обратный перевод в закреплённом оверлее.',
+      'feature-5-title': 'Панель ручного перевода',
+      'feature-5-body': 'Двухколоночный режим для ввода, перевода и отправки сообщений в VRC.',
+      'feature-6-title': 'Приватность прежде всего',
+      'feature-6-body': 'Без сбора данных, без логов и без собственного облака. Сообщения удаляются после отправки.',
+      'guide-eyebrow': 'Инструкция',
+      'guide-title': 'Старт за пять шагов',
+      'guide-sub': 'От скачивания до перевода в VRChat в реальном времени всего за несколько минут.',
+      'guide-step-1-title': 'Скачайте и установите',
+      'guide-step-1-body': 'Нажмите кнопку ниже, чтобы скачать установщик. Запустите его, затем откройте <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
+      'guide-step-2-title': 'Настройте переводческий бэкенд',
+      'guide-step-2-body': 'Запустите MioTranslator.exe, откройте настройки и введите API Key. Base URL и Model будут автоматически зафиксированы выбранным бэкендом.',
+      'guide-step-3-title': 'Включите OSC в VRChat',
+      'guide-step-3-body': 'В VRChat откройте Action Menu и перейдите сюда:',
+      'guide-step-4-title': 'Речевая модель уже включена',
+      'guide-step-4-body': 'Официальный установщик уже содержит SenseVoice Small. Дополнительная загрузка не нужна — просто нажмите «▶ Начать прослушивание».',
+      'guide-step-5-title': 'Начните перевод в реальном времени',
+      'guide-step-5-body': 'После загрузки модели просто говорите в микрофон, и перевод автоматически появится в чатбоксе VRChat.',
+      'download-eyebrow': 'Скачать',
+      'download-title': 'Готово к использованию',
+      'download-sub': 'Официальный релиз v1.2.3 уже доступен: модель речи включена, двусторонний голосовой перевод поддерживается сразу.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · Официальный релиз v1.2.3 · Модель SenseVoice включена · Двусторонний голосовой перевод',
+      'download-button-text': 'Скачать официальную версию',
+      'download-button-loading': 'Подготовка загрузки...',
+      'download-releases-text': 'Скачать beta-версию',
+      'download-releases-loading': 'Beta недоступна',
+      'download-releases-note': 'Текущий релиз v1.2.3 уже включает все последние функции, поэтому отдельной beta-версии сейчас нет.',
+      'download-dict-title': 'Официальный словарь ASR',
+      'download-dict-body': 'Здесь размещены официальные термины распознавания и файлы обновлений. Приложение обращается к ним только при ручном открытии.',
+      'download-dict-module-text': 'Открыть страницу словаря',
+      'download-dict-manifest-text': 'Посмотреть список обновлений',
+      'download-dict-json-text': 'Скачать файл словаря',
+      'download-dict-note': 'Команда «Обновить словарь» в приложении берёт официальный словарь отсюда。',
+      'privacy-title': 'Конфиденциальность',
+      'privacy-body': 'Проект <strong>не собирает никаких данных</strong>, не хранит журналы чатов и уничтожает каждое сообщение после отправки.<br>Это полностью локальный проект без собственного облачного сервера, поэтому API-ключи не выгружаются и не используются повторно.<br>В приложении нет аналитики, трекинга или записи чатов на диск.',
+      'footer-main': 'Автор: игрок VRC <strong style="color:#f0f0fa;">酒寄 みお</strong> · Open-source проект · Платное распространение запрещено · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'Без сбора данных, без хранения чатов, каждое сообщение удаляется после отправки.'
     },
-    "ko": {
-      pageTitle: "Mio RealTime Translator",
-      "nav-intro": "소개",
-      "nav-guide": "가이드",
-      "nav-download": "다운로드",
-      "nav-github": "GitHub",
-      "hero-eyebrow": "VRChat 실시간 번역 도구",
-      "hero-sub": "로컬 음성 인식 + AI 양방향 번역으로 VRChat의 언어 장벽을 자연스럽게 넘습니다.<br>내 말을 상대에게, 상대의 말도 나에게. 로컬 처리, 데이터 수집 없음, 완전 오픈소스.",
-      "hero-download": "지금 다운로드",
-      "hero-source": "소스 보기",
-      "privacy-badge": "데이터 수집 없음 · 전송 후 메시지 자동 폐기",
-      "scroll-hint-text": "아래로 스크롤",
-      "features-eyebrow": "기능",
-      "features-title": "VRChat 플레이어를 위해 설계",
-      "features-sub": "가볍고 빠르며 프라이버시를 우선하는 다국어 커뮤니케이션.",
-      "feature-1-title": "로컬 음성 인식",
-      "feature-1-body": "SenseVoice Small 기반. 공식 설치 패키지에 음성 모델이 포함되어 있어 낮은 지연으로 로컬 전사가 가능합니다.",
-      "feature-2-title": "다중 번역 백엔드",
-      "feature-2-body": "OpenAI, DeepSeek, Qianwen, Anthropic을 전환할 수 있습니다. Base URL과 Model은 백엔드에 맞게 고정됩니다.",
-      "feature-3-title": "VRChat 직접 전송",
-      "feature-3-body": "공식 OSC 인터페이스를 통해 번역 결과를 VRChat 채팅창으로 바로 보냅니다.",
-      "feature-4-title": "양방향 음성 번역",
-      "feature-4-body": "내 말만 번역하는 게 아닙니다 — 마이크로 상대방 목소리를 캡처하여 실시간으로 인식·역번역하고 항상 위에 표시되는 창에 보여줍니다. 진정한 양방향 음성 번역을 실현합니다.",
-      "feature-5-title": "수동 번역 패널",
-      "feature-5-body": "두 칸 레이아웃으로 입력, 번역, VRC 전송까지 한 흐름으로 처리합니다.",
-      "feature-6-title": "프라이버시 우선",
-      "feature-6-body": "데이터 수집 없음, 로그 저장 없음, 자체 클라우드 없음. 메시지는 전송 후 즉시 폐기됩니다.",
-      "guide-eyebrow": "가이드",
-      "guide-title": "5단계로 시작",
-      "guide-sub": "다운로드부터 VRChat 실시간 번역까지 몇 분이면 충분합니다.",
-      "guide-step-1-title": "다운로드 후 설치",
-      "guide-step-1-body": "아래 다운로드 버튼을 클릭해 설치 파일을 받으세요. 설치 후 <strong style=\"color:#f5f5f7;\">MioTranslator.exe</strong>를 실행하세요.",
-      "guide-step-2-title": "번역 백엔드 설정",
-      "guide-step-2-body": "MioTranslator.exe를 실행하고 ⚙ Settings에서 API Key를 입력하세요. Base URL과 Model은 백엔드에 맞게 자동 고정됩니다.",
-      "guide-step-3-title": "VRChat에서 OSC 켜기",
-      "guide-step-3-body": "VRChat에서 Action Menu를 연 뒤 다음으로 이동하세요:",
-      "guide-step-4-title": "음성 모델 내장 — 바로 사용 가능",
-      "guide-step-4-body": "공식 설치 패키지에 SenseVoice Small이 이미 포함되어 있습니다. 추가 다운로드 없이 ▶ 듣기 시작을 클릭하면 바로 오프라인으로 사용할 수 있습니다.",
-      "guide-step-5-title": "실시간 번역 시작",
-      "guide-step-5-body": "모델 로드가 끝나면 마이크에 말하기만 하면 번역 결과가 VRChat 채팅창에 표시됩니다.",
-      "download-eyebrow": "다운로드",
-      "download-title": "바로 사용 가능",
-      "download-sub": "v1.2.3 정식 버전 출시 — 음성 모델 내장, 양방향 음성 번역 지원, 바로 사용 가능합니다.",
-      "download-card-title": "Mio RealTime Translator",
-      "download-card-body": "Windows x64 · v1.2.3 정식 버전 · SenseVoice 모델 내장 · 양방향 음성 번역 지원",
-      "download-button-text": "정식 버전 다운로드",
-      "download-button-loading": "다운로드 준비 중...",
-      "download-releases-text": "beta 버전 다운로드",
-      "download-releases-loading": "beta 없음",
-      "download-releases-note": "v1.2.3에 모든 최신 기능이 포함되어 있습니다. 현재 별도 beta 버전은 없습니다.",
-      "download-dict-title": "ASR 공식 사전",
-      "download-dict-body": "공식 인식 사전과 업데이트 파일을 제공합니다. 수동으로 열 때만 접속합니다.",
-      "download-dict-module-text": "사전 페이지 열기",
-      "download-dict-manifest-text": "업데이트 목록 보기",
-      "download-dict-json-text": "사전 파일 다운로드",
-      "download-dict-note": "앱의 '사전 업데이트'는 여기서 공식 사전을 가져옵니다.",
-      "privacy-title": "개인정보 안내",
-      "privacy-body": "이 프로젝트는 <strong>어떠한 데이터도 수집하지 않으며</strong> 채팅 로그를 저장하지 않고, 메시지는 전송 후 파기됩니다.<br>프로젝트 전용 클라우드 서버가 없기 때문에 API Key가 업로드되거나 재사용되지 않습니다.<br>분석, 추적, 로컬 채팅 로그 저장 기능은 포함되어 있지 않습니다.",
-      "footer-main": "제작자: VRC 플레이어 <strong style=\"color:#f5f5f7;\">酒寄 みお</strong> · 오픈소스 · 유료 배포 금지 · <a href=\"https://github.com/CokoIya/MioVRC_Translator\" target=\"_blank\">GitHub</a>",
-      "footer-sub": "데이터 수집 없음, 채팅 로그 저장 없음, 모든 메시지는 전송 후 폐기됩니다."
+    ko: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '소개',
+      'nav-features': '기능',
+      'nav-guide': '가이드',
+      'nav-download': '다운로드',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'VRChat 실시간 번역 도구',
+      'hero-sub': '로컬 음성 인식과 AI 양방향 번역으로 VRChat의 언어 장벽을 자연스럽게 넘습니다.<br>내 말을 상대에게 전달할 뿐 아니라 상대의 말도 이해할 수 있습니다. 로컬 처리, 데이터 수집 없음, 완전 오픈소스입니다.',
+      'hero-download': '지금 다운로드',
+      'hero-source': '소스 보기',
+      'privacy-badge': '데이터 수집 없음 · 전송 후 메시지 자동 폐기',
+      'scroll-hint-text': '아래로 스크롤',
+      'features-eyebrow': '기능',
+      'features-title': 'VRChat 플레이어를 위해 설계',
+      'features-sub': '가볍고 빠르며 프라이버시를 우선하는 다국어 커뮤니케이션.',
+      'feature-1-title': '로컬 음성 인식',
+      'feature-1-body': 'SenseVoice Small 기반. 공식 설치 패키지에 음성 모델이 포함되어 있어 낮은 지연으로 로컬 전사가 가능합니다.',
+      'feature-2-title': '다중 번역 백엔드',
+      'feature-2-body': 'OpenAI, DeepSeek, Qianwen, Anthropic과 OpenAI 호환 엔드포인트를 자유롭게 전환할 수 있습니다.',
+      'feature-3-title': 'VRChat 직접 전송',
+      'feature-3-body': '공식 OSC 인터페이스를 통해 번역 결과를 VRChat 채팅창으로 바로 보냅니다.',
+      'feature-4-title': '양방향 음성 번역',
+      'feature-4-body': '내 말만 번역하는 것이 아닙니다. 마이크로 상대방 목소리를 캡처해 실시간으로 인식하고, 역번역 결과를 오버레이 창에 고정해 보여줄 수 있습니다.',
+      'feature-5-title': '수동 번역 패널',
+      'feature-5-body': '두 칸 레이아웃으로 입력, 번역, VRC 전송까지 한 흐름으로 처리합니다.',
+      'feature-6-title': '프라이버시 우선',
+      'feature-6-body': '데이터 수집 없음, 로그 저장 없음, 자체 클라우드 없음. 메시지는 전송 후 즉시 폐기됩니다.',
+      'guide-eyebrow': '가이드',
+      'guide-title': '5단계로 시작',
+      'guide-sub': '다운로드부터 VRChat 실시간 번역까지 몇 분이면 충분합니다.',
+      'guide-step-1-title': '다운로드 후 설치',
+      'guide-step-1-body': '아래 버튼으로 설치 파일을 받은 뒤 실행하세요. 설치 후 <strong style="color:#f0f0fa;">MioTranslator.exe</strong>를 실행하면 됩니다.',
+      'guide-step-2-title': '번역 백엔드 설정',
+      'guide-step-2-body': 'MioTranslator.exe를 실행하고 설정에서 API Key를 입력하세요. Base URL과 Model은 선택한 백엔드에 맞게 자동으로 고정됩니다.',
+      'guide-step-3-title': 'VRChat에서 OSC 켜기',
+      'guide-step-3-body': 'VRChat에서 Action Menu를 연 뒤 다음으로 이동하세요:',
+      'guide-step-4-title': '음성 모델 내장, 바로 사용 가능',
+      'guide-step-4-body': '공식 설치 패키지에 SenseVoice Small이 이미 포함되어 있습니다. 추가 다운로드 없이 “▶ 시작”만 누르면 오프라인으로 바로 사용할 수 있습니다.',
+      'guide-step-5-title': '실시간 번역 시작',
+      'guide-step-5-body': '모델 로드가 끝나면 마이크에 말하기만 하면 번역 결과가 VRChat 채팅창에 자동으로 표시됩니다.',
+      'download-eyebrow': '다운로드',
+      'download-title': '바로 사용 가능',
+      'download-sub': 'v1.2.3 정식 버전이 출시되었습니다. 음성 모델이 내장되어 있고, 양방향 음성 번역도 바로 사용할 수 있습니다.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.2.3 정식 버전 · SenseVoice 모델 내장 · 양방향 음성 번역 지원',
+      'download-button-text': '정식 버전 다운로드',
+      'download-button-loading': '다운로드 준비 중...',
+      'download-releases-text': 'beta 버전 다운로드',
+      'download-releases-loading': 'beta 없음',
+      'download-releases-note': '현재 v1.2.3 정식 버전에 최신 기능이 모두 포함되어 있어 별도 beta 버전은 없습니다.',
+      'download-dict-title': 'ASR 공식 사전',
+      'download-dict-body': '공식 인식 사전과 업데이트 파일을 제공합니다. 사용자가 수동으로 열 때만 접근합니다.',
+      'download-dict-module-text': '사전 페이지 열기',
+      'download-dict-manifest-text': '업데이트 목록 보기',
+      'download-dict-json-text': '사전 파일 다운로드',
+      'download-dict-note': '앱의 ‘사전 업데이트’ 기능은 여기서 공식 사전을 가져옵니다.',
+      'privacy-title': '개인정보 안내',
+      'privacy-body': '이 프로젝트는 <strong>어떠한 데이터도 수집하지 않으며</strong> 채팅 로그를 저장하지 않고, 메시지는 전송 후 파기됩니다.<br>프로젝트 전용 클라우드 서버가 없기 때문에 API Key가 업로드되거나 재사용되지 않습니다.<br>분석, 추적, 로컬 채팅 로그 저장 기능은 포함되어 있지 않습니다.',
+      'footer-main': '제작자: VRC 플레이어 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 오픈소스 프로젝트 · 유료 배포 금지 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': '데이터 수집 없음, 채팅 기록 저장 없음, 모든 메시지는 전송 후 자동 폐기됩니다.'
     }
   };
 
   const htmlKeys = new Set([
-    "hero-sub",
-    "guide-step-1-body",
-    "guide-step-2-body",
-    "guide-step-3-body",
-    "guide-step-4-body",
-    "guide-step-5-body",
-    "privacy-body",
-    "footer-main"
+    'hero-sub',
+    'guide-step-1-body',
+    'guide-step-2-body',
+    'guide-step-3-body',
+    'guide-step-4-body',
+    'guide-step-5-body',
+    'privacy-body',
+    'footer-main'
   ]);
 
-  function applyLanguage(lang) {
-    const dict = translations[lang] || translations["en"];
-    document.title = dict.pageTitle;
-    document.documentElement.lang = lang;
+  function applyLanguage(language) {
+    const dict = translations[language] || translations.en;
+    document.title = dict.pageTitle || 'Mio RealTime Translator';
+    document.documentElement.lang = language;
+
     Object.entries(dict).forEach(([key, value]) => {
-      if (key === "pageTitle") return;
-      const el = document.getElementById(key);
-      if (!el) return;
+      if (key === 'pageTitle') return;
+      const element = document.getElementById(key);
+      if (!element) return;
       if (htmlKeys.has(key)) {
-        el.innerHTML = value;
+        element.innerHTML = value;
       } else {
-        el.textContent = value;
+        element.textContent = value;
       }
     });
+
     const switcher = document.getElementById('lang-switcher');
-    if (switcher) switcher.value = lang;
-    localStorage.setItem('mio-site-lang', lang);
+    if (switcher) switcher.value = language;
+    localStorage.setItem('mio-site-lang', language);
   }
 
-  function langFromCountry(country) {
-    const code = (country || '').toUpperCase();
-    if (['CN', 'TW', 'HK', 'MO', 'SG'].includes(code)) return 'zh-CN';
-    if (code === 'JP') return 'ja';
-    if (code === 'KR') return 'ko';
-    if (['RU', 'BY', 'KZ'].includes(code)) return 'ru';
-    return 'en';
-  }
-
-  function langFromBrowser() {
-    const browser = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
-    if (browser.startsWith('zh')) return 'zh-CN';
-    if (browser.startsWith('ja')) return 'ja';
-    if (browser.startsWith('ko')) return 'ko';
-    if (browser.startsWith('ru')) return 'ru';
-    return 'en';
-  }
-
-  async function detectInitialLanguage() {
+  function detectInitialLanguage() {
     const saved = localStorage.getItem('mio-site-lang');
-    if (saved && translations[saved]) {
-      return saved;
-    }
-    try {
-      const response = await fetch('https://ipapi.co/json/');
-      if (response.ok) {
-        const data = await response.json();
-        return langFromCountry(data.country_code);
-      }
-    } catch (_error) {
-    }
-    return langFromBrowser();
+    if (saved && translations[saved]) return saved;
+
+    const browserLanguage = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
+    if (browserLanguage.startsWith('zh')) return 'zh-CN';
+    if (browserLanguage.startsWith('ja')) return 'ja';
+    if (browserLanguage.startsWith('ko')) return 'ko';
+    if (browserLanguage.startsWith('ru')) return 'ru';
+    return 'en';
   }
 
-  document.getElementById('lang-switcher').addEventListener('change', (event) => {
-    applyLanguage(event.target.value);
-  });
-
-  detectInitialLanguage().then(applyLanguage);
+  const switcher = document.getElementById('lang-switcher');
+  if (switcher) {
+    switcher.addEventListener('change', (event) => applyLanguage(event.target.value));
+  }
 
   function triggerDirectDownload(url) {
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    window.setTimeout(() => {
-      iframe.remove();
-    }, 60000);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = '';
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => anchor.remove(), 1000);
   }
 
   const directDownloadLink = document.getElementById('download-direct-link');
   const directDownloadText = document.getElementById('download-button-text');
-  const directDownloadUrl = directDownloadLink ? (directDownloadLink.getAttribute('href') || '') : '';
+  const directDownloadUrl = directDownloadLink ? directDownloadLink.getAttribute('href') : '';
+
   if (directDownloadLink && directDownloadText) {
     directDownloadLink.addEventListener('click', (event) => {
       event.preventDefault();
-
-      const lang = localStorage.getItem('mio-site-lang') || document.documentElement.lang || 'zh-CN';
-      const dict = translations[lang] || translations['en'];
+      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
+      const dict = translations[currentLanguage] || translations.en;
       const originalText = dict['download-button-text'] || directDownloadText.textContent;
       const loadingText = dict['download-button-loading'] || originalText;
 
       directDownloadLink.style.pointerEvents = 'none';
-      directDownloadLink.setAttribute('aria-busy', 'true');
       directDownloadText.textContent = loadingText;
 
-      if (!directDownloadUrl) {
-        directDownloadLink.style.pointerEvents = '';
-        directDownloadLink.removeAttribute('aria-busy');
-        directDownloadText.textContent = originalText;
-        return;
+      if (directDownloadUrl) {
+        triggerDirectDownload(directDownloadUrl);
       }
 
-      triggerDirectDownload(directDownloadUrl);
-      setTimeout(() => {
+      window.setTimeout(() => {
         directDownloadLink.style.pointerEvents = '';
-        directDownloadLink.removeAttribute('aria-busy');
         directDownloadText.textContent = originalText;
-      }, 1200);
+      }, 1500);
     });
   }
 
   const releaseDownloadLink = document.getElementById('download-releases-link');
   const releaseDownloadText = document.getElementById('download-releases-text');
-  const downloadsPageUrl = releaseDownloadLink ? (releaseDownloadLink.getAttribute('href') || '') : '';
+
   if (releaseDownloadLink && releaseDownloadText) {
     releaseDownloadLink.addEventListener('click', (event) => {
       event.preventDefault();
-
-      const lang = localStorage.getItem('mio-site-lang') || document.documentElement.lang || 'zh-CN';
-      const dict = translations[lang] || translations['en'];
+      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
+      const dict = translations[currentLanguage] || translations.en;
       const originalText = dict['download-releases-text'] || releaseDownloadText.textContent;
       const loadingText = dict['download-releases-loading'] || originalText;
 
       releaseDownloadLink.style.pointerEvents = 'none';
-      releaseDownloadLink.setAttribute('aria-busy', 'true');
       releaseDownloadText.textContent = loadingText;
 
-      if (!downloadsPageUrl) {
+      window.setTimeout(() => {
         releaseDownloadLink.style.pointerEvents = '';
-        releaseDownloadLink.removeAttribute('aria-busy');
         releaseDownloadText.textContent = originalText;
-        return;
-      }
-
-      triggerDirectDownload(downloadsPageUrl);
-      setTimeout(() => {
-        releaseDownloadLink.style.pointerEvents = '';
-        releaseDownloadLink.removeAttribute('aria-busy');
-        releaseDownloadText.textContent = originalText;
-      }, 1200);
+      }, 1400);
     });
   }
 
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('visible');
-        if (entry.target.classList.contains('features-grid')) {
-          entry.target.querySelectorAll('.feature-card').forEach((card, i) => {
-            setTimeout(() => card.classList.add('visible'), i * 100);
-          });
-        }
-      }
-    });
-  }, { threshold: 0.15 });
-
-  document.querySelectorAll('.feature-card').forEach(el => observer.observe(el));
-  document.querySelectorAll('.guide-step').forEach(el => observer.observe(el));
-  document.querySelectorAll('.download-card, .privacy-note').forEach(el => observer.observe(el));
-
-  const sections = document.querySelectorAll('section');
-  const navLinks = document.querySelectorAll('nav ul li a');
-  window.addEventListener('scroll', () => {
-    let current = '';
-    sections.forEach(s => {
-      if (window.scrollY >= s.offsetTop - 80) current = s.id;
-    });
-    navLinks.forEach(a => {
-      a.style.color = a.getAttribute('href') === '#' + current ? '#0071e3' : '';
-    });
-  });
-
-  /* ── FLOATING MUSIC PLAYER ── */
-  (function () {
-    /* 语言检测：浏览器语言以 zh 开头 → 网易云；否则 → YouTube */
-    const USE_YOUTUBE = !/^zh/i.test(navigator.language || '');
-
-    function wy(id) { return 'https://music.163.com/song/media/outer/url?id=' + id + '.mp3'; }
-
-    const PALETTES = [
-      ['#4568dc','#43cea2'], ['#7f00ff','#e100ff'], ['#11998e','#38ef7d'],
-      ['#ee0979','#ff6a00'], ['#f953c6','#b91d73'], ['#f7971e','#ffd200'],
-      ['#396afc','#2948ff'], ['#ffd89b','#19547b'], ['#43cea2','#185a9d'],
-      ['#f7797d','#c6426e'], ['#642b73','#c6426e'], ['#1a1a2e','#e94560'],
-    ];
-
-    /* 热门曲库（会员歌曲仅返回30秒，由 SHORT_TRACK_MAX_SECONDS 逻辑自动跳过） */
-    const TRACKS = [
-      // ── 华语·周杰伦 ──
-      { title:'稻香',       artist:'周杰伦', url:wy(185809)     },
-      { title:'晴天',       artist:'周杰伦', url:wy(186016)     },
-      { title:'夜曲',       artist:'周杰伦', url:wy(186020)     },
-      { title:'七里香',     artist:'周杰伦', url:wy(186001)     },
-      { title:'告白气球',   artist:'周杰伦', url:wy(413812444)  },
-      { title:'青花瓷',     artist:'周杰伦', url:wy(185811)     },
-      { title:'东风破',     artist:'周杰伦', url:wy(185808)     },
-      { title:'发如雪',     artist:'周杰伦', url:wy(185814)     },
-      { title:'简单爱',     artist:'周杰伦', url:wy(186003)     },
-      { title:'双节棍',     artist:'周杰伦', url:wy(186002)     },
-      { title:'一路向北',   artist:'周杰伦', url:wy(186012)     },
-      { title:'说好不哭',   artist:'周杰伦', url:wy(1363765293) },
-      { title:'爱在西元前', artist:'周杰伦', url:wy(186010)     },
-      { title:'龙卷风',     artist:'周杰伦', url:wy(186008)     },
-      { title:'园游会',     artist:'周杰伦', url:wy(186004)     },
-      { title:'枫',         artist:'周杰伦', url:wy(186018)     },
-      { title:'彩虹',       artist:'周杰伦', url:wy(185815)     },
-      { title:'搁浅',       artist:'周杰伦', url:wy(186019)     },
-      { title:'以父之名',   artist:'周杰伦', url:wy(185810)     },
-      { title:'Mine Mine',  artist:'周杰伦', url:wy(1893740392) },
-      // ── 华语·经典 ──
-      { title:'起风了',     artist:'买辣椒也用券', url:wy(1330348079) },
-      { title:'我记得',     artist:'赵雷',         url:wy(28815250)   },
-      { title:'成都',       artist:'赵雷',         url:wy(436514312)  },
-      { title:'十年',       artist:'陈奕迅',       url:wy(26603)      },
-      { title:'富士山下',   artist:'陈奕迅',       url:wy(26282)      },
-      { title:'浮夸',       artist:'陈奕迅',       url:wy(27562)      },
-      { title:'孤勇者',     artist:'陈奕迅',       url:wy(1901371403) },
-      { title:'江南',       artist:'林俊杰',       url:wy(214919)     },
-      { title:'小酒窝',     artist:'林俊杰',       url:wy(273486)     },
-      { title:'泡沫',       artist:'邓紫棋',       url:wy(28391863)   },
-      { title:'光年之外',   artist:'邓紫棋',       url:wy(407453893)  },
-      { title:'年少有为',   artist:'李荣浩',       url:wy(476907688)  },
-      { title:'认真的雪',   artist:'薛之谦',       url:wy(29764244)   },
-      { title:'演员',       artist:'薛之谦',       url:wy(32507038)   },
-      { title:'漠河舞厅',   artist:'柳爽',         url:wy(1473122082) },
-      { title:'错位时空',   artist:'艾辰',         url:wy(1489268945) },
-      { title:'消愁',       artist:'毛不易',       url:wy(480350125)  },
-      { title:'理想三旬',   artist:'陈鸿宇',       url:wy(409650368)  },
-      { title:'大鱼',       artist:'周深',         url:wy(1295526467) },
-      { title:'你的答案',   artist:'阿冗',         url:wy(1295525613) },
-      { title:'倔强',       artist:'五月天',       url:wy(5234310)    },
-      { title:'知足',       artist:'五月天',       url:wy(5234309)    },
-      { title:'突然好想你', artist:'五月天',       url:wy(5234307)    },
-      { title:'传奇',       artist:'王菲',         url:wy(25706282)   },
-      { title:'红豆',       artist:'王菲',         url:wy(27515380)   },
-      { title:'吻别',       artist:'张学友',       url:wy(199374)     },
-      { title:'后来',       artist:'刘若英',       url:wy(1303879)    },
-      { title:'断桥残雪',   artist:'许嵩',         url:wy(28825229)   },
-      { title:'庐州月',     artist:'许嵩',         url:wy(28825216)   },
-      { title:'慢慢喜欢你', artist:'莫文蔚',       url:wy(33160531)   },
-      // ── 日语 ──
-      { title:'Lemon',              artist:'米津玄師',        url:wy(557584888)  },
-      { title:'夜に駆ける',         artist:'YOASOBI',         url:wy(1416767413) },
-      { title:'群青',               artist:'YOASOBI',         url:wy(1491225712) },
-      { title:'怪物',               artist:'YOASOBI',         url:wy(1568958573) },
-      { title:'グッバイ宣言',       artist:'Chinozo',         url:wy(1493141301) },
-      { title:'Pretender',          artist:'Official髭男dism', url:wy(1370484439) },
-      { title:'うっせぇわ',         artist:'Ado',             url:wy(1491657595) },
-      { title:'踊',                 artist:'Ado',             url:wy(1600901231) },
-      { title:'新時代',             artist:'Ado',             url:wy(1968236706) },
-      { title:'香水',               artist:'瑛人',            url:wy(1468012352) },
-      { title:'炎',                 artist:'LiSA',            url:wy(1500544392) },
-      { title:'紅蓮華',             artist:'LiSA',            url:wy(1372375103) },
-      { title:'白日',               artist:'King Gnu',        url:wy(1372554490) },
-      { title:'廻廻奇譚',           artist:'Eve',             url:wy(1568958586) },
-      { title:'死ぬのがいいわ',     artist:'藤井風',          url:wy(1885220456) },
-      { title:'前前前世',           artist:'RADWIMPS',        url:wy(32568038)   },
-      { title:'残酷な天使のテーゼ', artist:'高橋洋子',        url:wy(22703815)   },
-      { title:'ドライフラワー',     artist:'優里',            url:wy(1558061126) },
-      // ── 韩语 ──
-      { title:'Dynamite',       artist:'BTS',       url:wy(1486521939) },
-      { title:'Spring Day',     artist:'BTS',       url:wy(464234500)  },
-      { title:'Butter',         artist:'BTS',       url:wy(1832617656) },
-      { title:'LILAC',          artist:'IU',        url:wy(1599732614) },
-      { title:'Celebrity',      artist:'IU',        url:wy(1816362291) },
-      { title:'Eight',          artist:'IU',        url:wy(1421290535) },
-      { title:'Blueming',       artist:'IU',        url:wy(1372375076) },
-      { title:'How You Like That', artist:'BLACKPINK', url:wy(1480682501) },
-      { title:'Pink Venom',     artist:'BLACKPINK', url:wy(1968245895) },
-      { title:'Next Level',     artist:'aespa',     url:wy(1599670924) },
-      { title:'Hype Boy',       artist:'NewJeans',  url:wy(1962556165) },
-      // ── 英语 ──
-      { title:'Shape of You',    artist:'Ed Sheeran',      url:wy(449819667)  },
-      { title:'Perfect',         artist:'Ed Sheeran',      url:wy(413327261)  },
-      { title:'Counting Stars',  artist:'OneRepublic',     url:wy(28231490)   },
-      { title:'Believer',        artist:'Imagine Dragons', url:wy(472132277)  },
-      { title:'Enemy',           artist:'Imagine Dragons', url:wy(1816031331) },
-      { title:'Thunder',         artist:'Imagine Dragons', url:wy(476081094)  },
-      { title:'Sugar',           artist:'Maroon 5',        url:wy(30885072)   },
-      { title:'Girls Like You',  artist:'Maroon 5',        url:wy(1295552947) },
-      { title:'Faded',           artist:'Alan Walker',     url:wy(36990266)   },
-      { title:'Alone',           artist:'Alan Walker',     url:wy(416892104)  },
-      { title:'Levitating',      artist:'Dua Lipa',        url:wy(1474411641) },
-      { title:'Blinding Lights', artist:'The Weeknd',      url:wy(1467993004) },
-      { title:'Starboy',         artist:'The Weeknd',      url:wy(431255706)  },
-      { title:'Stay',            artist:'Justin Bieber',   url:wy(1830225154) },
-      { title:'bad guy',         artist:'Billie Eilish',   url:wy(1362656624) },
-      { title:'Happier Than Ever', artist:'Billie Eilish', url:wy(1807799505) },
-      { title:'As It Was',       artist:'Harry Styles',    url:wy(1916020232) },
-      { title:'drivers license', artist:'Olivia Rodrigo',  url:wy(1574495643) },
-      { title:'Attention',       artist:'Charlie Puth',    url:wy(470662830)  },
-      { title:'See You Again',   artist:'Charlie Puth',    url:wy(29947420)   },
-      { title:'Cheap Thrills',   artist:'Sia',             url:wy(33251017)   },
-      { title:'Hello',           artist:'Adele',           url:wy(33163451)   },
-      { title:'Rolling in the Deep', artist:'Adele',       url:wy(3986241)    },
-      { title:'Circles',         artist:'Post Malone',     url:wy(1372532535) },
-      { title:'Stressed Out',    artist:'Twenty One Pilots',url:wy(32236640)  },
-      { title:'Yellow',          artist:'Coldplay',        url:wy(3986010)    },
-      { title:'A Sky Full of Stars', artist:'Coldplay',    url:wy(28403360)   },
-      { title:'24K Magic',       artist:'Bruno Mars',      url:wy(431259188)  },
-      { title:'That\'s What I Like', artist:'Bruno Mars',  url:wy(462244940)  },
-    ].map(function (t, i) {
-      t.mark    = t.title.slice(0, 2);
-      t.palette = t.palette || PALETTES[i % PALETTES.length];
-      return t;
-    });
-
-    /* YouTube 曲库（非中文用户） */
-    const YT_TRACKS = [
-      // ── Global Pop ──
-      { title:'Shape of You',       artist:'Ed Sheeran',       videoId:'JGwWNGJdvx8' },
-      { title:'Perfect',            artist:'Ed Sheeran',       videoId:'2Vv-BfVoq4g' },
-      { title:'Counting Stars',     artist:'OneRepublic',      videoId:'hT_nvWreIhg' },
-      { title:'Believer',           artist:'Imagine Dragons',  videoId:'7wtfhZwyrcc' },
-      { title:'Thunder',            artist:'Imagine Dragons',  videoId:'fKopy74weus' },
-      { title:'Enemy',              artist:'Imagine Dragons',  videoId:'D9G1VOjN_84' },
-      { title:'Blinding Lights',    artist:'The Weeknd',       videoId:'4NRXx6U8ABQ' },
-      { title:'Starboy',            artist:'The Weeknd',       videoId:'34Ig3X59_qA' },
-      { title:'bad guy',            artist:'Billie Eilish',    videoId:'DyDfgMOUjCI' },
-      { title:'Happier Than Ever',  artist:'Billie Eilish',    videoId:'5GJWxDKyk3A' },
-      { title:'As It Was',          artist:'Harry Styles',     videoId:'H5v3kku4y6Q' },
-      { title:'drivers license',    artist:'Olivia Rodrigo',   videoId:'ZmDBbnmKpqQ' },
-      { title:'Stay',               artist:'Justin Bieber',    videoId:'kTJczUoc26U' },
-      { title:'Levitating',         artist:'Dua Lipa',         videoId:'IXQZu38hEsA' },
-      { title:'Faded',              artist:'Alan Walker',      videoId:'60ItHLz5WEA' },
-      { title:'Alone',              artist:'Alan Walker',      videoId:'1-xGerv5FOk' },
-      { title:'Sugar',              artist:'Maroon 5',         videoId:'09R8_2nJtjg' },
-      { title:'Girls Like You',     artist:'Maroon 5',         videoId:'aJOTlE1K90k' },
-      { title:'Hello',              artist:'Adele',            videoId:'YQHsXMglC9A' },
-      { title:'Rolling in the Deep',artist:'Adele',            videoId:'rYEDA3JcQqw' },
-      { title:'Circles',            artist:'Post Malone',      videoId:'xLHRaDxhEgA' },
-      { title:'Stressed Out',       artist:'Twenty One Pilots',videoId:'pXRviuL6vMY' },
-      { title:'Yellow',             artist:'Coldplay',         videoId:'yKNxeF4KMsY' },
-      { title:'A Sky Full of Stars',artist:'Coldplay',         videoId:'VPRjCeoBqrI' },
-      { title:'24K Magic',          artist:'Bruno Mars',       videoId:'UqyT8IEBkvY' },
-      { title:"That's What I Like", artist:'Bruno Mars',       videoId:'PMivT9TuJ3U' },
-      { title:'See You Again',      artist:'Charlie Puth',     videoId:'RgKAFK5djSk' },
-      { title:'Attention',          artist:'Charlie Puth',     videoId:'nfs8NYg7yQM' },
-      { title:'Cheap Thrills',      artist:'Sia',              videoId:'CyvgWHB-3bk' },
-      // ── J-Pop ──
-      { title:'Lemon',              artist:'米津玄師',          videoId:'SX_ViTNl31s' },
-      { title:'夜に駆ける',         artist:'YOASOBI',           videoId:'x8bRad5pWWI' },
-      { title:'怪物',               artist:'YOASOBI',           videoId:'d1LBHEQZ14o' },
-      { title:'うっせぇわ',         artist:'Ado',               videoId:'Yq6EZGFRJuM' },
-      { title:'新時代',             artist:'Ado',               videoId:'gKnVGikRFvM' },
-      { title:'Pretender',          artist:'Official髭男dism',  videoId:'XQ8rs3I1Uf0' },
-      { title:'白日',               artist:'King Gnu',          videoId:'ony539T074w' },
-      { title:'廻廻奇譚',           artist:'Eve',               videoId:'UnIgEGHRNzU' },
-      { title:'前前前世',           artist:'RADWIMPS',          videoId:'PDSkFeMVNFs' },
-      { title:'紅蓮華',             artist:'LiSA',              videoId:'CwkzK-F0Y0I' },
-      // ── K-Pop ──
-      { title:'Dynamite',           artist:'BTS',               videoId:'gdZLi9oWNZg' },
-      { title:'Spring Day',         artist:'BTS',               videoId:'xEeFrLSkMm8' },
-      { title:'Butter',             artist:'BTS',               videoId:'WMweEpGlu_U' },
-      { title:'Celebrity',          artist:'IU',                videoId:'0-q1KafFCLU' },
-      { title:'LILAC',              artist:'IU',                videoId:'D1MHe3gIKos' },
-      { title:'How You Like That',  artist:'BLACKPINK',         videoId:'ioNng23DkIM' },
-      { title:'Hype Boy',           artist:'NewJeans',          videoId:'H9_09O2IQBU' },
-    ].map(function (t, i) {
-      t.mark    = t.title.slice(0, 2);
-      t.palette = PALETTES[i % PALETTES.length];
-      return t;
-    });
-
-    const ACTIVE_TRACKS = USE_YOUTUBE ? YT_TRACKS : TRACKS;
-
-    const DEFAULT_VOLUME = 50;
-    const SHORT_TRACK_MAX_SECONDS = 30;
-
-    const bubble = document.getElementById('music-bubble');
-    const toggleBtn = document.getElementById('music-toggle-btn');
-    const closeBtn = document.getElementById('music-close-btn');
-    const musicAudio = document.getElementById('music-audio');
-    const musicCover = document.getElementById('music-cover');
-    const musicSongName = document.getElementById('music-song-name');
-    const musicSongArtist = document.getElementById('music-song-artist');
-    const volSlider = document.getElementById('music-vol-slider');
-    const volNum = document.getElementById('music-vol-num');
-    const btnPrev = document.getElementById('btn-prev');
-    const btnPlay = document.getElementById('btn-play');
-    const btnNext = document.getElementById('btn-next');
-
-    if (!bubble || !toggleBtn || !closeBtn || !musicAudio || !musicCover || !musicSongName || !musicSongArtist || !volSlider || !volNum || !btnPrev || !btnPlay || !btnNext) {
-      return;
-    }
-
-    let panelOpen = false;
-    let wasDragged = false;
-    let autoplayBlocked = false;
-    let userPaused = false;
-    let queue = [];
-    let queueIndex = 0;
-    let consecutiveErrors = 0;
-
-    /* ── YouTube 状态 ── */
-    let ytPlayer = null;
-    let ytReady = false;
-    let ytPendingLoad = null; /* {index, autoPlay} — player 就绪前缓存 */
-
-    function shuffleTracks(list) {
-      const result = list.slice();
-      for (let i = result.length - 1; i > 0; i -= 1) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [result[i], result[j]] = [result[j], result[i]];
-      }
-      return result;
-    }
-
-    function ensureQueue() {
-      if (!queue.length) {
-        queue = shuffleTracks(ACTIVE_TRACKS);
-        queueIndex = 0;
-      }
-    }
-
-    function normalizeQueueIndex(index) {
-      ensureQueue();
-      if (index < 0) return queue.length - 1;
-      if (index >= queue.length) {
-        queue = shuffleTracks(ACTIVE_TRACKS);
-        return 0;
-      }
-      return index;
-    }
-
-    function setPlayingState(isPlaying) {
-      bubble.classList.toggle('mio-playing', isPlaying);
-      bubble.classList.toggle('mio-paused', !isPlaying);
-      btnPlay.classList.toggle('is-playing', isPlaying);
-    }
-
-    function buildCover(track) {
-      const palette = Array.isArray(track.palette) && track.palette.length === 2 ? track.palette : ['#4568dc', '#43cea2'];
-      musicCover.style.background = 'linear-gradient(135deg, ' + palette[0] + ', ' + palette[1] + ')';
-      musicCover.textContent = track.mark || 'FM';
-    }
-
-    function syncVolume() {
-      const value = Math.max(0, Math.min(100, Number(volSlider.value) || DEFAULT_VOLUME));
-      volSlider.value = String(value);
-      volNum.textContent = value + '%';
-      if (USE_YOUTUBE) {
-        if (ytPlayer && ytReady) ytPlayer.setVolume(value);
-      } else {
-        musicAudio.volume = value / 100;
-      }
-    }
-
-    function refreshMeta(track) {
-      buildCover(track);
-      musicSongName.textContent = track.title;
-      musicSongArtist.textContent = track.artist;
-    }
-
-    function attemptPlay() {
-      if (USE_YOUTUBE) {
-        if (ytPlayer && ytReady) {
-          ytPlayer.playVideo();
-        } else {
-          autoplayBlocked = true;
-        }
-        return;
-      }
-      const playPromise = musicAudio.play();
-      if (!playPromise || typeof playPromise.then !== 'function') {
-        autoplayBlocked = false; setPlayingState(true); return;
-      }
-      playPromise.then(() => { autoplayBlocked = false; setPlayingState(true); })
-                 .catch(() => { autoplayBlocked = true;  setPlayingState(false); });
-    }
-
-    function loadTrack(index, autoPlay) {
-      ensureQueue();
-      queueIndex = normalizeQueueIndex(index);
-      const track = queue[queueIndex];
-      refreshMeta(track);
-      if (USE_YOUTUBE) {
-        if (ytPlayer && ytReady) {
-          if (autoPlay) { userPaused = false; ytPlayer.loadVideoById(track.videoId); }
-          else           { ytPlayer.cueVideoById(track.videoId); setPlayingState(false); }
-        } else {
-          ytPendingLoad = { index: queueIndex, autoPlay };
-          setPlayingState(false);
-        }
-        return;
-      }
-      musicAudio.src = track.url;
-      musicAudio.load();
-      if (autoPlay) { userPaused = false; attemptPlay(); }
-      else          { setPlayingState(false); }
-    }
-
-    /* ── YouTube IFrame API 初始化 ── */
-    if (USE_YOUTUBE) {
-      window.onYouTubeIframeAPIReady = function () {
-        const el = document.createElement('div');
-        el.style.cssText = 'position:fixed;width:1px;height:1px;bottom:0;left:-9px;opacity:0;pointer-events:none;';
-        document.body.appendChild(el);
-        ytPlayer = new YT.Player(el, {
-          width: 1, height: 1,
-          playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0,
-                        iv_load_policy: 3, modestbranding: 1, rel: 0, playsinline: 1 },
-          events: {
-            onReady: function () {
-              ytReady = true;
-              ytPlayer.setVolume(Math.max(0, Math.min(100, Number(volSlider.value) || DEFAULT_VOLUME)));
-              if (ytPendingLoad) {
-                const p = ytPendingLoad; ytPendingLoad = null;
-                loadTrack(p.index, p.autoPlay);
-              }
-            },
-            onStateChange: function (e) {
-              if (e.data === YT.PlayerState.PLAYING) {
-                consecutiveErrors = 0; autoplayBlocked = false; setPlayingState(true);
-              } else if (e.data === YT.PlayerState.PAUSED) {
-                setPlayingState(false);
-              } else if (e.data === YT.PlayerState.ENDED) {
-                userPaused = false; loadTrack(queueIndex + 1, true);
-              }
-            },
-            onError: function () {
-              consecutiveErrors += 1;
-              if (consecutiveErrors >= Math.max(queue.length, 3)) { setPlayingState(false); return; }
-              window.setTimeout(function () { loadTrack(queueIndex + 1, true); }, 300);
-            },
-          },
-        });
-      };
-      const ytScript = document.createElement('script');
-      ytScript.src = 'https://www.youtube.com/iframe_api';
-      document.head.appendChild(ytScript);
-    }
-
-    toggleBtn.addEventListener('click', () => {
-      if (wasDragged) return;
-      panelOpen = !panelOpen;
-      bubble.classList.toggle('mio-open', panelOpen);
-    });
-
-    closeBtn.addEventListener('click', () => {
-      panelOpen = false;
-      bubble.classList.remove('mio-open');
-    });
-
-    btnPrev.addEventListener('click', () => { loadTrack(queueIndex - 1, true); });
-    btnNext.addEventListener('click', () => { loadTrack(queueIndex + 1, true); });
-
-    btnPlay.addEventListener('click', () => {
-      if (USE_YOUTUBE) {
-        if (!ytPlayer || !ytReady) { loadTrack(queueIndex, true); return; }
-        const state = ytPlayer.getPlayerState();
-        if (state === YT.PlayerState.PLAYING) {
-          userPaused = true; ytPlayer.pauseVideo();
-        } else {
-          userPaused = false; ytPlayer.playVideo();
-        }
-        return;
-      }
-      if (!musicAudio.src) { loadTrack(queueIndex, true); return; }
-      if (musicAudio.paused) { userPaused = false; attemptPlay(); }
-      else { userPaused = true; autoplayBlocked = false; musicAudio.pause(); }
-    });
-
-    volSlider.addEventListener('input', syncVolume);
-
-    /* ── 网易云 audio 事件（仅非 YouTube 模式生效） ── */
-    if (!USE_YOUTUBE) {
-      musicAudio.addEventListener('loadedmetadata', () => {
-        if (Number.isFinite(musicAudio.duration) && musicAudio.duration <= SHORT_TRACK_MAX_SECONDS) {
-          window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
-        }
-      });
-      musicAudio.addEventListener('playing', () => { consecutiveErrors = 0; setPlayingState(true); });
-      musicAudio.addEventListener('pause',   () => { if (!musicAudio.ended) setPlayingState(false); });
-      musicAudio.addEventListener('ended',   () => { userPaused = false; loadTrack(queueIndex + 1, true); });
-      musicAudio.addEventListener('error',   () => {
-        consecutiveErrors += 1;
-        if (consecutiveErrors >= Math.max(queue.length, 3)) { setPlayingState(false); return; }
-        window.setTimeout(() => loadTrack(queueIndex + 1, true), 180);
-      });
-    }
-
-    document.addEventListener('pointerdown', () => {
-      if (autoplayBlocked && !userPaused) attemptPlay();
-    }, { passive: true });
-
-    let isDragging = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let startRight = 22;
-    let startBottom = 72;
-
-    function getComputedPos() {
-      const style = window.getComputedStyle(bubble);
-      return { r: parseFloat(style.right) || 22, b: parseFloat(style.bottom) || 72 };
-    }
-
-    toggleBtn.addEventListener('mousedown', (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-      event.preventDefault();
-      const pos = getComputedPos();
-      startRight = pos.r;
-      startBottom = pos.b;
-      dragStartX = event.clientX;
-      dragStartY = event.clientY;
-      isDragging = true;
-      wasDragged = false;
-      document.body.style.cursor = 'grabbing';
-    });
-
-    window.addEventListener('mousemove', (event) => {
-      if (!isDragging) {
-        return;
-      }
-      const dx = event.clientX - dragStartX;
-      const dy = event.clientY - dragStartY;
-      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
-        wasDragged = true;
-      }
-      bubble.style.right = Math.max(8, Math.min(window.innerWidth - 60, startRight - dx)) + 'px';
-      bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, startBottom - dy)) + 'px';
-    });
-
-    window.addEventListener('mouseup', () => {
-      if (!isDragging) {
-        return;
-      }
-      isDragging = false;
-      document.body.style.cursor = '';
-      window.setTimeout(() => {
-        wasDragged = false;
-      }, 0);
-    });
-
-    let touchStartX = 0;
-    let touchStartY = 0;
-    let touchStartRight = 22;
-    let touchStartBottom = 72;
-
-    toggleBtn.addEventListener('touchstart', (event) => {
-      const touch = event.touches[0];
-      const pos = getComputedPos();
-      touchStartRight = pos.r;
-      touchStartBottom = pos.b;
-      touchStartX = touch.clientX;
-      touchStartY = touch.clientY;
-      wasDragged = false;
-    }, { passive: true });
-
-    toggleBtn.addEventListener('touchmove', (event) => {
-      const touch = event.touches[0];
-      const dx = touch.clientX - touchStartX;
-      const dy = touch.clientY - touchStartY;
-      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
-        wasDragged = true;
-        event.preventDefault();
-        bubble.style.right = Math.max(8, Math.min(window.innerWidth - 60, touchStartRight - dx)) + 'px';
-        bubble.style.bottom = Math.max(8, Math.min(window.innerHeight - 60, touchStartBottom - dy)) + 'px';
-      }
-    }, { passive: false });
-
-    queue = shuffleTracks(TRACKS);
-    queueIndex = 0;
-    volSlider.value = String(DEFAULT_VOLUME);
-    syncVolume();
-    setPlayingState(false);
-    loadTrack(0, true);
-  })();
+  applyLanguage(detectInitialLanguage());
+  setActiveSection(getActiveSectionIndex());
+  updateNavBar();
 </script>
 </body>
 </html>
-
 
