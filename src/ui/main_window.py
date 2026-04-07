@@ -33,6 +33,7 @@ from src.audio.desktop_recorder import (
 from src.audio.windows_audio import (
     default_output_device_name,
     detect_process_output_device_name,
+    inspect_process_output_state,
     is_process_running,
 )
 from src.asr.factory import create_asr
@@ -93,6 +94,9 @@ DEFAULT_LISTEN_SELF_SUPPRESS_S = 0.65
 DEFAULT_LISTEN_SEGMENT_DURATION_S = 2.0
 DEFAULT_LISTEN_TAIL_SILENCE_S = 1.2
 LISTEN_RESULT_DEDUPE_WINDOW_S = 1.6
+AUTO_INPUT_DEVICE_TOKEN = "__auto_follow_default__"
+LISTEN_DIAGNOSTIC_IDLE_S = 15.0
+logger = logging.getLogger(__name__)
 
 MAIN_COPY = {
     "settings_short": {
@@ -200,6 +204,48 @@ MAIN_COPY = {
         "ru": "Overlay",
         "ko": "오버레이",
     },
+    "mic_device_auto_option": {
+        "zh-CN": "自动跟随系统默认",
+        "en": "Auto Follow System Default",
+        "ja": "システム既定を自動追従",
+        "ru": "Авто следовать системному устройству",
+        "ko": "시스템 기본 장치 자동 추종",
+    },
+    "mic_device_auto_current": {
+        "zh-CN": "自动 · {name}",
+        "en": "Auto · {name}",
+        "ja": "自動 · {name}",
+        "ru": "Авто · {name}",
+        "ko": "자동 · {name}",
+    },
+    "mic_device_none": {
+        "zh-CN": "未检测到麦克风",
+        "en": "No microphone detected",
+        "ja": "マイクが見つかりません",
+        "ru": "Микрофон не найден",
+        "ko": "마이크를 찾지 못했습니다",
+    },
+    "mic_auto_switch_notice": {
+        "zh-CN": "麦克风已自动切换到：{name}",
+        "en": "Microphone auto-switched to: {name}",
+        "ja": "マイクを自動切替しました: {name}",
+        "ru": "Микрофон автоматически переключен: {name}",
+        "ko": "마이크가 자동으로 전환되었습니다: {name}",
+    },
+    "mic_missing_fallback_notice": {
+        "zh-CN": "原固定麦克风不可用，已临时回退到系统默认：{name}",
+        "en": "Configured microphone is unavailable. Falling back to system default: {name}",
+        "ja": "固定マイクが使えないため、システム既定へ一時的に切り替えました: {name}",
+        "ru": "Выбранный микрофон недоступен. Выполнен откат на системный микрофон: {name}",
+        "ko": "고정 마이크를 사용할 수 없어 시스템 기본 장치로 임시 전환했습니다: {name}",
+    },
+    "mic_runtime_stopped": {
+        "zh-CN": "麦克风采集已中断，请检查输入设备。",
+        "en": "Microphone capture stopped. Check the current input device.",
+        "ja": "マイク入力が中断しました。現在の入力デバイスを確認してください。",
+        "ru": "Захват микрофона остановился. Проверьте текущее устройство ввода.",
+        "ko": "마이크 캡처가 중단되었습니다. 현재 입력 장치를 확인해 주세요.",
+    },
     "update_badge": {
         "zh-CN": "有更新",
         "en": "Update",
@@ -245,18 +291,26 @@ class MainWindow(ctk.CTk):
         self._desktop_partial_generation = 0
         self._partial_merger = self._create_streaming_merger()
         self._desktop_partial_merger = self._create_streaming_merger()
-        self._partial_task_queue: queue.Queue[
-            tuple[object, str | None, int, int, str] | None
-        ] = queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE)
-        self._final_task_queue: queue.Queue[
-            tuple[object, str | None, str | None, int, str] | None
-        ] = queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE)
+        self._partial_task_queues: dict[
+            str,
+            queue.Queue[tuple[object, str | None, int, int, str] | None],
+        ] = {
+            MIC_SOURCE: queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE),
+            DESKTOP_SOURCE: queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE),
+        }
+        self._final_task_queues: dict[
+            str,
+            queue.Queue[tuple[object, str | None, str | None, int, str] | None],
+        ] = {
+            MIC_SOURCE: queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE),
+            DESKTOP_SOURCE: queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE),
+        }
         self._current_tgt_lang: str = self._config.get("translation", {}).get("target_language", "ja")
         self._current_src_lang: str | None = None
         self._current_asr_lang: str | None = None
         self._desktop_capture_enabled = bool(
             self._vrc_listen_config().get("enabled", False)
-        ) and self._listen_translation_available()
+        )
         self._listen_overlay_enabled = bool(
             self._vrc_listen_config().get("show_overlay", False)
         )
@@ -264,6 +318,11 @@ class MainWindow(ctk.CTk):
         self._mic_in_speech = False
         self._desktop_in_speech = False
         self._listen_running = False
+        self._listen_available = False
+        self._listen_unavailable_reason: str | None = None
+        self._listen_transition_lock = threading.Lock()
+        self._listen_transitioning = False
+        self._listen_toggle_cooldown_until = 0.0
         self._translation_state_lock = threading.Lock()
         self._active_translation_jobs = 0
         self._listen_send_lock = threading.Lock()
@@ -273,7 +332,10 @@ class MainWindow(ctk.CTk):
         self._last_mic_result_at = 0.0
         self._recent_mic_texts: deque[tuple[float, str]] = deque(maxlen=8)
         self._recent_listen_texts: deque[tuple[float, str]] = deque(maxlen=8)
+        self._last_listen_result_at = 0.0
+        self._last_listen_diagnostic_log_at = 0.0
         self._avatar_error_after_id: str | None = None
+        self._settings_window: SettingsWindow | None = None
         self._device_picker_win: ctk.CTkToplevel | None = None
         self._sponsor_win: ctk.CTkToplevel | None = None
         self._floating_window: FloatingWindow | None = None
@@ -293,10 +355,20 @@ class MainWindow(ctk.CTk):
         self._model_prepare_running = False
         self._config_save_after_id: str | None = None
         self._desktop_audio_watch_after_id: str | None = None
+        self._mic_audio_watch_after_id: str | None = None
         self._destroying = False
         self._active_listen_output_device_name: str | None = None
         self._last_desktop_device_signature: tuple[tuple[str, ...], str | None] | None = None
         self._listen_recovery_in_progress = False
+        self._active_mic_input_device_name: str | None = None
+        self._last_mic_device_signature: tuple[
+            tuple[str, ...],
+            str | None,
+            str,
+            str | None,
+            str | None,
+        ] | None = None
+        self._mic_recovery_in_progress = False
 
         self._set_window_icon()
         self._start_background_workers()
@@ -307,7 +379,9 @@ class MainWindow(ctk.CTk):
         self._sync_all_avatar_params(force=True)
         self.after(300, self._maybe_show_osc_guide)
         self._schedule_desktop_audio_watch(2200)
+        self._schedule_mic_audio_watch(2200)
         self.after(3000, self._check_for_update)
+        logger.info("MainWindow initialized")
 
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._ui_lang, key, **kwargs)
@@ -336,16 +410,27 @@ class MainWindow(ctk.CTk):
         return format_translation_error(error, backend=backend, ui_language=self._ui_lang)
 
     def _start_background_workers(self) -> None:
-        self._partial_worker = threading.Thread(
-            target=self._partial_worker_loop,
-            daemon=True,
-        )
-        self._partial_worker.start()
-        self._final_worker = threading.Thread(
-            target=self._final_worker_loop,
-            daemon=True,
-        )
-        self._final_worker.start()
+        self._partial_workers: dict[str, threading.Thread] = {}
+        self._final_workers: dict[str, threading.Thread] = {}
+        for source in (MIC_SOURCE, DESKTOP_SOURCE):
+            partial_worker = threading.Thread(
+                target=self._partial_worker_loop,
+                args=(source,),
+                daemon=True,
+                name=f"partial-{source}",
+            )
+            partial_worker.start()
+            self._partial_workers[source] = partial_worker
+
+            final_worker = threading.Thread(
+                target=self._final_worker_loop,
+                args=(source,),
+                daemon=True,
+                name=f"final-{source}",
+            )
+            final_worker.start()
+            self._final_workers[source] = final_worker
+        logger.debug("Background workers started for sources: %s", list(self._partial_workers))
 
     @staticmethod
     def _drain_queue(work_queue: queue.Queue) -> None:
@@ -356,23 +441,35 @@ class MainWindow(ctk.CTk):
                 return
 
     @staticmethod
-    def _enqueue_latest(work_queue: queue.Queue, payload) -> bool:
+    def _enqueue_latest(work_queue: queue.Queue, payload) -> str:
         try:
             work_queue.put_nowait(payload)
-            return True
+            return "enqueued"
         except queue.Full:
             pass
 
         try:
             work_queue.get_nowait()
         except queue.Empty:
-            return False
+            return "dropped"
 
         try:
             work_queue.put_nowait(payload)
-            return True
+            return "replaced"
         except queue.Full:
-            return False
+            return "dropped"
+
+    def _partial_task_queue_for_source(
+        self,
+        source: str,
+    ) -> queue.Queue[tuple[object, str | None, int, int, str] | None]:
+        return self._partial_task_queues[DESKTOP_SOURCE if source == DESKTOP_SOURCE else MIC_SOURCE]
+
+    def _final_task_queue_for_source(
+        self,
+        source: str,
+    ) -> queue.Queue[tuple[object, str | None, str | None, int, str] | None]:
+        return self._final_task_queues[DESKTOP_SOURCE if source == DESKTOP_SOURCE else MIC_SOURCE]
 
     def _call_in_ui(self, callback, delay_ms: int = 0) -> bool:
         if self._destroying:
@@ -396,6 +493,87 @@ class MainWindow(ctk.CTk):
     def _flush_config_save(self) -> None:
         self._config_save_after_id = None
         config_manager.save_config(self._config)
+
+    def _save_config_now(self) -> None:
+        if self._config_save_after_id is not None:
+            try:
+                self.after_cancel(self._config_save_after_id)
+            except Exception:
+                pass
+            self._config_save_after_id = None
+        config_manager.save_config(self._config)
+
+    def _audio_config(self) -> dict:
+        audio_cfg = self._config.setdefault("audio", {})
+        if not isinstance(audio_cfg, dict):
+            audio_cfg = {}
+            self._config["audio"] = audio_cfg
+        return audio_cfg
+
+    def _mic_input_device_mode(self) -> str:
+        audio_cfg = self._audio_config()
+        mode = str(audio_cfg.get("input_device_mode", "")).strip().lower()
+        if mode not in {"auto", "fixed"}:
+            mode = "fixed" if str(audio_cfg.get("input_device") or "").strip() else "auto"
+            audio_cfg["input_device_mode"] = mode
+        return mode
+
+    def _configured_mic_input_device_name(self) -> str | None:
+        configured = str(self._audio_config().get("input_device") or "").strip()
+        return configured or None
+
+    def _current_default_input_device_name(self, devices: list[dict] | None = None) -> str | None:
+        device_list = devices if devices is not None else list(getattr(self, "_devices", {}).keys())
+        if isinstance(device_list, list) and device_list and isinstance(device_list[0], dict):
+            names = [str(device.get("name", "")).strip() for device in device_list if str(device.get("name", "")).strip()]
+            devices_payload = device_list
+        else:
+            names = [str(name).strip() for name in device_list or [] if str(name).strip()]
+            devices_payload = [{"name": name} for name in names]
+        if not names:
+            return None
+        return self._get_system_default_input(devices_payload, names)
+
+    def _best_available_input_device_name(self, devices: list[dict] | None = None) -> str | None:
+        device_list = devices if devices is not None else list(getattr(self, "_devices", {}).keys())
+        if isinstance(device_list, list) and device_list and isinstance(device_list[0], dict):
+            names = [str(device.get("name", "")).strip() for device in device_list if str(device.get("name", "")).strip()]
+        else:
+            names = [str(name).strip() for name in device_list or [] if str(name).strip()]
+        return names[0] if names else None
+
+    def _resolve_mic_input_device_name(self, *, refresh_devices: bool = False) -> str | None:
+        if refresh_devices:
+            devices = AudioRecorder.list_devices()
+            self._devices = {d["name"]: d["index"] for d in devices}
+        else:
+            devices = [{"name": name, "index": index} for name, index in getattr(self, "_devices", {}).items()]
+        mode = self._mic_input_device_mode()
+        configured = self._configured_mic_input_device_name()
+        available_names = {str(device.get("name", "")).strip() for device in devices}
+        default_name = self._current_default_input_device_name(devices)
+        if mode == "fixed" and configured and configured in available_names:
+            return configured
+        if default_name and default_name in available_names:
+            return default_name
+        if configured and configured in available_names:
+            return configured
+        return self._best_available_input_device_name(devices)
+
+    def _current_device_display_name(self, device_name: str | None = None) -> str:
+        if device_name is not None:
+            resolved_name = str(device_name).strip()
+        elif hasattr(self, "_device_var"):
+            resolved_name = str(self._device_var.get()).strip()
+        else:
+            resolved_name = ""
+        if self._mic_input_device_mode() == "auto":
+            if resolved_name:
+                return self._copy("mic_device_auto_current", name=resolved_name)
+            if not getattr(self, "_devices", {}):
+                return self._copy("mic_device_none")
+            return self._copy("mic_device_auto_option")
+        return resolved_name or self._copy("mic_device_none")
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
@@ -1104,12 +1282,43 @@ class MainWindow(ctk.CTk):
         if button is None:
             return
         enabled = self._desktop_capture_enabled
+        running = self._listen_running
+        available = self._listen_available
+        transitioning = self._listen_transitioning
+        state = "disabled" if transitioning else "normal"
+        if transitioning:
+            text_color = TEXT_SEC
+            fg_color = BG_SECONDARY
+            hover_color = BG_SECONDARY
+            border_color = GLASS_BORDER
+        elif running:
+            text_color = "#166534"
+            fg_color = "#dcfce7"
+            hover_color = "#bbf7d0"
+            border_color = "#86efac"
+        elif enabled and not available:
+            text_color = "#9a3412"
+            fg_color = "#ffedd5"
+            hover_color = "#fed7aa"
+            border_color = "#fdba74"
+        elif enabled:
+            text_color = "#ffffff"
+            fg_color = ACCENT
+            hover_color = ACCENT_HOVER
+            border_color = ACCENT_HOVER
+        else:
+            text_color = TEXT_PRI
+            fg_color = "#eef5ff"
+            hover_color = "#dfeeff"
+            border_color = "#bfdbff"
         button.configure(
             text=self._copy("desktop_audio_on" if enabled else "desktop_audio_off"),
-            text_color="#166534" if enabled else TEXT_PRI,
-            fg_color="#dcfce7" if enabled else "#eef5ff",
-            hover_color="#bbf7d0" if enabled else "#dfeeff",
-            border_color="#86efac" if enabled else "#bfdbff",
+            text_color=text_color,
+            text_color_disabled=text_color,
+            fg_color=fg_color,
+            hover_color=hover_color,
+            border_color=border_color,
+            state=state,
         )
 
     def _refresh_listen_overlay_button(self) -> None:
@@ -1602,6 +1811,7 @@ class MainWindow(ctk.CTk):
         self._sync_avatar_bool("error", False, force=True)
 
     def _refresh_runtime_status(self) -> None:
+        self._refresh_desktop_capture_button()
         if self._current_translating_state():
             self._set_status(self._t("translating"), ACCENT)
             return
@@ -1688,6 +1898,115 @@ class MainWindow(ctk.CTk):
     def _desktop_capture_config(self) -> dict:
         return self._vrc_listen_config()
 
+    def _sync_settings_window_vrc_listen_state(self) -> None:
+        win = getattr(self, "_settings_window", None)
+        if win is None:
+            return
+        try:
+            if not win.winfo_exists():
+                self._settings_window = None
+                return
+            win.sync_vrc_listen_state(
+                enabled=self._desktop_capture_enabled,
+                show_overlay=self._listen_overlay_enabled,
+            )
+        except Exception:
+            self._settings_window = None
+
+    def _on_settings_window_closed(self) -> None:
+        self._settings_window = None
+
+    def _compute_listen_availability(
+        self,
+        *,
+        refresh_devices: bool = False,
+    ) -> tuple[bool, str | None]:
+        if refresh_devices:
+            self._load_desktop_devices()
+        if not self._listen_translation_available():
+            return False, self._copy("desktop_audio_requires_translation")
+        if not self._is_vrchat_running():
+            return False, self._copy("desktop_audio_requires_vrchat")
+        if self._desktop_output_device_name() is None:
+            return False, self._copy("desktop_audio_unavailable_body")
+        return True, None
+
+    def _refresh_listen_availability(self, *, refresh_devices: bool = False) -> bool:
+        available, reason = self._compute_listen_availability(
+            refresh_devices=refresh_devices,
+        )
+        self._listen_available = available
+        self._listen_unavailable_reason = reason
+        return available
+
+    def _log_listen_environment(self, stage: str) -> None:
+        try:
+            process_audio = inspect_process_output_state(("VRChat.exe",))
+        except Exception:
+            logger.exception("Failed to inspect VRChat output state")
+            process_audio = {}
+        logger.info(
+            "Desktop listen environment [%s] enabled=%s running=%s available=%s selected_output=%s active_output=%s default_output=%s process_audio=%s",
+            stage,
+            self._desktop_capture_enabled,
+            self._listen_running,
+            self._listen_available,
+            self._desktop_output_device_name(),
+            self._active_listen_output_device_name,
+            default_output_device_name(),
+            process_audio,
+        )
+
+    def _maybe_log_listen_diagnostics(self) -> None:
+        now = time.monotonic()
+        if (now - self._last_listen_diagnostic_log_at) < LISTEN_DIAGNOSTIC_IDLE_S:
+            return
+        recorder = self._listen_recorder
+        if recorder is None or not isinstance(recorder, DesktopAudioRecorder):
+            return
+        if (now - self._last_listen_result_at) < LISTEN_DIAGNOSTIC_IDLE_S:
+            return
+        stats = recorder.diagnostics_snapshot()
+        last_non_silent_at = float(stats.get("last_non_silent_at") or 0.0)
+        audio_state = "no_loopback_audio"
+        if last_non_silent_at > 0 and (now - last_non_silent_at) < LISTEN_DIAGNOSTIC_IDLE_S:
+            audio_state = "audio_present_but_no_result"
+        process_audio = inspect_process_output_state(("VRChat.exe",))
+        log_fn = logger.warning
+        if audio_state == "no_loopback_audio" and not bool(process_audio.get("has_active_audio_session", False)):
+            log_fn = logger.info
+        log_fn(
+            "Desktop listen diagnostics state=%s idle_for=%.1fs stats=%s process_audio=%s mic_active=%s output_format=%s self_suppress=%s",
+            audio_state,
+            now - self._last_listen_result_at if self._last_listen_result_at > 0 else now,
+            stats,
+            process_audio,
+            self._active_mic_input_device_name,
+            self._get_output_format(),
+            bool(self._desktop_capture_config().get("self_suppress", False)),
+        )
+        self._last_listen_diagnostic_log_at = now
+
+    def _begin_listen_transition(self) -> bool:
+        if self._destroying:
+            return False
+        if time.monotonic() < self._listen_toggle_cooldown_until:
+            return False
+        if not self._listen_transition_lock.acquire(blocking=False):
+            return False
+        self._listen_transitioning = True
+        self._refresh_desktop_capture_button()
+        return True
+
+    def _end_listen_transition(self) -> None:
+        self._listen_transitioning = False
+        self._listen_toggle_cooldown_until = time.monotonic() + 0.35
+        self._refresh_desktop_capture_button()
+        try:
+            self._listen_transition_lock.release()
+        except RuntimeError:
+            pass
+
     def _load_desktop_devices(self) -> None:
         # PyAudioWPatch (= PortAudio) names are identical to sounddevice names, so
         # there is no cross-library mismatch between device list and loopback lookup.
@@ -1767,6 +2086,10 @@ class MainWindow(ctk.CTk):
         target = str(listen_cfg.get("target_language", "zh")).strip() or "zh"
         return target
 
+    def _listen_send_to_chatbox_enabled(self) -> bool:
+        listen_cfg = self._desktop_capture_config()
+        return bool(listen_cfg.get("send_to_chatbox", True))
+
     def _listen_source_language(self) -> str | None:
         listen_cfg = self._desktop_capture_config()
         source = str(listen_cfg.get("source_language", "auto")).strip() or "auto"
@@ -1831,11 +2154,10 @@ class MainWindow(ctk.CTk):
                 return DEFAULT_LISTEN_TAIL_SILENCE_S
 
     def _listen_feature_configured(self) -> bool:
-        return (
-            self._desktop_capture_enabled
-            and self._listen_translation_available()
-            and self._desktop_output_device_name() is not None
-        )
+        if not self._desktop_capture_enabled:
+            return False
+        available, _ = self._compute_listen_availability(refresh_devices=True)
+        return available
 
     @staticmethod
     def _create_loopback_extra_settings():
@@ -1847,16 +2169,30 @@ class MainWindow(ctk.CTk):
     def _set_desktop_capture_enabled(self, enabled: bool, *, persist: bool) -> None:
         self._desktop_capture_enabled = bool(enabled)
         self._refresh_desktop_capture_button()
+        self._sync_settings_window_vrc_listen_state()
+        logger.info(
+            "Desktop listen preference updated (enabled=%s persist=%s running=%s available=%s)",
+            self._desktop_capture_enabled,
+            persist,
+            self._listen_running,
+            self._listen_available,
+        )
         if not persist:
             return
         desktop_cfg = self._desktop_capture_config()
         if bool(desktop_cfg.get("enabled", False)) != self._desktop_capture_enabled:
             desktop_cfg["enabled"] = self._desktop_capture_enabled
-            self._schedule_config_save()
+            self._save_config_now()
 
     def _set_listen_overlay_enabled(self, enabled: bool, *, persist: bool) -> None:
         self._listen_overlay_enabled = bool(enabled)
         self._refresh_listen_overlay_button()
+        self._sync_settings_window_vrc_listen_state()
+        logger.info(
+            "Listen overlay preference updated (enabled=%s persist=%s)",
+            self._listen_overlay_enabled,
+            persist,
+        )
         if self._listen_overlay_enabled:
             if self._floating_window is None:
                 self._floating_window = FloatingWindow(
@@ -1879,12 +2215,13 @@ class MainWindow(ctk.CTk):
         desktop_cfg = self._desktop_capture_config()
         if bool(desktop_cfg.get("show_overlay", False)) != self._listen_overlay_enabled:
             desktop_cfg["show_overlay"] = self._listen_overlay_enabled
-            self._schedule_config_save()
+            self._save_config_now()
 
     def _start_listen(self) -> None:
         if self._listen_recorder is not None:
             return
 
+        self._log_listen_environment("before_start")
         self._load_desktop_devices()
         device_name = self._desktop_output_device_name()
         if device_name is None:
@@ -1893,11 +2230,20 @@ class MainWindow(ctk.CTk):
         audio_cfg = self._config.get("audio", {})
         listen_segment_duration_s = self._listen_segment_duration_s()
         listen_tail_silence_s = self._listen_tail_silence_s()
-        # For desktop listen we expose a single user-facing "segment length".
-        # Keep the chunk interval and window aligned so each fixed cut is one
-        # distinct slice instead of overlapping 2-3 second windows.
-        desktop_chunk_interval_ms = max(int(round(listen_segment_duration_s * 1000.0)), 1)
+        # Use a shorter partial cadence than the final segment length so reverse
+        # translation can surface text earlier during continuous speech, while
+        # still keeping a larger recognition window for steadier results.
+        desktop_chunk_interval_ms = min(
+            max(int(round(listen_segment_duration_s * 500.0)), 700),
+            1400,
+        )
         desktop_chunk_window_s = listen_segment_duration_s
+        logger.debug(
+            "Desktop listen partial cadence configured (segment_s=%.2f chunk_interval_ms=%s chunk_window_s=%.2f)",
+            listen_segment_duration_s,
+            desktop_chunk_interval_ms,
+            desktop_chunk_window_s,
+        )
         self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
             on_chunk=lambda audio: self._on_audio_chunk(audio, DESKTOP_SOURCE),
@@ -1926,11 +2272,17 @@ class MainWindow(ctk.CTk):
             self._listen_running = True
             self._active_listen_output_device_name = device_name
             self._last_desktop_device_signature = (tuple(sorted(self._desktop_devices)), device_name)
+            logger.info("Desktop listen started successfully on output device: %s", device_name)
+            self._log_listen_environment("after_start")
         except Exception:
             self._listen_recorder = None
             self._listen_running = False
             self._active_listen_output_device_name = None
+            logger.exception("Desktop listen failed to start on output device: %s", device_name)
             raise
+        finally:
+            self._call_in_ui(lambda: self._refresh_listen_availability(refresh_devices=False))
+            self._call_in_ui(self._refresh_runtime_status)
 
     def _start_desktop_capture(self) -> None:
         self._start_listen()
@@ -1944,50 +2296,70 @@ class MainWindow(ctk.CTk):
         if self._listen_recorder is not None:
             self._listen_recorder.stop()
             self._listen_recorder = None
+        logger.info("Desktop listen stopped")
         self._sync_avatar_speaking_state(force=True)
+        self._call_in_ui(lambda: self._refresh_listen_availability(refresh_devices=False))
         self._call_in_ui(self._refresh_runtime_status)
 
     def _stop_desktop_capture(self) -> None:
         self._stop_listen()
 
     def _toggle_listen(self) -> None:
+        if self._listen_transitioning or time.monotonic() < self._listen_toggle_cooldown_until:
+            return
         target_enabled = not self._desktop_capture_enabled
+        logger.info("Desktop listen toggle requested -> %s", target_enabled)
         if target_enabled:
-            if not self._listen_translation_available():
-                messagebox.showwarning(
-                    self._copy("desktop_audio_unavailable_title"),
-                    self._copy("desktop_audio_requires_translation"),
-                )
-                return
-            if not self._is_vrchat_running():
-                messagebox.showwarning(
-                    self._copy("desktop_audio_unavailable_title"),
-                    self._copy("desktop_audio_requires_vrchat"),
-                )
-                return
-            self._load_desktop_devices()
-            if not self._desktop_devices or self._desktop_input_device_index() is None:
-                messagebox.showwarning(
-                    self._copy("desktop_audio_unavailable_title"),
-                    self._copy("desktop_audio_unavailable_body"),
-                )
-                return
-            try:
-                if self._running:
-                    self._start_listen()
-            except Exception as exc:
-                messagebox.showerror(
-                    self._copy("desktop_audio_unavailable_title"),
-                    self._copy("desktop_audio_failed", message=str(exc)),
-                )
-                return
             self._set_desktop_capture_enabled(True, persist=True)
+            available = self._refresh_listen_availability(refresh_devices=True)
+            self._refresh_desktop_capture_button()
+            if not self._running:
+                self._set_bottom(self._copy("desktop_audio_saved"))
+                if not available and self._listen_unavailable_reason:
+                    messagebox.showwarning(
+                        self._copy("desktop_audio_unavailable_title"),
+                        self._listen_unavailable_reason,
+                    )
+                return
+            if not available:
+                self._set_bottom(self._listen_unavailable_reason or self._copy("desktop_audio_saved"))
+                self._log_listen_environment("enable_blocked")
+                messagebox.showwarning(
+                    self._copy("desktop_audio_unavailable_title"),
+                    self._listen_unavailable_reason or self._copy("desktop_audio_unavailable_body"),
+                )
+                return
+            if self._listen_running:
+                self._set_bottom(self._copy("desktop_audio_saved"))
+                return
+            if not self._begin_listen_transition():
+                return
+            failed_message: str | None = None
+            try:
+                self._start_listen()
+            except Exception as exc:
+                failed_message = str(exc)
+            finally:
+                self._end_listen_transition()
+            if failed_message is not None:
+                self._on_desktop_capture_start_failed(failed_message)
+                return
+            self._refresh_runtime_status()
             self._set_bottom(self._copy("desktop_audio_saved"))
             return
 
-        if self._running:
-            self._stop_listen()
         self._set_desktop_capture_enabled(False, persist=True)
+        if self._running and self._listen_recorder is not None:
+            if not self._begin_listen_transition():
+                return
+            try:
+                self._stop_listen()
+            finally:
+                self._end_listen_transition()
+            self._refresh_runtime_status()
+        else:
+            self._refresh_listen_availability(refresh_devices=False)
+            self._refresh_desktop_capture_button()
         self._set_bottom(self._copy("desktop_audio_saved"))
 
     def _toggle_desktop_capture(self) -> None:
@@ -2000,8 +2372,11 @@ class MainWindow(ctk.CTk):
         )
 
     def _on_desktop_capture_start_failed(self, message: str) -> None:
+        self._refresh_listen_availability(refresh_devices=True)
         self._refresh_desktop_capture_button()
         self._set_bottom(self._copy("desktop_audio_failed", message=message))
+        logger.warning("Desktop listen start/restart failed: %s", message)
+        self._log_listen_environment("start_failed")
         messagebox.showwarning(
             self._copy("desktop_audio_unavailable_title"),
             self._copy("desktop_audio_failed", message=message),
@@ -2017,6 +2392,9 @@ class MainWindow(ctk.CTk):
         # 停止当前采集 → 重新加载设备 → 重新启动；重启失败则关闭功能并弹窗提示
         if self._listen_recovery_in_progress or self._destroying:
             return
+        if not self._begin_listen_transition():
+            return
+        logger.warning("Restarting desktop listen (reason=%s)", message or "unknown")
 
         recorder = self._listen_recorder
         self._listen_recovery_in_progress = True
@@ -2040,20 +2418,24 @@ class MainWindow(ctk.CTk):
             if not self._running or not self._desktop_capture_enabled:
                 return
 
-            self._load_desktop_devices()
+            if not self._refresh_listen_availability(refresh_devices=True):
+                failure = self._listen_unavailable_reason or str(message or "").strip()
+                if not failure:
+                    failure = self._copy("desktop_audio_runtime_stopped")
+                self._on_desktop_capture_start_failed(failure)
+                return
             self._start_listen()
             self._refresh_runtime_status()
         except Exception as exc:
-            self._desktop_capture_enabled = False
-            self._desktop_capture_config()["enabled"] = False
+            self._refresh_listen_availability(refresh_devices=True)
             self._refresh_desktop_capture_button()
-            self._schedule_config_save()
             failure = str(exc).strip() or str(message or "").strip()
             if not failure:
                 failure = self._copy("desktop_audio_runtime_stopped")
             self._on_desktop_capture_start_failed(failure)
         finally:
             self._listen_recovery_in_progress = False
+            self._end_listen_transition()
 
     def _schedule_desktop_audio_watch(self, delay_ms: int = 2500) -> None:
         # 调度下次轮询，取消旧的待执行任务后重新注册
@@ -2072,6 +2454,9 @@ class MainWindow(ctk.CTk):
             return
 
         try:
+            was_available = self._listen_available
+            self._refresh_listen_availability(refresh_devices=True)
+            self._refresh_desktop_capture_button()
             recorder = self._listen_recorder
             # 检查1：录音线程意外停止 → 重启
             if (
@@ -2080,10 +2465,26 @@ class MainWindow(ctk.CTk):
                 and self._running
                 and self._desktop_capture_enabled
             ):
+                logger.warning("Desktop listen recorder stopped unexpectedly; triggering restart")
                 self._restart_desktop_capture(
                     message=recorder.last_error or self._copy("desktop_audio_runtime_stopped")
                 )
                 return
+
+            if (
+                self._running
+                and self._desktop_capture_enabled
+                and self._listen_recorder is None
+                and not self._listen_running
+                and not self._listen_transitioning
+                and not was_available
+                and self._listen_available
+            ):
+                self._restart_desktop_capture()
+                return
+
+            if self._running and self._desktop_capture_enabled and self._listen_recorder is not None:
+                self._maybe_log_listen_diagnostics()
 
             # 检查2：仅自动模式下监测默认输出设备变更 → 重启以跟随新设备
             if not (
@@ -2104,9 +2505,14 @@ class MainWindow(ctk.CTk):
             previous_active = self._normalize_audio_device_name(previous[1] or "")
             current_active = self._normalize_audio_device_name(signature[1] or "")
             if current_active and current_active != previous_active:
+                logger.info(
+                    "Desktop output device changed in auto mode (previous=%s current=%s)",
+                    previous[1],
+                    signature[1],
+                )
                 self._restart_desktop_capture()
         except Exception:
-            pass
+            logger.exception("Desktop audio watch failed")
         finally:
             if not self._destroying:
                 self._schedule_desktop_audio_watch()
@@ -2219,12 +2625,17 @@ class MainWindow(ctk.CTk):
             self._recent_listen_texts.popleft()
 
     def _is_recent_duplicate_listen_text(self, text: str) -> bool:
+        return self._recent_duplicate_listen_reason(text) is not None
+
+    def _recent_duplicate_listen_reason(self, text: str) -> str | None:
         normalized = self._normalize_compare_text(text)
         if not normalized:
-            return False
+            return None
         now = time.monotonic()
         self._prune_recent_listen_texts(now)
-        return any(normalized == recent for _, recent in self._recent_listen_texts)
+        if any(normalized == recent for _, recent in self._recent_listen_texts):
+            return "recent_duplicate"
+        return None
 
     @staticmethod
     def _translation_context_source(source: str) -> str:
@@ -2241,27 +2652,30 @@ class MainWindow(ctk.CTk):
         return "auto"
 
     def _should_suppress_listen_result(self, text: str) -> bool:
+        return self._listen_suppress_reason(text) is not None
+
+    def _listen_suppress_reason(self, text: str) -> str | None:
         if not bool(self._desktop_capture_config().get("self_suppress", False)):
-            return False
+            return None
         now = time.monotonic()
         suppress_seconds = self._listen_self_suppress_seconds()
         if self._mic_in_speech:
-            return True
+            return "mic_in_speech"
         if (now - max(self._last_mic_activity_at, self._last_mic_result_at)) <= suppress_seconds:
-            return True
+            return "recent_mic_activity"
 
         normalized = self._normalize_compare_text(text)
         if not normalized:
-            return False
+            return None
 
         self._prune_recent_mic_texts(now)
         for _, recent in self._recent_mic_texts:
             if normalized == recent:
-                return True
+                return "same_as_recent_mic_result"
             if len(normalized) >= 8 and len(recent) >= 8:
                 if normalized in recent or recent in normalized:
-                    return True
-        return False
+                    return "similar_to_recent_mic_result"
+        return None
 
     def _send_listen_chatbox(self, text: str, session_id: int) -> None:
         message = VRCOSCSender._normalize_text(text)
@@ -2283,8 +2697,10 @@ class MainWindow(ctk.CTk):
                 if sent:
                     self._listen_last_send_at = time.monotonic()
                     self._own_msgs.add(sent)
+                    logger.debug("Desktop listen chatbox send queued (session=%s text=%s)", session_id, sent)
         except Exception as exc:
             error_text = str(exc).strip() or exc.__class__.__name__
+            logger.warning("Desktop listen chatbox send failed: %s", error_text)
             self._call_in_ui(
                 lambda m=error_text[:120]: self._set_bottom(
                     f"Chatbox send failed: {m}"
@@ -2296,6 +2712,7 @@ class MainWindow(ctk.CTk):
         message = VRCOSCSender._normalize_text(text)
         if not message or self._destroying:
             return
+        logger.debug("Scheduling desktop listen chatbox send (session=%s text=%s)", session_id, message)
         threading.Thread(
             target=self._send_listen_chatbox,
             args=(message, session_id),
@@ -2367,17 +2784,19 @@ class MainWindow(ctk.CTk):
             return self._desktop_partial_merger
         return self._partial_merger
 
-    def _partial_worker_loop(self) -> None:
+    def _partial_worker_loop(self, source: str) -> None:
+        task_queue = self._partial_task_queue_for_source(source)
         while True:
-            payload = self._partial_task_queue.get()
+            payload = task_queue.get()
             if payload is None:
                 return
             audio, asr_lang, generation, session_id, source = payload
             self._process_partial_audio_chunk(audio, asr_lang, generation, session_id, source)
 
-    def _final_worker_loop(self) -> None:
+    def _final_worker_loop(self, source: str) -> None:
+        task_queue = self._final_task_queue_for_source(source)
         while True:
-            payload = self._final_task_queue.get()
+            payload = task_queue.get()
             if payload is None:
                 return
             audio, asr_lang, selected_src_lang, session_id, source = payload
@@ -2389,10 +2808,17 @@ class MainWindow(ctk.CTk):
 
         generation = self._source_generation(source)
         asr_lang = self._listen_asr_language() if source == DESKTOP_SOURCE else self._current_asr_lang
-        self._enqueue_latest(
-            self._partial_task_queue,
+        queue_result = self._enqueue_latest(
+            self._partial_task_queue_for_source(source),
             (audio, asr_lang, generation, self._listen_session, source),
         )
+        if queue_result != "enqueued":
+            logger.debug(
+                "Partial queue update result=%s source=%s generation=%s",
+                queue_result,
+                source,
+                generation,
+            )
 
     def _process_partial_audio_chunk(
         self,
@@ -2405,6 +2831,7 @@ class MainWindow(ctk.CTk):
         if not self._running or session_id != self._listen_session:
             return
         try:
+            asr_started_at = time.monotonic()
             text = self._asr_for_source(source).transcribe(
                 audio,
                 language=asr_lang,
@@ -2429,8 +2856,21 @@ class MainWindow(ctk.CTk):
                 self._call_in_ui(
                     lambda t=merged, g=generation, s=source: self._show_partial_text(t, g, s)
                 )
+            elif merged:
+                logger.debug(
+                    "Dropped partial result after generation/session changed (source=%s generation=%s session=%s)",
+                    source,
+                    generation,
+                    session_id,
+                )
+            logger.debug(
+                "Partial ASR processed (source=%s chars=%s duration_ms=%.0f)",
+                source,
+                len(text or ""),
+                (time.monotonic() - asr_started_at) * 1000.0,
+            )
         except Exception:
-            pass
+            logger.exception("Partial ASR processing failed (source=%s)", source)
 
     def _show_partial_text(self, text: str, generation: int, source: str):
         if not self._running or generation != self._source_generation(source) or not text:
@@ -2454,6 +2894,7 @@ class MainWindow(ctk.CTk):
         try:
             if requires_translation:
                 self._set_translating_state(True)
+            asr_started_at = time.monotonic()
             text = self._asr_for_source(source).transcribe(
                 audio,
                 language=asr_lang,
@@ -2465,14 +2906,27 @@ class MainWindow(ctk.CTk):
             with self._merge_lock:
                 text = self._source_merger(source).ingest_final(text)
             if not text:
+                logger.debug(
+                    "Dropped empty final ASR result (source=%s asr_ms=%.0f)",
+                    source,
+                    (time.monotonic() - asr_started_at) * 1000.0,
+                )
                 return
             # Drop noise-only ASR outputs for desktop audio (single chars, punctuation, etc.)
             if source == DESKTOP_SOURCE and len(text.strip()) < 2:
+                logger.debug("Dropped short desktop ASR result: %r", text)
                 return
             if not self._running or session_id != self._listen_session:
                 return
-            if source == DESKTOP_SOURCE and self._should_suppress_listen_result(text):
-                return
+            if source == DESKTOP_SOURCE:
+                suppress_reason = self._listen_suppress_reason(text)
+                if suppress_reason:
+                    logger.debug(
+                        "Suppressed desktop ASR result (reason=%s text=%r)",
+                        suppress_reason,
+                        text,
+                    )
+                    return
 
             translator = self._translator
             context_source = self._translation_context_source(source)
@@ -2481,7 +2935,13 @@ class MainWindow(ctk.CTk):
 
             translated = None
             if source == DESKTOP_SOURCE:
-                if self._is_recent_duplicate_listen_text(text):
+                duplicate_reason = self._recent_duplicate_listen_reason(text)
+                if duplicate_reason:
+                    logger.debug(
+                        "Dropped duplicate desktop ASR result (reason=%s text=%r)",
+                        duplicate_reason,
+                        text,
+                    )
                     return
                 self._remember_recent_listen_text(text)
                 src_lang = self._listen_translation_source_language(selected_src_lang)
@@ -2491,11 +2951,19 @@ class MainWindow(ctk.CTk):
                 elif translator is None:
                     raise RuntimeError("Translator is not ready")
                 else:
+                    translate_started_at = time.monotonic()
                     translated = translator.translate(
                         text,
                         src_lang,
                         tgt_lang,
                         context_source=context_source,
+                    )
+                    logger.debug(
+                        "Desktop translation finished (src_lang=%s tgt_lang=%s asr_ms=%.0f translate_ms=%.0f)",
+                        src_lang,
+                        tgt_lang,
+                        (translate_started_at - asr_started_at) * 1000.0,
+                        (time.monotonic() - translate_started_at) * 1000.0,
                     )
                 if not self._running or session_id != self._listen_session:
                     return
@@ -2509,6 +2977,7 @@ class MainWindow(ctk.CTk):
                         payload=payload,
                     )
                 )
+                self._last_listen_result_at = time.monotonic()
             elif fmt == "original_only":
                 chatbox_text = text
             else:
@@ -2519,11 +2988,19 @@ class MainWindow(ctk.CTk):
                 elif translator is None:
                     raise RuntimeError("Translator is not ready")
                 else:
+                    translate_started_at = time.monotonic()
                     translated = translator.translate(
                         text,
                         src_lang,
                         tgt_lang,
                         context_source=context_source,
+                    )
+                    logger.debug(
+                        "Microphone translation finished (src_lang=%s tgt_lang=%s asr_ms=%.0f translate_ms=%.0f)",
+                        src_lang,
+                        tgt_lang,
+                        (translate_started_at - asr_started_at) * 1000.0,
+                        (time.monotonic() - translate_started_at) * 1000.0,
                     )
                 if not self._running or session_id != self._listen_session:
                     return
@@ -2541,7 +3018,10 @@ class MainWindow(ctk.CTk):
             if not self._running or session_id != self._listen_session:
                 return
             if source == DESKTOP_SOURCE:
-                self._send_listen_chatbox_async(chatbox_text, session_id)
+                if self._listen_send_to_chatbox_enabled():
+                    self._send_listen_chatbox_async(chatbox_text, session_id)
+                else:
+                    logger.info("Desktop listen result kept local only because send_to_chatbox is disabled")
             else:
                 self._last_mic_result_at = time.monotonic()
                 self._remember_recent_mic_texts(text, translated or "", chatbox_text)
@@ -2558,6 +3038,7 @@ class MainWindow(ctk.CTk):
                     )
         except Exception as exc:
             friendly = self._format_translation_error(exc)
+            logger.exception("Final audio segment processing failed (source=%s)", source)
             self._call_in_ui(
                 lambda message=friendly.short_message: self._set_bottom(message)
             )
@@ -2677,13 +3158,21 @@ class MainWindow(ctk.CTk):
         devices = AudioRecorder.list_devices()
         self._devices = {d["name"]: d["index"] for d in devices}
         self._load_desktop_devices()
-        names = list(self._devices.keys()) or ["榛樿"]
-        cfg_dev = self._config.get("audio", {}).get("input_device")
-        if cfg_dev and cfg_dev in self._devices:
-            self._set_selected_device(cfg_dev, persist=False)
-        else:
-            preferred = self._get_system_default_input(devices, names)
-            self._set_selected_device(preferred, persist=False)
+        self._refresh_listen_availability(refresh_devices=False)
+        preferred = self._resolve_mic_input_device_name(refresh_devices=False)
+        self._set_selected_device(
+            preferred,
+            persist=False,
+            mode=self._mic_input_device_mode(),
+        )
+        logger.debug(
+            "Loaded audio devices (mode=%s configured=%s resolved=%s available=%s)",
+            self._mic_input_device_mode(),
+            self._configured_mic_input_device_name(),
+            preferred,
+            list(self._devices.keys()),
+        )
+        self._refresh_desktop_capture_button()
 
     @staticmethod
     def _format_device_label(name: str, limit: int = 30) -> str:
@@ -2692,20 +3181,48 @@ class MainWindow(ctk.CTk):
             return text
         return f"{text[: max(0, limit - 3)]}..."
 
-    def _set_selected_device(self, device_name: str, *, persist: bool) -> None:
-        self._device_var.set(device_name)
+    def _set_selected_device(self, device_name: str | None, *, persist: bool, mode: str | None = None) -> None:
+        safe_device_name = str(device_name or "").strip()
+        target_mode = mode or self._mic_input_device_mode()
+        self._device_var.set(safe_device_name)
         if hasattr(self, "_device_button") and self._device_button is not None:
-            self._device_button.configure(text=self._format_device_label(device_name))
+            self._device_button.configure(
+                text=self._format_device_label(
+                    self._current_device_display_name(safe_device_name)
+                )
+            )
         if not persist:
             return
-        audio_cfg = self._config.setdefault("audio", {})
-        if audio_cfg.get("input_device") != device_name:
-            audio_cfg["input_device"] = device_name
-            self._schedule_config_save()
+        audio_cfg = self._audio_config()
+        desired_input = safe_device_name if target_mode == "fixed" and safe_device_name else None
+        changed = False
+        if audio_cfg.get("input_device_mode") != target_mode:
+            audio_cfg["input_device_mode"] = target_mode
+            changed = True
+        if audio_cfg.get("input_device") != desired_input:
+            audio_cfg["input_device"] = desired_input
+            changed = True
+        if changed:
+            self._save_config_now()
+            logger.info(
+                "Microphone selection updated (mode=%s configured_input=%s active_display=%s)",
+                target_mode,
+                desired_input,
+                safe_device_name,
+            )
 
     def _choose_device(self, device_name: str) -> None:
+        if device_name == AUTO_INPUT_DEVICE_TOKEN:
+            resolved = self._resolve_mic_input_device_name(refresh_devices=True)
+            self._set_selected_device(resolved, persist=True, mode="auto")
+            if self._running:
+                self._restart_microphone_capture(reason="user selected auto microphone mode")
+            self._close_device_picker()
+            return
         if device_name in getattr(self, "_devices", {}):
-            self._set_selected_device(device_name, persist=True)
+            self._set_selected_device(device_name, persist=True, mode="fixed")
+            if self._running and self._normalize_audio_device_name(device_name) != self._normalize_audio_device_name(self._active_mic_input_device_name or ""):
+                self._restart_microphone_capture(reason=f"user selected microphone: {device_name}")
         self._close_device_picker()
 
     def _open_device_picker(self) -> None:
@@ -2739,7 +3256,7 @@ class MainWindow(ctk.CTk):
 
         ctk.CTkLabel(
             outer,
-            text=self._format_device_label(self._device_var.get(), limit=54),
+            text=self._format_device_label(self._current_device_display_name(), limit=54),
             text_color=TEXT_SEC,
             justify="left",
             wraplength=380,
@@ -2765,8 +3282,26 @@ class MainWindow(ctk.CTk):
         list_frame.pack(fill="both", expand=True, padx=10, pady=(10, 6))
 
         current_name = self._device_var.get()
+        auto_selected = self._mic_input_device_mode() == "auto"
+        auto_label = self._copy("mic_device_auto_option")
+        if current_name:
+            auto_label = self._copy("mic_device_auto_current", name=current_name)
+        ctk.CTkButton(
+            list_frame,
+            text=auto_label,
+            anchor="w",
+            height=40,
+            fg_color="#eef5ff" if auto_selected else "transparent",
+            hover_color="#edf3fb",
+            border_width=1 if auto_selected else 0,
+            border_color="#bfdbff",
+            corner_radius=14,
+            text_color=ACCENT if auto_selected else TEXT_PRI,
+            font=ctk.CTkFont(size=12, weight="bold" if auto_selected else "normal"),
+            command=lambda: self._choose_device(AUTO_INPUT_DEVICE_TOKEN),
+        ).pack(fill="x", padx=4, pady=4)
         for name in self._devices.keys():
-            is_selected = name == current_name
+            is_selected = not auto_selected and name == current_name
             ctk.CTkButton(
                 list_frame,
                 text=name,
@@ -2823,6 +3358,168 @@ class MainWindow(ctk.CTk):
             names[0],
         )
 
+    def _microphone_device_signature(self) -> tuple[tuple[str, ...], str | None, str, str | None, str | None]:
+        devices = AudioRecorder.list_devices()
+        self._devices = {d["name"]: d["index"] for d in devices}
+        default_name = self._current_default_input_device_name(devices)
+        mode = self._mic_input_device_mode()
+        configured = self._configured_mic_input_device_name()
+        resolved = self._resolve_mic_input_device_name(refresh_devices=False)
+        return tuple(sorted(self._devices)), default_name, mode, configured, resolved
+
+    def _create_microphone_recorder(self, dev_idx: int | None) -> AudioRecorder:
+        audio_cfg = self._config.get("audio", {})
+        streaming_cfg = self._streaming_config()
+        return AudioRecorder(
+            on_segment=lambda audio: self._on_audio_segment(audio, MIC_SOURCE),
+            on_chunk=lambda audio: self._on_audio_chunk(audio, MIC_SOURCE),
+            sample_rate=audio_cfg.get("sample_rate", 16000),
+            frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
+            vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
+            silence_threshold_s=audio_cfg.get("vad_silence_threshold", 0.8),
+            vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
+            vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
+            vad_min_rms=audio_cfg.get("vad_min_rms", 0.012),
+            min_segment_s=audio_cfg.get("min_segment_s", 0.45),
+            partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
+            max_segment_s=audio_cfg.get("max_segment_s", 12.0),
+            denoise_strength=audio_cfg.get("denoise_strength", 0.0),
+            input_device=dev_idx,
+            on_vad_state=lambda state: self._on_source_vad_state(MIC_SOURCE, state),
+            chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
+            chunk_window_s=streaming_cfg.get("chunk_window_s", 1.6),
+            ring_buffer_s=streaming_cfg.get("ring_buffer_s", 4.0),
+            recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
+        )
+
+    def _start_microphone_capture(self, device_name: str | None = None) -> None:
+        target_name = str(device_name or self._resolve_mic_input_device_name(refresh_devices=True) or "").strip()
+        if not target_name:
+            raise RuntimeError(self._copy("mic_device_none"))
+        dev_idx = self._devices.get(target_name)
+        self._recorder = self._create_microphone_recorder(dev_idx)
+        self._recorder.start()
+        self._active_mic_input_device_name = (
+            self._recorder.active_input_device_name or target_name
+        )
+        self._last_mic_device_signature = self._microphone_device_signature()
+        self._call_in_ui(
+            lambda name=self._active_mic_input_device_name, mode=self._mic_input_device_mode():
+            self._set_selected_device(name, persist=False, mode=mode)
+        )
+        logger.info(
+            "Microphone capture started (mode=%s configured=%s target=%s active=%s index=%s)",
+            self._mic_input_device_mode(),
+            self._configured_mic_input_device_name(),
+            target_name,
+            self._active_mic_input_device_name,
+            dev_idx,
+        )
+
+    def _stop_microphone_capture(self) -> None:
+        self._mic_in_speech = False
+        self._reset_streaming_state(MIC_SOURCE)
+        if self._recorder:
+            self._recorder.stop()
+            self._recorder = None
+        logger.info("Microphone capture stopped (active=%s)", self._active_mic_input_device_name)
+        self._active_mic_input_device_name = None
+
+    def _on_microphone_capture_start_failed(self, message: str) -> None:
+        logger.warning("Microphone capture start/restart failed: %s", message)
+        self._set_bottom(message)
+
+    def _restart_microphone_capture(self, reason: str) -> None:
+        if self._destroying or not self._running or self._mic_recovery_in_progress:
+            return
+        logger.warning("Restarting microphone capture (reason=%s)", reason)
+        self._mic_recovery_in_progress = True
+        try:
+            self._stop_microphone_capture()
+            self._start_microphone_capture()
+            current_name = self._active_mic_input_device_name or self._copy("mic_device_none")
+            if "configured microphone unavailable" in reason:
+                self._set_bottom(self._copy("mic_missing_fallback_notice", name=current_name))
+            else:
+                self._set_bottom(self._copy("mic_auto_switch_notice", name=current_name))
+            self._refresh_runtime_status()
+        except Exception as exc:
+            failure = str(exc).strip() or self._copy("mic_runtime_stopped")
+            self._on_microphone_capture_start_failed(failure)
+        finally:
+            self._mic_recovery_in_progress = False
+
+    def _schedule_mic_audio_watch(self, delay_ms: int = 2500) -> None:
+        if self._destroying:
+            return
+        if self._mic_audio_watch_after_id is not None:
+            try:
+                self.after_cancel(self._mic_audio_watch_after_id)
+            except Exception:
+                pass
+        self._mic_audio_watch_after_id = self.after(delay_ms, self._poll_mic_audio_watch)
+
+    def _poll_mic_audio_watch(self) -> None:
+        self._mic_audio_watch_after_id = None
+        if self._destroying:
+            return
+
+        try:
+            previous = self._last_mic_device_signature
+            signature = self._microphone_device_signature()
+            self._last_mic_device_signature = signature
+            _, default_name, mode, configured_name, resolved_name = signature
+            if resolved_name != self._device_var.get():
+                self._set_selected_device(resolved_name, persist=False, mode=mode)
+
+            if not self._running:
+                return
+
+            recorder = self._recorder
+            if recorder is None and not self._mic_recovery_in_progress:
+                self._restart_microphone_capture("microphone recorder missing while running")
+                return
+            if recorder is not None and not recorder.is_running:
+                self._restart_microphone_capture("microphone recorder stopped unexpectedly")
+                return
+
+            active_norm = self._normalize_audio_device_name(self._active_mic_input_device_name or "")
+            resolved_norm = self._normalize_audio_device_name(resolved_name or "")
+            if previous is None:
+                return
+
+            previous_default = previous[1]
+            previous_resolved = previous[4]
+            if mode == "auto":
+                if resolved_norm and resolved_norm != active_norm and (
+                    previous_default != default_name
+                    or self._normalize_audio_device_name(previous_resolved or "") != resolved_norm
+                ):
+                    logger.info(
+                        "Detected default microphone change (previous_default=%s current_default=%s active=%s resolved=%s)",
+                        previous_default,
+                        default_name,
+                        self._active_mic_input_device_name,
+                        resolved_name,
+                    )
+                    self._restart_microphone_capture("system default microphone changed")
+                    return
+            else:
+                configured_exists = bool(configured_name and configured_name in self._devices)
+                if not configured_exists and resolved_norm and resolved_norm != active_norm:
+                    logger.warning(
+                        "Configured microphone is unavailable, falling back (configured=%s fallback=%s)",
+                        configured_name,
+                        resolved_name,
+                    )
+                    self._restart_microphone_capture("configured microphone unavailable")
+                    return
+        except Exception:
+            logger.exception("Microphone device watch failed")
+        finally:
+            if not self._destroying:
+                self._schedule_mic_audio_watch()
+
     def _toggle_listening(self):
         if self._running:
             self._stop()
@@ -2837,6 +3534,7 @@ class MainWindow(ctk.CTk):
     def _start(self):
         self._set_status(self._t("starting"), ACCENT)
         self._start_btn.configure(state="disabled", text=self._t("starting"))
+        logger.info("Start requested")
         self._listen_session += 1
         self._reset_streaming_state()
         self._mic_in_speech = False
@@ -2845,64 +3543,56 @@ class MainWindow(ctk.CTk):
         self._last_mic_result_at = 0.0
         self._recent_mic_texts.clear()
         self._recent_listen_texts.clear()
+        self._last_listen_result_at = 0.0
+        self._last_listen_diagnostic_log_at = 0.0
         with self._translation_state_lock:
             self._active_translation_jobs = 0
         self._clear_avatar_error()
-        self._drain_queue(self._partial_task_queue)
-        self._drain_queue(self._final_task_queue)
-        dev_name = self._device_var.get()
-        dev_idx = self._devices.get(dev_name)
-        threading.Thread(target=self._init_and_run, args=(dev_idx,), daemon=True).start()
+        for work_queue in (
+            *self._partial_task_queues.values(),
+            *self._final_task_queues.values(),
+        ):
+            self._drain_queue(work_queue)
+        threading.Thread(target=self._init_and_run, daemon=True).start()
 
-    def _init_and_run(self, dev_idx):
+    def _init_and_run(self):
         try:
             if self._listening_requires_translation():
+                logger.info("Initializing translator for listening")
+                translator_started_at = time.monotonic()
                 try:
                     self._translator = create_translator(self._config)
                 except ValueError:
                     raise RuntimeError(self._t("listen_requires_api"))
+                logger.info(
+                    "Translator initialized in %.0f ms",
+                    (time.monotonic() - translator_started_at) * 1000.0,
+                )
             else:
                 self._translator = None
+            mic_asr_started_at = time.monotonic()
             self._asr.load(
                 progress_callback=lambda event: self._call_in_ui(
                     lambda e=event: self._handle_model_progress(e)
                 )
             )
-            if self._listen_feature_configured():
-                self._listen_asr.load()
-            self._sender = self._create_sender()
-            audio_cfg = self._config.get("audio", {})
-            streaming_cfg = self._streaming_config()
-            self._recorder = AudioRecorder(
-                on_segment=lambda audio: self._on_audio_segment(audio, MIC_SOURCE),
-                on_chunk=lambda audio: self._on_audio_chunk(audio, MIC_SOURCE),
-                sample_rate=audio_cfg.get("sample_rate", 16000),
-                frame_duration_ms=audio_cfg.get("frame_duration_ms", 30),
-                vad_sensitivity=audio_cfg.get("vad_sensitivity", 2),
-                silence_threshold_s=audio_cfg.get("vad_silence_threshold", 0.8),
-                vad_speech_ratio=audio_cfg.get("vad_speech_ratio", 0.72),
-                vad_activation_threshold_s=audio_cfg.get("vad_activation_threshold_s", 0.24),
-                vad_min_rms=audio_cfg.get("vad_min_rms", 0.012),
-                min_segment_s=audio_cfg.get("min_segment_s", 0.45),
-                partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
-                max_segment_s=audio_cfg.get("max_segment_s", 12.0),
-                denoise_strength=audio_cfg.get("denoise_strength", 0.0),
-                input_device=dev_idx,
-                on_vad_state=lambda state: self._on_source_vad_state(MIC_SOURCE, state),
-                chunk_interval_ms=streaming_cfg.get("chunk_interval_ms", 250),
-                chunk_window_s=streaming_cfg.get("chunk_window_s", 1.6),
-                ring_buffer_s=streaming_cfg.get("ring_buffer_s", 4.0),
-                recent_speech_hold_s=streaming_cfg.get("recent_speech_hold_s", 0.8),
+            logger.info(
+                "Microphone ASR ready in %.0f ms",
+                (time.monotonic() - mic_asr_started_at) * 1000.0,
             )
-            self._recorder.start()
+            if self._listen_feature_configured():
+                listen_asr_started_at = time.monotonic()
+                self._listen_asr.load()
+                logger.info(
+                    "Desktop listen ASR ready in %.0f ms",
+                    (time.monotonic() - listen_asr_started_at) * 1000.0,
+                )
+            self._sender = self._create_sender()
+            self._start_microphone_capture()
             if self._listen_feature_configured():
                 try:
                     self._start_listen()
                 except Exception as exc:
-                    self._desktop_capture_enabled = False
-                    self._desktop_capture_config()["enabled"] = False
-                    self._call_in_ui(self._refresh_desktop_capture_button)
-                    self._call_in_ui(self._schedule_config_save)
                     self._call_in_ui(
                         lambda m=str(exc): self._on_desktop_capture_start_failed(m)
                     )
@@ -2930,10 +3620,12 @@ class MainWindow(ctk.CTk):
                 self._sender = None
             self._running = False
             msg = str(e)
+            logger.exception("Failed to initialize listening pipeline")
             self._call_in_ui(lambda: self._on_start_error(msg))
 
     def _stop(self):
         self._running = False
+        logger.info("Stop requested")
         self._reset_streaming_state()
         self._mic_in_speech = False
         self._desktop_in_speech = False
@@ -2941,17 +3633,20 @@ class MainWindow(ctk.CTk):
         self._last_mic_result_at = 0.0
         self._recent_mic_texts.clear()
         self._recent_listen_texts.clear()
+        self._last_listen_result_at = 0.0
+        self._last_listen_diagnostic_log_at = 0.0
         with self._translation_state_lock:
             self._active_translation_jobs = 0
-        self._drain_queue(self._partial_task_queue)
-        self._drain_queue(self._final_task_queue)
+        for work_queue in (
+            *self._partial_task_queues.values(),
+            *self._final_task_queues.values(),
+        ):
+            self._drain_queue(work_queue)
         if self._listen_recorder:
             self._listen_recorder.stop()
             self._listen_recorder = None
         self._listen_running = False
-        if self._recorder:
-            self._recorder.stop()
-            self._recorder = None
+        self._stop_microphone_capture()
         self._sync_all_avatar_params(force=True)
         if self._sender:
             self._sender.close()
@@ -2964,6 +3659,12 @@ class MainWindow(ctk.CTk):
             self._set_bottom(self._t("model_ready"))
 
     def _on_started(self):
+        logger.info(
+            "Listening started successfully (mic=%s desktop_enabled=%s desktop_running=%s)",
+            self._active_mic_input_device_name,
+            self._desktop_capture_enabled,
+            self._listen_running,
+        )
         self._refresh_runtime_status()
         self._sync_all_avatar_params(force=True)
         self._refresh_start_button()
@@ -2971,6 +3672,7 @@ class MainWindow(ctk.CTk):
         self._set_bottom(self._t("model_ready"))
 
     def _on_start_error(self, msg: str):
+        logger.error("Listening failed to start: %s", msg)
         self._set_status(self._t("status_error"), DANGER)
         self._refresh_start_button()
         self._hide_bottom_progress()
@@ -2985,13 +3687,35 @@ class MainWindow(ctk.CTk):
         self._reset_streaming_state(source)
         asr_lang = self._listen_asr_language() if source == DESKTOP_SOURCE else self._current_asr_lang
         selected_src_lang = self._listen_source_language() if source == DESKTOP_SOURCE else self._current_src_lang
-        self._enqueue_latest(
-            self._final_task_queue,
+        queue_result = self._enqueue_latest(
+            self._final_task_queue_for_source(source),
             (audio, asr_lang, selected_src_lang, self._listen_session, source),
         )
+        if queue_result != "enqueued":
+            logger.debug(
+                "Final queue update result=%s source=%s session=%s",
+                queue_result,
+                source,
+                self._listen_session,
+            )
 
     def _open_settings(self):
-        SettingsWindow(self, self._config, on_save=self._on_config_saved)
+        if self._settings_window is not None:
+            try:
+                if self._settings_window.winfo_exists():
+                    self._sync_settings_window_vrc_listen_state()
+                    self._settings_window.deiconify()
+                    self._settings_window.lift()
+                    return
+            except Exception:
+                self._settings_window = None
+        self._settings_window = SettingsWindow(
+            self,
+            self._config,
+            on_save=self._on_config_saved,
+            on_close=self._on_settings_window_closed,
+        )
+        self._sync_settings_window_vrc_listen_state()
 
     def _check_for_update(self) -> None:
         def _on_update_available(version: str, url: str, notes: str) -> None:
@@ -3036,10 +3760,16 @@ class MainWindow(ctk.CTk):
         source_text = self._src_text
         target_text = self._last_tgt_text
 
+        if self._floating_window is not None:
+            try:
+                self._floating_window.destroy()
+            except Exception:
+                pass
+            self._floating_window = None
+
         for child in list(self.winfo_children()):
             child.destroy()
 
-        self._floating_window = None
         self._char_label = None
         self._src_input = None
         self._tgt_output = None
@@ -3279,13 +4009,19 @@ class MainWindow(ctk.CTk):
         self._translator = None
         self._desktop_capture_enabled = bool(
             self._vrc_listen_config().get("enabled", False)
-        ) and self._listen_translation_available()
+        )
         self._listen_overlay_enabled = bool(
             self._vrc_listen_config().get("show_overlay", False)
         )
         self._mic_in_speech = False
         self._desktop_in_speech = False
         self._listen_running = False
+        self._listen_transitioning = False
+        self._listen_toggle_cooldown_until = 0.0
+        self._active_mic_input_device_name = None
+        self._last_mic_device_signature = None
+        self._last_listen_result_at = 0.0
+        self._last_listen_diagnostic_log_at = 0.0
         with self._translation_state_lock:
             self._active_translation_jobs = 0
         with self._merge_lock:
@@ -3332,6 +4068,7 @@ class MainWindow(ctk.CTk):
         if self._destroying:
             return
         self._destroying = True
+        logger.info("Application shutdown requested")
 
         if self._config_save_after_id is not None:
             try:
@@ -3345,6 +4082,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._desktop_audio_watch_after_id = None
+        if self._mic_audio_watch_after_id is not None:
+            try:
+                self.after_cancel(self._mic_audio_watch_after_id)
+            except Exception:
+                pass
+            self._mic_audio_watch_after_id = None
 
         try:
             config_manager.save_config(self._config)
@@ -3372,10 +4115,16 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
             self._floating_window = None
+        if self._settings_window is not None:
+            try:
+                self._settings_window.destroy()
+            except Exception:
+                pass
+            self._settings_window = None
 
         for work_queue in (
-            self._partial_task_queue,
-            self._final_task_queue,
+            *self._partial_task_queues.values(),
+            *self._final_task_queues.values(),
         ):
             self._drain_queue(work_queue)
             try:
@@ -3384,3 +4133,4 @@ class MainWindow(ctk.CTk):
                 pass
 
         super().destroy()
+        logger.info("Application shutdown complete")

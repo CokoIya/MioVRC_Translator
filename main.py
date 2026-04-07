@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -16,13 +17,26 @@ def main() -> int:
     if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1":
         return _run_selftest()
 
+    from src.utils.logger import setup_logging
+    log_file = setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Application startup requested")
+    logger.info("Log file ready at %s", log_file)
+
     from src.ui.main_window import MainWindow
     from src.utils import config_manager
 
-    config = config_manager.load_config()
-    app = MainWindow(config)
-    app.mainloop()
-    return 0
+    try:
+        config = config_manager.load_config()
+        logger.info("Configuration loaded successfully")
+        app = MainWindow(config)
+        logger.info("Main window initialized")
+        app.mainloop()
+        logger.info("Application closed normally")
+        return 0
+    except Exception:
+        logger.exception("Fatal error during application startup/runtime")
+        raise
 
 
 if __name__ == "__main__":

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import sys
 import uuid
+import logging
 from typing import Iterable
 
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 
 def default_output_device_name() -> str | None:
@@ -429,6 +432,38 @@ if sys.platform == "win32":
                 return clean
         return None
 
+    def inspect_process_output_state(process_names: Iterable[str]) -> dict[str, object]:
+        names = [str(name).strip() for name in process_names if str(name).strip()]
+        process_ids = _list_process_ids(names)
+        matches = _device_matches_for_process_ids(process_ids)
+        active_device = next(
+            (str(name).strip() for name, is_active in matches if is_active and str(name).strip()),
+            None,
+        )
+        if active_device is None:
+            active_device = next(
+                (str(name).strip() for name, _ in matches if str(name).strip()),
+                None,
+            )
+        snapshot = {
+            "process_names": names,
+            "process_ids": sorted(process_ids),
+            "is_running": bool(process_ids),
+            "default_output_device": default_output_device_name(),
+            "active_device": active_device,
+            "has_active_audio_session": any(bool(is_active) for _, is_active in matches),
+            "matches": [
+                {
+                    "device_name": str(name).strip(),
+                    "is_active": bool(is_active),
+                }
+                for name, is_active in matches
+                if str(name).strip()
+            ],
+        }
+        logger.debug("Process output inspection: %s", snapshot)
+        return snapshot
+
     def is_process_running(process_names: Iterable[str]) -> bool:
         return bool(_list_process_ids(process_names))
 
@@ -437,6 +472,18 @@ else:
 
     def detect_process_output_device_name(process_names: Iterable[str]) -> str | None:
         return None
+
+    def inspect_process_output_state(process_names: Iterable[str]) -> dict[str, object]:
+        names = [str(name).strip() for name in process_names if str(name).strip()]
+        return {
+            "process_names": names,
+            "process_ids": [],
+            "is_running": False,
+            "default_output_device": default_output_device_name(),
+            "active_device": None,
+            "has_active_audio_session": False,
+            "matches": [],
+        }
 
     def is_process_running(process_names: Iterable[str]) -> bool:
         return False

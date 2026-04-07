@@ -3,6 +3,7 @@ import os
 import shutil
 import threading
 import time
+import logging
 from pathlib import Path
 
 from src.utils.app_paths import resource_base_dirs, writable_app_dir
@@ -10,6 +11,7 @@ from src.utils.ui_language_detection import bootstrap_ui_language
 from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
 _SAVE_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _config_path() -> Path:
@@ -96,6 +98,7 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "self_suppress": False,
         "self_suppress_seconds": 0.65,
         "show_overlay": False,
+        "send_to_chatbox": True,
     }
 
     for key, value in defaults.items():
@@ -175,6 +178,42 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if "show_overlay" not in vrc_cfg:
         vrc_cfg["show_overlay"] = False
         changed = True
+    if "send_to_chatbox" not in vrc_cfg:
+        vrc_cfg["send_to_chatbox"] = True
+        changed = True
+    return changed
+
+
+def _ensure_audio_device_config(config: dict, loaded: dict | None = None) -> bool:
+    changed = False
+    audio_cfg = config.get("audio", {})
+    if not isinstance(audio_cfg, dict):
+        return False
+
+    loaded = loaded if isinstance(loaded, dict) else {}
+    loaded_audio_cfg = loaded.get("audio", {})
+    if not isinstance(loaded_audio_cfg, dict):
+        loaded_audio_cfg = {}
+
+    input_device = audio_cfg.get("input_device")
+    if input_device == "":
+        audio_cfg["input_device"] = None
+        input_device = None
+        changed = True
+
+    configured_input = str(input_device or "").strip() or None
+    if configured_input is None and audio_cfg.get("input_device") is not None:
+        audio_cfg["input_device"] = None
+        changed = True
+
+    mode = str(audio_cfg.get("input_device_mode", "")).strip().lower()
+    if mode not in {"auto", "fixed"}:
+        if "input_device_mode" in loaded_audio_cfg:
+            normalized_mode = "fixed" if configured_input else "auto"
+        else:
+            normalized_mode = "fixed" if configured_input else "auto"
+        audio_cfg["input_device_mode"] = normalized_mode
+        changed = True
     return changed
 
 
@@ -224,6 +263,7 @@ def _ensure_asr_config(config: dict) -> bool:
 
 def load_config() -> dict:
     config_path = _config_path()
+    logger.info("Loading configuration from %s", config_path)
     created_new = False
     recovered_invalid = False
     if not config_path.exists():
@@ -248,12 +288,20 @@ def load_config() -> dict:
         merged = dict(defaults) if isinstance(defaults, dict) else {}
         config_changed = True
     config_changed = _ensure_vrc_listen_config(merged, loaded) or config_changed
+    if _ensure_audio_device_config(merged, loaded):
+        config_changed = True
     if _ensure_translation_config(merged):
         config_changed = True
     if _ensure_asr_config(merged):
         config_changed = True
     if bootstrap_ui_language(merged, prefer_auto=created_new or recovered_invalid) or config_changed:
         save_config(merged)
+    logger.info(
+        "Configuration ready (created_new=%s recovered_invalid=%s changed=%s)",
+        created_new,
+        recovered_invalid,
+        config_changed,
+    )
     return merged
 
 
@@ -270,6 +318,7 @@ def save_config(config: dict) -> None:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp_path, config_path)
+            logger.debug("Configuration saved to %s", config_path)
         finally:
             if temp_path.exists():
                 try:

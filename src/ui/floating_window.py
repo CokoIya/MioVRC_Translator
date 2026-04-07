@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
+import logging
 from typing import Callable
 
 import customtkinter as ctk
 
 from src.utils.i18n import tr
 from .window_effects import apply_window_icon
+
+logger = logging.getLogger(__name__)
 
 WINDOW_BG = "#f6f8fb"
 CARD_BG = "#ffffff"
@@ -120,6 +123,13 @@ class FloatingWindow(ctk.CTkToplevel):
         self._on_close = on_close
         self._last_layout_width = 0
         self._layout_refresh_after_id: str | None = None
+        self._history_widgets: dict[int, dict[str, object]] = {}
+        self._empty_history_label: ctk.CTkLabel | None = None
+        self._pending_scroll_after_id: str | None = None
+        self._full_refresh_count = 0
+        self._append_update_count = 0
+        self._selection_update_count = 0
+        self._wrap_update_count = 0
 
         self.title(tr(self._ui_lang, "floating_window_title"))
         apply_window_icon(self)
@@ -306,7 +316,7 @@ class FloatingWindow(ctk.CTkToplevel):
                 self.after_cancel(self._layout_refresh_after_id)
             except Exception:
                 pass
-        self._layout_refresh_after_id = self.after(60, self._refresh_history)
+        self._layout_refresh_after_id = self.after(60, self._apply_layout_update)
 
     def _on_opacity_change(self, value: float) -> None:
         self.attributes("-alpha", float(value))
@@ -373,6 +383,33 @@ class FloatingWindow(ctk.CTkToplevel):
         width = max(int(self.winfo_width() or 0), self._popup_size[0])
         self._header_subtitle_label.configure(wraplength=max(260, width - 140))
         self._selection_preview_label.configure(wraplength=max(220, width - 160))
+        self._selection_hint_label.configure(wraplength=max(180, width - 240))
+
+    def _apply_layout_update(self) -> None:
+        self._layout_refresh_after_id = None
+        self._update_wraplengths()
+        self._update_history_wraplengths()
+
+    def _history_canvas(self):
+        return getattr(self._scroll_frame, "_parent_canvas", None)
+
+    def _is_near_bottom(self) -> bool:
+        canvas = self._history_canvas()
+        if canvas is None:
+            return True
+        try:
+            first, last = canvas.yview()
+        except Exception:
+            return True
+        return last >= 0.96 or (last - first) >= 0.99
+
+    def _schedule_scroll_to_bottom(self) -> None:
+        if self._pending_scroll_after_id is not None:
+            try:
+                self.after_cancel(self._pending_scroll_after_id)
+            except Exception:
+                pass
+        self._pending_scroll_after_id = self.after(16, self._scroll_to_bottom)
 
     def _update_actions(self) -> None:
         entry = self._selected_entry()
@@ -399,120 +436,223 @@ class FloatingWindow(ctk.CTkToplevel):
         widget.bind("<Button-1>", lambda _event, value=entry_id: self._select_history_entry(value))
 
     def _select_history_entry(self, entry_id: int) -> None:
+        previous_id = self._selected_history_id
         if self._selected_history_id == entry_id:
             self._selected_history_id = None
         else:
             self._selected_history_id = entry_id
-        self._refresh_history()
+        self._update_selection_ui(previous_id, self._selected_history_id)
 
     def _refresh_history(self) -> None:
         self._layout_refresh_after_id = None
         self._update_wraplengths()
-        for widget in self._scroll_frame.winfo_children():
-            widget.destroy()
+        should_scroll = (not self._visible) or self._is_near_bottom()
+        self._full_refresh_count += 1
+        logger.debug("FloatingWindow full refresh #%s", self._full_refresh_count)
+        self._clear_history_widgets()
 
         if self._selected_entry() is None:
             self._selected_history_id = None
 
         if not self._history:
-            lbl = ctk.CTkLabel(
+            self._empty_history_label = ctk.CTkLabel(
                 self._scroll_frame,
                 text=self._copy("history_empty"),
                 text_color=TEXT_SEC,
                 font=ctk.CTkFont(size=12),
             )
-            lbl.grid(row=0, column=0, pady=20)
+            self._empty_history_label.grid(row=0, column=0, pady=20)
             self._update_header()
             self._update_actions()
             return
 
-        wraplength = self._bubble_wraplength()
         for idx, entry in enumerate(self._history):
-            source = str(entry.get("source", "listen"))
-            color = SOURCE_COLORS.get(source, TEXT_PRI)
-            source_title = self._source_title(source)
-            time_label = str(entry.get("time_label", "") or "")
-            can_resend = self._entry_can_resend(entry)
-            is_selected = entry.get("id") == self._selected_history_id
-            side = self._entry_side(entry)
-
-            lane = ctk.CTkFrame(self._scroll_frame, fg_color="transparent")
-            lane.grid(row=idx, column=0, sticky="ew", padx=8, pady=4)
-            lane.columnconfigure(0, weight=1)
-            lane.columnconfigure(1, weight=1)
-
-            bubble = ctk.CTkFrame(
-                lane,
-                fg_color=HISTORY_ITEM_SELECTED_BG if is_selected else self._bubble_fill(source),
-                corner_radius=20,
-                border_width=1,
-                border_color="#dbe4ef" if is_selected else CARD_BORDER,
-            )
-            bubble.columnconfigure(0, weight=1)
-            bubble_width_pad = (4, 44) if side == "left" else (44, 4)
-            bubble.grid(
-                row=0,
-                column=0 if side == "left" else 1,
-                sticky="w" if side == "left" else "e",
-                padx=bubble_width_pad,
-            )
-
-            meta_row = ctk.CTkFrame(bubble, fg_color="transparent")
-            meta_row.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
-            meta_row.columnconfigure(0, weight=1)
-
-            meta_label = ctk.CTkLabel(
-                meta_row,
-                text=source_title,
-                text_color=color,
-                font=ctk.CTkFont(size=10, weight="bold"),
-                anchor="w" if side == "left" else "e",
-                justify="left" if side == "left" else "right",
-            )
-            time_text = ctk.CTkLabel(
-                meta_row,
-                text=time_label,
-                text_color=TEXT_SOFT,
-                font=ctk.CTkFont(size=10),
-                anchor="e" if side == "left" else "w",
-            )
-            if side == "left":
-                meta_label.grid(row=0, column=0, sticky="w")
-                time_text.grid(row=0, column=1, sticky="e", padx=(10, 0))
-            else:
-                time_text.grid(row=0, column=0, sticky="w")
-                meta_label.grid(row=0, column=1, sticky="e", padx=(10, 0))
-
-            text_label = ctk.CTkLabel(
-                bubble,
-                text=str(entry.get("text", "")),
-                text_color=TEXT_PRI,
-                font=ctk.CTkFont(size=13),
-                justify="left",
-                anchor="nw" if side == "left" else "ne",
-                wraplength=wraplength,
-            )
-            text_label.grid(
-                row=1,
-                column=0,
-                sticky="ew",
-                padx=12,
-                pady=(0, 10),
-            )
-
-            self._bind_select(lane, int(entry.get("id", 0)), can_resend)
-            self._bind_select(bubble, int(entry.get("id", 0)), can_resend)
-            self._bind_select(meta_label, int(entry.get("id", 0)), can_resend)
-            self._bind_select(time_text, int(entry.get("id", 0)), can_resend)
-            self._bind_select(text_label, int(entry.get("id", 0)), can_resend)
+            self._append_history_entry_ui(entry, idx)
 
         self._update_header()
         self._update_actions()
-        self._scroll_frame.after(60, self._scroll_to_bottom)
+        if should_scroll:
+            self._schedule_scroll_to_bottom()
+
+    def _clear_history_widgets(self) -> None:
+        for widgets in self._history_widgets.values():
+            lane = widgets.get("lane")
+            if lane is not None:
+                try:
+                    lane.destroy()
+                except Exception:
+                    pass
+        self._history_widgets.clear()
+        if self._empty_history_label is not None:
+            try:
+                self._empty_history_label.destroy()
+            except Exception:
+                pass
+            self._empty_history_label = None
+
+    def _append_history_entry_ui(self, entry: dict[str, object], row_index: int | None = None) -> None:
+        if self._empty_history_label is not None:
+            try:
+                self._empty_history_label.destroy()
+            except Exception:
+                pass
+            self._empty_history_label = None
+
+        entry_id = int(entry.get("id", 0))
+        if row_index is None:
+            row_index = max(len(self._history_widgets), 0)
+        source = str(entry.get("source", "listen"))
+        color = SOURCE_COLORS.get(source, TEXT_PRI)
+        source_title = self._source_title(source)
+        time_label = str(entry.get("time_label", "") or "")
+        can_resend = self._entry_can_resend(entry)
+        side = self._entry_side(entry)
+
+        lane = ctk.CTkFrame(self._scroll_frame, fg_color="transparent")
+        lane.grid(row=row_index, column=0, sticky="ew", padx=8, pady=4)
+        lane.columnconfigure(0, weight=1)
+        lane.columnconfigure(1, weight=1)
+
+        bubble = ctk.CTkFrame(
+            lane,
+            corner_radius=20,
+            border_width=1,
+        )
+        bubble.columnconfigure(0, weight=1)
+        bubble_width_pad = (4, 44) if side == "left" else (44, 4)
+        bubble.grid(
+            row=0,
+            column=0 if side == "left" else 1,
+            sticky="w" if side == "left" else "e",
+            padx=bubble_width_pad,
+        )
+
+        meta_row = ctk.CTkFrame(bubble, fg_color="transparent")
+        meta_row.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        meta_row.columnconfigure(0, weight=1)
+
+        meta_label = ctk.CTkLabel(
+            meta_row,
+            text=source_title,
+            text_color=color,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            anchor="w" if side == "left" else "e",
+            justify="left" if side == "left" else "right",
+        )
+        time_text = ctk.CTkLabel(
+            meta_row,
+            text=time_label,
+            text_color=TEXT_SOFT,
+            font=ctk.CTkFont(size=10),
+            anchor="e" if side == "left" else "w",
+        )
+        if side == "left":
+            meta_label.grid(row=0, column=0, sticky="w")
+            time_text.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        else:
+            time_text.grid(row=0, column=0, sticky="w")
+            meta_label.grid(row=0, column=1, sticky="e", padx=(10, 0))
+
+        text_label = ctk.CTkLabel(
+            bubble,
+            text=str(entry.get("text", "")),
+            text_color=TEXT_PRI,
+            font=ctk.CTkFont(size=13),
+            justify="left",
+            anchor="nw" if side == "left" else "ne",
+            wraplength=self._bubble_wraplength(),
+        )
+        text_label.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=12,
+            pady=(0, 10),
+        )
+
+        self._history_widgets[entry_id] = {
+            "lane": lane,
+            "bubble": bubble,
+            "meta_label": meta_label,
+            "time_label": time_text,
+            "text_label": text_label,
+            "source": source,
+            "can_resend": can_resend,
+            "row_index": row_index,
+        }
+        self._style_history_entry(entry_id)
+        self._bind_select(lane, entry_id, can_resend)
+        self._bind_select(bubble, entry_id, can_resend)
+        self._bind_select(meta_label, entry_id, can_resend)
+        self._bind_select(time_text, entry_id, can_resend)
+        self._bind_select(text_label, entry_id, can_resend)
+        self._append_update_count += 1
+        logger.debug("FloatingWindow append update #%s entry_id=%s", self._append_update_count, entry_id)
+
+    def _style_history_entry(self, entry_id: int) -> None:
+        widgets = self._history_widgets.get(entry_id)
+        if not widgets:
+            return
+        bubble = widgets.get("bubble")
+        source = str(widgets.get("source", "listen"))
+        is_selected = entry_id == self._selected_history_id
+        if bubble is not None:
+            bubble.configure(
+                fg_color=HISTORY_ITEM_SELECTED_BG if is_selected else self._bubble_fill(source),
+                border_color="#dbe4ef" if is_selected else CARD_BORDER,
+            )
+
+    def _update_selection_ui(self, previous_id: int | None, current_id: int | None) -> None:
+        if previous_id is not None:
+            self._style_history_entry(previous_id)
+        if current_id is not None:
+            self._style_history_entry(current_id)
+        self._selection_update_count += 1
+        logger.debug(
+            "FloatingWindow selection update #%s previous=%s current=%s",
+            self._selection_update_count,
+            previous_id,
+            current_id,
+        )
+        self._update_actions()
+
+    def _update_history_wraplengths(self) -> None:
+        wraplength = self._bubble_wraplength()
+        for widgets in self._history_widgets.values():
+            text_label = widgets.get("text_label")
+            if text_label is not None:
+                text_label.configure(wraplength=wraplength)
+        self._wrap_update_count += 1
+        logger.debug("FloatingWindow wrap update #%s wraplength=%s", self._wrap_update_count, wraplength)
+
+    def _remove_history_entry_ui(self, entry_id: int) -> None:
+        widgets = self._history_widgets.pop(entry_id, None)
+        if not widgets:
+            return
+        lane = widgets.get("lane")
+        if lane is not None:
+            try:
+                lane.destroy()
+            except Exception:
+                pass
+
+    def _reindex_history_rows(self) -> None:
+        for idx, entry in enumerate(self._history):
+            entry_id = int(entry.get("id", 0))
+            widgets = self._history_widgets.get(entry_id)
+            if not widgets:
+                continue
+            lane = widgets.get("lane")
+            if lane is not None:
+                lane.grid_configure(row=idx)
+            widgets["row_index"] = idx
 
     def _scroll_to_bottom(self) -> None:
+        self._pending_scroll_after_id = None
         try:
-            self._scroll_frame._parent_canvas.yview_moveto(1.0)
+            canvas = self._history_canvas()
+            if canvas is not None:
+                canvas.yview_moveto(1.0)
         except Exception:
             pass
 
@@ -549,7 +689,7 @@ class FloatingWindow(ctk.CTkToplevel):
         if not self._visible:
             self.deiconify()
             self._visible = True
-        self.lift()
+            self.lift()
 
     def add_history_entry(
         self,
@@ -561,21 +701,33 @@ class FloatingWindow(ctk.CTkToplevel):
         message = str(text or "").strip()
         if not message:
             return
+        should_scroll = (not self._visible) or self._is_near_bottom()
+        evicted_id: int | None = None
+        if len(self._history) == MAX_HISTORY and self._history:
+            evicted_id = int(self._history[0].get("id", 0))
         self._history_seq += 1
         if payload is None:
             payload = "" if source == "error" else message
-        self._history.append(
-            {
-                "id": self._history_seq,
-                "text": message,
-                "source": str(source or "listen"),
-                "payload": str(payload or "").strip(),
-                "time_label": datetime.now().strftime("%H:%M"),
-            }
-        )
+        entry = {
+            "id": self._history_seq,
+            "text": message,
+            "source": str(source or "listen"),
+            "payload": str(payload or "").strip(),
+            "time_label": datetime.now().strftime("%H:%M"),
+        }
+        self._history.append(entry)
+        if evicted_id is not None:
+            self._remove_history_entry_ui(evicted_id)
+            self._reindex_history_rows()
+            if self._selected_history_id == evicted_id:
+                self._selected_history_id = None
+        self._append_history_entry_ui(entry, len(self._history) - 1)
         if self._selected_entry() is None:
             self._selected_history_id = None
-        self._refresh_history()
+        self._update_header()
+        self._update_actions()
+        if should_scroll:
+            self._schedule_scroll_to_bottom()
 
     def reveal(self) -> None:
         if not self._visible:

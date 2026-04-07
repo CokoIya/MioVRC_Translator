@@ -6,11 +6,7 @@ import numpy as np
 
 
 class ChunkStreamer:
-    """按固定间隔从滑动窗口吐出 partial ASR chunk。
-
-    有语音活动时每隔 chunk_interval_ms 输出一段最近 chunk_window_s 的音频，
-    静音超过 recent_speech_hold_s 后停止输出并等下次激活。
-    """
+    """Emit partial-ASR chunks on a fixed cadence from a sliding audio window."""
 
     def __init__(
         self,
@@ -25,6 +21,12 @@ class ChunkStreamer:
         self._window_samples = max(int(sample_rate * chunk_window_s), self._interval_samples)
         self._buffer_limit = max(int(sample_rate * ring_buffer_s), self._window_samples)
         self._recent_speech_hold_samples = max(int(sample_rate * recent_speech_hold_s), 0)
+        # Emit the first partial chunk earlier than a full window to improve
+        # time-to-first-text, while later chunks still use the full window.
+        self._warmup_samples = max(
+            self._interval_samples,
+            min(self._window_samples, int(round(self._window_samples * 0.6))),
+        )
 
         self._frames: collections.deque[np.ndarray] = collections.deque()
         self._buffered_samples = 0
@@ -53,16 +55,16 @@ class ChunkStreamer:
 
         self._trim_buffer()
         if not self._is_recently_active():
-            # 静音太久，重置发射锚点，下次激活时重新触发首帧
+            # Reset the cadence after a long silence so the next activation can
+            # emit a fresh warmup chunk quickly.
             self._last_emit_sample = 0
             return []
 
         emitted: list[np.ndarray] = []
         if self._last_emit_sample == 0:
-            # 首次发射：等缓冲够一个完整窗口再开始
-            if self._buffered_samples < self._window_samples:
+            if self._buffered_samples < self._warmup_samples:
                 return []
-            emitted.append(self._slice_last(self._window_samples))
+            emitted.append(self._slice_last(min(self._buffered_samples, self._window_samples)))
             self._last_emit_sample = self._total_samples
             return emitted
 

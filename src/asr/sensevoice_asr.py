@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sys
 import threading
+import logging
 from typing import Optional
 
 import numpy as np
@@ -13,6 +14,7 @@ from src.asr.model_registry import get_asr_engine_spec
 from src.asr.text_corrections import LayeredASRCorrector
 
 _DEFAULT_SPEC = get_asr_engine_spec("sensevoice-small")
+logger = logging.getLogger(__name__)
 
 _LANGUAGE_MAP = {
     "zh": "zh",
@@ -93,9 +95,16 @@ class SenseVoiceASR:
         with self._lock:
             if self._model is not None:
                 return
+            logger.info(
+                "Loading SenseVoice ASR (model_id=%s revision=%s device=%s)",
+                self.model_id,
+                self.model_revision,
+                self.device,
+            )
             try:
                 AutoModel, rich_transcription_postprocess = _load_runtime_symbols()
             except (ImportError, OSError) as exc:
+                logger.exception("SenseVoice runtime dependency load failed")
                 raise RuntimeError(_dependency_error_message(exc)) from exc
 
             spec = self._runtime_spec()
@@ -117,6 +126,7 @@ class SenseVoiceASR:
             )
             self._postprocess = rich_transcription_postprocess
             _emit_progress(progress_callback, stage="ready", message="ready")
+            logger.info("SenseVoice ASR loaded successfully from %s", model_path)
 
     def transcribe(
         self,

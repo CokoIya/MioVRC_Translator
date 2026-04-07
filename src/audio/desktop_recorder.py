@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
+import time
 from typing import Callable, Optional
 
 import numpy as np
@@ -9,6 +11,8 @@ import sounddevice as sd
 
 from .recorder import AudioRecorder
 from .vad_detector import SileroVADDetector
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +77,8 @@ def list_output_devices() -> list[dict[str, object]]:
                 continue
             seen.add(name)
             result.append({"name": name, "is_default": name == default_name})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to enumerate WASAPI output devices: %s", exc)
     finally:
         if p is not None:
             try:
@@ -224,6 +228,12 @@ class DesktopAudioRecorder(AudioRecorder):
         self._loopback_device_info: Optional[dict] = None
         self._on_runtime_error = on_runtime_error
         self._last_error: str | None = None
+        self._stats_lock = threading.Lock()
+        self._last_frame_at = 0.0
+        self._last_non_silent_at = 0.0
+        self._last_rms = 0.0
+        self._total_frames = 0
+        self._non_silent_frames = 0
 
     @property
     def is_running(self) -> bool:
@@ -239,6 +249,7 @@ class DesktopAudioRecorder(AudioRecorder):
         if not message:
             message = exc.__class__.__name__ if isinstance(exc, BaseException) else "Unknown error"
         self._last_error = message
+        logger.warning("DesktopAudioRecorder runtime error: %s", message)
         if self._on_runtime_error is not None:
             try:
                 self._on_runtime_error(message)
@@ -270,6 +281,12 @@ class DesktopAudioRecorder(AudioRecorder):
         self._capture_channels = min(channels, 2)
         self._capture_dtype = "float32"
         self._last_error = None
+        with self._stats_lock:
+            self._last_frame_at = 0.0
+            self._last_non_silent_at = 0.0
+            self._last_rms = 0.0
+            self._total_frames = 0
+            self._non_silent_frames = 0
         self._clear_frame_queue()
         self._denoiser.reset()
         if self._chunk_streamer is not None:
@@ -279,6 +296,12 @@ class DesktopAudioRecorder(AudioRecorder):
         self._worker_thread.start()
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
+        logger.info(
+            "DesktopAudioRecorder started (requested_output=%s loopback_device=%s native_rate=%s)",
+            self._output_device_name or "auto",
+            self._loopback_device_info.get("name") if self._loopback_device_info else None,
+            native_rate,
+        )
 
     def stop(self):
         self._running = False
@@ -293,6 +316,35 @@ class DesktopAudioRecorder(AudioRecorder):
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
         self._loopback_device_info = None
+        logger.info("DesktopAudioRecorder stopped (requested_output=%s)", self._output_device_name or "auto")
+
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        with self._stats_lock:
+            return {
+                "last_frame_at": self._last_frame_at,
+                "last_non_silent_at": self._last_non_silent_at,
+                "last_rms": self._last_rms,
+                "total_frames": self._total_frames,
+                "non_silent_frames": self._non_silent_frames,
+                "requested_output_device": self._output_device_name or None,
+                "loopback_device": (
+                    str(self._loopback_device_info.get("name", "")).strip()
+                    if self._loopback_device_info is not None
+                    else None
+                ),
+                "last_error": self._last_error,
+            }
+
+    def _update_capture_stats(self, arr: np.ndarray) -> None:
+        now = time.monotonic()
+        rms = float(np.sqrt(np.mean(np.square(arr, dtype=np.float64)))) if arr.size else 0.0
+        with self._stats_lock:
+            self._last_frame_at = now
+            self._last_rms = rms
+            self._total_frames += 1
+            if rms >= 0.002:
+                self._last_non_silent_at = now
+                self._non_silent_frames += 1
 
     # ------------------------------------------------------------------
     # Capture loop — runs in a dedicated daemon thread
@@ -336,6 +388,7 @@ class DesktopAudioRecorder(AudioRecorder):
                 arr = np.frombuffer(data, dtype=np.float32)
                 if arr.size == 0:
                     continue
+                self._update_capture_stats(arr)
                 # Reshape to (frames, channels) so _prepare_frame can mix down
                 frame = arr.reshape(-1, channels) if channels > 1 else arr
                 self._enqueue_frame(frame.copy())
@@ -384,12 +437,22 @@ class DesktopAudioRecorder(AudioRecorder):
         sd_default = _default_output_device_name_from_sounddevice()
         if sd_default and sd_default not in preferred_names:
             preferred_names.append(sd_default)
+        logger.info(
+            "Resolving loopback device (requested_output=%s preferred_names=%s)",
+            self._output_device_name or None,
+            preferred_names,
+        )
 
         # Enumerate all loopback devices (PyAudioWPatch extension)
         try:
             all_loopbacks: list[dict] = list(p.get_loopback_device_info_generator())
         except Exception:
             all_loopbacks = []
+        logger.debug(
+            "Enumerated %s loopback devices: %s",
+            len(all_loopbacks),
+            [str(lb.get("name", "")).strip() for lb in all_loopbacks],
+        )
 
         if not all_loopbacks:
             raise RuntimeError(
@@ -404,12 +467,14 @@ class DesktopAudioRecorder(AudioRecorder):
             for lb in all_loopbacks:
                 lb_name = str(lb.get("name", "")).strip().lower()
                 if pref_lower in lb_name:
+                    logger.info("Matched loopback device by substring: %s", lb.get("name"))
                     return lb
 
         # Pass 2: fuzzy match for edge cases (e.g. truncated or differently formatted names)
         for pref in preferred_names:
             matched = _fuzzy_match_loopback(pref, all_loopbacks)
             if matched is not None:
+                logger.info("Matched loopback device by fuzzy match: %s", matched.get("name"))
                 return matched
 
         # Pass 3: WASAPI default output device's loopback
@@ -421,6 +486,7 @@ class DesktopAudioRecorder(AudioRecorder):
                 for lb in all_loopbacks:
                     lb_name = str(lb.get("name", "")).strip().lower()
                     if default_name and default_name in lb_name:
+                        logger.info("Matched loopback device from WASAPI default output: %s", lb.get("name"))
                         return lb
             except Exception:
                 pass

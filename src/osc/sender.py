@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import queue
 import threading
 import time
@@ -12,6 +13,7 @@ MAX_CHATBOX_CHARS = 144
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
 DUPLICATE_WINDOW_S = 1.5
 SEND_QUEUE_MAXSIZE = 32
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,12 @@ class VRCOSCSender:
             except Exception as exc:
                 with self._state_lock:
                     self._last_error = str(exc).strip() or exc.__class__.__name__
+                logger.warning(
+                    "OSC send failed (address=%s rate_limited=%s): %s",
+                    payload.address,
+                    payload.rate_limited,
+                    exc,
+                )
 
     def _enqueue_payload(self, payload: _QueuedOSCMessage | None) -> None:
         if payload is not None:

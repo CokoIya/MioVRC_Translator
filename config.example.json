@@ -1,5 +1,6 @@
 {
   "audio": {
+    "input_device_mode": "auto",
     "input_device": null,
     "desktop_capture": {
       "enabled": false,
@@ -98,7 +99,8 @@
     "tail_silence_s": 1.2,
     "self_suppress": false,
     "self_suppress_seconds": 0.65,
-    "show_overlay": false
+    "show_overlay": false,
+    "send_to_chatbox": true
   },
   "osc": {
     "send_host": "127.0.0.1",

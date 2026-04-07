@@ -437,6 +437,26 @@ WINDOW_COPY.update(
             "en": "Enable VRC Listen",
             "ja": "VRC 音声リスンを有効化",
         },
+        "vrc_listen_overlay": {
+            "zh-CN": "显示悬浮窗",
+            "en": "Show Overlay",
+            "ja": "オーバーレイを表示",
+        },
+        "vrc_listen_overlay_hint": {
+            "zh-CN": "这里管的是默认显示状态。主页上的“悬浮窗”按钮会继续保留，之后仍然可以随时临时开关。",
+            "en": "This controls the default overlay visibility. The main-window Overlay button stays available for quick on/off toggles.",
+            "ja": "ここでは既定の表示状態を設定します。メイン画面のオーバーレイボタンはそのまま残るので、あとから一時的に切り替えられます。",
+        },
+        "vrc_listen_send_to_chatbox": {
+            "zh-CN": "将反向翻译结果发送到 VRC 聊天框",
+            "en": "Send reverse translation to VRC Chatbox",
+            "ja": "逆翻訳結果を VRC Chatbox に送信する",
+        },
+        "vrc_listen_send_to_chatbox_hint": {
+            "zh-CN": "关闭后，反向翻译仍会继续识别、翻译、显示在主界面和悬浮窗里，只是不再自动发到 VRC 聊天框。",
+            "en": "When disabled, reverse translation still appears in the main window and overlay, but it is no longer sent to the VRC Chatbox.",
+            "ja": "オフにしても逆翻訳の認識・翻訳・メイン画面表示・オーバーレイ表示は続きますが、VRC Chatbox には自動送信されません。",
+        },
         "vrc_listen_device": {
             "zh-CN": "播放设备",
             "en": "Playback Device",
@@ -695,6 +715,10 @@ _extend_window_copy_language(
         "vrc_listen_section": "Обратный перевод",
         "vrc_listen_subtitle": "Программа слушает звук из VRChat и переводит его для вас.",
         "vrc_listen_enabled": "Включить обратный перевод",
+        "vrc_listen_overlay": "Показывать оверлей",
+        "vrc_listen_overlay_hint": "Это задает состояние по умолчанию. Кнопка оверлея на главном экране останется и ее можно будет переключать отдельно.",
+        "vrc_listen_send_to_chatbox": "Отправлять результат обратного перевода в VRC Chatbox",
+        "vrc_listen_send_to_chatbox_hint": "Если выключить, обратный перевод все равно будет распознаваться, переводиться и показываться в окне и оверлее, но перестанет отправляться в VRC Chatbox.",
         "vrc_listen_device": "Устройство воспроизведения",
         "vrc_listen_device_default": "Автоопределение (рекомендуется)",
         "vrc_listen_device_missing": "Доступных устройств не найдено",
@@ -791,6 +815,10 @@ _extend_window_copy_language(
         "vrc_listen_section": "역방향 번역",
         "vrc_listen_subtitle": "VRChat 안의 소리를 듣고, 그 내용을 번역해서 보여 줍니다.",
         "vrc_listen_enabled": "역방향 번역 켜기",
+        "vrc_listen_overlay": "오버레이 표시",
+        "vrc_listen_overlay_hint": "여기서는 기본 표시 상태만 정합니다. 메인 화면의 오버레이 버튼은 그대로 남아서 나중에 바로 켜고 끌 수 있습니다.",
+        "vrc_listen_send_to_chatbox": "역방향 번역 결과를 VRC 채팅창으로 보내기",
+        "vrc_listen_send_to_chatbox_hint": "끄면 역방향 번역은 계속 인식·번역되고 메인 화면과 오버레이에도 표시되지만, VRC 채팅창으로는 자동 전송되지 않습니다.",
         "vrc_listen_device": "재생 장치",
         "vrc_listen_device_default": "자동 감지 (권장)",
         "vrc_listen_device_missing": "사용 가능한 재생 장치를 찾지 못했습니다",
@@ -859,10 +887,11 @@ def _roleplay_preset_options(ui_language: str) -> list[tuple[str, str]]:
 
 
 class SettingsWindow(ctk.CTkToplevel):
-    def __init__(self, parent, config: dict, on_save=None):
+    def __init__(self, parent, config: dict, on_save=None, on_close=None):
         super().__init__(parent)
         self._config = config
         self._on_save = on_save
+        self._on_close = on_close
         self._ui_lang = get_ui_language(config)
 
         self.title(tr(self._ui_lang, "settings_window_title"))
@@ -873,6 +902,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.configure(fg_color=BG_PRIMARY)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         self._field_vars: dict[str, ctk.StringVar] = {}
         self._editable_backend_entries: list[ctk.CTkEntry] = []
@@ -1249,6 +1279,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 "self_suppress": False,
                 "self_suppress_seconds": 0.65,
                 "show_overlay": False,
+                "send_to_chatbox": True,
             }
         else:
             vrc_cfg.setdefault("source_language", "auto")
@@ -1256,6 +1287,7 @@ class SettingsWindow(ctk.CTkToplevel):
             vrc_cfg.setdefault("self_suppress", False)
             vrc_cfg.setdefault("self_suppress_seconds", 0.65)
             vrc_cfg.setdefault("show_overlay", False)
+            vrc_cfg.setdefault("send_to_chatbox", True)
         osc_cfg = self._config.get("osc", {})
         avatar_cfg = osc_cfg.get("avatar_sync", {}) if isinstance(osc_cfg.get("avatar_sync", {}), dict) else {}
         avatar_params = avatar_cfg.get("params", {}) if isinstance(avatar_cfg.get("params", {}), dict) else {}
@@ -1488,6 +1520,34 @@ class SettingsWindow(ctk.CTkToplevel):
             self._ui_copy("vrc_listen_enabled"),
             self._vrc_listen_enabled_var,
             **pad,
+        )
+
+        self._listen_overlay_enabled_var = ctk.StringVar(
+            value="1" if bool(vrc_cfg.get("show_overlay", False)) else "0"
+        )
+        self._build_switch_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_overlay"),
+            self._listen_overlay_enabled_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_overlay_hint"),
+        )
+
+        self._listen_send_to_chatbox_var = ctk.StringVar(
+            value="1" if bool(vrc_cfg.get("send_to_chatbox", True)) else "0"
+        )
+        self._build_switch_entry(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_send_to_chatbox"),
+            self._listen_send_to_chatbox_var,
+            **pad,
+        )
+        self._build_hint_box(
+            vrc_listen_card,
+            self._ui_copy("vrc_listen_send_to_chatbox_hint"),
         )
 
         self._listen_self_suppress_var = ctk.StringVar(
@@ -1988,6 +2048,8 @@ class SettingsWindow(ctk.CTkToplevel):
         parent,
         label_text: str,
         variable: ctk.StringVar,
+        *,
+        command=None,
         **pack_kwargs,
     ) -> ctk.CTkSwitch:
         switch = ctk.CTkSwitch(
@@ -1999,9 +2061,38 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_PRI,
             font=ctk.CTkFont(size=12, weight="bold"),
             progress_color=ACCENT,
+            command=command,
         )
         switch.pack(anchor="w", padx=pack_kwargs.get("padx", 12), pady=pack_kwargs.get("pady", (2, 0)))
         return switch
+
+    def sync_vrc_listen_state(
+        self,
+        *,
+        enabled: bool | None = None,
+        show_overlay: bool | None = None,
+    ) -> None:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if enabled is not None:
+            listen_cfg["enabled"] = bool(enabled)
+            if hasattr(self, "_vrc_listen_enabled_var") and self._vrc_listen_enabled_var is not None:
+                self._vrc_listen_enabled_var.set("1" if enabled else "0")
+        if show_overlay is not None:
+            listen_cfg["show_overlay"] = bool(show_overlay)
+            if hasattr(self, "_listen_overlay_enabled_var") and self._listen_overlay_enabled_var is not None:
+                self._listen_overlay_enabled_var.set("1" if show_overlay else "0")
+
+    def destroy(self):
+        on_close = getattr(self, "_on_close", None)
+        self._on_close = None
+        try:
+            super().destroy()
+        finally:
+            if on_close:
+                try:
+                    on_close()
+                except Exception:
+                    pass
 
     def _apply_roleplay_preset(self, preset_id: str) -> None:
         preset = ROLEPLAY_PRESETS.get(preset_id)
@@ -2411,10 +2502,9 @@ class SettingsWindow(ctk.CTkToplevel):
             self._ui_copy("vrc_listen_device_missing"),
         }:
             loopback_device = ""
-        vrc_cfg["enabled"] = (
-            self._vrc_listen_enabled_var.get() == "1"
-            and normalize_output_format(output_format) != "original_only"
-        )
+        vrc_cfg["enabled"] = self._vrc_listen_enabled_var.get() == "1"
+        vrc_cfg["show_overlay"] = self._listen_overlay_enabled_var.get() == "1"
+        vrc_cfg["send_to_chatbox"] = self._listen_send_to_chatbox_var.get() == "1"
         vrc_cfg["loopback_device"] = loopback_device or None
         vrc_cfg["source_language"] = self._listen_src_codes.get(
             self._listen_source_lang_var.get(),

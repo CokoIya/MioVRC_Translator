@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import logging
 import queue
 import threading
 from math import gcd
@@ -21,6 +22,7 @@ from .chunk_streamer import ChunkStreamer
 from .vad_detector import VADDetector
 
 FRAME_QUEUE_MAXSIZE = 64
+logger = logging.getLogger(__name__)
 
 
 class AudioRecorder:
@@ -87,6 +89,7 @@ class AudioRecorder:
         self._capture_rate: int = sample_rate
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
+        self._active_device_name: str | None = None
         self._denoiser = AdaptiveDenoiser(strength=denoise_strength)
         self._chunk_streamer = (
             ChunkStreamer(
@@ -118,6 +121,20 @@ class AudioRecorder:
         self._stream = self._open_stream(self.input_device, self.extra_settings)
         self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._worker_thread.start()
+        logger.info(
+            "AudioRecorder started (input_device=%s active_device=%s sample_rate=%s)",
+            self.input_device,
+            self._active_device_name,
+            self.sample_rate,
+        )
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self._running)
+
+    @property
+    def active_input_device_name(self) -> str | None:
+        return self._active_device_name
 
     def _open_stream(self, device, extra_settings=None) -> sd.InputStream:
         try:
@@ -165,6 +182,13 @@ class AudioRecorder:
             self._capture_rate = rate
             self._capture_channels = channels
             self._capture_dtype = dtype
+            active_device_name = None
+            try:
+                actual_device_index = dev if dev is not None else sd.default.device[0]
+                if actual_device_index is not None and int(actual_device_index) >= 0:
+                    active_device_name = str(sd.query_devices(int(actual_device_index))["name"]).strip() or None
+            except Exception:
+                active_device_name = None
             stream = sd.InputStream(
                 samplerate=rate,
                 channels=channels,
@@ -182,6 +206,16 @@ class AudioRecorder:
                 except Exception:
                     pass
                 raise
+            self._active_device_name = active_device_name
+            logger.debug(
+                "Opened input stream (device=%s active_device=%s rate=%s channels=%s dtype=%s loopback=%s)",
+                dev,
+                self._active_device_name,
+                rate,
+                channels,
+                dtype,
+                extra_settings is not None,
+            )
             return stream
 
         last_err = None
@@ -198,15 +232,37 @@ class AudioRecorder:
                     return _try_open_and_start(rate, channels, dtype, dev, extra_settings)
                 except sd.PortAudioError as exc:
                     last_err = exc
+                    logger.debug(
+                        "Input stream open attempt failed (device=%s rate=%s channels=%s dtype=%s): %s",
+                        dev,
+                        rate,
+                        channels,
+                        dtype,
+                        exc,
+                    )
 
+        if last_err is None:
+            last_err = RuntimeError("No compatible input stream configuration was found")
+        logger.error(
+            "Failed to open input stream (requested_device=%s loopback=%s last_error=%s)",
+            device,
+            extra_settings is not None,
+            last_err,
+        )
         raise last_err
 
     def stop(self):
         self._running = False
         self._enqueue_frame(None)
         if self._stream:
-            self._stream.stop()
-            self._stream.close()
+            try:
+                self._stream.stop()
+            except Exception:
+                pass
+            try:
+                self._stream.close()
+            except Exception:
+                pass
             self._stream = None
         if self._worker_thread:
             self._worker_thread.join(timeout=2)
@@ -214,14 +270,17 @@ class AudioRecorder:
         self._clear_frame_queue()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
+        logger.info("AudioRecorder stopped (active_device=%s)", self._active_device_name)
+        self._active_device_name = None
 
     def _sd_callback(self, indata, frames, time_info, status):
         del frames
         del time_info
-        del status
 
         if not self._running:
             return
+        if status:
+            logger.debug("sounddevice callback status: %s", status)
         self._enqueue_frame(indata.copy())
 
     def _process_loop(self):
@@ -269,7 +328,7 @@ class AudioRecorder:
                     try:
                         self.on_chunk(chunk)
                     except Exception as exc:
-                        print(f"[Recorder] on_chunk error: {exc}")
+                        logger.exception("AudioRecorder on_chunk callback failed: %s", exc)
 
             if in_speech != previous_in_speech and self.on_vad_state:
                 try:
@@ -296,14 +355,14 @@ class AudioRecorder:
             try:
                 self.on_segment(segment)
             except Exception as exc:
-                print(f"[Recorder] on_segment error: {exc}")
+                logger.exception("AudioRecorder on_segment callback failed: %s", exc)
 
     def _enqueue_frame(self, frame: np.ndarray | None) -> None:
         try:
             self._frame_queue.put_nowait(frame)
             return
         except queue.Full:
-            pass
+            logger.debug("AudioRecorder frame queue full; dropping oldest frame")
 
         try:
             self._frame_queue.get_nowait()
@@ -380,7 +439,13 @@ class AudioRecorder:
             hostapis = []
 
         seen: dict[str, dict] = {}
-        for index, device in enumerate(sd.query_devices()):
+        try:
+            queried_devices = sd.query_devices()
+        except Exception as exc:
+            logger.warning("Failed to enumerate input devices: %s", exc)
+            return []
+
+        for index, device in enumerate(queried_devices):
             if device["max_input_channels"] <= 0:
                 continue
             api_name = hostapis[device["hostapi"]]["name"] if hostapis else ""
@@ -390,6 +455,7 @@ class AudioRecorder:
                 seen[device["name"]] = {"index": index, "name": device["name"], "_pref": pref}
 
         result = sorted(seen.values(), key=lambda item: item["index"])
+        logger.debug("Enumerated %s input devices", len(result))
         return [{"index": item["index"], "name": item["name"]} for item in result]
 
     @staticmethod
@@ -397,7 +463,8 @@ class AudioRecorder:
         try:
             hostapis = sd.query_hostapis()
             devices = sd.query_devices()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to enumerate loopback devices via sounddevice: %s", exc)
             return []
 
         def _hostapi_name(device: dict) -> str:
@@ -435,4 +502,5 @@ class AudioRecorder:
                 }
 
         result = sorted(seen.values(), key=lambda item: (item["_pref"], item["index"]))
+        logger.debug("Enumerated %s loopback-capable output devices", len(result))
         return [{"index": item["index"], "name": item["name"]} for item in result]
