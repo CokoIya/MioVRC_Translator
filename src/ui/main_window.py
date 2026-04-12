@@ -510,6 +510,13 @@ class MainWindow(ctk.CTk):
             self._config["audio"] = audio_cfg
         return audio_cfg
 
+    def _translation_config(self) -> dict:
+        trans_cfg = self._config.setdefault("translation", {})
+        if not isinstance(trans_cfg, dict):
+            trans_cfg = {}
+            self._config["translation"] = trans_cfg
+        return trans_cfg
+
     def _mic_input_device_mode(self) -> str:
         audio_cfg = self._audio_config()
         mode = str(audio_cfg.get("input_device_mode", "")).strip().lower()
@@ -2090,6 +2097,9 @@ class MainWindow(ctk.CTk):
         listen_cfg = self._desktop_capture_config()
         return bool(listen_cfg.get("send_to_chatbox", True))
 
+    def _mic_send_to_chatbox_enabled(self) -> bool:
+        return bool(self._translation_config().get("send_to_chatbox", True))
+
     def _listen_source_language(self) -> str | None:
         listen_cfg = self._desktop_capture_config()
         source = str(listen_cfg.get("source_language", "auto")).strip() or "auto"
@@ -2258,7 +2268,9 @@ class MainWindow(ctk.CTk):
             min_segment_s=audio_cfg.get("min_segment_s", 0.45),
             partial_min_speech_s=audio_cfg.get("partial_min_speech_s", 0.45),
             max_segment_s=audio_cfg.get("max_segment_s", 12.0),
-            denoise_strength=audio_cfg.get("denoise_strength", 0.0),
+            # Keep desktop listen aligned with the UI copy: the denoise preset is
+            # for microphone preprocessing only.
+            denoise_strength=0.0,
             output_device_name=device_name,
             on_vad_state=lambda state: self._on_source_vad_state(DESKTOP_SOURCE, state),
             chunk_interval_ms=desktop_chunk_interval_ms,
@@ -3025,9 +3037,12 @@ class MainWindow(ctk.CTk):
             else:
                 self._last_mic_result_at = time.monotonic()
                 self._remember_recent_mic_texts(text, translated or "", chatbox_text)
-                sent = self._ensure_sender().send_chatbox(chatbox_text)
-                if sent:
-                    self._own_msgs.add(sent)
+                if self._mic_send_to_chatbox_enabled():
+                    sent = self._ensure_sender().send_chatbox(chatbox_text)
+                    if sent:
+                        self._own_msgs.add(sent)
+                else:
+                    logger.info("Microphone result kept local only because send_to_chatbox is disabled")
                 if self._desktop_capture_enabled:
                     mic_display = translated or text
                     self._call_in_ui(

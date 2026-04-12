@@ -143,7 +143,6 @@ class OpenAITranslator(BaseTranslator):
         )
         extra_body = dict(self._extra_body)
         if self._uses_qwen_mt_translation_options:
-            messages = [{"role": "user", "content": str(text or "")}]
             extra_body["translation_options"] = {
                 "source_lang": self._translation_option_language(src_lang),
                 "target_lang": self._translation_option_language(tgt_lang),
@@ -162,7 +161,10 @@ class OpenAITranslator(BaseTranslator):
             kwargs["extra_body"] = extra_body
 
         response = self._client.chat.completions.create(**kwargs)
-        return (response.choices[0].message.content or "").strip()
+        return self._finalize_translation_output(
+            response.choices[0].message.content or "",
+            source_text=text,
+        )
 
     def _translate_with_responses(
         self,
@@ -185,7 +187,10 @@ class OpenAITranslator(BaseTranslator):
             kwargs["extra_body"] = self._extra_body
 
         response = self._client.responses.create(**kwargs)
-        return str(response.output_text or "").strip()
+        return self._finalize_translation_output(
+            str(response.output_text or ""),
+            source_text=text,
+        )
 
     def _translation_option_language(self, code: str) -> str:
         normalized = str(code or "").strip().lower()

@@ -41,6 +41,7 @@
     "backend": "openai",
     "target_language": "ja",
     "output_format": "translated_with_original",
+    "send_to_chatbox": true,
     "social": {
       "mode": "standard",
       "persona_preset": "custom",

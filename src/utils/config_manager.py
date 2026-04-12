@@ -223,9 +223,13 @@ def _ensure_translation_config(config: dict) -> bool:
     if not isinstance(trans_cfg, dict):
         return False
 
+    if "send_to_chatbox" not in trans_cfg:
+        trans_cfg["send_to_chatbox"] = True
+        changed = True
+
     openai_cfg = trans_cfg.get("openai", {})
     if not isinstance(openai_cfg, dict):
-        return False
+        return changed
 
     model = str(openai_cfg.get("model", "") or "").strip().lower()
     if model.startswith("gpt-4"):

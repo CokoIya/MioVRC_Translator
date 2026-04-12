@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from collections import OrderedDict, deque
 from threading import Lock
@@ -10,15 +11,32 @@ _TRANSLATION_SYSTEM_PROMPT = (
     "You are a real-time translator for VR social chat (VRChat). "
     "Translate only the current utterance, but use recent conversation context when it helps resolve "
     "pronouns, omitted subjects, slang, jokes, internet-native wording, and relationship tone. "
-    "Produce natural, modern, colloquial translations that sound like something a real person would casually say, "
-    "never stiff, word-for-word, or textbook-like. Preserve emotion, humor, slang, internet expressions, "
+    "Produce natural, modern, colloquial translations that sound like something a real person would casually say. "
+    "Prefer everyday spoken wording over formal written phrasing unless the source is clearly formal. "
+    "Never sound stiff, word-for-word, or textbook-like. Preserve emotion, humor, slang, internet expressions, "
     "and gaming or VR-specific terms. Keep names, acronyms, product names, community jargon, and standard spellings "
     "in their modern commonly used forms. Return only the translated text with no explanations, notes, quotes, "
-    "or repeated context."
+    "or repeated context. Do not add decorative punctuation, wrapping quotes, or unmatched brackets that are not required."
 )
 _CONTEXT_MAX_TURNS = 3
 _CONTEXT_MAX_AGE_S = 75.0
 _CONTEXT_TEXT_LIMIT = 160
+_WRAP_PAIRS = {
+    '"': '"',
+    "\u201c": "\u201d",
+    "\u2018": "\u2019",
+    "\u300c": "\u300d",
+    "\u300e": "\u300f",
+    "(": ")",
+    "\uff08": "\uff09",
+    "[": "]",
+    "\u3010": "\u3011",
+    "<": ">",
+    "\u300a": "\u300b",
+    "\u3008": "\u3009",
+}
+_TRAILING_ARTIFACT_OPENERS = "".join(ch for ch, closer in _WRAP_PAIRS.items() if ch != closer)
+_SENTENCE_ENDING_PUNCT = "\u3002\uff0e.!?\uff01\uff1f\u2026"
 
 
 class BaseTranslator(ABC):
@@ -86,11 +104,13 @@ class BaseTranslator(ABC):
         tgt = self._language_name(tgt_lang)
         requirements = [
             "sound natural and colloquial, as a real person would casually say it",
+            "prefer everyday spoken wording instead of stiff or bookish phrasing",
             "preserve emotion, tone, humor, slang, and gaming or VR terms",
             "prefer modern internet-native wording and community-standard names when appropriate",
             "keep meaning accurate but prioritize natural flow over word-for-word literalness",
             "use recent context only to disambiguate the current text when helpful",
             "translate only the current text and do not repeat previous lines",
+            "do not add decorative quotes or extra punctuation",
             "output only the translation",
         ]
         profile_lines = self._prompt_profile_lines()
@@ -212,6 +232,49 @@ class BaseTranslator(ABC):
         if len(normalized) <= _CONTEXT_TEXT_LIMIT:
             return normalized
         return normalized[: _CONTEXT_TEXT_LIMIT - 3].rstrip() + "..."
+
+    def _finalize_translation_output(self, text: str, *, source_text: str = "") -> str:
+        cleaned = " ".join(str(text or "").split()).strip()
+        if not cleaned:
+            return ""
+
+        source = " ".join(str(source_text or "").split()).strip()
+        source_wrapped = False
+        for opener, closer in _WRAP_PAIRS.items():
+            if len(source) >= 2 and source.startswith(opener) and source.endswith(closer):
+                source_wrapped = True
+                break
+
+        if not source_wrapped:
+            for opener, closer in _WRAP_PAIRS.items():
+                if len(cleaned) >= 2 and cleaned.startswith(opener) and cleaned.endswith(closer):
+                    inner = cleaned[1:-1].strip()
+                    if inner:
+                        cleaned = inner
+                    break
+
+        if _TRAILING_ARTIFACT_OPENERS:
+            cleaned = re.sub(
+                rf"[{re.escape(_TRAILING_ARTIFACT_OPENERS)}]+([{re.escape(_SENTENCE_ENDING_PUNCT)}]+)$",
+                r"\1",
+                cleaned,
+            )
+            cleaned = re.sub(
+                rf"([{re.escape(_SENTENCE_ENDING_PUNCT)}]+)[{re.escape(_TRAILING_ARTIFACT_OPENERS)}]+$",
+                r"\1",
+                cleaned,
+            )
+            while cleaned and cleaned[-1] in _TRAILING_ARTIFACT_OPENERS:
+                if source and source.rstrip().endswith(cleaned[-1]):
+                    break
+                cleaned = cleaned[:-1].rstrip()
+
+        cleaned = re.sub(
+            rf"([{re.escape(_SENTENCE_ENDING_PUNCT)}])(?:\1)+$",
+            r"\1",
+            cleaned,
+        )
+        return cleaned.strip()
 
     def _context_key(
         self,

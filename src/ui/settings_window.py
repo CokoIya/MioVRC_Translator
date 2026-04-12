@@ -592,6 +592,16 @@ WINDOW_COPY.update(
             "en": "Translation (Original): translated text first, original after it\nTranslation only: only translated text\nOriginal only: no AI translation, send original only\nOriginal (Translation): original text first, translation after it",
             "ja": "訳文（原文）：訳文のあとに原文\n訳文のみ：訳文だけ\n原文のみ：AI 翻訳なしで原文だけ\n原文（訳文）：原文のあとに訳文",
         },
+        "settings_send_to_chatbox": {
+            "zh-CN": "将麦克风翻译结果发送到 VRC 聊天框",
+            "en": "Send microphone translation to VRC Chatbox",
+            "ja": "マイク翻訳結果を VRC Chatbox に送信する",
+        },
+        "settings_send_to_chatbox_hint": {
+            "zh-CN": "关闭后，麦克风识别和翻译仍会继续显示在主界面里，只是不再自动发到 VRC。你仍然可以手动点发送。",
+            "en": "When disabled, microphone recognition and translation still appear locally, but they are no longer auto-sent to VRC. You can still send manually.",
+            "ja": "オフにしてもマイクの認識と翻訳は画面に表示されますが、VRC への自動送信だけ止まります。手動送信は引き続き使えます。",
+        },
         "settings_asr_backend": {
             "zh-CN": "语音模型",
             "en": "Speech Model",
@@ -746,6 +756,8 @@ _extend_window_copy_language(
         "settings_target_language": "На какой язык переводить",
         "settings_output_format": "Как отправлять в чат",
         "settings_output_format_hint": "Перевод (Оригинал): сначала перевод, потом оригинал\nТолько перевод: отправлять только перевод\nТолько оригинал: без AI, отправлять только оригинал\nОригинал (Перевод): сначала оригинал, потом перевод",
+        "settings_send_to_chatbox": "Отправлять перевод с микрофона в VRC Chatbox",
+        "settings_send_to_chatbox_hint": "Если выключить, микрофон все равно будет распознаваться и переводиться в окне программы, но перестанет автоматически отправляться в VRC. Ручная отправка останется доступной.",
         "settings_asr_backend": "Речевая модель",
         "settings_asr_hint": "Обычно менять не нужно, в этой версии используется фиксированный вариант.",
         "settings_streaming": "Скорость распознавания",
@@ -846,6 +858,8 @@ _extend_window_copy_language(
         "settings_target_language": "어떤 언어로 번역할지",
         "settings_output_format": "채팅창에 보내는 형식",
         "settings_output_format_hint": "번역문 (원문): 번역문을 먼저 보내고 뒤에 원문을 붙입니다\n번역문만: 번역 결과만 보냅니다\n원문만: AI 번역 없이 원문만 보냅니다\n원문 (번역문): 원문을 먼저 보내고 뒤에 번역문을 붙입니다",
+        "settings_send_to_chatbox": "마이크 번역 결과를 VRC 채팅창으로 보내기",
+        "settings_send_to_chatbox_hint": "끄면 마이크 인식과 번역은 화면에 계속 표시되지만, VRC로는 자동 전송되지 않습니다. 수동 전송은 계속 사용할 수 있습니다.",
         "settings_asr_backend": "음성 모델",
         "settings_asr_hint": "보통은 바꿀 필요가 없습니다. 이 버전에서는 이 구성을 고정으로 사용합니다.",
         "settings_streaming": "인식 속도",
@@ -1419,6 +1433,20 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self._format_menu.pack(**pad, fill="x")
         self._build_hint_box(translation_card, self._ui_copy("settings_output_format_hint"))
+
+        self._mic_send_to_chatbox_var = ctk.StringVar(
+            value="1" if bool(trans_cfg.get("send_to_chatbox", True)) else "0"
+        )
+        self._build_switch_entry(
+            translation_card,
+            self._ui_copy("settings_send_to_chatbox"),
+            self._mic_send_to_chatbox_var,
+            **pad,
+        )
+        self._build_hint_box(
+            translation_card,
+            self._ui_copy("settings_send_to_chatbox_hint"),
+        )
 
         section_label(translation_card, self._ui_copy("translation_provider_params"))
         self._fields_frame = ctk.CTkFrame(
@@ -2457,6 +2485,7 @@ class SettingsWindow(ctk.CTkToplevel):
         translation_cfg["backend"] = backend
         translation_cfg["target_language"] = target_lang
         translation_cfg["output_format"] = normalize_output_format(output_format)
+        translation_cfg["send_to_chatbox"] = self._mic_send_to_chatbox_var.get() == "1"
         social_cfg = translation_cfg.setdefault("social", {})
         selected_preset = self._roleplay_preset_codes.get(
             self._roleplay_preset_var.get(),

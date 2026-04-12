@@ -234,6 +234,7 @@ class DesktopAudioRecorder(AudioRecorder):
         self._last_rms = 0.0
         self._total_frames = 0
         self._non_silent_frames = 0
+        self._stream_config: Optional[dict[str, int]] = None
 
     @property
     def is_running(self) -> bool:
@@ -265,11 +266,12 @@ class DesktopAudioRecorder(AudioRecorder):
         p = pa.PyAudio()
         try:
             self._loopback_device_info = self._resolve_loopback_device_info(p, pa)
+            self._stream_config = self._select_stream_config(p, pa, self._loopback_device_info)
         finally:
             p.terminate()
 
-        native_rate = int(self._loopback_device_info.get("defaultSampleRate", 48000))
-        channels = max(int(self._loopback_device_info.get("maxInputChannels", 2)), 1)
+        if self._stream_config is None:
+            raise RuntimeError("No valid desktop audio capture configuration was found")
 
         self._running = True
         self.vad.reset()
@@ -277,9 +279,14 @@ class DesktopAudioRecorder(AudioRecorder):
         self._pre_speech_buffer.clear()
         self._speech_samples = 0
         self._was_in_speech = False
-        self._capture_rate = native_rate
-        self._capture_channels = min(channels, 2)
+        self._capture_rate = int(self._stream_config["rate"])
+        self._capture_channels = int(self._stream_config["channels"])
         self._capture_dtype = "float32"
+        self._active_device_name = (
+            str(self._loopback_device_info.get("name", "")).strip()
+            if self._loopback_device_info is not None
+            else None
+        )
         self._last_error = None
         with self._stats_lock:
             self._last_frame_at = 0.0
@@ -297,10 +304,11 @@ class DesktopAudioRecorder(AudioRecorder):
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
         logger.info(
-            "DesktopAudioRecorder started (requested_output=%s loopback_device=%s native_rate=%s)",
+            "DesktopAudioRecorder started (requested_output=%s loopback_device=%s rate=%s channels=%s)",
             self._output_device_name or "auto",
             self._loopback_device_info.get("name") if self._loopback_device_info else None,
-            native_rate,
+            self._capture_rate,
+            self._capture_channels,
         )
 
     def stop(self):
@@ -316,6 +324,8 @@ class DesktopAudioRecorder(AudioRecorder):
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
         self._loopback_device_info = None
+        self._stream_config = None
+        self._active_device_name = None
         logger.info("DesktopAudioRecorder stopped (requested_output=%s)", self._output_device_name or "auto")
 
     def diagnostics_snapshot(self) -> dict[str, object]:
@@ -332,6 +342,8 @@ class DesktopAudioRecorder(AudioRecorder):
                     if self._loopback_device_info is not None
                     else None
                 ),
+                "capture_rate": self._capture_rate,
+                "capture_channels": self._capture_channels,
                 "last_error": self._last_error,
             }
 
@@ -352,16 +364,16 @@ class DesktopAudioRecorder(AudioRecorder):
 
     def _capture_loop(self) -> None:
         device_info = self._loopback_device_info
-        if device_info is None:
+        stream_config = self._stream_config
+        if device_info is None or stream_config is None:
             self._running = False
             self._enqueue_frame(None)
             return
 
-        native_rate = int(device_info.get("defaultSampleRate", 48000))
-        channels = max(min(int(device_info.get("maxInputChannels", 2)), 2), 1)
+        rate = int(stream_config["rate"])
+        channels = int(stream_config["channels"])
         device_index = int(device_info["index"])
-        # blocksize based on the *native* rate so each frame is frame_duration_ms long
-        blocksize = max(int(native_rate * self.frame_duration_ms / 1000), 1)
+        blocksize = int(stream_config["blocksize"])
 
         pa = None
         p = None
@@ -373,7 +385,7 @@ class DesktopAudioRecorder(AudioRecorder):
             stream = p.open(
                 format=pa.paFloat32,
                 channels=channels,
-                rate=native_rate,
+                rate=rate,
                 input=True,
                 input_device_index=device_index,
                 frames_per_buffer=blocksize,
@@ -411,6 +423,106 @@ class DesktopAudioRecorder(AudioRecorder):
             self._enqueue_frame(None)
             if runtime_error is not None:
                 self._report_runtime_error(runtime_error)
+
+    def _select_stream_config(self, p, pa, device_info: dict) -> dict[str, int]:
+        device_index = int(device_info["index"])
+        native_rate = int(round(float(device_info.get("defaultSampleRate", 48000))))
+        max_channels = max(min(int(device_info.get("maxInputChannels", 2)), 2), 1)
+        last_error: BaseException | None = None
+
+        for rate, channels in self._candidate_stream_configs(native_rate, max_channels):
+            blocksize = max(int(rate * self.frame_duration_ms / 1000), 1)
+            try:
+                self._validate_stream_config(
+                    p,
+                    pa,
+                    device_index=device_index,
+                    rate=rate,
+                    channels=channels,
+                    blocksize=blocksize,
+                )
+                logger.info(
+                    "Selected desktop capture config (device=%s rate=%s channels=%s blocksize=%s)",
+                    device_info.get("name"),
+                    rate,
+                    channels,
+                    blocksize,
+                )
+                return {
+                    "rate": int(rate),
+                    "channels": int(channels),
+                    "blocksize": int(blocksize),
+                }
+            except Exception as exc:
+                last_error = exc
+                logger.debug(
+                    "Desktop capture config failed (device=%s rate=%s channels=%s): %s",
+                    device_info.get("name"),
+                    rate,
+                    channels,
+                    exc,
+                )
+
+        if last_error is None:
+            last_error = RuntimeError("No compatible desktop audio capture configuration was found")
+        raise last_error
+
+    def _candidate_stream_configs(
+        self,
+        native_rate: int,
+        max_channels: int,
+    ) -> list[tuple[int, int]]:
+        rate_candidates: list[int] = []
+        for candidate in (
+            native_rate,
+            48000,
+            44100,
+            32000,
+            self.sample_rate,
+        ):
+            rate = int(candidate)
+            if rate > 0 and rate not in rate_candidates:
+                rate_candidates.append(rate)
+
+        channel_candidates: list[int] = []
+        for candidate in (max_channels, 1):
+            channels = max(min(int(candidate), max_channels), 1)
+            if channels not in channel_candidates:
+                channel_candidates.append(channels)
+
+        return [(rate, channels) for rate in rate_candidates for channels in channel_candidates]
+
+    @staticmethod
+    def _validate_stream_config(
+        p,
+        pa,
+        *,
+        device_index: int,
+        rate: int,
+        channels: int,
+        blocksize: int,
+    ) -> None:
+        stream = None
+        try:
+            stream = p.open(
+                format=pa.paFloat32,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=blocksize,
+            )
+            stream.read(blocksize, exception_on_overflow=False)
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                except Exception:
+                    pass
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Loopback device resolution

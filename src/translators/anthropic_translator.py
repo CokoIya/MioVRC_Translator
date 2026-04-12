@@ -62,7 +62,10 @@ class AnthropicTranslator(BaseTranslator):
                 }
             ],
         )
-        translated = message.content[0].text.strip()
+        translated = self._finalize_translation_output(
+            message.content[0].text,
+            source_text=text,
+        )
         if not translated:
             raise RuntimeError("Translation API returned an empty response")
         translated = self._store_cached_translation(
