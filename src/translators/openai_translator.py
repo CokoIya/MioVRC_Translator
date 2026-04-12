@@ -135,18 +135,30 @@ class OpenAITranslator(BaseTranslator):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
     ) -> str:
         output_tokens = self._estimate_max_tokens(text)
-        messages = self._build_messages(
-            text,
-            src_lang,
-            tgt_lang,
-            context_snapshot=context_snapshot,
-        )
         extra_body = dict(self._extra_body)
         if self._uses_qwen_mt_translation_options:
             extra_body["translation_options"] = {
                 "source_lang": self._translation_option_language(src_lang),
                 "target_lang": self._translation_option_language(tgt_lang),
             }
+            # Qwen-MT models only accept [user, assistant] roles — no system role.
+            # Merge system prompt into the user message.
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"{_TRANSLATION_SYSTEM_PROMPT}\n\n"
+                        f"{self._build_prompt(text, src_lang, tgt_lang, context_snapshot=context_snapshot)}"
+                    ),
+                }
+            ]
+        else:
+            messages = self._build_messages(
+                text,
+                src_lang,
+                tgt_lang,
+                context_snapshot=context_snapshot,
+            )
         kwargs = dict(
             model=self.model,
             messages=messages,

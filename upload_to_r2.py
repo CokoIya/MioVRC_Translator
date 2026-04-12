@@ -10,6 +10,7 @@ Optional:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -42,6 +43,27 @@ s3 = boto3.client(
 )
 
 CHUNK = 256 * 1024 * 1024
+
+
+def upload_json(local_path: str, key: str) -> None:
+    path = Path(local_path)
+    raw = path.read_bytes()
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"ABORT: {path.name} is not valid JSON — {exc}\n"
+            f"Fix the file before uploading."
+        )
+    print(f"\nUploading: {path.name} -> {BUCKET}/{key}")
+    s3.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=raw,
+        ContentType="application/json",
+        CacheControl="no-cache, no-store, must-revalidate",
+    )
+    print(f"  Done: {key}")
 
 
 def upload(local_path: str, key: str) -> None:

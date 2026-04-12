@@ -1,7 +1,7 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "v1.2.6"
+#define AppVersion "v1.2.6.1"
 #define AppNumericVersion "1.2.3.0"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import logging
 import re
 import threading
+import time
 from typing import Callable
 
 import requests
 
 from src.version import APP_VERSION, UPDATE_CHECK_URL
 
+logger = logging.getLogger(__name__)
+
 _REQUEST_TIMEOUT = 8
+_MAX_RETRIES = 3
+_RETRY_DELAYS = [5, 15]  # seconds to wait before 2nd and 3rd attempt
 
 _PRERELEASE_RANK = {
     "dev": 0,
@@ -87,25 +93,60 @@ def _is_newer(remote: str, local: str) -> bool:
 
 def check_for_update(
     on_update_available: Callable[[str, str, str], None],
+    *,
+    on_no_update: Callable[[], None] | None = None,
+    on_error: Callable[[str], None] | None = None,
 ) -> None:
     """Silently check for updates in a daemon thread.
 
-    Calls on_update_available(version, download_url, notes) on the calling
-    thread's tkinter event loop via the provided callback — the callback must
-    schedule the UI call with widget.after(0, ...) itself.
+    Calls *on_update_available(version, download_url, notes)* when a newer
+    version is detected.  Retries up to ``_MAX_RETRIES`` times with back-off
+    on network failures.
+
+    Optional callbacks:
+    * *on_no_update* – called when the remote version is not newer.
+    * *on_error* – called with an error message after all retries are exhausted.
     """
 
     def _worker() -> None:
-        try:
-            resp = requests.get(UPDATE_CHECK_URL, timeout=_REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            data: dict = resp.json()
-            remote_version = str(data.get("version", "")).strip()
-            download_url = str(data.get("url", "")).strip()
-            notes = str(data.get("notes", "")).strip()
-            if remote_version and download_url and _is_newer(remote_version, APP_VERSION):
-                on_update_available(remote_version, download_url, notes)
-        except Exception:
-            pass  # silent failure — network issues must never affect the app
+        last_error: Exception | None = None
+
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                logger.info(
+                    "Update check attempt %d/%d  (local %s)",
+                    attempt, _MAX_RETRIES, APP_VERSION,
+                )
+                resp = requests.get(UPDATE_CHECK_URL, timeout=_REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                data: dict = resp.json()
+                remote_version = str(data.get("version", "")).strip()
+                download_url = str(data.get("url", "")).strip()
+                notes = str(data.get("notes", "")).strip()
+
+                if remote_version and download_url and _is_newer(remote_version, APP_VERSION):
+                    logger.info("Update available: %s -> %s", APP_VERSION, remote_version)
+                    on_update_available(remote_version, download_url, notes)
+                else:
+                    logger.info(
+                        "No update needed (local=%s, remote=%s)",
+                        APP_VERSION, remote_version or "<empty>",
+                    )
+                    if on_no_update is not None:
+                        on_no_update()
+                return  # request succeeded — done regardless of version comparison
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Update check attempt %d/%d failed: %s", attempt, _MAX_RETRIES, exc,
+                )
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_DELAYS[attempt - 1])
+
+        msg = str(last_error) if last_error else "unknown error"
+        logger.warning("All %d update check attempts failed: %s", _MAX_RETRIES, msg)
+        if on_error is not None:
+            on_error(msg)
 
     threading.Thread(target=_worker, daemon=True).start()

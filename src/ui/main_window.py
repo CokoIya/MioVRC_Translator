@@ -381,6 +381,7 @@ class MainWindow(ctk.CTk):
         self._schedule_desktop_audio_watch(2200)
         self._schedule_mic_audio_watch(2200)
         self.after(3000, self._check_for_update)
+        self._update_recheck_ms = 30 * 60 * 1000  # 30 minutes
         logger.info("MainWindow initialized")
 
     def _t(self, key: str, **kwargs) -> str:
@@ -3733,11 +3734,16 @@ class MainWindow(ctk.CTk):
         self._sync_settings_window_vrc_listen_state()
 
     def _check_for_update(self) -> None:
+        if getattr(self, "_pending_update", None):
+            self.after(self._update_recheck_ms, self._check_for_update)
+            return
+
         def _on_update_available(version: str, url: str, notes: str) -> None:
             self._pending_update = (version, url, notes)
             self.after(0, self._show_update_badge)
 
         check_for_update(_on_update_available)
+        self.after(self._update_recheck_ms, self._check_for_update)
 
     def _show_update_badge(self) -> None:
         badge = getattr(self, "_update_badge_btn", None)

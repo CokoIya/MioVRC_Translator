@@ -89,10 +89,10 @@ def list_output_devices() -> list[dict[str, object]]:
 
 
 def default_output_device_name() -> str | None:
-    for device in list_output_devices():
+    devices = list_output_devices()
+    for device in devices:
         if device.get("is_default"):
             return str(device.get("name", "")).strip() or None
-    devices = list_output_devices()
     if devices:
         return str(devices[0].get("name", "")).strip() or None
     return None

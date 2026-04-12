@@ -10,6 +10,8 @@ from src.utils import config_manager
 from src.audio.desktop_recorder import list_output_devices as _list_desktop_output_devices
 from src.audio.recorder import AudioRecorder
 from src.asr.text_corrections import dictionary_status, update_official_dictionary
+from src.updater.update_checker import check_for_update
+from src.version import APP_VERSION
 from src.utils.i18n import tr
 from src.utils.ui_config import (
     BACKEND_ORDER,
@@ -662,6 +664,26 @@ WINDOW_COPY.update(
             "en": "Update Dictionary",
             "ja": "辞書を更新",
         },
+        "settings_check_update": {
+            "zh-CN": "检查更新",
+            "en": "Check for Updates",
+            "ja": "更新を確認",
+        },
+        "settings_checking_update": {
+            "zh-CN": "���在检查…",
+            "en": "Checking…",
+            "ja": "確認中…",
+        },
+        "settings_up_to_date": {
+            "zh-CN": "已是最新版本",
+            "en": "You're up to date",
+            "ja": "最新版です",
+        },
+        "settings_check_update_failed": {
+            "zh-CN": "检查失败，请稍后重试",
+            "en": "Check failed, try again later",
+            "ja": "確認に失敗しました。後で再試行してください",
+        },
     }
 )
 
@@ -770,6 +792,10 @@ _extend_window_copy_language(
         "settings_dictionary": "Словарь исправления",
         "settings_dictionary_hint": "Используется только для исправления ошибок распознавания. Обычно приложение не выходит в сеть, загрузка будет только по кнопке обновления.",
         "settings_dictionary_update": "Обновить словарь",
+        "settings_check_update": "Проверить обновление",
+        "settings_checking_update": "Проверка…",
+        "settings_up_to_date": "У вас последняя версия",
+        "settings_check_update_failed": "Не удалось проверить, попробуйте позже",
     },
 )
 
@@ -872,6 +898,10 @@ _extend_window_copy_language(
         "settings_dictionary": "인식 교정 사전",
         "settings_dictionary_hint": "음성 인식 오타를 고치는 데만 사용됩니다. 평소에는 인터넷에 연결하지 않고, 업데이트 버튼을 눌렀을 때만 공식 사전을 받습니다.",
         "settings_dictionary_update": "사전 업데이트",
+        "settings_check_update": "업데이트 확인",
+        "settings_checking_update": "확인 중…",
+        "settings_up_to_date": "최신 버전입니다",
+        "settings_check_update_failed": "확인 실패, 나중에 다시 시도하세요",
     },
 )
 
@@ -975,7 +1005,31 @@ class SettingsWindow(ctk.CTkToplevel):
             text_color=TEXT_SEC,
             justify="left",
             wraplength=SETTINGS_TEXT_WRAP,
-        ).pack(anchor="w", padx=12, pady=(0, 12))
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        version_row = ctk.CTkFrame(card, fg_color="transparent")
+        version_row.pack(anchor="w", padx=12, pady=(0, 10), fill="x")
+
+        ctk.CTkLabel(
+            version_row,
+            text=f"v{APP_VERSION}",
+            font=ctk.CTkFont(size=11),
+            text_color=TEXT_MUTED,
+        ).pack(side="left")
+
+        self._check_update_btn = ctk.CTkButton(
+            version_row,
+            text=self._ui_copy("settings_check_update"),
+            fg_color="transparent",
+            hover_color=GLASS_HOVER,
+            corner_radius=8,
+            height=24,
+            width=10,
+            text_color=ACCENT,
+            font=ctk.CTkFont(size=11),
+            command=self._start_check_update,
+        )
+        self._check_update_btn.pack(side="left", padx=(8, 0))
 
     def _bind_section_toggle(self, state: dict[str, object], *widgets) -> None:
         for widget in widgets:
@@ -2408,6 +2462,70 @@ class SettingsWindow(ctk.CTkToplevel):
             self._t("dictionary_update_failed_title"),
             message,
         )
+
+    # ── Check for updates (manual) ──────────────────────────────────────────
+
+    def _start_check_update(self) -> None:
+        btn = getattr(self, "_check_update_btn", None)
+        if btn is None:
+            return
+        btn.configure(
+            state="disabled",
+            text=self._ui_copy("settings_checking_update"),
+        )
+
+        def _on_update(version: str, url: str, notes: str) -> None:
+            self._schedule_if_alive(
+                lambda: self._on_check_update_found(version, url, notes)
+            )
+
+        def _on_no_update() -> None:
+            self._schedule_if_alive(self._on_check_update_none)
+
+        def _on_error(_msg: str) -> None:
+            self._schedule_if_alive(self._on_check_update_error)
+
+        check_for_update(
+            _on_update,
+            on_no_update=_on_no_update,
+            on_error=_on_error,
+        )
+
+    def _reset_check_update_btn(self) -> None:
+        btn = getattr(self, "_check_update_btn", None)
+        if btn is None:
+            return
+        btn.configure(state="normal", text=self._ui_copy("settings_check_update"))
+
+    def _on_check_update_found(self, version: str, url: str, notes: str) -> None:
+        self._reset_check_update_btn()
+        parent = self.master
+        if parent is not None:
+            parent._pending_update = (version, url, notes)
+            try:
+                parent._show_update_badge()
+            except Exception:
+                pass
+            try:
+                parent._open_update_window()
+            except Exception:
+                pass
+
+    def _on_check_update_none(self) -> None:
+        self._reset_check_update_btn()
+        btn = getattr(self, "_check_update_btn", None)
+        if btn is not None:
+            btn.configure(text=self._ui_copy("settings_up_to_date"))
+            self.after(3000, self._reset_check_update_btn)
+
+    def _on_check_update_error(self) -> None:
+        self._reset_check_update_btn()
+        btn = getattr(self, "_check_update_btn", None)
+        if btn is not None:
+            btn.configure(text=self._ui_copy("settings_check_update_failed"))
+            self.after(4000, self._reset_check_update_btn)
+
+    # ── Validation helpers ────────────────────────────────────────────────
 
     def _parse_positive_float(self, value: str, field_name: str) -> float:
         try:
