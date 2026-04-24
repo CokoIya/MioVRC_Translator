@@ -1,10 +1,10 @@
 {
-  "version": "v1.2.3",
-  "installer_name": "MioTranslator-Setup-v1.2.3.exe",
-  "installer_url": "https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.3.exe",
-  "size_bytes": 2819274859,
-  "sha256": "aad9209a0ac2f8640ecd29f5e6fa1c796037ce147a7f71a6b6d9b86100a420cb",
+  "version": "v1.2.6.1",
+  "installer_name": "MioTranslator-Setup-v1.2.6.1.exe",
+  "installer_url": "https://download.78hejiu.top/MioTranslator-Setup-v1.2.6.1.exe",
+  "size_bytes": 2822892954,
+  "sha256": "f3ea93b4215f93d0e3439b4bca0e63f17585d70e0671c0014ea3f194c9af4180",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-03-29T01:50:30+08:00"
+  "published_at": "2026-04-12T21:44:23+08:00"
 }
