@@ -14,6 +14,22 @@ from .vad_detector import SileroVADDetector
 
 logger = logging.getLogger(__name__)
 
+_MAX_DESKTOP_CAPTURE_CHANNELS = 8
+_COMMON_DESKTOP_CAPTURE_RATES = (
+    384000,
+    352800,
+    192000,
+    176400,
+    96000,
+    88200,
+    48000,
+    44100,
+    32000,
+    24000,
+    22050,
+    16000,
+)
+
 
 # ---------------------------------------------------------------------------
 # PyAudioWPatch import helper
@@ -427,7 +443,10 @@ class DesktopAudioRecorder(AudioRecorder):
     def _select_stream_config(self, p, pa, device_info: dict) -> dict[str, int]:
         device_index = int(device_info["index"])
         native_rate = int(round(float(device_info.get("defaultSampleRate", 48000))))
-        max_channels = max(min(int(device_info.get("maxInputChannels", 2)), 2), 1)
+        max_channels = max(
+            min(int(device_info.get("maxInputChannels", 2) or 2), _MAX_DESKTOP_CAPTURE_CHANNELS),
+            1,
+        )
         last_error: BaseException | None = None
 
         for rate, channels in self._candidate_stream_configs(native_rate, max_channels):
@@ -473,19 +492,13 @@ class DesktopAudioRecorder(AudioRecorder):
         max_channels: int,
     ) -> list[tuple[int, int]]:
         rate_candidates: list[int] = []
-        for candidate in (
-            native_rate,
-            48000,
-            44100,
-            32000,
-            self.sample_rate,
-        ):
+        for candidate in (native_rate, *_COMMON_DESKTOP_CAPTURE_RATES, self.sample_rate):
             rate = int(candidate)
             if rate > 0 and rate not in rate_candidates:
                 rate_candidates.append(rate)
 
         channel_candidates: list[int] = []
-        for candidate in (max_channels, 1):
+        for candidate in (max_channels, 8, 6, 4, 2, 1):
             channels = max(min(int(candidate), max_channels), 1)
             if channels not in channel_candidates:
                 channel_candidates.append(channels)

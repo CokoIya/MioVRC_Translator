@@ -1,7 +1,10 @@
 {
-  "version": "1.2.6.1",
-  "url": "https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.6.1.exe",
-  "size_bytes": 2822892954,
-  "sha256": "f3ea93b4215f93d0e3439b4bca0e63f17585d70e0671c0014ea3f194c9af4180",
-  "notes": "v1.2.6.1 release: fixes reverse translation loopback Invalid device issues on some devices; improves recorder compatibility; separates microphone and reverse translation VRC chatbox auto-send switches; fixes Qwen-MT prompt routing; improves translation cleanup and denoise logic."
+  "version": "1.2.7",
+  "installer_name": "MioTranslator-Setup-v1.2.7-lite.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-lite.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-lite.exe",
+  "size_bytes": 205661890,
+  "sha256": "42b220ebf4df40a37bfc9f39ad98df55be8d2b21ecfd871954540c742cefc1e2",
+  "homepage_url": "https://78hejiu.top",
+  "notes": "v1.2.7 release: migration update for existing users. The R2 update JSON now points to the GitHub Release lite installer, preserves existing SenseVoice models, and moves future update downloads to GitHub."
 }

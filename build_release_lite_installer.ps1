@@ -1,10 +1,20 @@
 $ErrorActionPreference = "Stop"
 
+$torchCuda = python -c "import torch; print(torch.version.cuda or '')"
+if ($torchCuda) {
+    throw "This Python environment uses CUDA PyTorch ($torchCuda). Install CPU-only torch before building the lite installer."
+}
+
 $env:MIO_TRANSLATOR_BUNDLE_MODELS = "0"
-python -m PyInstaller --noconfirm MioTranslator.spec
+python -m PyInstaller --clean --noconfirm MioTranslator.spec
 
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
+}
+
+$bundledModelsDir = "dist\MioTranslator\models"
+if (Test-Path $bundledModelsDir) {
+    Remove-Item -LiteralPath $bundledModelsDir -Recurse -Force
 }
 
 $compilerCandidates = @(
@@ -23,5 +33,5 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "Release-lite installer finished: dist\\MioTranslator-Setup-V1.2.0_beta3.2_Releases.exe"
+Write-Host "Release-lite installer finished. Upload it for existing users and in-app updates."
 

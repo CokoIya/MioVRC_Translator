@@ -27,7 +27,8 @@
 
 - 官方下载站：<https://78hejiu.top>
 - 稳定版、beta 测试版，以及未来所有更新，统一在官网提供下载
-- 本仓库不再提供 GitHub Releases 特供版，也不再同步二进制安装包
+- GitHub Release 同步提供 `full` 完整包和 `lite` 更新包
+- 新玩家建议下载 `full` 完整包，老玩家和在线更新使用 `lite` 轻量包
 - GitHub 仓库主要用于源代码、问题反馈和开发记录
 
 ## 功能亮点
@@ -47,6 +48,7 @@
 - 推荐系统：`Windows 10 / 11`
 - 反向翻译依赖 `Windows WASAPI Loopback`
 - 若本地没有模型，首次启动时会自动下载 `SenseVoice Small`
+- `full` 安装包内置 `SenseVoice Small` 模型；`lite` 安装包用于已有模型的老玩家更新。
 
 ## 从源码运行
 

@@ -17,3 +17,4 @@ models/
 upload_release.py
 
 .wrangler/
+.claude/

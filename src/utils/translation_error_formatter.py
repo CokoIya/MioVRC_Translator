@@ -263,6 +263,9 @@ _PROVIDER_NAMES = {
     "zhipu": "GLM",
     "qianwen": "Qwen",
     "gemini": "Gemini",
+    "kimi": "Kimi",
+    "xai": "xAI",
+    "mistral": "Mistral",
     "doubao": "Doubao / Ark",
     "anthropic": "Claude",
 }

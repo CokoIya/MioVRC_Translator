@@ -19,6 +19,9 @@ OPENAI_COMPATIBLE_BACKENDS = {
     "zhipu",
     "qianwen",
     "gemini",
+    "kimi",
+    "xai",
+    "mistral",
     "doubao",
 }
 

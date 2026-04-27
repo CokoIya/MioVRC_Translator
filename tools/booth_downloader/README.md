@@ -44,11 +44,15 @@ The build script will try to locate `signtool.exe`, sign both downloader executa
 
 ```powershell
 python .\tools\booth_downloader\update_installer_manifest.py `
-  --installer .\dist\MioTranslator-Setup-v1.2.3.exe `
-  --url "https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.3.exe" `
-  --version v1.2.3 `
+  --installer .\dist\MioTranslator-Setup-v1.2.7-lite.exe `
+  --url "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-lite.exe" `
+  --full-installer .\dist\MioTranslator-Setup-v1.2.7-full.exe `
+  --full-url "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-full.exe" `
+  --version v1.2.7 `
   --published-at 2026-03-29T01:50:30+08:00
 ```
+
+`installer_url` stays pointed at the lite installer so in-app updates stay small. If `full_installer_url` is present, the standalone BOOTH downloader will use the full installer for fresh installs.
 
 This writes:
 

@@ -38,7 +38,8 @@
     }
   },
   "translation": {
-    "backend": "openai",
+    "backend": "qianwen",
+    "backend_source": "auto",
     "target_language": "ja",
     "output_format": "translated_with_original",
     "send_to_chatbox": true,
@@ -75,6 +76,21 @@
       "api_key": "",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
       "model": "gemini-2.5-flash"
+    },
+    "kimi": {
+      "api_key": "",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2-turbo-preview"
+    },
+    "xai": {
+      "api_key": "",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.20"
+    },
+    "mistral": {
+      "api_key": "",
+      "base_url": "https://api.mistral.ai/v1",
+      "model": "mistral-small-latest"
     },
     "doubao": {
       "api_key": "",

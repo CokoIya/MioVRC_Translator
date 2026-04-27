@@ -1,10 +1,16 @@
 {
-  "version": "v1.2.6.1",
-  "installer_name": "MioTranslator-Setup-v1.2.6.1.exe",
-  "installer_url": "https://pub-bec4964d84f7494190362b2ea44fb6e9.r2.dev/MioTranslator-Setup-v1.2.6.1.exe",
-  "size_bytes": 2822892954,
-  "sha256": "f3ea93b4215f93d0e3439b4bca0e63f17585d70e0671c0014ea3f194c9af4180",
+  "version": "v1.2.7",
+  "installer_name": "MioTranslator-Setup-v1.2.7-lite.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-lite.exe",
+  "size_bytes": 205661890,
+  "sha256": "42b220ebf4df40a37bfc9f39ad98df55be8d2b21ecfd871954540c742cefc1e2",
+  "full_installer_name": "MioTranslator-Setup-v1.2.7-full.exe",
+  "full_installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.2.7/MioTranslator-Setup-v1.2.7-full.exe",
+  "full_size_bytes": 1050406888,
+  "full_sha256": "e028c6605fbc3de1052b63dc1e4fb887efde4a0f1add61ed6db85a15877fc542",
+  "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-04-12T21:44:23+08:00"
+  "notes": "v1.2.7 uses two installers: full includes the SenseVoice model for new players, while lite is used for existing users and online updates. Existing models are preserved.",
+  "published_at": "2026-04-28T00:00:00+08:00"
 }

@@ -260,6 +260,15 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "max_retries": 0,
         "model_input": "select",
     },
+    "qianwen": {
+        "label": "Qwen",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-mt-flash",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+    },
     "deepseek": {
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
@@ -279,19 +288,37 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "max_retries": 0,
         "model_input": "select",
     },
-    "qianwen": {
-        "label": "Qwen",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-mt-flash",
+    "gemini": {
+        "label": "Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-2.5-flash",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
         "model_input": "select",
     },
-    "gemini": {
-        "label": "Gemini",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-2.5-flash",
+    "kimi": {
+        "label": "Kimi",
+        "base_url": "https://api.moonshot.cn/v1",
+        "model": "kimi-k2-turbo-preview",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+    },
+    "xai": {
+        "label": "xAI",
+        "base_url": "https://api.x.ai/v1",
+        "model": "grok-4.20",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+    },
+    "mistral": {
+        "label": "Mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "model": "mistral-small-latest",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -322,6 +349,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
 
 TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "openai": (
+        "gpt-5.5",
         "gpt-5.4-pro",
         "gpt-5.4-mini",
         "gpt-5.4-nano",
@@ -344,11 +372,42 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "qwen-mt-plus",
         "qwen-mt-turbo",
         "qwen-mt-lite",
+        "qwen-plus",
+        "qwen-flash",
+        "qwen-turbo",
+        "qwen3-max",
     ),
     "gemini": (
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-pro-preview",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
+    ),
+    "kimi": (
+        "kimi-k2-turbo-preview",
+        "kimi-k2.5",
+        "kimi-k2-thinking",
+        "moonshot-v1-8k",
+        "moonshot-v1-32k",
+        "moonshot-v1-128k",
+    ),
+    "xai": (
+        "grok-4.20",
+        "grok-4",
+        "grok-code-fast-1",
+        "grok-3",
+        "grok-3-mini",
+    ),
+    "mistral": (
+        "mistral-small-latest",
+        "mistral-medium-latest",
+        "mistral-large-latest",
+        "ministral-8b-latest",
+        "ministral-3b-latest",
+        "magistral-small-latest",
+        "magistral-medium-latest",
     ),
     "doubao": (),
     "anthropic": (
@@ -363,6 +422,12 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
 
 TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "openai": {
+        "gpt-5.5": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "general_high_quality",
+        },
         "gpt-5.4-pro": {
             "speed": "slow",
             "quality": "high",
@@ -465,8 +530,50 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "general",
             "note": "economy_first",
         },
+        "qwen-plus": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "qwen-flash": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "ultra_fast",
+        },
+        "qwen-turbo": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
+        "qwen3-max": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "general_high_quality",
+        },
     },
     "gemini": {
+        "gemini-3-flash-preview": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "gemini-3.1-flash-lite-preview": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "ultra_fast",
+        },
+        "gemini-3.1-pro-preview": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "quality_first",
+        },
         "gemini-2.5-flash-lite": {
             "speed": "very_fast",
             "quality": "balanced",
@@ -484,6 +591,120 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "not_recommended",
             "note": "quality_first",
+        },
+    },
+    "kimi": {
+        "kimi-k2-turbo-preview": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "kimi-k2.5": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "general_high_quality",
+        },
+        "kimi-k2-thinking": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "reasoning",
+        },
+        "moonshot-v1-8k": {
+            "speed": "fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
+        "moonshot-v1-32k": {
+            "speed": "balanced",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "balanced_quality",
+        },
+        "moonshot-v1-128k": {
+            "speed": "slow",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "quality_first",
+        },
+    },
+    "xai": {
+        "grok-4.20": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "grok-4": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "general_high_quality",
+        },
+        "grok-code-fast-1": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "ultra_fast",
+        },
+        "grok-3": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "general",
+            "note": "balanced_quality",
+        },
+        "grok-3-mini": {
+            "speed": "fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
+    },
+    "mistral": {
+        "mistral-small-latest": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "mistral-medium-latest": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "mistral-large-latest": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "quality_first",
+        },
+        "ministral-8b-latest": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
+        "ministral-3b-latest": {
+            "speed": "very_fast",
+            "quality": "basic",
+            "fit": "general",
+            "note": "economy_first",
+        },
+        "magistral-small-latest": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "general",
+            "note": "reasoning",
+        },
+        "magistral-medium-latest": {
+            "speed": "slow",
+            "quality": "high",
+            "fit": "not_recommended",
+            "note": "reasoning",
         },
     },
     "anthropic": {
@@ -527,7 +748,9 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
 }
 
 BACKEND_ORDER = tuple(TRANSLATION_BACKENDS.keys())
-DEFAULT_BACKEND = BACKEND_ORDER[0]
+DEFAULT_CHINESE_BACKEND = "qianwen"
+DEFAULT_INTERNATIONAL_BACKEND = "openai"
+DEFAULT_BACKEND = DEFAULT_CHINESE_BACKEND
 DEFAULT_ASR_ENGINE = "sensevoice-small"
 UI_LANGUAGE_LABELS = {code: label for label, code in UI_LANGUAGE_OPTIONS}
 TARGET_LANGUAGE_OPTIONS = ()
@@ -566,6 +789,11 @@ def normalize_backend(backend: str | None) -> str:
     if backend in TRANSLATION_BACKENDS:
         return str(backend)
     return DEFAULT_BACKEND
+
+
+def default_backend_for_ui_language(language: str | None) -> str:
+    resolved = _resolve_ui_language(language)
+    return DEFAULT_CHINESE_BACKEND if resolved.startswith("zh") else DEFAULT_INTERNATIONAL_BACKEND
 
 
 def normalize_output_format(output_format: str | None) -> str:

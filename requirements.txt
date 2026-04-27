@@ -14,6 +14,9 @@ modelscope>=1.28.0
 torch>=2.7.0
 torchaudio>=2.7.0
 
+# Release builds should use CPU-only PyTorch. CUDA wheels pull several GB of
+# CUDA/cuDNN DLLs into the installer.
+
 # Translation backends
 openai>=1.30.0        # covers OpenAI / DeepSeek / Qianwen / Custom
 anthropic>=0.28.0

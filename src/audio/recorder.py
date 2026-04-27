@@ -23,6 +23,21 @@ from .vad_detector import VADDetector
 
 FRAME_QUEUE_MAXSIZE = 64
 logger = logging.getLogger(__name__)
+_MAX_CAPTURE_CHANNELS = 8
+_COMMON_CAPTURE_RATES = (
+    384000,
+    352800,
+    192000,
+    176400,
+    96000,
+    88200,
+    48000,
+    44100,
+    32000,
+    24000,
+    22050,
+    16000,
+)
 
 
 class AudioRecorder:
@@ -156,20 +171,29 @@ class AudioRecorder:
         if available_channels <= 0:
             available_channels = 2 if loopback_enabled else 1
 
-        preferred_channels = [2, 1] if loopback_enabled else [1, 2]
+        max_channel_limit = _MAX_CAPTURE_CHANNELS if loopback_enabled else 2
+        available_channels = max(min(available_channels, max_channel_limit), 1)
+        preferred_channels = [available_channels, 8, 6, 4, 2, 1] if loopback_enabled else [1, 2]
         channel_candidates = [
-            channels
+            max(min(channels, available_channels), 1)
             for channels in preferred_channels
             if 0 < channels <= available_channels
         ]
+        channel_candidates = list(dict.fromkeys(channel_candidates))
         if not channel_candidates:
             channel_candidates = [max(available_channels, 1)]
 
         candidates = []
-        for rate in (self.sample_rate, native_rate):
+        rate_candidates: list[int] = []
+        for candidate in (self.sample_rate, native_rate, *_COMMON_CAPTURE_RATES):
+            rate = int(candidate)
+            if rate > 0 and rate not in rate_candidates:
+                rate_candidates.append(rate)
+
+        for rate in rate_candidates:
             for channels in channel_candidates:
                 candidates.append((rate, channels, "int16"))
-        for rate in (native_rate,):
+        for rate in rate_candidates:
             for channels in channel_candidates:
                 candidates.append((rate, channels, "float32"))
         deduped: list[tuple[int, int, str]] = []

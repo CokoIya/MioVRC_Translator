@@ -27,7 +27,8 @@ Current main pipelines:
 
 - Official download site: <https://78hejiu.top>
 - Stable builds, beta builds, and all future updates are distributed through the official website
-- This repository no longer provides GitHub Releases special builds or synced binary packages
+- GitHub Releases also provide the `full` installer and the `lite` update installer
+- New players should download `full`; existing users and online updates can use `lite`
 - GitHub is now mainly used for source code, issue tracking, and development history
 
 ## Highlights
@@ -47,6 +48,7 @@ Current main pipelines:
 - Recommended OS: `Windows 10 / 11`
 - Reverse translation relies on `Windows WASAPI Loopback`
 - If the model is missing locally, `SenseVoice Small` will be downloaded automatically on first launch
+- The `full` installer includes the `SenseVoice Small` model. The `lite` installer is intended for existing installs that already have the model.
 
 ## Run From Source
 

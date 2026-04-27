@@ -8,7 +8,12 @@ from pathlib import Path
 
 from src.utils.app_paths import resource_base_dirs, writable_app_dir
 from src.utils.ui_language_detection import bootstrap_ui_language
-from src.utils.ui_config import DEFAULT_ASR_ENGINE
+from src.utils.ui_config import (
+    DEFAULT_ASR_ENGINE,
+    TRANSLATION_BACKENDS,
+    default_backend_for_ui_language,
+    get_backend_value,
+)
 
 _SAVE_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -217,15 +222,73 @@ def _ensure_audio_device_config(config: dict, loaded: dict | None = None) -> boo
     return changed
 
 
-def _ensure_translation_config(config: dict) -> bool:
+def _ensure_translation_config(
+    config: dict,
+    loaded: dict | None = None,
+    *,
+    prefer_auto_backend: bool = False,
+) -> bool:
     changed = False
     trans_cfg = config.get("translation", {})
     if not isinstance(trans_cfg, dict):
         return False
+    loaded = loaded if isinstance(loaded, dict) else {}
+    loaded_trans_cfg = loaded.get("translation", {})
+    if not isinstance(loaded_trans_cfg, dict):
+        loaded_trans_cfg = {}
+
+    ui_cfg = config.get("ui", {})
+    ui_language = ui_cfg.get("language") if isinstance(ui_cfg, dict) else None
+    recommended_backend = default_backend_for_ui_language(str(ui_language or ""))
+    backend = str(trans_cfg.get("backend", "") or "").strip()
+    backend_source = str(trans_cfg.get("backend_source", "") or "").strip().lower()
+    loaded_had_backend = bool(str(loaded_trans_cfg.get("backend", "") or "").strip())
+    loaded_had_backend_source = "backend_source" in loaded_trans_cfg
+
+    if (
+        not prefer_auto_backend
+        and loaded_had_backend
+        and not loaded_had_backend_source
+        and trans_cfg.get("backend_source") != "manual"
+    ):
+        trans_cfg["backend_source"] = "manual"
+        backend_source = "manual"
+        changed = True
+
+    if backend_source not in {"auto", "manual"}:
+        trans_cfg["backend_source"] = "auto" if prefer_auto_backend or not backend else "manual"
+        backend_source = str(trans_cfg["backend_source"])
+        changed = True
+
+    if prefer_auto_backend or not backend or backend not in TRANSLATION_BACKENDS:
+        if trans_cfg.get("backend") != recommended_backend:
+            trans_cfg["backend"] = recommended_backend
+            changed = True
+        if trans_cfg.get("backend_source") != "auto":
+            trans_cfg["backend_source"] = "auto"
+            changed = True
+    elif backend_source == "auto":
+        # Auto defaults follow the detected computer/UI language until the user
+        # explicitly saves Settings, which marks the backend as manual.
+        if backend != recommended_backend:
+            trans_cfg["backend"] = recommended_backend
+            changed = True
 
     if "send_to_chatbox" not in trans_cfg:
         trans_cfg["send_to_chatbox"] = True
         changed = True
+
+    for backend_code in TRANSLATION_BACKENDS:
+        backend_cfg = trans_cfg.get(backend_code, {})
+        if not isinstance(backend_cfg, dict):
+            backend_cfg = {}
+            trans_cfg[backend_code] = backend_cfg
+            changed = True
+        for key in ("base_url", "model"):
+            default_value = get_backend_value(backend_code, key)
+            if default_value and not str(backend_cfg.get(key, "") or "").strip():
+                backend_cfg[key] = default_value
+                changed = True
 
     openai_cfg = trans_cfg.get("openai", {})
     if not isinstance(openai_cfg, dict):
@@ -294,11 +357,17 @@ def load_config() -> dict:
     config_changed = _ensure_vrc_listen_config(merged, loaded) or config_changed
     if _ensure_audio_device_config(merged, loaded):
         config_changed = True
-    if _ensure_translation_config(merged):
-        config_changed = True
     if _ensure_asr_config(merged):
         config_changed = True
-    if bootstrap_ui_language(merged, prefer_auto=created_new or recovered_invalid) or config_changed:
+    if bootstrap_ui_language(merged, prefer_auto=created_new or recovered_invalid):
+        config_changed = True
+    if _ensure_translation_config(
+        merged,
+        loaded,
+        prefer_auto_backend=created_new or recovered_invalid,
+    ):
+        config_changed = True
+    if config_changed:
         save_config(merged)
     logger.info(
         "Configuration ready (created_new=%s recovered_invalid=%s changed=%s)",

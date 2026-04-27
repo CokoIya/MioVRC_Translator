@@ -121,7 +121,7 @@ def check_for_update(
                 resp.raise_for_status()
                 data: dict = resp.json()
                 remote_version = str(data.get("version", "")).strip()
-                download_url = str(data.get("url", "")).strip()
+                download_url = str(data.get("url") or data.get("installer_url") or "").strip()
                 notes = str(data.get("notes", "")).strip()
 
                 if remote_version and download_url and _is_newer(remote_version, APP_VERSION):

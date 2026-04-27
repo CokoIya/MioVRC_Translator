@@ -1064,7 +1064,10 @@ class SettingsWindow(ctk.CTkToplevel):
         height = max(0, int(height))
         if int(state.get("rendered_height", -1)) == height:
             return
-        wrap.configure(height=height)
+        configured_height = height
+        if hasattr(wrap, "_reverse_widget_scaling"):
+            configured_height = int(round(wrap._reverse_widget_scaling(height)))
+        wrap.configure(height=max(0, configured_height))
         state["rendered_height"] = height
 
     def _on_section_content_configure(self, state: dict[str, object]) -> None:
@@ -2601,6 +2604,7 @@ class SettingsWindow(ctk.CTkToplevel):
         cfg = self._config
         translation_cfg = cfg.setdefault("translation", {})
         translation_cfg["backend"] = backend
+        translation_cfg["backend_source"] = "manual"
         translation_cfg["target_language"] = target_lang
         translation_cfg["output_format"] = normalize_output_format(output_format)
         translation_cfg["send_to_chatbox"] = self._mic_send_to_chatbox_var.get() == "1"

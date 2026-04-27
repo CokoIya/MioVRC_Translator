@@ -42,6 +42,9 @@ COPY = {
         "download_start": "正在下载正式版安装器...",
         "download_progress": "正在下载正式版安装器... {percent:.1f}% ({downloaded} / {total})",
         "download_progress_unknown": "正在下载正式版安装器... {downloaded}",
+        "download_model_start": "正在下载 SenseVoice 模型包...",
+        "download_model_progress": "正在下载 SenseVoice 模型包... {percent:.1f}% ({downloaded} / {total})",
+        "download_model_progress_unknown": "正在下载 SenseVoice 模型包... {downloaded}",
         "verify": "正在校验安装包完整性...",
         "installing": "正在静默安装正式版...",
         "launching": "正在启动 MioTranslator...",
@@ -75,6 +78,9 @@ COPY = {
         "download_start": "正式版インストーラーをダウンロードしています...",
         "download_progress": "正式版インストーラーをダウンロードしています... {percent:.1f}% ({downloaded} / {total})",
         "download_progress_unknown": "正式版インストーラーをダウンロードしています... {downloaded}",
+        "download_model_start": "SenseVoice モデルパッケージをダウンロードしています...",
+        "download_model_progress": "SenseVoice モデルパッケージをダウンロードしています... {percent:.1f}% ({downloaded} / {total})",
+        "download_model_progress_unknown": "SenseVoice モデルパッケージをダウンロードしています... {downloaded}",
         "verify": "インストーラーを検証しています...",
         "installing": "正式版をサイレントインストールしています...",
         "launching": "MioTranslator を起動しています...",
@@ -108,6 +114,9 @@ COPY = {
         "download_start": "Downloading the official installer...",
         "download_progress": "Downloading the official installer... {percent:.1f}% ({downloaded} / {total})",
         "download_progress_unknown": "Downloading the official installer... {downloaded}",
+        "download_model_start": "Downloading the SenseVoice model package...",
+        "download_model_progress": "Downloading the SenseVoice model package... {percent:.1f}% ({downloaded} / {total})",
+        "download_model_progress_unknown": "Downloading the SenseVoice model package... {downloaded}",
         "verify": "Verifying the installer package...",
         "installing": "Silently installing the official release...",
         "launching": "Launching MioTranslator...",
@@ -136,6 +145,10 @@ class InstallerManifest:
     installer_name: str
     sha256: str
     size_bytes: int | None
+    model_package_url: str
+    model_package_name: str
+    model_sha256: str
+    model_size_bytes: int | None
     app_exe: str
     homepage_url: str
 
@@ -203,6 +216,12 @@ def cached_installer_path(manifest: InstallerManifest) -> Path:
     )
 
 
+def cached_model_package_path(manifest: InstallerManifest) -> Path | None:
+    if not manifest.model_package_url or not manifest.model_package_name:
+        return None
+    return cached_installer_path(manifest).with_name(manifest.model_package_name)
+
+
 def installer_log_path(release_version: str) -> Path:
     return downloader_data_dir() / "logs" / f"install-{_safe_path_component(release_version)}.log"
 
@@ -231,6 +250,27 @@ def format_bytes(num_bytes: int | None) -> str:
     return f"{int(num_bytes)} B"
 
 
+def format_sha_preview(sha256: str) -> str:
+    return f"SHA256 {sha256[:12]}..." if sha256 else "SHA256 not provided"
+
+
+def parse_optional_size(value: object, field_name: str) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        size_bytes = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"manifest {field_name} is invalid") from exc
+    return size_bytes if size_bytes > 0 else None
+
+
+def validate_optional_sha256(value: str, field_name: str) -> str:
+    sha256 = str(value or "").strip().lower()
+    if sha256 and (len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256)):
+        raise RuntimeError(f"manifest {field_name} is invalid")
+    return sha256
+
+
 def request_url(url: str, timeout: int = 20):
     req = urllib.request.Request(
         url,
@@ -253,9 +293,17 @@ def load_manifest(manifest_url: str) -> InstallerManifest:
         raise RuntimeError("manifest is not a JSON object")
 
     version = str(payload.get("version") or "").strip()
-    installer_url = str(payload.get("installer_url") or payload.get("url") or "").strip()
-    sha256 = str(payload.get("sha256") or "").strip().lower()
-    installer_name = str(payload.get("installer_name") or "").strip()
+    lite_installer_url = str(payload.get("installer_url") or payload.get("url") or "").strip()
+    full_installer_url = str(payload.get("full_installer_url") or "").strip()
+    use_full_installer = bool(full_installer_url)
+    installer_url = full_installer_url or lite_installer_url
+    sha256_key = "full_sha256" if use_full_installer else "sha256"
+    sha256 = validate_optional_sha256(str(payload.get(sha256_key) or ""), sha256_key)
+    installer_name_key = "full_installer_name" if use_full_installer else "installer_name"
+    installer_name = str(payload.get(installer_name_key) or "").strip()
+    model_package_url = str(payload.get("model_package_url") or "").strip()
+    model_package_name = str(payload.get("model_package_name") or "").strip()
+    model_sha256 = validate_optional_sha256(str(payload.get("model_sha256") or ""), "model_sha256")
     homepage_url = str(payload.get("homepage_url") or DEFAULT_HOMEPAGE_URL).strip() or DEFAULT_HOMEPAGE_URL
     app_exe = str(payload.get("app_exe") or DEFAULT_APP_EXE).strip() or DEFAULT_APP_EXE
 
@@ -263,21 +311,16 @@ def load_manifest(manifest_url: str) -> InstallerManifest:
         raise RuntimeError("manifest is missing version")
     if not installer_url:
         raise RuntimeError("manifest is missing installer_url")
-    if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
-        raise RuntimeError("manifest sha256 is invalid")
     if not installer_name:
         parsed = urllib.parse.urlparse(installer_url)
         installer_name = Path(parsed.path).name or "MioTranslator-Setup.exe"
+    if model_package_url and not model_package_name:
+        parsed = urllib.parse.urlparse(model_package_url)
+        model_package_name = Path(parsed.path).name or "MioTranslator-Model-SenseVoiceSmall.zip"
 
-    size_value = payload.get("size_bytes")
-    size_bytes: int | None = None
-    if size_value is not None and str(size_value).strip():
-        try:
-            size_bytes = int(size_value)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("manifest size_bytes is invalid") from exc
-        if size_bytes <= 0:
-            size_bytes = None
+    size_key = "full_size_bytes" if use_full_installer else "size_bytes"
+    size_bytes = parse_optional_size(payload.get(size_key), size_key)
+    model_size_bytes = parse_optional_size(payload.get("model_size_bytes"), "model_size_bytes")
 
     return InstallerManifest(
         version=version,
@@ -285,6 +328,10 @@ def load_manifest(manifest_url: str) -> InstallerManifest:
         installer_name=installer_name,
         sha256=sha256,
         size_bytes=size_bytes,
+        model_package_url=model_package_url,
+        model_package_name=model_package_name,
+        model_sha256=model_sha256,
+        model_size_bytes=model_size_bytes,
         app_exe=app_exe,
         homepage_url=homepage_url,
     )
@@ -295,6 +342,8 @@ def verify_downloaded_file(path: Path, expected_size: int | None, expected_sha25
         return False
     if expected_size is not None and path.stat().st_size != expected_size:
         return False
+    if not expected_sha256:
+        return True
 
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
@@ -348,7 +397,7 @@ def download_installer(
         if partial_path.exists():
             partial_path.unlink()
         raise RuntimeError("size_mismatch")
-    if hasher.hexdigest().lower() != expected_sha256.lower():
+    if expected_sha256 and hasher.hexdigest().lower() != expected_sha256.lower():
         if partial_path.exists():
             partial_path.unlink()
         raise RuntimeError("hash_mismatch")
@@ -543,6 +592,21 @@ class DownloaderApp:
                     self._schedule_download_progress,
                 )
 
+            model_package_path = cached_model_package_path(manifest)
+            if model_package_path is not None and not verify_downloaded_file(
+                model_package_path,
+                manifest.model_size_bytes,
+                manifest.model_sha256,
+            ):
+                self.root.after(0, lambda: self.status_var.set(text(self.lang, "download_model_start")))
+                download_installer(
+                    manifest.model_package_url,
+                    model_package_path,
+                    manifest.model_size_bytes,
+                    manifest.model_sha256,
+                    self._schedule_model_download_progress,
+                )
+
             self.root.after(0, lambda: self._on_verify_started(manifest, installer_path))
             run_silent_install(installer_path, install_dir, manifest.version)
 
@@ -553,10 +617,13 @@ class DownloaderApp:
     def _schedule_download_progress(self, downloaded: int, total: int | None) -> None:
         self.root.after(0, lambda: self._on_download_progress(downloaded, total))
 
+    def _schedule_model_download_progress(self, downloaded: int, total: int | None) -> None:
+        self.root.after(0, lambda: self._on_model_download_progress(downloaded, total))
+
     def _on_manifest_ready(self, manifest: InstallerManifest) -> None:
         self.status_var.set(text(self.lang, "manifest_ready", version=manifest.version))
         self.details_var.set(
-            f"{manifest.installer_name} | {format_bytes(manifest.size_bytes)} | SHA256 {manifest.sha256[:12]}... | {manifest.homepage_url}"
+            f"{manifest.installer_name} | {format_bytes(manifest.size_bytes)} | {format_sha_preview(manifest.sha256)} | {manifest.homepage_url}"
         )
 
     def _on_download_progress(self, downloaded: int, total: int | None) -> None:
@@ -584,10 +651,35 @@ class DownloaderApp:
                 text(self.lang, "details_idle", homepage=DEFAULT_HOMEPAGE_URL)
             )
 
+    def _on_model_download_progress(self, downloaded: int, total: int | None) -> None:
+        if total and total > 0:
+            percent = downloaded / total * 100.0
+            self._set_progress(percent)
+            self.status_var.set(
+                text(
+                    self.lang,
+                    "download_model_progress",
+                    percent=percent,
+                    downloaded=format_bytes(downloaded),
+                    total=format_bytes(total),
+                )
+            )
+        else:
+            self.status_var.set(
+                text(self.lang, "download_model_progress_unknown", downloaded=format_bytes(downloaded))
+            )
+        model_path = cached_model_package_path(self.manifest) if self.manifest else None
+        if model_path is not None:
+            self.details_var.set(f"{model_path} | {text(self.lang, 'details_idle', homepage=self.manifest.homepage_url)}")
+        else:
+            self.details_var.set(
+                text(self.lang, "details_idle", homepage=DEFAULT_HOMEPAGE_URL)
+            )
+
     def _on_verify_started(self, manifest: InstallerManifest, installer_path: Path) -> None:
         self._set_progress(100.0)
         self.status_var.set(text(self.lang, "verify"))
-        self.details_var.set(f"{manifest.installer_name} | SHA256 {manifest.sha256[:12]}... | {installer_path}")
+        self.details_var.set(f"{manifest.installer_name} | {format_sha_preview(manifest.sha256)} | {installer_path}")
         self.root.after(150, lambda: self.status_var.set(text(self.lang, "installing")))
         self.root.after(150, self._set_progress_indeterminate)
 
