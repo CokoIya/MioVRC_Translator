@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "updated": "2026-05-08",
+  "tip": {
+    "zh": "赞助请在备注中留下您的称呼或 VRC ID，感谢您的支持！",
+    "ja": "ご支援の際は備考にお名前または VRC ID をご記入ください。",
+    "en": "Please include your name or VRC ID in the donation note. Thank you!",
+    "ko": "후원 시 비고란에 닉네임 또는 VRC ID를 남겨 주세요. 감사합니다!",
+    "ru": "При донате укажите ваш ник или VRC ID в примечании. Спасибо!"
+  },
+  "sponsors": [
+    { "name": "sakuraruki[特别鸣谢]" },
+    { "name": "muyan[￥220!]" },
+    { "name": "苏晴仪（Torelobo）" },
+    { "name": "一根大头葱" },
+    { "name": "凉拌排骨炒西瓜[￥200!]" },
+    { "name": "calenture[￥200!]" },
+    { "name": "114514(逸粉)" },
+    { "name": "啞啞啞啞" },
+    { "name": "Ero小玉[￥100]" },
+    { "name": "来自非洲的然某人" },
+    { "name": "小黑盒：凛音[感谢推广]" },
+    { "name": "73阿姨[感谢推广]" },
+    { "name": "73的干爹" },
+    { "name": "★星の願い★[感谢推广]" },
+    { "name": "爱情废柴" },
+    { "name": "小狼[破费了]" },
+    { "name": "lkhbd[￥114.5]" },
+    { "name": "睦头人[破费了]" },
+    { "name": "阿浩" }
+  ]
+}

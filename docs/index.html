@@ -1,0 +1,1785 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mio RealTime Translator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --acc1: #7b6df2;
+      --acc2: #2dc6ef;
+      --bg: #04050a;
+      --card: rgba(255, 255, 255, 0.07);
+      --bdr: rgba(255, 255, 255, 0.12);
+      --txt1: #f4f6ff;
+      --txt2: #b4bbd9;
+      --txt3: #7c84a6;
+      --rad: 24px;
+      --maxw: 1040px;
+      --shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
+    }
+
+    html {
+      font-family: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB",
+                   "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+      background: var(--bg);
+      color: var(--txt1);
+      -webkit-font-smoothing: antialiased;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-height: 100vh;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+      background: var(--bg);
+      color: var(--txt1);
+      overflow-x: hidden;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      display: none;
+    }
+
+    body::before {
+      z-index: -2;
+      background: url('./assets/icons/Mio_1.png') center / cover no-repeat;
+      transform: scale(1.06);
+      opacity: 0.6;
+      filter: brightness(0.72) saturate(1.02);
+    }
+
+    body::after {
+      z-index: -1;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(123, 109, 242, 0.22), transparent 34%),
+        radial-gradient(circle at 80% 28%, rgba(45, 198, 239, 0.16), transparent 30%),
+        linear-gradient(180deg, rgba(4, 5, 10, 0.1) 0%, rgba(4, 5, 10, 0.28) 38%, rgba(4, 5, 10, 0.62) 100%);
+    }
+
+    body::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    body::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    body::-webkit-scrollbar-thumb {
+      background: rgba(123, 109, 242, 0.45);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+
+    .page-backdrop,
+    .page-backdrop-image,
+    .page-backdrop-grid,
+    .page-backdrop-scrim,
+    .page-backdrop-glow {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .page-backdrop { z-index: 0; }
+    .page-backdrop-image {
+      background: url('./assets/icons/Mio_1.png') center / cover no-repeat;
+      transform: scale(1.01);
+      opacity: 1;
+      filter: saturate(1.02) brightness(1.02);
+    }
+    .page-backdrop-grid {
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+      background-size: 52px 52px;
+      opacity: 0.04;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.55));
+    }
+    .page-backdrop-glow.glow-a {
+      inset: auto auto -12% -10%;
+      width: 44vw;
+      height: 44vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(123, 109, 242, 0.04), transparent 70%);
+      filter: blur(40px);
+    }
+    .page-backdrop-glow.glow-b {
+      inset: -10% -8% auto auto;
+      width: 34vw;
+      height: 34vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(45, 198, 239, 0.04), transparent 68%);
+      filter: blur(50px);
+    }
+    .page-backdrop-scrim {
+      background:
+        linear-gradient(180deg, rgba(4, 5, 10, 0.01) 0%, rgba(4, 5, 10, 0.04) 38%, rgba(4, 5, 10, 0.08) 100%),
+        radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.02), transparent 55%);
+      backdrop-filter: blur(1.5px);
+      -webkit-backdrop-filter: blur(1.5px);
+    }
+
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 240;
+      height: 64px;
+      background: rgba(5, 6, 12, 0);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px;
+      gap: 24px;
+      transition: background-color .28s ease, border-bottom-color .28s ease, backdrop-filter .28s ease, -webkit-backdrop-filter .28s ease;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 12px;
+      text-decoration: none;
+      color: inherit;
+      flex-shrink: 0;
+    }
+    .nav-logo-img {
+      width: 30px; height: 30px; border-radius: 9px;
+      object-fit: cover;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
+    }
+    .nav-logo-text {
+      font-size: 16px; font-weight: 700; letter-spacing: -.02em;
+      background: linear-gradient(90deg, var(--acc1), var(--acc2));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    nav ul { list-style: none; display: flex; align-items: center; gap: 30px; margin-left: auto; }
+    nav ul li a {
+      font-size: 13px; color: var(--txt3); text-decoration: none;
+      transition: color .22s ease, opacity .22s ease;
+    }
+    nav ul li a:hover, nav ul li a.active { color: var(--txt1); }
+    .nav-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+    .lang-switcher {
+      height: 34px; border-radius: 999px;
+      border: 1px solid var(--bdr);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--txt2); padding: 0 14px; font-size: 13px; outline: none;
+      cursor: pointer; transition: border-color .22s ease, color .22s ease;
+    }
+    .lang-switcher:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); }
+    .lang-switcher option { background: #0f111a; color: var(--txt1); }
+
+    .fp-dots {
+      position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
+      z-index: 260; display: flex; flex-direction: column; gap: 12px;
+      pointer-events: auto;
+    }
+    .fp-dot {
+      position: relative;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+    }
+        .fp-dot::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.34);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      transition: all .22s ease;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    }
+    .fp-dot:hover::before { background: rgba(255, 255, 255, 0.62); transform: translate(-50%, -50%) scale(1.08); }
+    .fp-dot.active::before {
+      background: var(--acc1);
+      border-color: rgba(255, 255, 255, 0.36);
+      transform: translate(-50%, -50%) scale(1.08);
+      box-shadow: 0 0 0 7px rgba(123, 109, 242, 0.16), 0 0 18px rgba(123, 109, 242, 0.28);
+    }
+
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 999px;
+      border: 1px solid rgba(123, 109, 242, 0.2);
+      background: rgba(123, 109, 242, 0.1);
+      color: #c8c3ff; margin-bottom: 16px;
+      font-size: 11.5px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+    }
+    .sec-title {
+      font-size: clamp(34px, 4.8vw, 58px); font-weight: 800;
+      line-height: 1.08; text-align: center; color: var(--txt1);
+      margin-bottom: 12px; letter-spacing: -.04em;
+      text-shadow: 0 10px 40px rgba(0, 0, 0, 0.28);
+    }
+    .sec-sub {
+      font-size: 15px; color: var(--txt2); text-align: center;
+      width: min(100%, 650px); line-height: 1.76; margin-bottom: 40px;
+    }
+    
+    .grad-text {
+      background: linear-gradient(120deg, var(--acc1) 0%, var(--acc2) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-wordmark {
+      display: inline-block;
+      line-height: 1.1;
+      padding: 0 .04em .16em;
+      margin: 0 -.04em .06em;
+      text-rendering: geometricPrecision;
+      overflow: visible;
+    }
+    #hero {
+      z-index: 1;
+      justify-content: center;
+      text-align: center;
+      overflow: hidden;
+    }
+    #hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background: rgba(5, 6, 12, 0.15);
+      backdrop-filter: blur(12px) saturate(110%);
+      -webkit-backdrop-filter: blur(12px) saturate(110%);
+    }
+    .hero-bg { display: none; }
+    .hero-blob {
+      position: absolute; border-radius: 50%; filter: blur(90px); z-index: 0;
+      pointer-events: none;
+    }
+    .hero-blob.b1 {
+      width: 420px; height: 420px; top: 4%; left: -8%;
+      background: radial-gradient(circle, rgba(123, 109, 242, 0.24), transparent 70%);
+    }
+    .hero-blob.b2 {
+      width: 360px; height: 360px; right: -4%; bottom: 12%;
+      background: radial-gradient(circle, rgba(45, 198, 239, 0.2), transparent 70%);
+    }
+    .hero-blob.b3 {
+      width: 240px; height: 240px; top: 18%; left: 50%; transform: translateX(-50%);
+      background: radial-gradient(circle, rgba(207, 137, 255, 0.14), transparent 72%);
+    }
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 980px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .hero-icon-wrap {
+      display: flex; justify-content: center; margin-bottom: 14px;
+      flex-shrink: 0;
+    }
+    .hero-icon {
+      width: 72px; height: 72px; border-radius: 20px;
+      object-fit: cover;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      animation: icon-float 4.2s ease-in-out infinite;
+    }
+    @keyframes icon-float {
+      0%,100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .hero-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 11.5px; font-weight: 700; letter-spacing: .16em;
+      text-transform: uppercase; color: #c8f7ff;
+      border: 1px solid rgba(45, 198, 239, 0.24);
+      background: rgba(45, 198, 239, 0.08);
+      padding: 6px 18px; border-radius: 999px; margin-bottom: 16px;
+    }
+    .hero-title {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.02em;
+      font-size: clamp(42px, 7vw, 82px); font-weight: 900;
+      line-height: 1.12; letter-spacing: -.05em;
+      color: #ffffff; margin-bottom: 16px;
+      text-shadow: 0 20px 60px rgba(0, 0, 0, 0.46);
+      overflow: visible;
+    }
+    .hero-title-main { display: block; }
+    .hero-sub {
+      font-size: clamp(15px, 1.7vw, 18px);
+      color: rgba(244, 246, 255, 0.9);
+      width: min(100%, 680px);
+      margin: 0 auto 24px;
+      line-height: 1.76;
+      text-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+    }
+    .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .hero-impact {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      width: min(100%, 880px);
+      margin: 0 auto 22px;
+    }
+    .hero-impact-item {
+      min-height: 78px;
+      padding: 13px 15px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(8, 10, 18, 0.22)),
+        radial-gradient(circle at 20% 0%, rgba(45, 198, 239, 0.18), transparent 58%);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(18px) saturate(125%);
+      -webkit-backdrop-filter: blur(18px) saturate(125%);
+      text-align: left;
+    }
+    .hero-impact-title {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 13.5px;
+      font-weight: 850;
+      color: #ffffff;
+      line-height: 1.28;
+      text-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+    }
+    .hero-impact-body {
+      display: block;
+      font-size: 11.5px;
+      line-height: 1.58;
+      color: rgba(244, 246, 255, 0.78);
+    }
+    .hero-tutorial {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 38px; padding: 0 22px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: linear-gradient(180deg, rgba(18, 24, 40, 0.76), rgba(12, 16, 28, 0.64));
+      color: rgba(247, 249, 255, 0.96); text-decoration: none;
+      font-size: 12.5px; font-weight: 700;
+      box-shadow: 0 12px 30px rgba(5, 6, 12, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      margin: -2px 0 16px;
+      transition: all .22s ease;
+    }
+    .hero-tutorial:hover {
+      border-color: rgba(255, 255, 255, 0.28);
+      color: #fff;
+      transform: translateY(-2px);
+    }
+    .btn-primary,
+    .btn-ghost {
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      position: relative;
+      min-height: 52px; min-width: 158px; padding: 0 30px;
+      border-radius: 999px; font-size: 14.5px; font-weight: 700;
+      border: 1px solid transparent;
+      text-decoration: none; transition: all .22s ease; white-space: nowrap;
+      overflow: hidden;
+      isolation: isolate;
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+    }
+    .btn-primary::before,
+    .btn-ghost::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      z-index: -1;
+    }
+    .btn-primary {
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.14);
+      box-shadow: 0 14px 34px rgba(123, 109, 242, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+    .btn-primary::before {
+      background: linear-gradient(120deg, #6f70f7 0%, #28c1ee 100%);
+    }
+    .btn-primary:hover { opacity: .96; transform: translateY(-2px); box-shadow: 0 18px 40px rgba(123, 109, 242, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.18); }
+    .btn-ghost {
+      color: rgba(247, 249, 255, 0.96);
+      border-color: rgba(255, 255, 255, 0.18);
+      text-decoration: none;
+      box-shadow: 0 12px 30px rgba(5, 6, 12, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+    .btn-ghost::before {
+      background: linear-gradient(180deg, rgba(18, 24, 40, 0.76), rgba(12, 16, 28, 0.64));
+    }
+    .btn-ghost:hover {
+      border-color: rgba(255, 255, 255, 0.28);
+      color: #fff;
+      transform: translateY(-2px);
+      box-shadow: 0 16px 36px rgba(5, 6, 12, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      min-height: 40px; font-size: 12.5px; font-weight: 600; color: rgba(244, 246, 255, 0.96);
+      padding: 0 18px; border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: linear-gradient(180deg, rgba(14, 18, 31, 0.76), rgba(10, 14, 25, 0.64));
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+      margin-bottom: 10px;
+    }
+    .hero-badge svg { color: #98e1ff; }
+    .hero-credit {
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(244, 246, 255, 0.72);
+      text-shadow: 0 1px 8px rgba(0, 0, 0, 0.34);
+    }
+    .scroll-hint {
+      position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      font-size: 10.5px; color: var(--txt3); letter-spacing: .14em;
+      text-transform: uppercase; animation: hint-bob 2.2s ease-in-out infinite;
+      z-index: 1;
+    }
+    .scroll-hint svg { opacity: .7; }
+    @keyframes hint-bob { 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(8px)} }
+
+    #features,
+    #guide,
+    #download {
+      backdrop-filter: blur(12px) saturate(118%);
+      -webkit-backdrop-filter: blur(12px) saturate(118%);
+    }
+    #features {
+      z-index: 2;
+      background:
+        linear-gradient(180deg, rgba(7, 10, 18, 0.58) 0%, rgba(8, 10, 18, 0.66) 100%),
+        radial-gradient(circle at 22% 18%, rgba(123, 109, 242, 0.07), transparent 34%);
+    }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+      width: min(100%, var(--maxw));
+    }
+    .feature-spotlight {
+      width: min(100%, var(--maxw));
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 18px;
+      padding: 24px 26px;
+      border-radius: calc(var(--rad) + 4px);
+      border: 1px solid rgba(45, 198, 239, 0.26);
+      background:
+        linear-gradient(135deg, rgba(45, 198, 239, 0.16), rgba(123, 109, 242, 0.13)),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(8, 10, 18, 0.2));
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(20px) saturate(125%);
+      -webkit-backdrop-filter: blur(20px) saturate(125%);
+    }
+    .feature-spotlight-kicker {
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: #bff3ff;
+    }
+    .feature-spotlight h3 {
+      margin: 0;
+      font-size: clamp(22px, 3vw, 34px);
+      line-height: 1.18;
+      color: #fff;
+      letter-spacing: 0;
+    }
+    .feature-spotlight p:last-child {
+      margin: 0;
+      color: rgba(244, 246, 255, 0.84);
+      font-size: 14px;
+      line-height: 1.76;
+    }
+    .feature-card {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: var(--rad); padding: 24px 22px;
+      transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
+      opacity: 1; transform: translateY(0);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+    }
+    .feature-card.visible {
+      opacity: 1; transform: translateY(0);
+    }
+    .feature-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(123, 109, 242, .32);
+      box-shadow: 0 28px 60px rgba(0, 0, 0, .44);
+    }
+    .feat-icon {
+      width: 46px; height: 46px; border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 14px;
+      background: linear-gradient(135deg, rgba(123, 109, 242, .2), rgba(45, 198, 239, .12));
+      border: 1px solid rgba(255, 255, 255, .06);
+    }
+    .feature-card h3 {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      font-size: 15px; font-weight: 700; margin-bottom: 8px; color: var(--txt1);
+    }
+    .feature-card p { font-size: 13px; color: var(--txt2); line-height: 1.7; }
+    .dev-badge {
+      display: inline-flex; align-items: center; height: 20px;
+      padding: 0 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 900; line-height: 1;
+      color: #17100a;
+      background: linear-gradient(135deg, #ffe17a, #ff8f6b);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, .18), 0 8px 22px rgba(255, 143, 107, .22);
+    }
+
+    #guide {
+      z-index: 3;
+      background:
+        linear-gradient(180deg, rgba(7, 10, 18, 0.62), rgba(8, 10, 18, 0.7)),
+        radial-gradient(ellipse at 50% 100%, rgba(123, 109, 242, 0.06), transparent 60%);
+    }
+    .guide-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;
+      width: min(100%, var(--maxw));
+    }
+    .guide-step {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 18px 18px 17px; border-radius: var(--rad);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      opacity: 1; transform: translateY(0);
+      transition: opacity .45s ease, transform .45s ease, border-color .24s ease;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+    }
+    .guide-step.visible { opacity: 1; transform: translateY(0); }
+    .guide-step:hover { border-color: rgba(45, 198, 239, .3); transform: translateY(-2px); }
+    .step-num {
+      flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800;
+      background: linear-gradient(135deg, var(--acc1), var(--acc2));
+      color: #fff;
+      box-shadow: 0 12px 26px rgba(123, 109, 242, 0.26);
+    }
+    .step-body h4 { font-size: 14.5px; font-weight: 700; margin-bottom: 6px; color: var(--txt1); }
+    .step-body p { font-size: 13px; color: var(--txt2); line-height: 1.72; }
+    .step-body code {
+      display: inline-flex; margin-top: 8px;
+      font-size: 12px; padding: 0 11px; min-height: 32px; border-radius: 999px;
+      background: rgba(45, 198, 239, .08); border: 1px solid rgba(45, 198, 239, .18);
+      color: #d7f8ff; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      align-items: center;
+    }
+    .guide-step.full { grid-column: 1 / -1; }
+
+    #download {
+      background:
+        linear-gradient(180deg, rgba(7, 10, 18, 0.68), rgba(8, 10, 18, 0.76)),
+        radial-gradient(circle at 78% 20%, rgba(45, 198, 239, 0.05), transparent 34%);
+      z-index: 4;
+    }
+    .dl-cards {
+      display: grid; gap: 18px; width: min(100%, var(--maxw));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 18px;
+    }
+    .dl-card {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(8, 10, 18, 0.2));
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: calc(var(--rad) + 2px); padding: 26px 24px 22px;
+      opacity: 1; transform: translateY(0);
+      transition: opacity .5s ease, transform .5s ease, border-color .24s ease;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+    }
+    .dl-card.visible { opacity: 1; transform: translateY(0); }
+    .dl-card:hover { border-color: rgba(123, 109, 242, .28); transform: translateY(-2px); }
+    .dl-icon-wrap {
+      width: 48px; height: 48px; border-radius: 15px; font-size: 24px;
+      display: flex; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, rgba(123, 109, 242, .2), rgba(45, 198, 239, .12));
+      border: 1px solid rgba(255, 255, 255, .06);
+      margin-bottom: 15px;
+    }
+    .dl-card h3 { font-size: 17px; font-weight: 800; margin-bottom: 8px; color: var(--txt1); }
+    .dl-card p { font-size: 13px; color: var(--txt2); line-height: 1.76; margin-bottom: 16px; }
+    .dl-btns { display: flex; flex-direction: column; gap: 10px; }
+    .btn-dl {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 0 16px; min-height: 42px; border-radius: 12px;
+      font-size: 13.5px; font-weight: 700; text-decoration: none;
+      transition: all .22s ease; cursor: pointer;
+    }
+    .btn-dl.prim {
+      background: linear-gradient(120deg, var(--acc1), var(--acc2));
+      color: #fff; border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 12px 28px rgba(123, 109, 242, 0.24);
+    }
+    .btn-dl.prim:hover { opacity: .92; transform: translateY(-2px); box-shadow: 0 16px 34px rgba(123, 109, 242, 0.3); }
+    .btn-dl.sec {
+      background: rgba(255, 255, 255, .04); border: 1px solid var(--bdr);
+      color: var(--txt2);
+    }
+    .btn-dl.sec:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); transform: translateY(-2px); }
+    .download-community {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px; margin-top: 6px;
+    }
+    .dl-note {
+      font-size: 11.5px; color: var(--txt3); margin-top: 2px; line-height: 1.65;
+    }
+    .privacy-block {
+      width: min(100%, var(--maxw));
+      background: linear-gradient(180deg, rgba(11, 15, 26, 0.9), rgba(8, 11, 20, 0.82));
+      border: 1px solid rgba(151, 207, 255, 0.14);
+      border-radius: calc(var(--rad) + 2px); padding: 20px 22px;
+      display: flex; gap: 14px; align-items: flex-start;
+      opacity: 1; transform: translateY(0);
+      transition: opacity .5s .2s ease, transform .5s .2s ease;
+      box-shadow: 0 22px 54px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(18px) saturate(120%);
+      -webkit-backdrop-filter: blur(18px) saturate(120%);
+      margin-bottom: 22px;
+    }
+    .privacy-block.visible { opacity: 1; transform: translateY(0); }
+    .privacy-block svg {
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      padding: 10px;
+      margin-top: 0;
+      color: #a7e7ff;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(123, 109, 242, 0.22), rgba(45, 198, 239, 0.16));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    }
+    .privacy-block h4 { font-size: 15px; font-weight: 800; margin-bottom: 7px; color: #ffffff; }
+    .privacy-block p { font-size: 13.5px; color: rgba(244, 246, 255, 0.92); line-height: 1.82; }
+    .privacy-block strong { color: #ffffff; }
+    .site-footer {
+      width: min(100%, var(--maxw));
+      padding: 18px 0 0;
+      border-top: 1px solid rgba(255, 255, 255, .08);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+    }
+    .site-footer p { font-size: 11.5px; color: rgba(228, 232, 246, 0.82); text-align: center; line-height: 1.7; text-shadow: 0 4px 18px rgba(0, 0, 0, 0.28); }
+    .site-footer a { color: #c8f7ff; text-decoration: none; }
+    .site-footer a:hover { text-decoration: underline; }
+
+    .fp-section-anchor {
+      display: block;
+      width: 100%;
+      height: 0;
+      pointer-events: none;
+    }
+    .fp-section {
+      position: sticky;
+      top: 0;
+      min-height: 100vh;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: sticky;
+      padding: 104px 32px 70px;
+      isolation: isolate;
+    }
+    .fp-section.section-scrollable {
+      position: relative;
+      top: auto;
+      justify-content: flex-start;
+    }
+    .fp-section.section-scrollable .scroll-hint {
+      display: none;
+    }
+    @media (max-width: 900px) {
+      nav { padding: 0 18px; }
+      nav ul { display: none; }
+      .fp-section { padding-inline: 22px; }
+      .hero-impact { grid-template-columns: 1fr; width: min(100%, 560px); }
+      .hero-impact-item { min-height: auto; text-align: center; }
+      .feature-spotlight { grid-template-columns: 1fr; padding: 22px; }
+      .features-grid, .guide-grid, .dl-cards { grid-template-columns: 1fr; }
+      .download-community { grid-template-columns: 1fr; }
+      .guide-step.full { grid-column: 1; }
+      .fp-dots { right: 12px; }
+    }
+    @media (max-height: 820px) {
+      .fp-section { padding-top: 84px; padding-bottom: 46px; }
+      .hero-eyebrow { margin-bottom: 12px; }
+      .hero-title { font-size: clamp(36px, 6vw, 68px); margin-bottom: 10px; }
+      .hero-sub { font-size: 14px; margin-bottom: 18px; line-height: 1.68; }
+      .hero-impact { margin-bottom: 14px; gap: 8px; }
+      .hero-impact-item { min-height: 58px; padding: 10px 12px; }
+      .hero-impact-title { margin-bottom: 0; font-size: 12.5px; }
+      .hero-impact-body { display: none; }
+      .hero-cta { margin-bottom: 12px; }
+      .hero-tutorial { margin-bottom: 10px; }
+      .hero-badge { margin-bottom: 4px; }
+      .scroll-hint { bottom: 14px; }
+    }
+    @media (max-height: 720px) {
+      .hero-title { font-size: clamp(34px, 5.6vw, 60px); }
+      .hero-sub { width: min(100%, 620px); }
+    }
+    @media (max-width: 640px) {
+      .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: min(100%, 980px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+    @media (max-width: 480px) {
+      nav { height: 58px; padding: 0 12px; }
+      .nav-logo-text { font-size: 14px; }
+      .lang-switcher { max-width: 116px; padding: 0 10px; }
+      .fp-section { padding-inline: 16px; }
+      .feature-card, .guide-step, .dl-card, .privacy-block { border-radius: 20px; }
+      .fp-dots { right: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-backdrop" aria-hidden="true">
+    <div class="page-backdrop-image"></div>
+    <div class="page-backdrop-glow glow-a"></div>
+    <div class="page-backdrop-glow glow-b"></div>
+    <div class="page-backdrop-grid"></div>
+    <div class="page-backdrop-scrim"></div>
+  </div>
+
+<!-- NAV -->
+<nav>
+  <a class="nav-logo" href="#" onclick="scrollToSection(0);return false;">
+    <img class="nav-logo-img" src="./assets/icons/app_icon_mio.png" alt="Mio" />
+    <span class="nav-logo-text">Mio Translator</span>
+  </a>
+  <ul>
+    <li><a id="nav-intro" href="#" onclick="scrollToSection(0);return false;">介绍</a></li>
+    <li><a id="nav-features" href="#" onclick="scrollToSection(1);return false;">功能</a></li>
+    <li><a id="nav-guide" href="#" onclick="scrollToSection(2);return false;">使用说明</a></li>
+    <li><a id="nav-download" href="#" onclick="scrollToSection(3);return false;">下载</a></li>
+    <li><a id="nav-github" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></li>
+  </ul>
+  <div class="nav-right">
+    <select id="lang-switcher" class="lang-switcher" aria-label="Language">
+      <option value="zh-CN">简体中文</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="ru">Русский</option>
+      <option value="ko">한국어</option>
+    </select>
+  </div>
+</nav>
+
+<!-- DOT NAV -->
+<div class="fp-dots" aria-label="Section navigation" role="navigation">
+  <button class="fp-dot active" data-i="0" aria-label="Hero"></button>
+  <button class="fp-dot" data-i="1" aria-label="Features"></button>
+  <button class="fp-dot" data-i="2" aria-label="Guide"></button>
+  <button class="fp-dot" data-i="3" aria-label="Download"></button>
+</div>
+
+<!-- 0: HERO -->
+<section class="fp-section" id="hero">
+  <div class="hero-bg" aria-hidden="true"></div>
+  <div class="hero-blob b1" aria-hidden="true"></div>
+  <div class="hero-blob b2" aria-hidden="true"></div>
+  <div class="hero-blob b3" aria-hidden="true"></div>
+  <div class="hero-inner">
+    <div class="hero-eyebrow">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg>
+      <span id="hero-eyebrow">让任何游戏都能同声传译</span>
+    </div>
+    <h1 class="hero-title">
+      <span class="grad-text hero-wordmark">Mio</span>
+      <span class="hero-title-main">RealTime Translator</span>
+    </h1>
+    <p class="hero-sub" id="hero-sub">语音阅读把译文和手打文字变成 AI 声音；反向翻译听懂别人说什么；MixLine 把这段声音送进游戏麦克风。<br>不只是 VRChat，只要游戏能选择麦克风，就能拥有实时翻译和属于自己的声音。</p>
+    <div class="hero-impact" aria-label="Core capabilities">
+      <div class="hero-impact-item">
+        <span class="hero-impact-title" id="hero-impact-1-title">任何游戏，同声传译</span>
+        <span class="hero-impact-body" id="hero-impact-1-body">翻译结果可经 MixLine 作为麦克风输入，进入支持自选麦克风的游戏。</span>
+      </div>
+      <div class="hero-impact-item">
+        <span class="hero-impact-title" id="hero-impact-2-title">AI 阅读译文与文字</span>
+        <span class="hero-impact-body" id="hero-impact-2-body">说话、翻译、手打文字，都可以被读成你选择的 AI 声线。</span>
+      </div>
+      <div class="hero-impact-item">
+        <span class="hero-impact-title" id="hero-impact-3-title">给无言势和口障玩家声音</span>
+        <span class="hero-impact-body" id="hero-impact-3-body">不用开口，也能用文字和翻译结果在游戏里发出自己的声音。</span>
+      </div>
+    </div>
+    <div class="hero-cta">
+      <a id="hero-download" href="#" onclick="scrollToSection(3);return false;" class="btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        立即下载
+      </a>
+      <a id="hero-source" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" class="btn-ghost">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+        查看源码
+      </a>
+    </div>
+    <a id="hero-tutorial" class="hero-tutorial" href="https://www.bilibili.com/video/BV1SPDTBhEdK/?share_source=copy_web&vd_source=9902314fcc4f4815dd6d12f4d7fa82e2" target="_blank" rel="noopener">
+      视频教学
+    </a>
+    <div class="hero-badge">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+      <span id="privacy-badge">零数据收集 · 聊天内容发送后自动销毁</span>
+    </div>
+    <p class="hero-credit">背景图为天川 澪「みお」</p>
+  </div>
+  <div class="scroll-hint" onclick="scrollToSection(1)" style="cursor:pointer">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    <span id="scroll-hint-text">向下滚动</span>
+  </div>
+</section>
+
+<!-- 1: FEATURES -->
+<section class="fp-section" id="features">
+  <p class="eyebrow" id="features-eyebrow">功能特性</p>
+  <h2 class="sec-title" id="features-title">不只是翻译工具，也是玩家的第二个声音</h2>
+  <p class="sec-sub" id="features-sub">让跨语言玩家能实时交流，也让无言势、口障或不方便开麦的玩家，把文字变成能被队友听见的 AI 声音。</p>
+  <div class="feature-spotlight">
+    <div>
+      <p class="feature-spotlight-kicker" id="spotlight-kicker">给每一种表达方式留位置</p>
+      <h3 id="spotlight-title">把“我想说”变成游戏里听得见的声音</h3>
+    </div>
+    <p id="spotlight-body">语音阅读不只是朗读功能。它可以读出翻译后的句子，也可以读出手打文字；配合 MixLine 后，这段 AI 声音会作为麦克风进入游戏。对无言势、口障、社恐或暂时不方便开口的玩家来说，这意味着可以选择一条适合自己的声线，真正参与语音交流。</p>
+  </div>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feat-icon">🎙️</div>
+      <h3 id="feature-1-title">本地语音识别</h3>
+      <p id="feature-1-body">本地 + 在线识别：中文 / 粤语用 SenseVoice Small，其他语言可选 Web Speech、Qwen3-ASR 或 Gemini Live。Qwen3-ASR 面向全语言，兼顾高精度和速度。可在设置中随时切换。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feat-icon">🌐</div>
+      <h3 id="feature-2-title">多翻译后端</h3>
+      <p id="feature-2-body">支持 GPT、Qwen、DeepSeek、Gemini、Claude、Kimi、xAI、Mistral 等服务商，自由切换。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feat-icon">💬</div>
+      <h3 id="feature-3-title">VRChat 直发</h3>
+      <p id="feature-3-body">通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feat-icon">🔄</div>
+      <h3 id="feature-4-title">反向翻译 + 同声传译</h3>
+      <p id="feature-4-body">反向翻译可识别对方语音并显示译文；开启语音阅读后，译文还能通过 MixLine 虚拟麦克风实时读给游戏里的其他玩家。不是只给 VRC，只要游戏能选麦克风，就能搭出同声传译。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feat-icon">✏️</div>
+      <h3 id="feature-5-title">文字输入 + AI 语音阅读</h3>
+      <p id="feature-5-body">输入文字可以翻译、发送到 VRC，也可以直接用 AI 声音朗读。无言势、口障或不方便开麦的玩家，可以用自己选择的声线把想说的话传进游戏语音。</p>
+    </div>
+    <div class="feature-card">
+      <div class="feat-icon">🔒</div>
+      <h3 id="feature-6-title">隐私优先</h3>
+      <p id="feature-6-body">无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2: GUIDE -->
+<section class="fp-section" id="guide">
+  <p class="eyebrow" id="guide-eyebrow">使用说明</p>
+  <h2 class="sec-title" id="guide-title">五步开始使用</h2>
+  <p class="sec-sub" id="guide-sub">从下载到 VRChat 实时翻译，只需几分钟。</p>
+  <div class="guide-grid">
+    <div class="guide-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h4 id="guide-step-1-title">下载并安装</h4>
+        <p id="guide-step-1-body">点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。</p>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h4 id="guide-step-2-title">配置翻译后端</h4>
+        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。</p>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h4 id="guide-step-3-title">设置游戏输入</h4>
+        <p id="guide-step-3-body">VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：</p>
+        <code>Options → OSC → Enable</code>
+      </div>
+    </div>
+    <div class="guide-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h4 id="guide-step-4-title">下载并安装</h4>
+        <p id="guide-step-4-body">运行安装包后，程序会检测本地 SenseVoice 模型并按需弹出下载向导。在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。首次本地模型约需下载 950 MB。</p>
+      </div>
+    </div>
+    <div class="guide-step full">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h4 id="guide-step-5-title">开始翻译或同传</h4>
+        <p id="guide-step-5-body">模型加载完成后，对着麦克风说话即可翻译；开启反向翻译和语音阅读后，译文会被 AI 语音读出并经 MixLine 进入游戏麦克风。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3: DOWNLOAD -->
+<section class="fp-section" id="download">
+  <p class="eyebrow" id="download-eyebrow">下载</p>
+  <h2 class="sec-title" id="download-title">新版下载</h2>
+  <p class="sec-sub" id="download-sub">v1.3.5.2 正式版把“AI 阅读译文”和“MixLine 虚拟麦克风”放到同传链路里；安装包已内置 Style-Bert-VITS2 相关依赖，不捆绑语音模型，首次启动会按需下载。</p>
+  <div class="dl-cards">
+    <div class="dl-card">
+      <div class="dl-icon-wrap">⬇️</div>
+      <h3 id="download-card-title">Mio RealTime Translator</h3>
+      <p id="download-card-body">Windows x64 · v1.3.5.2 正式版 · AI 语音阅读 · MixLine 同声传译</p>
+      <p class="dl-note" id="download-release-note">v1.3.5.2 适合直接下载安装；语音阅读可把译文或手打文字读成 AI 声音，配合反向翻译与 MixLine 送进 VRChat 或其他游戏。</p>
+      <div class="dl-btns">
+        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.5.2/MioTranslator-Setup-v1.3.5.2.exe"
+           download="MioTranslator-Setup-v1.3.5.2.exe"
+           id="download-direct-link" class="btn-dl prim">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="download-button-text">下载安装包</span>
+        </a>
+        <a href="#"
+           id="download-model-link" class="btn-dl sec">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
+          <span id="download-model-text">Beta版下载</span>
+        </a>
+        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.3.5.2 正式版安装包。</p>
+        <div class="download-community">
+          <a href="https://qm.qq.com/q/BB1z8mldeM" target="_blank" rel="noopener" class="btn-dl sec">
+            <span id="download-qq-1-text">QQ 1 群</span>
+          </a>
+          <a href="https://qm.qq.com/q/TrkJ0MSz4G" target="_blank" rel="noopener" class="btn-dl sec">
+            <span id="download-qq-2-text">QQ 2 群</span>
+          </a>
+        </div>
+        <p class="dl-note" id="download-community-note">下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。</p>
+      </div>
+    </div>
+    <div class="dl-card">
+      <div class="dl-icon-wrap">📖</div>
+      <h3 id="download-dict-title">ASR 官方词典</h3>
+      <p id="download-dict-body">这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。</p>
+      <div class="dl-btns">
+        <a href="./dictionaries/" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-module-text">打开词典页面</span>
+        </a>
+        <a href="./dictionaries/asr_dictionary_manifest.json" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-manifest-text">查看更新清单</span>
+        </a>
+        <a href="./dictionaries/asr_terms.official.json" target="_blank" rel="noopener" class="btn-dl sec">
+          <span id="download-dict-json-text">下载词典文件</span>
+        </a>
+        <p class="dl-note" id="download-dict-note">软件里的“更新词典”会从这里获取官方词典。</p>
+      </div>
+    </div>
+  </div>
+  <div class="privacy-block">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+    <div>
+      <h4 id="privacy-title">隐私声明</h4>
+      <p id="privacy-body">本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。</p>
+    </div>
+  </div>
+  <footer class="site-footer">
+    <p id="footer-main">制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></p>
+    <p id="footer-sub">本项目无任何数据收集，不保存任何聊天内容，每条消息发送后都会自动销毁。</p>
+  </footer>
+</section>
+
+<script>
+  const sections = Array.from(document.querySelectorAll('.fp-section'));
+  const sectionAnchors = sections.map((section, index) => {
+    const anchor = document.createElement('span');
+    anchor.className = 'fp-section-anchor';
+    anchor.setAttribute('aria-hidden', 'true');
+    anchor.dataset.i = String(index);
+    section.parentNode.insertBefore(anchor, section);
+    return anchor;
+  });
+  const dots = Array.from(document.querySelectorAll('.fp-dot'));
+  const navBar = document.querySelector('nav');
+  const navLinks = [
+    document.getElementById('nav-intro'),
+    document.getElementById('nav-features'),
+    document.getElementById('nav-guide'),
+    document.getElementById('nav-download')
+  ];
+
+  let activeSectionIndex = -1;
+  const sectionUnlockMediaQuery = window.matchMedia('(max-width: 900px), (hover: none) and (pointer: coarse)');
+
+  function syncSectionScrollability() {
+    const shouldUnlockTallSections = sectionUnlockMediaQuery.matches;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    sections.forEach((section) => {
+      const shouldUnlock = shouldUnlockTallSections && section.scrollHeight > viewportHeight + 4;
+      section.classList.toggle('section-scrollable', shouldUnlock);
+    });
+  }
+  function scrollToSection(index) {
+    const target = sections[index];
+    const anchor = sectionAnchors[index];
+    if (!target || !anchor) return;
+
+    const top = anchor.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo({
+      top,
+      behavior: 'smooth'
+    });
+  }
+
+  window.scrollToSection = scrollToSection;
+
+  function setActiveSection(index) {
+    if (index === activeSectionIndex || index < 0 || index >= sections.length) return;
+    activeSectionIndex = index;
+    dots.forEach((dot, dotIndex) => dot.classList.toggle('active', dotIndex === index));
+    navLinks.forEach((link, linkIndex) => {
+      if (link) link.classList.toggle('active', linkIndex === index);
+    });
+  }
+
+
+  function updateNavBar() {
+    if (!navBar) return;
+    const progress = Math.max(0, Math.min(window.scrollY / Math.max(window.innerHeight * 0.35, 1), 1));
+    const alpha = (0.56 * progress).toFixed(3);
+    const borderAlpha = (0.08 * progress).toFixed(3);
+    const blur = (18 * progress).toFixed(2);
+    navBar.style.backgroundColor = `rgba(5, 6, 12, ${alpha})`;
+    navBar.style.borderBottomColor = `rgba(255, 255, 255, ${borderAlpha})`;
+    if (progress > 0.01) {
+      const filterValue = `saturate(150%) blur(${blur}px)`;
+      navBar.style.backdropFilter = filterValue;
+      navBar.style.webkitBackdropFilter = filterValue;
+    } else {
+      navBar.style.backdropFilter = 'none';
+      navBar.style.webkitBackdropFilter = 'none';
+    }
+  }
+  function getActiveSectionIndex() {
+    const navHeight = navBar ? navBar.offsetHeight : 0;
+    const threshold = navHeight + 12;
+
+    for (let index = sections.length - 1; index >= 0; index -= 1) {
+      const rect = sections[index].getBoundingClientRect();
+      if (rect.top <= threshold && rect.bottom > threshold) {
+        return index;
+      }
+    }
+
+    let closestIndex = 0;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    sections.forEach((section, index) => {
+      const rect = section.getBoundingClientRect();
+      const distance = Math.abs(rect.top - threshold);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    });
+    return closestIndex;
+  }
+
+  let ticking = false;
+  function updateSectionState() {
+    setActiveSection(getActiveSectionIndex());
+    updateNavBar();
+    ticking = false;
+  }
+
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    window.requestAnimationFrame(updateSectionState);
+  }, { passive: true });
+
+  window.addEventListener('resize', () => {
+    syncSectionScrollability();
+    updateSectionState();
+  }, { passive: true });
+  dots.forEach((dot, index) => {
+    dot.addEventListener('click', () => scrollToSection(index));
+  });
+
+  window.addEventListener('keydown', (event) => {
+    const tagName = document.activeElement && document.activeElement.tagName;
+    const isTyping = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+    if (isTyping) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'PageDown') {
+      event.preventDefault();
+      scrollToSection(Math.min(activeSectionIndex + 1, sections.length - 1));
+    }
+
+    if (event.key === 'ArrowUp' || event.key === 'PageUp') {
+      event.preventDefault();
+      scrollToSection(Math.max(activeSectionIndex - 1, 0));
+    }
+  });
+
+  const translations = {
+    'zh-CN': {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '介绍',
+      'nav-features': '功能',
+      'nav-guide': '使用说明',
+      'nav-download': '下载',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': '让任何游戏都能同声传译',
+      'hero-sub': '语音阅读把译文和手打文字变成 AI 声音；反向翻译听懂别人说什么；MixLine 把这段声音送进游戏麦克风。<br>不只是 VRChat，只要游戏能选择麦克风，就能拥有实时翻译和属于自己的声音。',
+      'hero-impact-1-title': '任何游戏，同声传译',
+      'hero-impact-1-body': '翻译结果可经 MixLine 作为麦克风输入，进入支持自选麦克风的游戏。',
+      'hero-impact-2-title': 'AI 阅读译文与文字',
+      'hero-impact-2-body': '说话、翻译、手打文字，都可以被读成你选择的 AI 声线。',
+      'hero-impact-3-title': '给无言势和口障玩家声音',
+      'hero-impact-3-body': '不用开口，也能用文字和翻译结果在游戏里发出自己的声音。',
+      'hero-download': '立即下载',
+      'hero-source': '查看源码',
+      'hero-tutorial': '视频教学',
+      'privacy-badge': '零数据收集 · 聊天内容发送后自动销毁',
+      'scroll-hint-text': '向下滚动',
+      'features-eyebrow': '功能特性',
+      'features-title': '不只是翻译工具，也是玩家的第二个声音',
+      'features-sub': '让跨语言玩家能实时交流，也让无言势、口障或不方便开麦的玩家，把文字变成能被队友听见的 AI 声音。',
+      'spotlight-kicker': '给每一种表达方式留位置',
+      'spotlight-title': '把“我想说”变成游戏里听得见的声音',
+      'spotlight-body': '语音阅读不只是朗读功能。它可以读出翻译后的句子，也可以读出手打文字；配合 MixLine 后，这段 AI 声音会作为麦克风进入游戏。对无言势、口障、社恐或暂时不方便开口的玩家来说，这意味着可以选择一条适合自己的声线，真正参与语音交流。',
+      'feature-1-title': '本地语音识别',
+      'feature-1-body': '本地 + 在线识别：中文 / 粤语用 SenseVoice Small，其他语言可选 Web Speech、Qwen3-ASR 或 Gemini Live。Qwen3-ASR 面向全语言，兼顾高精度和速度。可在设置中随时切换。',
+      'feature-2-title': '多翻译后端',
+      'feature-2-body': '支持 GPT、Qwen、DeepSeek、Gemini、Claude、Kimi、xAI、Mistral 等服务商，自由切换。',
+      'feature-3-title': 'VRChat 直发',
+      'feature-3-body': '通过 VRChat 官方 OSC 接口，将翻译内容直接发送到你的聊天框，无需复制粘贴。',
+      'feature-4-title': '反向翻译 + 同声传译',
+      'feature-4-body': '反向翻译可识别对方语音并显示译文；开启语音阅读后，译文还能通过 MixLine 虚拟麦克风实时读给游戏里的其他玩家。不是只给 VRC，只要游戏能选麦克风，就能搭出同声传译。',
+      'feature-5-title': '文字输入 + AI 语音阅读',
+      'feature-5-body': '输入文字可以翻译、发送到 VRC，也可以直接用 AI 声音朗读。无言势、口障或不方便开麦的玩家，可以用自己选择的声线把想说的话传进游戏语音。',
+      'feature-6-title': '隐私优先',
+      'feature-6-body': '无数据收集、无日志记录、无云服务器。每条消息发送结束后立即销毁，完全本地运行。',
+      'guide-eyebrow': '使用说明',
+      'guide-title': '五步开始使用',
+      'guide-sub': '从下载到 VRChat 实时翻译，只需几分钟。',
+      'guide-step-1-title': '下载并安装',
+      'guide-step-1-body': '点击下方“立即下载安装”按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。',
+      'guide-step-2-title': '配置翻译后端',
+      'guide-step-2-body': '启动 MioTranslator.exe，点击右上角设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。',
+      'guide-step-3-title': '设置游戏输入',
+      'guide-step-3-body': 'VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：',
+      'guide-step-4-title': '下载并安装',
+      'guide-step-4-body': '运行安装包后，程序会检测本地 SenseVoice 模型并按需弹出下载向导。在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。首次本地模型约需下载 950 MB。',
+      'guide-step-5-title': '开始翻译或同传',
+      'guide-step-5-body': '模型加载完成后，对着麦克风说话即可翻译；开启反向翻译和语音阅读后，译文会被 AI 语音读出并经 MixLine 进入游戏麦克风。',
+      'download-eyebrow': '下载',
+      'download-title': '新版下载',
+      'download-sub': 'v1.3.5.2 正式版把“AI 阅读译文”和“MixLine 虚拟麦克风”放到同传链路里；安装包已内置 Style-Bert-VITS2 相关依赖，不捆绑语音模型，首次启动会按需下载。',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.3.5.2 正式版 · AI 语音阅读 · MixLine 同声传译',
+      'download-release-note': 'v1.3.5.2 适合直接下载安装；语音阅读可把译文或手打文字读成 AI 声音，配合反向翻译与 MixLine 送进 VRChat 或其他游戏。',
+      'download-button-text': '下载安装包',
+      'download-button-loading': '正在准备安装包...',
+      'download-model-text': 'Beta版下载',
+      'download-model-note': '暂无测试版提供，当前请使用 v1.3.5.2 正式版安装包。',
+      'download-qq-1-text': 'QQ 1 群',
+      'download-qq-2-text': 'QQ 2 群',
+      'download-community-note': '下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。',
+      'download-releases-text': '暂无测试版提供',
+      'download-releases-loading': '暂无测试版提供',
+      'download-releases-note': 'v1.3.5.2 是正式版手动下载，当前暂无测试版提供。',
+      'download-dict-title': 'ASR 官方词典',
+      'download-dict-body': '这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。',
+      'download-dict-module-text': '打开词典页面',
+      'download-dict-manifest-text': '查看更新清单',
+      'download-dict-json-text': '下载词典文件',
+      'download-dict-note': '软件里的“更新词典”会从这里获取官方词典。',
+      'privacy-title': '隐私声明',
+      'privacy-body': '本项目<strong>无任何数据收集</strong>，不保存任何聊天内容，每条聊天内容发送结束都会自动销毁。<br>本项目为纯本地项目，没有项目自有的云服务器，用户的任何 API Key 均不会被上传或滥用。<br>软件本身不含任何统计、埋点或聊天日志写盘逻辑。',
+      'footer-main': '制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 开源项目，禁止任何形式的收费分发 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': '本项目无任何数据收集，不保存任何聊天内容，每条消息发送后都会自动销毁。'
+    },
+    en: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': 'Overview',
+      'nav-features': 'Features',
+      'nav-guide': 'Guide',
+      'nav-download': 'Download',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'Simultaneous-style interpretation for any game',
+      'hero-sub': 'Voice reading turns translated lines and typed text into AI speech; reverse translation helps you understand others; MixLine sends that voice into the game microphone.<br>It is not just for VRChat. If a game lets you choose a mic, you can bring real-time translation and your own voice into it.',
+      'hero-impact-1-title': 'Any game, interpreted live',
+      'hero-impact-1-body': 'Route translated speech through MixLine as mic input for games that let you choose a microphone.',
+      'hero-impact-2-title': 'AI reads text and translations',
+      'hero-impact-2-body': 'Speech, translated lines, and typed text can all become the AI voice you choose.',
+      'hero-impact-3-title': 'A voice for more players',
+      'hero-impact-3-body': 'Non-speaking or speech-impaired players can join voice chat through typed text and translations.',
+      'hero-download': 'Download Now',
+      'hero-source': 'View Source',
+      'hero-tutorial': 'Video Guide',
+      'privacy-badge': 'No data collection · Messages are discarded after sending',
+      'scroll-hint-text': 'Scroll down',
+      'features-eyebrow': 'Features',
+      'features-title': 'More than a translator: a second voice for players',
+      'features-sub': 'Real-time translation for cross-language play, and AI speech for players who cannot, prefer not to, or are not able to speak on mic.',
+      'spotlight-kicker': 'Room for every way to communicate',
+      'spotlight-title': 'Turn “what I want to say” into a voice players can hear',
+      'spotlight-body': 'Voice reading is more than playback. It can read translated sentences and typed text; with MixLine, that AI speech becomes your in-game microphone. For non-speaking, speech-impaired, voice-shy, or temporarily muted players, it means choosing a voice that fits and joining voice chat for real.',
+      'feature-1-title': 'Local Speech Recognition',
+      'feature-1-body': 'Speech recognition supports local SenseVoice Small for Chinese / Cantonese plus online ASR options: Web Speech, Qwen3-ASR, and Gemini Live. Qwen3-ASR is optimized for fast, highly accurate recognition across all languages. Switch any time from Settings.',
+      'feature-2-title': 'Multiple Translation Backends',
+      'feature-2-body': 'Switch between GPT, Qwen, DeepSeek, Gemini, Claude, Kimi, xAI, Mistral, and more.',
+      'feature-3-title': 'Direct VRChat Sending',
+      'feature-3-body': 'Send translated text straight to the VRChat chatbox through the official OSC interface.',
+      'feature-4-title': 'Reverse Translation + Interpretation',
+      'feature-4-body': 'Reverse translation transcribes other players and pins the translation. Turn on voice reading and the translated line can be spoken through MixLine as a virtual microphone. It is not just for VRC: any game with mic selection can get an interpretation flow.',
+      'feature-5-title': 'Text Input + AI Voice Reading',
+      'feature-5-body': 'Type a line, translate it, send it to VRC, or read it aloud with an AI voice. Non-speaking, speech-impaired, or no-mic players can use a chosen voice to say what they want in game chat.',
+      'feature-6-title': 'Privacy First',
+      'feature-6-body': 'No data collection, no log files, and no project-owned cloud service. Messages are destroyed after sending.',
+      'guide-eyebrow': 'Guide',
+      'guide-title': 'Get started in five steps',
+      'guide-sub': 'From download to real-time VRChat translation in just a few minutes.',
+      'guide-step-1-title': 'Download and install',
+      'guide-step-1-body': 'Click the button below to download the installer. Run it, then launch <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
+      'guide-step-2-title': 'Configure your translation backend',
+      'guide-step-2-body': 'Launch MioTranslator.exe, open Settings, and enter your API Key. Base URL and Model are automatically locked to the backend you choose.',
+      'guide-step-3-title': 'Set up game input',
+      'guide-step-3-body': 'VRChat chatbox sending still needs OSC. To make a game hear AI speech, install MixLine separately and select the MixLine virtual microphone in the game. VRChat OSC path:',
+      'guide-step-4-title': 'Download and install',
+      'guide-step-4-body': 'Run the installer and the app checks the local SenseVoice model. If it is missing, the model wizard downloads it; online ASR options do not need local model files and can be configured from Settings. The local model is about 950 MB.',
+      'guide-step-5-title': 'Start translation or interpretation',
+      'guide-step-5-body': 'After the model loads, speak into your mic to translate. Enable reverse translation and voice reading to have translated lines spoken by AI and routed through MixLine into the game microphone.',
+      'download-eyebrow': 'Download',
+      'download-title': 'Release Downloads',
+      'download-sub': 'v1.3.5.2 is a stable release that connects AI voice reading with the MixLine virtual microphone. The installer includes Style-Bert-VITS2 dependencies, while voice models are downloaded on first launch as needed.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.3.5.2 Release · AI voice reading · MixLine interpretation',
+      'download-release-note': 'v1.3.5.2 is ready for direct install: translated or typed text can be spoken by AI and routed through MixLine into VRChat or other games.',
+      'download-button-text': 'Download Installer',
+      'download-button-loading': 'Preparing installer...',
+      'download-model-text': 'Download Beta',
+      'download-model-note': 'No beta build is available right now. Please use the v1.3.5.2 release installer.',
+      'download-qq-1-text': 'QQ Group 1',
+      'download-qq-2-text': 'QQ Group 2',
+      'download-community-note': 'Downloads are hosted on GitHub. If the download is slow, join a QQ group and use the group files, which include a picture-based guide.',
+      'download-releases-text': 'No Beta Available',
+      'download-releases-loading': 'No beta available',
+      'download-releases-note': 'v1.3.5.2 is the current release download. No beta build is available right now.',
+      'download-dict-title': 'ASR Official Dictionary',
+      'download-dict-body': 'Official recognition terms and update files are provided here. The app only connects when you open these links manually.',
+      'download-dict-module-text': 'Open Dictionary Page',
+      'download-dict-manifest-text': 'View Update List',
+      'download-dict-json-text': 'Download Dictionary File',
+      'download-dict-note': 'The in-app Update Dictionary action reads from this official source.',
+      'privacy-title': 'Privacy Notice',
+      'privacy-body': 'This project performs <strong>no data collection</strong>, stores no chat logs, and destroys every message after sending.<br>It is a purely local project with no first-party cloud server, so your API keys are not uploaded or reused by this project.<br>No analytics, tracking, or local chat-log persistence is built into the app.',
+      'footer-main': 'Created by VRC player <strong style="color:#f0f0fa;">酒寄 みお</strong> · Open-source project · No paid redistribution · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'No data collection, no chat history retention, and every message is discarded after sending.'
+    },
+    ja: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '紹介',
+      'nav-features': '機能',
+      'nav-guide': '使い方',
+      'nav-download': 'ダウンロード',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'どんなゲームにも同時通訳を',
+      'hero-sub': '音声読み上げが翻訳文や入力文を AI 音声にし、逆翻訳が相手の言葉を理解し、MixLine がその声をゲームのマイクへ送ります。<br>VRChat だけではありません。マイクを選べるゲームなら、リアルタイム翻訳と自分だけの声を持ち込めます。',
+      'hero-impact-1-title': 'どんなゲームでも通訳',
+      'hero-impact-1-body': '翻訳音声を MixLine 経由でマイク入力にし、対応ゲームへ送れます。',
+      'hero-impact-2-title': 'AI が訳文と文字を読み上げ',
+      'hero-impact-2-body': '発話、翻訳文、入力した文章を、選んだ AI 声線で読み上げられます。',
+      'hero-impact-3-title': '声を出しにくい人にも声を',
+      'hero-impact-3-body': '話さなくても、文字や翻訳結果をゲーム内の声として届けられます。',
+      'hero-download': '今すぐダウンロード',
+      'hero-source': 'ソースを見る',
+      'hero-tutorial': '動画チュートリアル',
+      'privacy-badge': 'データ収集なし · 送信後にメッセージを自動破棄',
+      'scroll-hint-text': 'スクロール',
+      'features-eyebrow': '機能',
+      'features-title': '翻訳ツールであり、プレイヤーのもう一つの声',
+      'features-sub': '言語を越えた会話をリアルタイムにし、発話が難しい人やマイクを使いにくい人の文字も、仲間に聞こえる AI 音声にします。',
+      'spotlight-kicker': 'あらゆる表現に場所を',
+      'spotlight-title': '「言いたいこと」をゲームで聞こえる声へ',
+      'spotlight-body': '音声読み上げは単なる再生機能ではありません。翻訳文も入力文も読み上げられ、MixLine と組み合わせれば AI 音声がゲームのマイクになります。声を出しにくい人、発話が難しい人、今は話せない人でも、自分に合う声線を選んでボイスチャットに参加できます。',
+      'feature-1-title': 'ローカル音声認識',
+      'feature-1-body': '音声認識は、中国語/広東語向けのローカル SenseVoice Small と、Web Speech / Qwen3-ASR / Gemini Live のオンライン ASR に対応。Qwen3-ASR は全言語で高速かつ高精度な認識を重視しています。設定からいつでも切り替え可能です。',
+      'feature-2-title': '複数の翻訳バックエンド',
+      'feature-2-body': 'GPT、Qwen、DeepSeek、Gemini、Claude、Kimi、xAI、Mistral などを自由に切り替えられます。',
+      'feature-3-title': 'VRChat へ直接送信',
+      'feature-3-body': '公式 OSC インターフェース経由で、翻訳文をそのまま VRChat のチャットボックスへ送れます。',
+      'feature-4-title': '逆翻訳 + 同時通訳',
+      'feature-4-body': '逆翻訳で相手の声を認識して訳文を表示できます。音声読み上げをオンにすると、訳文を MixLine 仮想マイクで他のプレイヤーへ読み上げます。VRC だけでなく、マイクを選べるゲームなら同時通訳の流れを作れます。',
+      'feature-5-title': 'テキスト入力 + AI 音声読み上げ',
+      'feature-5-body': '入力した文章を翻訳して VRC に送ったり、AI 音声で読み上げたりできます。声を出しにくい人やマイクを使いにくい人も、選んだ声線でゲーム内に言葉を届けられます。',
+      'feature-6-title': 'プライバシー優先',
+      'feature-6-body': 'データ収集なし、ログ保存なし、専用クラウドなし。各メッセージは送信後に破棄されます。',
+      'guide-eyebrow': '使い方',
+      'guide-title': '5 ステップで開始',
+      'guide-sub': 'ダウンロードから VRChat リアルタイム翻訳まで、数分で完了します。',
+      'guide-step-1-title': 'ダウンロードしてインストール',
+      'guide-step-1-body': '下のボタンからインストーラーを取得し、実行してください。インストール後、<strong style="color:#f0f0fa;">MioTranslator.exe</strong> を起動します。',
+      'guide-step-2-title': '翻訳バックエンドを設定',
+      'guide-step-2-body': 'MioTranslator.exe を起動し、設定から API Key を入力してください。Base URL と Model は選択したバックエンドに合わせて自動固定されます。',
+      'guide-step-3-title': 'ゲーム入力を設定',
+      'guide-step-3-body': 'VRChat のチャットボックス送信には OSC が必要です。AI 音声をゲームに聞かせる場合は MixLine を別途インストールし、ゲーム側で MixLine 仮想マイクを選択してください。VRChat の OSC パス：',
+      'guide-step-4-title': 'ダウンロードしてインストール',
+      'guide-step-4-body': 'インストーラー実行後、アプリはローカル SenseVoice モデルを確認します。未導入ならダウンロードウィザードが起動し、オンライン ASR はローカルモデル不要で設定から選べます。ローカルモデルは約 950 MB です。',
+      'guide-step-5-title': '翻訳または同時通訳を開始',
+      'guide-step-5-body': 'モデルの読み込み後、マイクに話すと翻訳できます。逆翻訳と音声読み上げを有効にすると、訳文が AI 音声で読み上げられ、MixLine 経由でゲームのマイク入力へ送られます。',
+      'download-eyebrow': 'ダウンロード',
+      'download-title': 'リリース版ダウンロード',
+      'download-sub': 'v1.3.5.2 正式版は AI 音声読み上げと MixLine 仮想マイクを同時通訳の流れに組み込みます。インストーラーには Style-Bert-VITS2 関連依存関係を含め、音声モデルは初回起動時に必要に応じて取得します。',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.3.5.2 正式版 · AI 音声読み上げ · MixLine 同時通訳',
+      'download-release-note': 'v1.3.5.2 はそのままインストールできます。訳文や入力文を AI 音声にし、MixLine 経由で VRChat や他のゲームへ送れます。',
+      'download-button-text': 'インストーラーをダウンロード',
+      'download-button-loading': '準備中...',
+      'download-model-text': 'beta 版をダウンロード',
+      'download-model-note': '現在 beta 版は提供していません。v1.3.5.2 正式版インストーラーをご利用ください。',
+      'download-qq-1-text': 'QQ 1 群',
+      'download-qq-2-text': 'QQ 2 群',
+      'download-community-note': 'ダウンロードは GitHub 経由です。遅い場合は QQ グループに参加し、グループファイルからダウンロードしてください。画像付きガイドも含まれています。',
+      'download-releases-text': 'beta 版なし',
+      'download-releases-loading': 'beta 版なし',
+      'download-releases-note': 'v1.3.5.2 が現在の正式版ダウンロードです。beta 版は提供していません。',
+      'download-dict-title': 'ASR 公式辞書',
+      'download-dict-body': '公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。',
+      'download-dict-module-text': '辞書ページを開く',
+      'download-dict-manifest-text': '更新リストを確認',
+      'download-dict-json-text': '辞書ファイルをダウンロード',
+      'download-dict-note': 'アプリ内の「辞書を更新」はここから公式辞書を取得します。',
+      'privacy-title': 'プライバシーについて',
+      'privacy-body': '本プロジェクトは<strong>データ収集を一切行わず</strong>、チャット内容を保存しません。各メッセージは送信後に破棄されます。<br>プロジェクト専用のクラウドサーバーは存在せず、API Key が本プロジェクト側へ送信・再利用されることはありません。<br>解析、トラッキング、ローカルチャットログ保存は実装していません。',
+      'footer-main': '制作者：VRC プレイヤー <strong style="color:#f0f0fa;">酒寄 みお</strong> · オープンソース · 有料配布禁止 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'データ収集なし、チャット保存なし、各メッセージは送信後に自動破棄されます。'
+    },
+    ru: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': 'Обзор',
+      'nav-features': 'Функции',
+      'nav-guide': 'Инструкция',
+      'nav-download': 'Скачать',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': 'Синхронный режим почти для любой игры',
+      'hero-sub': 'Озвучивание превращает перевод и набранный текст в AI-голос; обратный перевод помогает понимать других; MixLine отправляет этот голос в игровой микрофон.<br>Это не только для VRChat: если игра позволяет выбрать микрофон, можно добавить перевод в реальном времени и собственный голос.',
+      'hero-impact-1-title': 'Любая игра, живой перевод',
+      'hero-impact-1-body': 'Переведённая речь через MixLine становится микрофонным входом для игр с выбором микрофона.',
+      'hero-impact-2-title': 'AI читает текст и перевод',
+      'hero-impact-2-body': 'Речь, переводы и набранные фразы могут звучать выбранным AI-голосом.',
+      'hero-impact-3-title': 'Голос для большего числа игроков',
+      'hero-impact-3-body': 'Игроки, которым трудно говорить, могут участвовать в голосовом чате через текст и перевод.',
+      'hero-download': 'Скачать',
+      'hero-source': 'Исходный код',
+      'hero-tutorial': 'Видеоинструкция',
+      'privacy-badge': 'Без сбора данных · Сообщения уничтожаются после отправки',
+      'scroll-hint-text': 'Прокрутите вниз',
+      'features-eyebrow': 'Возможности',
+      'features-title': 'Не только переводчик, но и второй голос игрока',
+      'features-sub': 'Для общения между языками в реальном времени и для игроков, которым трудно или неудобно говорить в микрофон: текст превращается в AI-голос, слышимый команде.',
+      'spotlight-kicker': 'Место для любого способа общения',
+      'spotlight-title': 'Превратите «я хочу сказать» в голос, который слышно в игре',
+      'spotlight-body': 'Озвучивание — это не просто воспроизведение. Оно читает переведённые строки и набранный текст; с MixLine AI-голос становится игровым микрофоном. Для игроков с речевыми трудностями, тех, кто не говорит голосом, стесняется голоса или временно не может говорить, это способ выбрать подходящий голос и реально участвовать в голосовом общении.',
+      'feature-1-title': 'Локальное распознавание речи',
+      'feature-1-body': 'Распознавание речи: локальный SenseVoice Small для китайского/кантонского и онлайн ASR — Web Speech, Qwen3-ASR или Gemini Live. Qwen3-ASR рассчитан на быстрое и точное распознавание для всех языков. Переключение доступно в настройках.',
+      'feature-2-title': 'Несколько переводческих бэкендов',
+      'feature-2-body': 'Можно переключаться между GPT, Qwen, DeepSeek, Gemini, Claude, Kimi, xAI, Mistral и другими сервисами.',
+      'feature-3-title': 'Прямая отправка в VRChat',
+      'feature-3-body': 'Отправляйте переведённый текст прямо в чат VRChat через официальный OSC-интерфейс.',
+      'feature-4-title': 'Обратный перевод + синхронный режим',
+      'feature-4-body': 'Обратный перевод распознаёт речь других игроков и показывает перевод. Если включить озвучивание, перевод будет произнесён через виртуальный микрофон MixLine. Это не только для VRC: любая игра с выбором микрофона может получить поток синхронного перевода.',
+      'feature-5-title': 'Текстовый ввод + AI-озвучивание',
+      'feature-5-body': 'Введите фразу, переведите её, отправьте в VRC или озвучьте AI-голосом. Игроки, которым трудно говорить или неудобно включать микрофон, могут выбрать голос и передать свои слова в игровой голосовой чат.',
+      'feature-6-title': 'Приватность прежде всего',
+      'feature-6-body': 'Без сбора данных, без логов и без собственного облака. Сообщения удаляются после отправки.',
+      'guide-eyebrow': 'Инструкция',
+      'guide-title': 'Старт за пять шагов',
+      'guide-sub': 'От скачивания до перевода в VRChat в реальном времени всего за несколько минут.',
+      'guide-step-1-title': 'Скачайте и установите',
+      'guide-step-1-body': 'Нажмите кнопку ниже, чтобы скачать установщик. Запустите его, затем откройте <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
+      'guide-step-2-title': 'Настройте переводческий бэкенд',
+      'guide-step-2-body': 'Запустите MioTranslator.exe, откройте настройки и введите API Key. Base URL и Model будут автоматически зафиксированы выбранным бэкендом.',
+      'guide-step-3-title': 'Настройте вход в игре',
+      'guide-step-3-body': 'Для отправки в чатбокс VRChat нужен OSC. Чтобы игра слышала AI-голос, отдельно установите MixLine и выберите виртуальный микрофон MixLine в игре. Путь OSC в VRChat:',
+      'guide-step-4-title': 'Скачайте и установите',
+      'guide-step-4-body': 'После запуска установщика приложение проверяет локальную модель SenseVoice. Если её нет, мастер загрузит модель; онлайн ASR не требует локальных файлов и настраивается в Settings. Размер локальной модели около 950 МБ.',
+      'guide-step-5-title': 'Начните перевод или синхронный режим',
+      'guide-step-5-body': 'После загрузки модели говорите в микрофон для перевода. Включите обратный перевод и озвучивание, чтобы переведённые строки произносились AI-голосом и шли через MixLine в микрофон игры.',
+      'download-eyebrow': 'Скачать',
+      'download-title': 'Загрузки релиза',
+      'download-sub': 'v1.3.5.2 — стабильный выпуск, который связывает AI-озвучивание с виртуальным микрофоном MixLine. Установщик включает зависимости Style-Bert-VITS2, а голосовые модели загружаются при первом запуске по необходимости.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.3.5.2 Release · AI-озвучивание · Синхронный перевод через MixLine',
+      'download-release-note': 'v1.3.5.2 готов к установке: перевод и набранный текст можно озвучить AI-голосом и отправить через MixLine в VRChat или другие игры.',
+      'download-button-text': 'Скачать установщик',
+      'download-button-loading': 'Подготовка установщика...',
+      'download-model-text': 'Скачать beta',
+      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.3.5.2.',
+      'download-qq-1-text': 'QQ группа 1',
+      'download-qq-2-text': 'QQ группа 2',
+      'download-community-note': 'Загрузка идёт через GitHub. Если скорость низкая, вступите в QQ-группу и скачайте файл из группы; там также есть инструкция с изображениями.',
+      'download-releases-text': 'Beta недоступна',
+      'download-releases-loading': 'Beta недоступна',
+      'download-releases-note': 'v1.3.5.2 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
+      'download-dict-title': 'Официальный словарь ASR',
+      'download-dict-body': 'Здесь размещены официальные термины распознавания и файлы обновлений. Приложение обращается к ним только при ручном открытии.',
+      'download-dict-module-text': 'Открыть страницу словаря',
+      'download-dict-manifest-text': 'Посмотреть список обновлений',
+      'download-dict-json-text': 'Скачать файл словаря',
+      'download-dict-note': 'Команда «Обновить словарь» в приложении берёт официальный словарь отсюда。',
+      'privacy-title': 'Конфиденциальность',
+      'privacy-body': 'Проект <strong>не собирает никаких данных</strong>, не хранит журналы чатов и уничтожает каждое сообщение после отправки.<br>Это полностью локальный проект без собственного облачного сервера, поэтому API-ключи не выгружаются и не используются повторно.<br>В приложении нет аналитики, трекинга или записи чатов на диск.',
+      'footer-main': 'Автор: игрок VRC <strong style="color:#f0f0fa;">酒寄 みお</strong> · Open-source проект · Платное распространение запрещено · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': 'Без сбора данных, без хранения чатов, каждое сообщение удаляется после отправки.'
+    },
+    ko: {
+      pageTitle: 'Mio RealTime Translator',
+      'nav-intro': '소개',
+      'nav-features': '기능',
+      'nav-guide': '가이드',
+      'nav-download': '다운로드',
+      'nav-github': 'GitHub',
+      'hero-eyebrow': '어떤 게임에서도 동시통역처럼',
+      'hero-sub': '음성 읽기는 번역문과 입력한 문장을 AI 음성으로 만들고, 역번역은 상대의 말을 이해하게 하며, MixLine은 그 음성을 게임 마이크로 보냅니다.<br>VRChat만이 아닙니다. 마이크를 선택할 수 있는 게임이라면 실시간 번역과 나만의 목소리를 가져갈 수 있습니다.',
+      'hero-impact-1-title': '어떤 게임이든 실시간 통역',
+      'hero-impact-1-body': '번역 음성을 MixLine을 통해 마이크 입력으로 보내, 마이크 선택이 가능한 게임에서 사용할 수 있습니다.',
+      'hero-impact-2-title': 'AI가 번역문과 텍스트를 읽기',
+      'hero-impact-2-body': '말, 번역문, 입력한 텍스트를 모두 선택한 AI 음색으로 읽을 수 있습니다.',
+      'hero-impact-3-title': '더 많은 플레이어에게 목소리를',
+      'hero-impact-3-body': '말하지 않아도 텍스트와 번역 결과로 게임 안에서 자신의 목소리를 낼 수 있습니다.',
+      'hero-download': '지금 다운로드',
+      'hero-source': '소스 보기',
+      'hero-tutorial': '동영상 가이드',
+      'privacy-badge': '데이터 수집 없음 · 전송 후 메시지 자동 폐기',
+      'scroll-hint-text': '아래로 스크롤',
+      'features-eyebrow': '기능',
+      'features-title': '번역 도구이자 플레이어의 두 번째 목소리',
+      'features-sub': '언어가 다른 플레이어가 실시간으로 대화하고, 말하기 어렵거나 마이크를 켜기 힘든 플레이어도 텍스트를 팀원이 들을 수 있는 AI 음성으로 바꿀 수 있습니다.',
+      'spotlight-kicker': '모든 표현 방식에 자리를',
+      'spotlight-title': '“하고 싶은 말”을 게임에서 들리는 목소리로',
+      'spotlight-body': '음성 읽기는 단순 재생 기능이 아닙니다. 번역문과 입력한 텍스트를 읽고, MixLine과 함께 쓰면 AI 음성이 게임 마이크가 됩니다. 말하기 어렵거나, 목소리를 내기 부담스럽거나, 잠시 마이크를 쓸 수 없는 플레이어도 자신에게 맞는 음색을 선택해 음성 채팅에 참여할 수 있습니다.',
+      'feature-1-title': '로컬 음성 인식',
+      'feature-1-body': '음성 인식은 중국어/광동어용 로컬 SenseVoice Small과 Web Speech, Qwen3-ASR, Gemini Live 온라인 ASR을 지원합니다. Qwen3-ASR은 모든 언어에서 빠르고 정확한 인식을 목표로 합니다. 설정에서 언제든 전환할 수 있습니다.',
+      'feature-2-title': '다중 번역 백엔드',
+      'feature-2-body': 'GPT, Qwen, DeepSeek, Gemini, Claude, Kimi, xAI, Mistral 등 여러 서비스를 자유롭게 전환할 수 있습니다.',
+      'feature-3-title': 'VRChat 직접 전송',
+      'feature-3-body': '공식 OSC 인터페이스를 통해 번역 결과를 VRChat 채팅창으로 바로 보냅니다.',
+      'feature-4-title': '역번역 + 동시통역',
+      'feature-4-body': '역번역은 상대 목소리를 인식해 번역을 오버레이에 보여줍니다. 음성 읽기를 켜면 번역문을 MixLine 가상 마이크로 다른 플레이어에게 읽어 줍니다. VRC만이 아니라, 마이크를 선택할 수 있는 게임이면 동시통역 흐름을 만들 수 있습니다.',
+      'feature-5-title': '텍스트 입력 + AI 음성 읽기',
+      'feature-5-body': '문장을 입력해 번역하고 VRC로 보내거나 AI 음성으로 읽을 수 있습니다. 말하기 어렵거나 마이크를 켜기 힘든 플레이어도 선택한 음색으로 게임 음성 채팅에 말을 전할 수 있습니다.',
+      'feature-6-title': '프라이버시 우선',
+      'feature-6-body': '데이터 수집 없음, 로그 저장 없음, 자체 클라우드 없음. 메시지는 전송 후 즉시 폐기됩니다.',
+      'guide-eyebrow': '가이드',
+      'guide-title': '5단계로 시작',
+      'guide-sub': '다운로드부터 VRChat 실시간 번역까지 몇 분이면 충분합니다.',
+      'guide-step-1-title': '다운로드 후 설치',
+      'guide-step-1-body': '아래 버튼으로 설치 파일을 받은 뒤 실행하세요. 설치 후 <strong style="color:#f0f0fa;">MioTranslator.exe</strong>를 실행하면 됩니다.',
+      'guide-step-2-title': '번역 백엔드 설정',
+      'guide-step-2-body': 'MioTranslator.exe를 실행하고 설정에서 API Key를 입력하세요. Base URL과 Model은 선택한 백엔드에 맞게 자동으로 고정됩니다.',
+      'guide-step-3-title': '게임 입력 설정',
+      'guide-step-3-body': 'VRChat 채팅박스 전송에는 OSC가 필요합니다. 게임에서 AI 음성을 듣게 하려면 MixLine을 별도로 설치하고 게임 안에서 MixLine 가상 마이크를 선택하세요. VRChat OSC 경로:',
+      'guide-step-4-title': '다운로드 후 설치',
+      'guide-step-4-body': '설치 파일 실행 후 앱은 로컬 SenseVoice 모델을 확인합니다. 없으면 다운로드 마법사가 모델을 받으며, 온라인 ASR은 로컬 모델이 필요 없고 설정에서 선택할 수 있습니다. 로컬 모델은 약 950 MB입니다.',
+      'guide-step-5-title': '번역 또는 동시통역 시작',
+      'guide-step-5-body': '모델 로드가 끝나면 마이크에 말해 번역합니다. 역번역과 음성 읽기를 켜면 번역문이 AI 음성으로 읽히고 MixLine을 통해 게임 마이크 입력으로 들어갑니다.',
+      'download-eyebrow': '다운로드',
+      'download-title': '릴리스 다운로드',
+      'download-sub': 'v1.3.5.2 정식 버전은 AI 음성 읽기와 MixLine 가상 마이크를 동시통역 흐름에 연결합니다. 설치 파일에는 Style-Bert-VITS2 관련 의존성이 포함되며, 음성 모델은 첫 실행 시 필요에 따라 다운로드됩니다.',
+      'download-card-title': 'Mio RealTime Translator',
+      'download-card-body': 'Windows x64 · v1.3.5.2 Release · AI 음성 읽기 · MixLine 동시통역',
+      'download-release-note': 'v1.3.5.2는 바로 설치해 사용할 수 있습니다. 번역문이나 입력 문장을 AI 음성으로 읽고 MixLine을 통해 VRChat 또는 다른 게임으로 보낼 수 있습니다.',
+      'download-button-text': '설치 파일 다운로드',
+      'download-button-loading': '준비 중...',
+      'download-model-text': 'Beta 다운로드',
+      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.3.5.2 정식 설치 파일을 사용해 주세요.',
+      'download-qq-1-text': 'QQ 1 그룹',
+      'download-qq-2-text': 'QQ 2 그룹',
+      'download-community-note': '다운로드는 GitHub를 통해 진행됩니다. 속도가 느리면 QQ 그룹에 참여해 그룹 파일에서 다운로드하세요. 이미지 가이드도 포함되어 있습니다.',
+      'download-releases-text': 'Beta 없음',
+      'download-releases-loading': 'Beta 없음',
+      'download-releases-note': 'v1.3.5.2가 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
+      'download-dict-title': 'ASR 공식 사전',
+      'download-dict-body': '공식 인식 사전과 업데이트 파일을 제공합니다. 사용자가 수동으로 열 때만 접근합니다.',
+      'download-dict-module-text': '사전 페이지 열기',
+      'download-dict-manifest-text': '업데이트 목록 보기',
+      'download-dict-json-text': '사전 파일 다운로드',
+      'download-dict-note': '앱의 ‘사전 업데이트’ 기능은 여기서 공식 사전을 가져옵니다.',
+      'privacy-title': '개인정보 안내',
+      'privacy-body': '이 프로젝트는 <strong>어떠한 데이터도 수집하지 않으며</strong> 채팅 로그를 저장하지 않고, 메시지는 전송 후 파기됩니다.<br>프로젝트 전용 클라우드 서버가 없기 때문에 API Key가 업로드되거나 재사용되지 않습니다.<br>분석, 추적, 로컬 채팅 로그 저장 기능은 포함되어 있지 않습니다.',
+      'footer-main': '제작자: VRC 플레이어 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 오픈소스 프로젝트 · 유료 배포 금지 · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
+      'footer-sub': '데이터 수집 없음, 채팅 기록 저장 없음, 모든 메시지는 전송 후 자동 폐기됩니다.'
+    }
+  };
+
+  const htmlKeys = new Set([
+    'hero-sub',
+    'feature-5-title',
+    'guide-step-1-body',
+    'guide-step-2-body',
+    'guide-step-3-body',
+    'guide-step-4-body',
+    'guide-step-5-body',
+    'privacy-body',
+    'footer-main'
+  ]);
+
+  function applyLanguage(language) {
+    const dict = translations[language] || translations.en;
+    document.title = dict.pageTitle || 'Mio RealTime Translator';
+    document.documentElement.lang = language;
+
+    Object.entries(dict).forEach(([key, value]) => {
+      if (key === 'pageTitle') return;
+      const element = document.getElementById(key);
+      if (!element) return;
+      if (htmlKeys.has(key)) {
+        element.innerHTML = value;
+      } else {
+        element.textContent = value;
+      }
+    });
+
+    const switcher = document.getElementById('lang-switcher');
+    if (switcher) switcher.value = language;
+    localStorage.setItem('mio-site-lang', language);
+  }
+
+  function detectInitialLanguage() {
+    const saved = localStorage.getItem('mio-site-lang');
+    if (saved && translations[saved]) return saved;
+
+    const browserLanguage = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
+    if (browserLanguage.startsWith('zh')) return 'zh-CN';
+    if (browserLanguage.startsWith('ja')) return 'ja';
+    if (browserLanguage.startsWith('ko')) return 'ko';
+    if (browserLanguage.startsWith('ru')) return 'ru';
+    return 'en';
+  }
+
+  const switcher = document.getElementById('lang-switcher');
+  if (switcher) {
+    switcher.addEventListener('change', (event) => {
+      applyLanguage(event.target.value);
+      syncSectionScrollability();
+      updateSectionState();
+    });
+  }
+
+  const REGION_CACHE_KEY = 'mio-country-v1';
+  const REGION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const GEO_LOOKUP_TIMEOUT_MS = 1800;
+  const GEO_LOOKUP_ENDPOINTS = [
+    {
+      url: 'https://api.country.is/',
+      country: (payload) => payload && payload.country,
+    },
+    {
+      url: 'https://ipapi.co/json/',
+      country: (payload) => payload && payload.country_code,
+    },
+    {
+      url: 'https://ipwho.is/',
+      country: (payload) => payload && payload.country_code,
+    },
+  ];
+
+  function normalizeCountryCode(code) {
+    return String(code || '').trim().toUpperCase();
+  }
+
+  function readCachedCountryCode() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(REGION_CACHE_KEY) || '{}');
+      if (!cached || Date.now() - Number(cached.time || 0) > REGION_CACHE_TTL_MS) return '';
+      return normalizeCountryCode(cached.country);
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function writeCachedCountryCode(country) {
+    try {
+      localStorage.setItem(REGION_CACHE_KEY, JSON.stringify({
+        country: normalizeCountryCode(country),
+        time: Date.now(),
+      }));
+    } catch (_error) {
+      // Ignore storage errors; the default GitHub link remains usable.
+    }
+  }
+
+  async function fetchJsonWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function detectCountryCode() {
+    const cached = readCachedCountryCode();
+    if (cached) return cached;
+
+    for (const endpoint of GEO_LOOKUP_ENDPOINTS) {
+      try {
+        const payload = await fetchJsonWithTimeout(endpoint.url, GEO_LOOKUP_TIMEOUT_MS);
+        const country = normalizeCountryCode(endpoint.country(payload));
+        if (country) {
+          writeCachedCountryCode(country);
+          return country;
+        }
+      } catch (_error) {
+        // Try the next provider. If all fail, downloads stay on GitHub.
+      }
+    }
+    return '';
+  }
+
+  function languageFromCountryCode(country) {
+    const code = normalizeCountryCode(country);
+    if (['CN', 'TW', 'HK', 'MO', 'SG'].includes(code)) return 'zh-CN';
+    if (code === 'JP') return 'ja';
+    if (code === 'KR') return 'ko';
+    if (['RU', 'BY', 'KZ'].includes(code)) return 'ru';
+    return '';
+  }
+
+  async function applyInitialLanguageFromRegion() {
+    if (localStorage.getItem('mio-site-lang')) return;
+    const country = await detectCountryCode();
+    const language = languageFromCountryCode(country);
+    if (language && translations[language] && !localStorage.getItem('mio-site-lang')) {
+      applyLanguage(language);
+      syncSectionScrollability();
+      updateSectionState();
+    }
+  }
+
+  function triggerDirectDownload(url, filename = '') {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.setTimeout(() => anchor.remove(), 1000);
+  }
+
+  const directDownloadLink = document.getElementById('download-direct-link');
+  const directDownloadText = document.getElementById('download-button-text');
+
+  if (directDownloadLink && directDownloadText) {
+    directDownloadLink.addEventListener('click', async (event) => {
+      event.preventDefault();
+      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
+      const dict = translations[currentLanguage] || translations.en;
+      const originalText = dict['download-button-text'] || directDownloadText.textContent;
+      const loadingText = dict['download-button-loading'] || originalText;
+
+      directDownloadLink.style.pointerEvents = 'none';
+      directDownloadText.textContent = loadingText;
+
+      const directDownloadUrl = directDownloadLink.getAttribute('href') || '';
+      if (directDownloadUrl) {
+        triggerDirectDownload(directDownloadUrl, directDownloadLink.getAttribute('download') || '');
+      }
+
+      window.setTimeout(() => {
+        directDownloadLink.style.pointerEvents = '';
+        directDownloadText.textContent = originalText;
+      }, 2200);
+    });
+  }
+
+  const betaDownloadLink = document.getElementById('download-model-link');
+
+  if (betaDownloadLink) {
+    betaDownloadLink.addEventListener('click', (event) => {
+      event.preventDefault();
+      alert('暂无测试版提供');
+    });
+  }
+
+  const releaseDownloadLink = document.getElementById('download-releases-link');
+  const releaseDownloadText = document.getElementById('download-releases-text');
+
+  if (releaseDownloadLink && releaseDownloadText) {
+    releaseDownloadLink.addEventListener('click', (event) => {
+      event.preventDefault();
+      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
+      const dict = translations[currentLanguage] || translations.en;
+      const originalText = dict['download-releases-text'] || releaseDownloadText.textContent;
+      const loadingText = dict['download-releases-loading'] || originalText;
+
+      releaseDownloadLink.style.pointerEvents = 'none';
+      releaseDownloadText.textContent = loadingText;
+
+      window.setTimeout(() => {
+        releaseDownloadLink.style.pointerEvents = '';
+        releaseDownloadText.textContent = originalText;
+      }, 1400);
+    });
+  }
+
+  applyLanguage(detectInitialLanguage());
+  applyInitialLanguageFromRegion();
+  syncSectionScrollability();
+  updateSectionState();
+</script>
+</body>
+</html>

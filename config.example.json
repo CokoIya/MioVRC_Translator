@@ -1,0 +1,242 @@
+{
+  "app_mode": "translation",
+  "simul_mode": {
+    "tts_backend": "edge",
+    "tts_strategy": "queue",
+    "vad_silence_ms": 300,
+    "show_subtitle": true,
+    "subtitle_position": "bottom",
+    "aggressive_chunking": false,
+    "merge_window_ms": 800
+  },
+  "audio": {
+    "input_device_mode": "auto",
+    "input_device": null,
+    "desktop_capture": {
+      "enabled": false,
+      "output_device": ""
+    },
+    "vad_silence_threshold": 0.65,
+    "vad_sensitivity": 2,
+    "vad_speech_ratio": 0.6,
+    "vad_activation_threshold_s": 0.2,
+    "vad_min_rms": 0.012,
+    "denoise_strength": 0.0,
+    "min_segment_s": 0.45,
+    "partial_min_speech_s": 0.45,
+    "max_segment_s": 6.0,
+    "sample_rate": 16000,
+    "frame_duration_ms": 30
+  },
+  "asr": {
+    "device": "cpu",
+    "engine": "sensevoice-small",
+    "fallback_engine": "sensevoice-small",
+    "user_selected_engine": false,
+    "language": "ja-JP",
+    "auto_fallback": true,
+    "sensevoice": {
+      "model_id": "iic/SenseVoiceSmall",
+      "model_revision": "master",
+      "ncpu": null
+    },
+    "webspeech": {
+      "language": "ja-JP",
+      "continuous": true,
+      "interim_results": true,
+      "max_alternatives": 1,
+      "restart_on_end": true,
+      "silence_timeout_ms": 800,
+      "final_timeout_seconds": 4.0,
+      "partial_timeout_seconds": 0.2,
+      "connection_timeout_seconds": 3.0,
+      "auto_open_browser": true,
+      "bridge_port": 0
+    },
+    "qwen3_asr": {
+      "api_key": "",
+      "region": "singapore",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3-asr-flash",
+      "language": "ja",
+      "mode": "vad_chunked",
+      "sample_rate": 16000,
+      "max_segment_seconds": 6.0,
+      "tail_silence_seconds": 0.7,
+      "overlap_ms": 300,
+      "timeout_seconds": 15
+    },
+    "gemini_live": {
+      "api_key": "",
+      "model": "gemini-3.1-flash-live-preview",
+      "language": "ja-JP",
+      "transcribe_only": true,
+      "system_instruction": "You are a speech-to-text engine. Output only the transcription. Do not translate, summarize, explain, or answer.",
+      "timeout_seconds": 20,
+      "use_live_api": true,
+      "live_silence_duration_ms": 600
+    },
+    "correction": {
+      "enabled": true,
+      "official_manifest_url": "https://78hejiu.top/dictionaries/asr_dictionary_manifest.json"
+    },
+    "streaming": {
+      "chunk_interval_ms": 250,
+      "chunk_window_s": 1.6,
+      "ring_buffer_s": 4.0,
+      "recent_speech_hold_s": 0.8,
+      "partial_stability_hits": 2
+    }
+  },
+  "translation": {
+    "backend": "qianwen",
+    "backend_source": "auto",
+    "source_language": "auto",
+    "language_pair_source": "auto",
+    "target_language": "ja",
+    "output_format": "translated_with_original",
+    "send_to_chatbox": true,
+    "social": {
+      "mode": "standard",
+      "persona_preset": "custom",
+      "politeness": "neutral",
+      "tone": "natural",
+      "persona_name": "",
+      "persona_prompt": "",
+      "persona_glossary": ""
+    },
+    "openai": {
+      "api_key": "",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.5"
+    },
+    "local_ai": {
+      "api_key": "",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "model": "qwen2.5:7b-instruct"
+    },
+    "deepseek": {
+      "api_key": "",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-flash"
+    },
+    "zhipu": {
+      "api_key": "",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-5.1"
+    },
+    "qianwen": {
+      "api_key": "",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-mt-plus"
+    },
+    "gemini": {
+      "api_key": "",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+      "model": "gemini-3.1-flash-lite"
+    },
+    "kimi": {
+      "api_key": "",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.6"
+    },
+    "xai": {
+      "api_key": "",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.3"
+    },
+    "mistral": {
+      "api_key": "",
+      "base_url": "https://api.mistral.ai/v1",
+      "model": "mistral-small-latest"
+    },
+    "doubao": {
+      "api_key": "",
+      "base_url": "https://ark.cn-beijing.volces.com/api/compatible/v1",
+      "model": "doubao-seed-2.0-pro"
+    },
+    "anthropic": {
+      "api_key": "",
+      "model": "claude-sonnet-4-20250514"
+    },
+    "custom": {
+      "api_key": "",
+      "base_url": "",
+      "model": ""
+    }
+  },
+  "vrc_listen": {
+    "enabled": false,
+    "loopback_device": null,
+    "asr_engine": "same_as_main",
+    "source_language": "auto",
+    "target_language": "zh",
+    "segment_duration_s": 2.0,
+    "tail_silence_s": 0.65,
+    "self_suppress": false,
+    "self_suppress_seconds": 0.65,
+    "show_overlay": false,
+    "send_to_chatbox": true
+  },
+  "osc": {
+    "send_host": "127.0.0.1",
+    "send_port": 9000,
+    "min_send_interval_s": 0.8
+  },
+  "tts": {
+    "enabled": false,
+    "engine": "edge",
+    "auto_read": true,
+    "monitor_enabled": false,
+    "output_to_vrchat": false,
+    "output_device": null,
+    "output_device_name": "",
+    "edge": {
+      "voice": "zh-CN-XiaoxiaoNeural",
+      "rate": 1.0,
+      "volume": 0.8
+    },
+    "gtts": {
+      "voice": "zh-CN",
+      "rate": 1.0,
+      "volume": 0.8
+    },
+    "pyttsx3": {
+      "voice": null,
+      "rate": 1.0,
+      "volume": 1.0
+    },
+    "voicevox": {
+      "voice": null,
+      "rate": 1.0,
+      "volume": 0.8
+    },
+    "aivis_speech": {
+      "voice": null,
+      "rate": 1.0,
+      "volume": 0.8
+    },
+    "style_bert_vits2": {
+      "voice": null,
+      "rate": 1.0,
+      "volume": 0.8,
+      "device": "cpu",
+      "bert_language": "jp"
+    }
+  },
+  "ui": {
+    "language": "",
+    "language_source": "auto",
+    "allow_ip_language_detection": false,
+    "osc_guide_seen": false,
+    "theme": "dark"
+  },
+  "text_input_window": {
+    "size_version": 5,
+    "topmost": true,
+    "opacity": 0.88,
+    "hotkey": "Ctrl+Alt+X",
+    "geometry": "520x320",
+    "minimized": false
+  }
+}
