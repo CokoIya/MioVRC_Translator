@@ -1,0 +1,50 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# UI
+customtkinter>=5.2.0,<6.0.0
+Pillow>=10.0.0
+
+# Audio
+sounddevice>=0.4.6,<1.0.0
+SoundCard>=0.4.5,<1.0.0
+PyAudioWPatch>=0.2.12,<1.0.0
+numpy>=1.26.4,<2.0.0; python_version < "3.12"
+numpy>=2.0.0; python_version >= "3.12"
+webrtcvad>=2.0.10,<3.0.0
+scipy>=1.10.0
+
+# ASR - SenseVoiceSmall (Chinese / Cantonese)
+funasr>=1.3.1,<2.0.0
+modelscope>=1.28.0,<2.0.0
+torch>=2.4.0
+torchaudio>=2.4.0
+editdistance>=0.8.1,<1.0.0
+
+# ASR - shared HF download helpers
+huggingface-hub>=0.20.0,<2.0.0
+tokenizers>=0.20.0,<1.0.0
+tqdm>=4.66.0,<5.0.0
+
+# Release builds should use CPU-only PyTorch. CUDA wheels pull several GB of
+# CUDA/cuDNN DLLs into the installer.
+
+# Translation backends
+openai>=1.30.0,<2.0.0        # covers OpenAI / DeepSeek / Qianwen / Custom
+anthropic>=0.28.0,<1.0.0
+google-genai>=1.0.0,<2.0.0
+requests>=2.31.0,<3.0.0
+charset-normalizer>=3.4.0,<4.0.0  # bundled explicitly so requests has text detection in PyInstaller builds
+
+# OSC
+python-osc>=1.8.3,<2.0.0
+
+# TTS (Text-to-Speech)
+edge-tts>=7.2.0,<8.0.0       # Microsoft Edge TTS (primary)
+gTTS>=2.3.0,<3.0.0           # Google TTS (works globally)
+pyttsx3>=2.90,<3.0.0         # Offline TTS fallback
+av>=12.0.0                   # PyAV for MP3 decoding (includes FFmpeg libraries)
+style-bert-vits2==2.5.0      # Custom / Hololive local voices (supports Python 3.11+)
+transformers==5.8.1          # Keep Style-Bert-VITS2 BERT imports reproducible
+
+# Optional: GPU acceleration (uncomment if CUDA available)
+# torch>=2.4.0+cu118,<2.8.0

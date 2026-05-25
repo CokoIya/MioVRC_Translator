@@ -1,0 +1,13 @@
+{
+  "version": "v1.3.5.2",
+  "installer_name": "MioTranslator-Setup-v1.3.5.2.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.5.2/MioTranslator-Setup-v1.3.5.2.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.5.2/MioTranslator-Setup-v1.3.5.2.exe",
+  "size_bytes": 286486071,
+  "sha256": "12bbb8e7ec7ceb8d2e592ab6419ca92cdc6ec5dff7f3263792a47c08d0b8a34f",
+  "homepage_url": "https://78hejiu.top",
+  "published_at": "2026-05-15T22:14:29+08:00",
+  "signature_algorithm": "ed25519",
+  "signature_key_id": "mio-update-ed25519-v1",
+  "signature": "37b0148d8fe8c1cc219686ce7a13c678f4e58679d3b19062551054537379ec92c0c649e2ea597d86b34fc101ceccdc5ffe5fa57b8243e168f6408deaaa44a50d"
+}

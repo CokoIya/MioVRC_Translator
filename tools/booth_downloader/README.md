@@ -1,0 +1,86 @@
+﻿# Mio VRC Downloader
+
+This folder contains the standalone BOOTH-friendly downloader bootstrapper.
+
+It is intentionally separate from the main installer pipeline:
+
+- `tools/booth_downloader/mio_vrc_download.py`
+  Small GUI downloader that fetches the latest official installer, verifies it, keeps a local cached copy, installs it to the selected folder, and launches `MioTranslator.exe`.
+- `tools/booth_downloader/update_installer_manifest.py`
+  Helper script that computes the installer size and SHA256, then writes the public manifest consumed by the downloader.
+
+## Build the downloader
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_booth_downloader.ps1
+```
+
+The build produces two outputs:
+
+```text
+dist\Mio_vrc_download.exe
+dist\Mio_vrc_download_bundle.zip
+```
+
+`dist\Mio_vrc_download.exe`
+Single-file convenience build.
+
+`dist\Mio_vrc_download_bundle.zip`
+Safer onedir bundle for BOOTH. This is the preferred package when you want to minimize antivirus false positives as much as possible.
+
+## Optional code signing
+
+If you have a code-signing certificate, set these environment variables before building:
+
+```powershell
+$env:MIO_VRC_SIGN_PFX = "C:\path\to\certificate.pfx"
+$env:MIO_VRC_SIGN_PASS = "your-password"
+powershell -ExecutionPolicy Bypass -File .\build_booth_downloader.ps1
+```
+
+The build script will try to locate `signtool.exe`, sign both downloader executables, and timestamp them.
+
+## Update the public manifest
+
+The app does not discover updates from GitHub Releases directly. It checks:
+
+```text
+https://78hejiu.top/installer_manifest.json
+```
+
+After uploading a new GitHub Release, regenerate this manifest, sign it, deploy the updated `docs/installer_manifest.json` to the website, and upload the same signed JSON as a GitHub Release asset named `installer_manifest.json`. If the manifest still points to the previous version, users will not see an update prompt even though the GitHub Release exists.
+
+```powershell
+python .\tools\booth_downloader\update_installer_manifest.py `
+  --installer .\dist\MioTranslator-Setup-v1.3.0-lite.exe `
+  --url "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.0/MioTranslator-Setup-v1.3.0-lite.exe" `
+  --full-installer .\dist\MioTranslator-Setup-v1.3.0-full.exe `
+  --full-url "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.0/MioTranslator-Setup-v1.3.0-full.exe" `
+  --version v1.3.0 `
+  --signing-seed-file .\.secrets\update_manifest_ed25519_seed.txt `
+  --published-at 2026-03-29T01:50:30+08:00
+```
+
+`installer_url` stays pointed at the GitHub lite installer so in-app updates stay small. If `full_installer_url` is present, the standalone BOOTH downloader will use the GitHub full installer for fresh installs.
+
+The private signing seed must stay outside git. The repository ignores `.secrets/`; keep a backup somewhere private. The public key is embedded in `src/version.py`, and the updater verifies the manifest signature before trusting the installer SHA256.
+
+This writes:
+
+```text
+docs\installer_manifest.json
+```
+
+When the website is deployed, the downloader reads it from:
+
+```text
+https://78hejiu.top/installer_manifest.json
+```
+
+## Practical anti-false-positive notes
+
+- Keep the download hosted on your official domain and keep the publisher name stable.
+- Sign the downloader before uploading whenever possible.
+- Prefer `dist\Mio_vrc_download_bundle.zip` for BOOTH if you want the lowest false-positive risk. This is an inference based on avoiding onefile self-extraction at launch.
+- Reuse the same downloader binary between app releases when only the manifest changes.
+- If Microsoft Defender still flags a release, submit the signed file for analysis after publishing.

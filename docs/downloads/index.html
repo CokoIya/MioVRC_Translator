@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mio Translator v1.3.5.2 Downloads</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --text: #162033;
+      --muted: #64748b;
+      --accent: #1677ff;
+      --border: #d9e2f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top, #ffffff 0%, var(--bg) 70%);
+      color: var(--text);
+    }
+    .card {
+      width: min(760px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(22, 32, 51, 0.08);
+    }
+    h1 { margin: 0 0 12px; font-size: 30px; }
+    p { margin: 0 0 14px; line-height: 1.7; }
+    .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 22px;
+    }
+    a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: min(100%, 320px);
+      min-height: 58px;
+      padding: 13px 18px;
+      border-radius: 14px;
+      text-decoration: none;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .secondary {
+      border-color: var(--border);
+      color: var(--text);
+      background: #fff;
+    }
+    .meta {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Mio Translator v1.3.5.2 Downloads</h1>
+    <p>这里是官网手动下载页。v1.3.5.2 是正式版，安装包已内置 Style-Bert-VITS2 相关依赖，但不捆绑语音模型，首次启动时仍会按系统语言自动推荐并下载。</p>
+    <p>安装器会检测已有 SenseVoice 模型，不会重复下载；Web Speech、Qwen3-ASR 与 Gemini Live 属于在线 ASR，不需要本地模型。Qwen3-ASR 面向全语言的高精度快速识别，更适合多语言场景。</p>
+    <p>v1.3.5.2 继续把语音阅读、反向翻译和 MixLine 虚拟麦克风串成同传链路：译文和手打文字都可以被 AI 声音读出来，再作为麦克风输入送进 VRChat 或其他支持自选麦克风的游戏。</p>
+    <p>如果你想让游戏里的其他玩家听到 AI 语音，需要额外安装 MixLine，然后在游戏内选择 MixLine 虚拟麦克风。</p>
+    <div class="actions">
+      <a class="primary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.5.2/MioTranslator-Setup-v1.3.5.2.exe">下载正式版安装包</a>
+      <a class="secondary" href="#" onclick="alert('暂无测试版提供'); return false;">Beta版下载</a>
+    </div>
+    <p class="meta">如果你是第一次安装或从旧版本升级，都使用同一个 v1.3.5.2 安装包。</p>
+    <p class="meta">安装后按向导下载语音模型；更新校验信息由官方 installer_manifest.json 提供。</p>
+  </main>
+</body>
+</html>

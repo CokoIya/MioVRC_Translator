@@ -1,0 +1,97 @@
+import queue
+
+from src.ui.main_window import (
+    DESKTOP_FINAL_TASK_QUEUE_MAXSIZE,
+    DESKTOP_SOURCE,
+    MIC_SOURCE,
+    MainWindow,
+)
+
+
+def _window_for_mute(muted: bool = True):
+    window = object.__new__(MainWindow)
+    window._running = True
+    window._listen_session = 7
+    window._mic_muted = muted
+    window._partial_task_queues = {
+        MIC_SOURCE: queue.Queue(maxsize=1),
+        DESKTOP_SOURCE: queue.Queue(maxsize=1),
+    }
+    window._final_task_queues = {
+        MIC_SOURCE: queue.Queue(maxsize=8),
+        DESKTOP_SOURCE: queue.Queue(maxsize=DESKTOP_FINAL_TASK_QUEUE_MAXSIZE),
+    }
+    window._current_asr_lang = "ja"
+    window._current_src_lang = "ja"
+    window._listen_asr_language = lambda: "en"
+    window._listen_source_language = lambda: "en"
+    window._reset_streaming_state = lambda source=None: setattr(
+        window,
+        "_last_reset_source",
+        source,
+    )
+    return window
+
+
+def test_mic_mute_drops_mic_segments_but_allows_reverse_translation():
+    window = _window_for_mute(muted=True)
+
+    window._on_audio_segment("private mic audio", MIC_SOURCE)
+
+    assert window._final_task_queues[MIC_SOURCE].empty()
+    assert window._last_reset_source == MIC_SOURCE
+
+    window._on_audio_segment("desktop audio", DESKTOP_SOURCE)
+
+    payload = window._final_task_queues[DESKTOP_SOURCE].get_nowait()
+    assert payload[-1] == DESKTOP_SOURCE
+
+
+def test_reverse_translation_final_queue_keeps_latest_segment():
+    window = _window_for_mute(muted=False)
+
+    window._on_audio_segment("old desktop audio", DESKTOP_SOURCE)
+    window._on_audio_segment("new desktop audio", DESKTOP_SOURCE)
+
+    payload = window._final_task_queues[DESKTOP_SOURCE].get_nowait()
+    assert payload[0] == "new desktop audio"
+    assert window._final_task_queues[DESKTOP_SOURCE].empty()
+
+
+def test_reverse_translation_yields_while_mic_is_speaking():
+    window = _window_for_mute(muted=False)
+    shared_asr = object()
+    window._asr = shared_asr
+    window._listen_asr = shared_asr
+    window._mic_in_speech = True
+
+    window._on_audio_segment("desktop audio", DESKTOP_SOURCE)
+
+    assert window._final_task_queues[DESKTOP_SOURCE].empty()
+
+
+def test_reverse_translation_does_not_yield_to_mic_with_independent_asr():
+    window = _window_for_mute(muted=False)
+    window._asr = object()
+    window._listen_asr = object()
+    window._mic_in_speech = True
+
+    window._on_audio_segment("desktop audio", DESKTOP_SOURCE)
+
+    payload = window._final_task_queues[DESKTOP_SOURCE].get_nowait()
+    assert payload[0] == "desktop audio"
+
+
+def test_mic_mute_drops_already_queued_final_mic_audio():
+    window = _window_for_mute(muted=True)
+    window._asr_for_source = lambda _source: (_ for _ in ()).throw(
+        AssertionError("muted mic audio should not reach ASR")
+    )
+
+    window._process_final_audio_segment(
+        "private mic audio",
+        None,
+        None,
+        window._listen_session,
+        MIC_SOURCE,
+    )

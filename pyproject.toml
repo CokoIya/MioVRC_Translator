@@ -1,0 +1,2 @@
+[tool.pytest.ini_options]
+tmp_path_retention_policy = "none"
