@@ -94,7 +94,9 @@
     "source_language": "auto",
     "language_pair_source": "auto",
     "target_language": "ja",
+    "target_language_2": "en",
     "output_format": "translated_with_original",
+    "output_format_2": "disabled",
     "send_to_chatbox": true,
     "social": {
       "mode": "standard",
@@ -128,7 +130,7 @@
     "qianwen": {
       "api_key": "",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen-mt-plus"
+      "model": "qwen-mt-flash"
     },
     "gemini": {
       "api_key": "",
@@ -229,13 +231,17 @@
     "language_source": "auto",
     "allow_ip_language_detection": false,
     "osc_guide_seen": false,
-    "theme": "dark"
+    "theme": "dark",
+    "background_image_path": ""
+  },
+  "hotkeys": {
+    "mic_mute": "Alt+C"
   },
   "text_input_window": {
     "size_version": 5,
     "topmost": true,
     "opacity": 0.88,
-    "hotkey": "Ctrl+Alt+X",
+    "hotkey": "Alt+X",
     "geometry": "520x320",
     "minimized": false
   }
