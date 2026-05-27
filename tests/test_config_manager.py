@@ -10,7 +10,12 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils import config_manager
-from src.utils.ui_config import TRANSLATION_BACKENDS, TRANSLATION_MODEL_PRESETS
+from src.utils.ui_config import (
+    OUTPUT_FORMAT_2_DISABLED,
+    TRANSLATION_BACKENDS,
+    TRANSLATION_MODEL_PRESETS,
+    normalize_output_format_2,
+)
 
 
 class TestConfigEncryption(unittest.TestCase):
@@ -156,6 +161,42 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["output_device"] == 14
         assert config["tts"]["output_device_name"] == ""
 
+    def test_ensure_tts_config_normalizes_style_bert_language_aliases(self):
+        """Old saved BERT language labels should be normalized to runtime codes."""
+        config = {
+            "tts": {
+                "style_bert_vits2": {
+                    "bert_language": "English",
+                }
+            }
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["style_bert_vits2"]["bert_language"] == "en"
+
+        config["tts"]["style_bert_vits2"]["bert_language"] = "zh_CN"
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["style_bert_vits2"]["bert_language"] == "zh"
+
+    def test_ensure_tts_config_removes_style_bert_gpu_device(self):
+        """Style-Bert-VITS2 should use CPU because GPU is not exposed in the UI."""
+        config = {
+            "tts": {
+                "style_bert_vits2": {
+                    "device": "cuda",
+                }
+            }
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
+
     def test_ensure_mode_config_adds_simul_mode_defaults(self):
         """Mode config should default to translation with simultaneous presets."""
         config = {}
@@ -188,6 +229,63 @@ class TestConfigValidation(unittest.TestCase):
         assert config["audio"]["vad_silence_threshold"] == 0.65
         assert config["audio"]["vad_speech_ratio"] == 0.6
         assert config["audio"]["vad_activation_threshold_s"] == 0.2
+
+    def test_hotkey_config_defaults_mic_mute_hotkey(self):
+        """New hotkey configs should default the microphone mute shortcut."""
+        config = {}
+
+        changed = config_manager._ensure_hotkey_config(config)
+
+        assert changed is True
+        assert config["hotkeys"]["mic_mute"] == config_manager.DEFAULT_MIC_MUTE_HOTKEY
+
+    def test_hotkey_config_normalizes_mic_mute_hotkey(self):
+        config = {"hotkeys": {"mic_mute": "alt-c"}}
+
+        changed = config_manager._ensure_hotkey_config(config)
+
+        assert changed is True
+        assert config["hotkeys"]["mic_mute"] == "Alt+C"
+
+    def test_text_input_old_default_migrates_to_alt_x(self):
+        config = {"text_input_window": {"hotkey": "Ctrl+Alt+X"}}
+
+        changed = config_manager._ensure_text_input_window_config(config)
+
+        assert changed is True
+        assert config["text_input_window"]["hotkey"] == config_manager.DEFAULT_TEXT_INPUT_HOTKEY
+
+    def test_ensure_ui_config_adds_background_path_default(self):
+        config = {}
+
+        changed = config_manager._ensure_ui_config(config)
+
+        assert changed is True
+        assert config["ui"]["background_image_path"] == ""
+
+    def test_ensure_ui_config_preserves_background_path(self):
+        config = {"ui": {"background_image_path": "backgrounds/custom.png"}}
+
+        changed = config_manager._ensure_ui_config(config)
+
+        assert changed is False
+        assert config["ui"]["background_image_path"] == "backgrounds/custom.png"
+
+    def test_ensure_ui_config_normalizes_background_path(self):
+        config = {"ui": {"background_image_path": 123}}
+
+        changed = config_manager._ensure_ui_config(config)
+
+        assert changed is True
+        assert config["ui"]["background_image_path"] == "123"
+
+    def test_ensure_ui_config_replaces_invalid_ui_block(self):
+        config = {"ui": "invalid"}
+
+        changed = config_manager._ensure_ui_config(config)
+
+        assert changed is True
+        assert config["ui"]["background_image_path"] == ""
 
     def test_vrc_listen_tail_silence_defaults_to_release_value(self):
         """Reverse listen tail silence should use the same fast default."""
@@ -369,6 +467,8 @@ class TestConfigValidation(unittest.TestCase):
 
         assert config["translation"]["source_language"] == "zh"
         assert config["translation"]["target_language"] == "ja"
+        assert config["translation"]["target_language_2"] == "en"
+        assert config["translation"]["output_format_2"] == OUTPUT_FORMAT_2_DISABLED
         assert config["translation"]["language_pair_source"] == "auto"
 
     def test_auto_language_pair_defaults_non_chinese_to_chinese(self):
@@ -406,7 +506,12 @@ class TestConfigValidation(unittest.TestCase):
 
         assert config["translation"]["source_language"] == "auto"
         assert config["translation"]["target_language"] == "fr"
+        assert config["translation"]["target_language_2"] == "en"
         assert config["translation"]["language_pair_source"] == "manual"
+
+    def test_output_format_2_normalization(self):
+        assert normalize_output_format_2("translated1_with_translated2") == "translated1_with_translated2"
+        assert normalize_output_format_2("unknown") == OUTPUT_FORMAT_2_DISABLED
 
     def test_existing_custom_target_marks_language_pair_manual(self):
         """Old configs with a non-default target should keep that target."""
@@ -441,7 +546,7 @@ class TestConfigValidation(unittest.TestCase):
     def test_api_provider_presets_include_latest_model_families(self):
         """All hosted translation backends should expose their current model families."""
         expected_models = {
-            "qianwen": ("qwen3.6-plus", "qwen-mt-plus"),
+            "qianwen": ("qwen3.6-plus", "qwen-mt-flash"),
             "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
             "zhipu": ("glm-5.1", "glm-5-turbo"),
             "gemini": ("gemini-3.1-flash-lite", "gemini-3.1-pro-preview"),
@@ -529,25 +634,25 @@ class TestConfigSave(unittest.TestCase):
 
     def test_save_config_atomic(self):
         """Config save should be atomic (temp file + replace)."""
-        tmp_root = Path.cwd() / ".tmp" / "tests" / "config_manager"
-        tmp_root.mkdir(parents=True, exist_ok=True)
-        config_path = tmp_root / f"config-{os.getpid()}.json"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            config_path = tmp_root / f"config-{os.getpid()}.json"
 
-        # Mock the config path
-        original_config_path = config_manager._config_path
-        config_manager._config_path = lambda: config_path
+            # Mock the config path
+            original_config_path = config_manager._config_path
+            config_manager._config_path = lambda: config_path
 
-        try:
-            test_config = {"test": "data", "number": 42}
-            config_manager.save_config(test_config)
+            try:
+                test_config = {"test": "data", "number": 42}
+                config_manager.save_config(test_config)
 
-            assert config_path.exists()
-            with config_path.open("r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            assert loaded["test"] == "data"
-            assert loaded["number"] == 42
-        finally:
-            config_manager._config_path = original_config_path
+                assert config_path.exists()
+                with config_path.open("r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                assert loaded["test"] == "data"
+                assert loaded["number"] == 42
+            finally:
+                config_manager._config_path = original_config_path
 
 
 class TestConfigGet(unittest.TestCase):

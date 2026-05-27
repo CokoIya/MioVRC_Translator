@@ -2,6 +2,7 @@
 
 # UI
 customtkinter>=5.2.0,<6.0.0
+PySide6>=6.8.0,<7.0.0
 Pillow>=10.0.0
 
 # Audio
@@ -45,6 +46,12 @@ pyttsx3>=2.90,<3.0.0         # Offline TTS fallback
 av>=12.0.0                   # PyAV for MP3 decoding (includes FFmpeg libraries)
 style-bert-vits2==2.5.0      # Custom / Hololive local voices (supports Python 3.11+)
 transformers==5.8.1          # Keep Style-Bert-VITS2 BERT imports reproducible
+sentencepiece>=0.2.0,<0.3.0  # English SBV2 DeBERTa tokenizer
+protobuf>=5.0.0,<8.0.0       # SentencePiece model protobuf support
+jieba>=0.42.1,<1.0.0         # Chinese SBV2 text segmentation
+pypinyin>=0.55.0,<1.0.0      # Chinese SBV2 pronunciation conversion
+cn2an>=0.5.23,<1.0.0         # Chinese SBV2 number normalization
+g2p-en>=2.1.0,<3.0.0         # English SBV2 pronunciation conversion
 
 # Optional: GPU acceleration (uncomment if CUDA available)
 # torch>=2.4.0+cu118,<2.8.0

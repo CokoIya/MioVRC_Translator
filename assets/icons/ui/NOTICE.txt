@@ -1,0 +1,9 @@
+Icons in this directory were downloaded from the Lucide icon set.
+
+Source: https://github.com/lucide-icons/lucide/tree/main/icons
+License: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+
+Brand icons were downloaded from Simple Icons.
+
+Source: https://simpleicons.org/
+License: https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md

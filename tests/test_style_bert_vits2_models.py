@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.tts import style_bert_vits2_engine as engine_store
 from src.tts import style_bert_vits2_models as model_store
@@ -129,13 +130,89 @@ def test_hololive_catalog_labels_matching_imported_voice(tmp_path, monkeypatch):
     assert voices[0].language == "en"
 
 
+def test_style_bert_synthesis_uses_catalog_voice_language(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "SBV2_HoloLow")
+
+    imported = managed_root / "SBV2_HoloLow"
+    config = json.loads((imported / "config.json").read_text(encoding="utf-8"))
+    config["data"]["spk2id"] = {"MoriCalliope": 0}
+    config["data"]["style2id"] = {"Neutral": 0}
+    (imported / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    ensured_languages: list[str | None] = []
+    infer_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        StyleBertVits2TTS,
+        "_ensure_bert_runtime",
+        lambda self, language=None: ensured_languages.append(language),
+    )
+
+    class FakeModel:
+        def __init__(self, **_kwargs):
+            self.spk2id = {"MoriCalliope": 3}
+            self.style2id = {"Neutral": 0}
+
+        def infer(self, **kwargs):
+            infer_calls.append(kwargs)
+            return 24000, np.array([0, 600, -600], dtype=np.int16)
+
+    engine = StyleBertVits2TTS(bert_language="jp")
+    engine._tts_model_cls = FakeModel
+
+    audio = engine.synthesize(
+        "hello",
+        model_store.style_bert_voice_id("SBV2_HoloLow", "MoriCalliope", "Neutral"),
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert ensured_languages == ["en"]
+    assert infer_calls[0]["language"] == "EN"
+
+
 def test_style_bert_language_mapping_helpers():
     assert engine_store.normalize_style_bert_bert_language("ja") == "jp"
     assert engine_store.normalize_style_bert_bert_language("english") == "en"
+    assert engine_store.normalize_style_bert_bert_language("en_US") == "en"
+    assert engine_store.normalize_style_bert_bert_language("zh-CN") == "zh"
+    assert engine_store.normalize_style_bert_bert_language("中文") == "zh"
     assert (
         engine_store.style_bert_bert_model_id("zh")
         == "hfl/chinese-roberta-wwm-ext-large"
     )
+
+
+def test_style_bert_english_dependency_probe_reports_missing_sentencepiece(monkeypatch):
+    def fake_import_module(name):
+        if name == "sentencepiece":
+            raise ModuleNotFoundError("No module named 'sentencepiece'")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(engine_store.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine_store._ensure_style_bert_language_runtime_dependencies("english")
+
+    message = str(excinfo.value)
+    assert "English BERT runtime dependency is missing" in message
+    assert "sentencepiece" in message
+
+
+def test_style_bert_chinese_dependency_probe_reports_missing_segmenter(monkeypatch):
+    def fake_import_module(name):
+        if name == "jieba.posseg":
+            raise ModuleNotFoundError("No module named 'jieba.posseg'")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(engine_store.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine_store._ensure_style_bert_language_runtime_dependencies("zh-CN")
+
+    message = str(excinfo.value)
+    assert "Chinese BERT runtime dependency is missing" in message
+    assert "jieba POS tokenizer" in message
 
 
 def test_style_bert_engine_requires_shared_runtime_assets(tmp_path, monkeypatch):

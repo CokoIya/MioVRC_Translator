@@ -133,6 +133,7 @@ def test_tts_manager_passes_sbv2_device_to_engine_factory(monkeypatch):
         return fake_engine
 
     monkeypatch.setattr("src.tts.manager.create_tts_engine", fake_create_engine)
+    monkeypatch.setattr("src.tts.manager._style_bert_cuda_available", lambda: True)
 
     manager = TTSManager(
         engine_name="style_bert_vits2",
@@ -144,6 +145,82 @@ def test_tts_manager_passes_sbv2_device_to_engine_factory(monkeypatch):
 
     assert manager.is_available() is True
     assert captured == [("style_bert_vits2", "cuda", "en")]
+
+
+def test_tts_manager_falls_back_to_cpu_when_sbv2_cuda_is_unavailable(monkeypatch):
+    fake_engine = FakeTTS()
+    captured: list[tuple[str, str, str]] = []
+
+    def fake_create_engine(engine_name, **kwargs):
+        captured.append(
+            (
+                engine_name,
+                kwargs.get("device"),
+                kwargs.get("bert_language"),
+            )
+        )
+        return fake_engine
+
+    monkeypatch.setattr("src.tts.manager.create_tts_engine", fake_create_engine)
+    monkeypatch.setattr("src.tts.manager._style_bert_cuda_available", lambda: False)
+
+    manager = TTSManager(
+        engine_name="style_bert_vits2",
+        cache_enabled=False,
+        allow_fallback=False,
+        sbv2_device="cuda",
+        sbv2_bert_language="en",
+    )
+
+    assert manager.is_available() is True
+    assert captured == [("style_bert_vits2", "cpu", "en")]
+
+
+def test_tts_manager_pauses_after_repeated_failures(monkeypatch):
+    class FailingTTS(FakeTTS):
+        def synthesize(self, *args, **kwargs):
+            raise RuntimeError("offline resource download failed")
+
+    fake_engine = FailingTTS()
+    callback_results: list[tuple[bool, str]] = []
+
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: fake_engine,
+    )
+    monkeypatch.setattr("src.tts.manager.TTS_FAILURE_SUSPEND_THRESHOLD", 2)
+    monkeypatch.setattr("src.tts.manager.TTS_FAILURE_SUSPEND_SECONDS", 60.0)
+
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    request = lambda: TTSRequest(
+        text="hello",
+        voice="fake-voice",
+        rate=1.0,
+        volume=1.0,
+        callback=lambda success, message: callback_results.append((success, message)),
+    )
+
+    manager._process_request(request())
+    manager._process_request(request())
+
+    assert manager._suspended_until > 0
+    assert len(callback_results) == 2
+    assert all(success is False for success, _message in callback_results)
+
+    manager._running = True
+    accepted = manager.speak(
+        "hello",
+        "fake-voice",
+        callback=lambda success, message: callback_results.append((success, message)),
+    )
+
+    assert accepted is False
+    assert "temporarily paused" in callback_results[-1][1]
 
 
 def test_play_audio_can_mirror_to_monitor_output_when_not_routing_to_vrchat(monkeypatch):
