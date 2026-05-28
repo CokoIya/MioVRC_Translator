@@ -199,19 +199,8 @@ excludes = [
     "pandas",
     "lxml",
     "aliyunsdkcore",
-    "customtkinter",
     "tkinter",
     "_tkinter",
-    "src.ui",
-    "src.ui.main_window",
-    "src.ui.settings_window",
-    "src.ui.floating_window",
-    "src.ui.sponsor_window",
-    "src.ui.update_window",
-    "src.ui.text_input_window",
-    "src.ui.model_download_dialog",
-    "src.ui.window_effects",
-    "src.ui_tk_backup",
 ]
 
 a = Analysis(
