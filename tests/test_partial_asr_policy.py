@@ -1,4 +1,4 @@
-from src.ui.main_window import MIC_SOURCE, MainWindow
+from src.ui_qt.main_window import MIC_SOURCE, MainWindow
 
 
 class _ASR:

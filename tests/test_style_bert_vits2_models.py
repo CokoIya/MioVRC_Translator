@@ -248,6 +248,7 @@ def test_style_bert_engine_module_imports_without_scipy(monkeypatch):
 
 
 def test_style_bert_runtime_imports_without_numba(monkeypatch):
+    pytest.importorskip("style_bert_vits2")
     for module_name in list(sys.modules):
         if module_name == "numba" or module_name.startswith("numba."):
             monkeypatch.delitem(sys.modules, module_name, raising=False)

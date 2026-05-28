@@ -1,15 +1,16 @@
 import queue
 
-from src.ui.main_window import (
+from src.ui_qt.main_window import (
     DESKTOP_FINAL_TASK_QUEUE_MAXSIZE,
     DESKTOP_SOURCE,
+    FINAL_TASK_QUEUE_MAXSIZE,
     MIC_SOURCE,
     MainWindow,
 )
 
 
 def _window_for_mute(muted: bool = True):
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._running = True
     window._listen_session = 7
     window._mic_muted = muted
@@ -18,7 +19,7 @@ def _window_for_mute(muted: bool = True):
         DESKTOP_SOURCE: queue.Queue(maxsize=1),
     }
     window._final_task_queues = {
-        MIC_SOURCE: queue.Queue(maxsize=8),
+        MIC_SOURCE: queue.Queue(maxsize=FINAL_TASK_QUEUE_MAXSIZE),
         DESKTOP_SOURCE: queue.Queue(maxsize=DESKTOP_FINAL_TASK_QUEUE_MAXSIZE),
     }
     window._current_asr_lang = "ja"
@@ -56,6 +57,36 @@ def test_reverse_translation_final_queue_keeps_latest_segment():
     payload = window._final_task_queues[DESKTOP_SOURCE].get_nowait()
     assert payload[0] == "new desktop audio"
     assert window._final_task_queues[DESKTOP_SOURCE].empty()
+
+
+def test_mic_final_queue_keeps_latest_segment_under_backpressure():
+    window = _window_for_mute(muted=False)
+
+    window._on_audio_segment("old mic audio", MIC_SOURCE)
+    window._on_audio_segment("new mic audio", MIC_SOURCE)
+
+    payload = window._final_task_queues[MIC_SOURCE].get_nowait()
+    assert payload[0] == "new mic audio"
+    assert window._final_task_queues[MIC_SOURCE].empty()
+
+
+def test_stop_workers_replaces_full_queues_with_stop_sentinel():
+    window = MainWindow.__new__(MainWindow)
+    partial_queue = queue.Queue(maxsize=1)
+    final_queue = queue.Queue(maxsize=1)
+    partial_queue.put_nowait("stale partial")
+    final_queue.put_nowait("stale final")
+    window._partial_task_queues = {MIC_SOURCE: partial_queue}
+    window._final_task_queues = {MIC_SOURCE: final_queue}
+    window._partial_workers = {"partial": object()}
+    window._final_workers = {"final": object()}
+
+    window._stop_workers()
+
+    assert partial_queue.get_nowait() is None
+    assert final_queue.get_nowait() is None
+    assert window._partial_workers == {}
+    assert window._final_workers == {}
 
 
 def test_reverse_translation_yields_while_mic_is_speaking():

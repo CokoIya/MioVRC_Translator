@@ -184,12 +184,6 @@ def main() -> int:
             config_manager.save_config(config)
             logger.info("Auto-selected ASR engine: %s", engine)
 
-        ui_backend = os.environ.get("MIO_TRANSLATOR_UI", "qt").strip().lower()
-        if ui_backend == "tk":
-            logger.warning("Tk UI is no longer used in release builds; launching Qt UI")
-        elif ui_backend not in ("", "qt"):
-            logger.warning("Unknown UI backend '%s'; launching Qt UI", ui_backend)
-
         from src.ui_qt.app import run_qt_app
         logger.info("Launching Qt UI")
         exit_code = run_qt_app(config)

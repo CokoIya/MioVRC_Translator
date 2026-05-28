@@ -1,5 +1,6 @@
 import threading
 
+from src.core.mode_manager import AppMode
 from src.ui_qt.main_window import MainWindow, UI_CALLBACK_DRAIN_MS
 from src.utils.i18n import tr
 
@@ -10,18 +11,70 @@ def test_drain_ui_callback_queue_reschedules_callbacks(qtbot):
     window._ui_thread_id = threading.get_ident()
     from queue import Queue
     window._ui_callback_queue = Queue()
-    window._callback_drain_timer = None
     called: list[str] = []
+
+    class FakeTimer:
+        started = False
+        def start(self, ms):
+            self.started = True
+
+    timer = FakeTimer()
+    window._callback_drain_timer = timer
     window._ui_callback_queue.put_nowait((0, lambda: called.append("now")))
     window._ui_callback_queue.put_nowait((15, lambda: called.append("later")))
 
     MainWindow._drain_ui_callback_queue(window)
 
     qtbot.waitUntil(lambda: called == ["now", "later"], timeout=500)
+    assert timer.started is True
+
+
+def test_call_in_ui_from_worker_wakes_callback_drain():
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._ui_thread_id = -1
+    from queue import Queue
+    window._ui_callback_queue = Queue()
+
+    class FakeSignal:
+        emitted = False
+
+        def emit(self):
+            self.emitted = True
+
+    signal = FakeSignal()
+    window.sig_ui_callback = signal
+
+    assert MainWindow._call_in_ui(window, lambda: None) is True
+    assert window._ui_callback_queue.qsize() == 1
+    assert signal.emitted is True
+
+
+def test_call_in_ui_from_worker_runs_on_qt_thread(qtbot, monkeypatch):
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: None)
+
+    window = MainWindow({"ui": {"main_window_theme": "dark", "osc_guide_seen": True}})
+    qtbot.addWidget(window)
+    called: list[int] = []
+    returned: list[bool] = []
+
+    worker = threading.Thread(
+        target=lambda: returned.append(window._call_in_ui(lambda: called.append(threading.get_ident()))),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=1)
+
+    qtbot.waitUntil(lambda: bool(called), timeout=500)
+    assert returned == [True]
+    assert called == [window._ui_thread_id]
+    window.destroy()
 
 
 def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
-    monkeypatch.setattr("src.ui_qt.main_window.AudioRecorder.list_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
     monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
     monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: None)
 
@@ -37,6 +90,20 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert window.maximumSize().height() > window.height()
     assert window._start_btn is not None
     assert window._mute_btn is not None
+    assert window._mode_translation_button.isCheckable()
+    assert window._mode_simultaneous_button.isCheckable()
+    assert window._mode_translation_button.isChecked()
+    assert not window._mode_simultaneous_button.isChecked()
+    assert window._mode_translation_button.property("modeActive") == "true"
+    assert window._mode_simultaneous_button.property("modeActive") == "false"
+
+    window._set_app_mode(AppMode.SIMULTANEOUS, persist=True)
+
+    assert not window._mode_translation_button.isChecked()
+    assert window._mode_simultaneous_button.isChecked()
+    assert window._mode_translation_button.property("modeActive") == "false"
+    assert window._mode_simultaneous_button.property("modeActive") == "true"
+
     assert window._src_header_label.text()
     assert window._tgt_header_label.text()
     window._on_theme_toggle()
@@ -45,7 +112,7 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
 
 
 def test_ui_language_switch_refreshes_dynamic_buttons(qtbot, monkeypatch):
-    monkeypatch.setattr("src.ui_qt.main_window.AudioRecorder.list_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
     monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
     monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: None)
 

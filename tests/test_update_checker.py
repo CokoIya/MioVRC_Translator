@@ -1,4 +1,6 @@
 """Tests for update checker and version comparison."""
+import json
+from pathlib import Path
 import unittest
 
 from src.updater import update_checker
@@ -20,6 +22,7 @@ from src.updater.update_checker import (
     _select_newest_update_info,
     _parse_sha256,
     is_trusted_download_url,
+    update_notes_for_language,
 )
 
 
@@ -52,6 +55,21 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(info.sha256, "a" * 64)
         self.assertEqual(info.localized_notes["ja"], "日本語の更新内容")
         self.assertEqual(info.localized_notes["en"], "English release notes")
+
+    def test_parse_update_info_accepts_release_notes_aliases(self):
+        info = _parse_update_info(
+            {
+                "version": "v9.9.9",
+                "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v9.9.9/app.exe",
+                "sha256": "a" * 64,
+                "release_notes": "Default notes",
+                "release_notes_i18n": {"zh-CN": "中文更新说明"},
+            }
+        )
+        self.assertIsNotNone(info)
+        self.assertEqual(info.notes, "Default notes")
+        self.assertEqual(update_notes_for_language(info, "zh-CN"), "中文更新说明")
+        self.assertEqual(update_notes_for_language(info, "ja"), "Default notes")
 
     def test_rejects_untrusted_or_plain_http_download_url(self):
         self.assertFalse(is_trusted_download_url("http://github.com/example/app.exe"))
@@ -97,6 +115,29 @@ class UpdateCheckerTests(unittest.TestCase):
             update_checker.UPDATE_MANIFEST_PUBLIC_KEY_ID = original_key_id
             update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = original_required
 
+    def test_optional_bad_manifest_signature_does_not_block_sha256_path(self):
+        original_public_key = update_checker.UPDATE_MANIFEST_PUBLIC_KEY
+        original_key_id = update_checker.UPDATE_MANIFEST_PUBLIC_KEY_ID
+        original_required = update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE
+        try:
+            update_checker.UPDATE_MANIFEST_PUBLIC_KEY = public_key_from_seed("55" * 32)
+            update_checker.UPDATE_MANIFEST_PUBLIC_KEY_ID = "test-key"
+            update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = False
+            manifest = {
+                "version": "v9.9.9",
+                "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v9.9.9/app.exe",
+                "sha256": "a" * 64,
+                SIGNATURE_ALGORITHM_FIELD: SIGNATURE_ALGORITHM,
+                SIGNATURE_KEY_ID_FIELD: "test-key",
+                SIGNATURE_FIELD: "b" * 128,
+            }
+            self.assertFalse(update_checker._verify_update_manifest(manifest))
+            self.assertIsNotNone(_parse_update_info(manifest))
+        finally:
+            update_checker.UPDATE_MANIFEST_PUBLIC_KEY = original_public_key
+            update_checker.UPDATE_MANIFEST_PUBLIC_KEY_ID = original_key_id
+            update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = original_required
+
     def test_select_newest_update_info_uses_highest_version(self):
         newest = _select_newest_update_info(
             [
@@ -107,6 +148,15 @@ class UpdateCheckerTests(unittest.TestCase):
         )
         self.assertIsNotNone(newest)
         self.assertEqual(newest.version, "v1.3.2.3")
+
+    def test_repository_installer_manifest_is_parseable(self):
+        manifest_path = Path(__file__).resolve().parents[1] / "docs" / "installer_manifest.json"
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        update_checker._verify_update_manifest(data)
+        info = _parse_update_info(data)
+        self.assertIsNotNone(info)
+        self.assertGreater(info.size_bytes or 0, 0)
+        self.assertEqual(len(info.sha256), 64)
 
 
 class TestVersionParsing(unittest.TestCase):

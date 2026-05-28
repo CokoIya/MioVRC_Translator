@@ -1,7 +1,7 @@
 import threading
 import time
 
-from src.ui.main_window import DESKTOP_SOURCE, MainWindow
+from src.ui_qt.main_window import DESKTOP_SOURCE, MainWindow
 
 
 class _Merger:
@@ -21,7 +21,7 @@ class _Translator:
 
 
 def _base_desktop_window(*, send_to_chatbox: bool):
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     shown_source: list[str] = []
     shown_target: list[str] = []
     shown_overlay: list[tuple[str, str | None]] = []
@@ -55,7 +55,7 @@ def _base_desktop_window(*, send_to_chatbox: bool):
         lambda text, *, payload=None, source="listen": shown_overlay.append((text, payload))
     )
     window._listen_send_to_chatbox_enabled = lambda: send_to_chatbox
-    window._send_listen_chatbox_async = lambda text, session_id: sent_chatbox.append((text, session_id))
+    window._send_listen_chatbox = lambda text: sent_chatbox.append((text, window._listen_session))
     window._auto_read_mic_translation = lambda **kwargs: auto_read_calls.append(kwargs) or True
     window._record_translation_success = lambda: None
     window._refresh_runtime_status = lambda: None

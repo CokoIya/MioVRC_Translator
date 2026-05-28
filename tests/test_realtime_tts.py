@@ -1,6 +1,6 @@
 import threading
 
-from src.ui.main_window import MIC_SOURCE, MainWindow
+from src.ui_qt.main_window import MIC_SOURCE, MainWindow
 
 
 def _window_for_auto_read(
@@ -9,7 +9,7 @@ def _window_for_auto_read(
     auto_read: bool = True,
     output_format: str = "translated_only",
 ):
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._tts_enabled = tts_enabled
     window._config = {
         "translation": {"output_format": output_format},
@@ -78,7 +78,7 @@ class _FakeTtsManager:
 
 
 def _window_for_tts_strategy(strategy: str):
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     manager = _FakeTtsManager()
     window._tts_enabled = True
     window._config = {
@@ -192,7 +192,7 @@ class _FakeSender:
 
 
 def test_final_mic_segment_queues_tts_after_translation():
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     sender = _FakeSender()
     auto_read_calls: list[dict[str, str]] = []
 
@@ -204,6 +204,7 @@ def test_final_mic_segment_queues_tts_after_translation():
     window._desktop_capture_enabled = False
     window._own_msgs = set()
     window._get_output_format = lambda: "translated_only"
+    window._get_output_format_2 = lambda: "disabled"
     window._final_segment_may_need_translation_api = lambda *args: True
     window._translation_cooldown_active = lambda _source: False
     window._set_translating_state = lambda _active: None

@@ -1,4 +1,4 @@
-from src.ui.main_window import MainWindow
+from src.ui_qt.main_window import MainWindow
 
 
 def _window_with_output_selection(
@@ -9,7 +9,7 @@ def _window_with_output_selection(
     tts_output_to_vrchat: bool = False,
     tts_output_device_name: str = "",
 ):
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._desktop_devices = {
         "Configured Device": 0,
         "VRChat Active Device": 0,
@@ -81,9 +81,9 @@ def test_missing_configured_output_uses_auto_mode_without_tts_virtual_output():
 
 
 def test_auto_detect_uses_default_output_without_process_probe(monkeypatch):
-    from src.ui import main_window
+    from src.ui_qt import main_window
 
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._desktop_devices = {"Default Device": 0}
     window._desktop_capture_config = lambda: {}
     window._tts_config = lambda: {
@@ -102,9 +102,9 @@ def test_auto_detect_uses_default_output_without_process_probe(monkeypatch):
 
 
 def test_auto_detect_avoids_tts_mixline_default_output(monkeypatch):
-    from src.ui import main_window
+    from src.ui_qt import main_window
 
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._desktop_devices = {
         "Speakers (MIXLINE)": 0,
         "Headphones (Realtek(R) Audio)": 1,
@@ -126,9 +126,9 @@ def test_auto_detect_avoids_tts_mixline_default_output(monkeypatch):
 
 
 def test_auto_detect_can_use_process_probe_when_enabled(monkeypatch):
-    from src.ui import main_window
+    from src.ui_qt import main_window
 
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._desktop_devices = {"VRChat Active Device": 0}
     window._desktop_capture_config = lambda: {"follow_process_output": True}
     window._tts_config = lambda: {

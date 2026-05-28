@@ -1,6 +1,6 @@
 import threading
 
-from src.ui.main_window import DESKTOP_SOURCE, MainWindow
+from src.ui_qt.main_window import DESKTOP_SOURCE, MainWindow
 from src.utils.translation_error_formatter import (
     FriendlyTranslationError,
     format_translation_error,
@@ -8,7 +8,7 @@ from src.utils.translation_error_formatter import (
 
 
 def _window_for_backoff():
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     window._translation_state_lock = threading.Lock()
     window._active_translation_jobs = 0
     window._translation_failure_streak = 0
@@ -40,7 +40,7 @@ def test_engine_overloaded_429_is_treated_as_quota_error():
 
 def test_translation_failure_backoff_cools_down_and_resets(monkeypatch):
     now = [100.0]
-    monkeypatch.setattr("src.ui.main_window.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("src.ui_qt.main_window.time.monotonic", lambda: now[0])
     window = _window_for_backoff()
 
     first = window._record_translation_failure(_friendly("network"))

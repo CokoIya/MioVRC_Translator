@@ -57,6 +57,8 @@ def test_qwen3_asr_sends_audio_and_cleans_text(monkeypatch):
     assert _FakeOpenAI.last_init_kwargs["base_url"] == (
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     )
+    assert _FakeOpenAI.last_init_kwargs["timeout"] == 25.0
+    assert _FakeOpenAI.last_init_kwargs["max_retries"] == 0
     assert _FakeOpenAI.last_kwargs["model"] == "qwen3-asr-flash"
     content = _FakeOpenAI.last_kwargs["messages"][0]["content"][0]
     assert content["type"] == "input_audio"

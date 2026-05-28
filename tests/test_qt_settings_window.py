@@ -1,6 +1,8 @@
 import pytest
 
 from src.ui_qt.settings_window import CapsuleSwitch, SettingsWindow, NAV_ITEMS
+from src.updater.update_checker import UpdateInfo
+from src.utils.ui_config import QWEN_TRANSLATION_BASE_URL_MAINLAND
 
 
 class _DummyTTS:
@@ -157,5 +159,118 @@ def test_settings_window_switches_are_capsules(qtbot, config, monkeypatch):
     qtbot.wait(30)
 
     assert dialog.findChildren(CapsuleSwitch)
+
+    dialog.reject()
+
+
+def test_qwen_translation_region_controls_base_url(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+
+    config["translation"]["backend"] = "qianwen"
+    config["translation"]["qianwen"] = {
+        "api_key": "test-key",
+        "region": "singapore",
+        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-mt-flash",
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    mainland_label = next(
+        label for label, code in dialog._qwen_translation_region_codes.items()
+        if code == "china_mainland"
+    )
+    dialog._qwen_translation_region_var.set(mainland_label)
+    dialog._on_qwen_translation_region_changed(mainland_label)
+
+    assert dialog._backend_base_url_var.value() == QWEN_TRANSLATION_BASE_URL_MAINLAND
+    assert dialog._backend_base_url_entry is not None
+    assert dialog._backend_base_url_entry.isReadOnly() is True
+
+    dialog.reject()
+
+
+def test_output_format_labels_follow_ui_language(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ru"
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert "Только перевод" in dialog._fmt_codes
+    assert "Отключить перевод 2" in dialog._fmt2_codes
+
+    dialog.reject()
+
+
+def test_settings_check_update_opens_update_window(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    opened: list[tuple[object, UpdateInfo, str]] = []
+
+    class FakeUpdateWindow:
+        def __init__(self, parent, info, ui_lang):
+            opened.append((parent, info, ui_lang))
+
+        def show(self):
+            pass
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+    def fake_check_for_update(on_update, **kwargs):
+        assert kwargs["max_retries"] == 2
+        assert kwargs["retry_delays"] == (2,)
+        on_update(
+            UpdateInfo(
+                version="v9.9.9",
+                download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+                notes="Update notes",
+                sha256="a" * 64,
+            )
+        )
+        return None
+
+    monkeypatch.setattr("src.ui_qt.settings_window.check_for_update", fake_check_for_update)
+    monkeypatch.setattr("src.ui_qt.update_window.UpdateWindow", FakeUpdateWindow)
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    dialog._on_check_update()
+
+    assert dialog._update_checking is False
+    assert opened
+    assert opened[0][1].version == "v9.9.9"
+    assert opened[0][2] == "zh-CN"
+    assert dialog._check_update_btn.isEnabled() is True
+
+    dialog.reject()
+
+
+def test_settings_check_update_reports_no_update(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    messages: list[tuple[str, str]] = []
+
+    def fake_check_for_update(_on_update, *, on_no_update, **_kwargs):
+        on_no_update()
+        return None
+
+    monkeypatch.setattr("src.ui_qt.settings_window.check_for_update", fake_check_for_update)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.information",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    dialog._on_check_update()
+
+    assert messages == [(dialog._copy("settings_check_update"), dialog._copy("settings_up_to_date"))]
+    assert dialog._update_checking is False
 
     dialog.reject()

@@ -1,13 +1,21 @@
 {
-  "version": "v1.3.6",
-  "installer_name": "MioTranslator-Setup-v1.3.6.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6/MioTranslator-Setup-v1.3.6.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6/MioTranslator-Setup-v1.3.6.exe",
-  "size_bytes": 286486071,
-  "sha256": "12bbb8e7ec7ceb8d2e592ab6419ca92cdc6ec5dff7f3263792a47c08d0b8a34f",
+  "version": "v1.3.6.1",
+  "installer_name": "MioTranslator-Setup-v1.3.6.1.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe",
+  "size_bytes": 310647309,
+  "sha256": "d9ce2383872d65941834f45dcc2ce303042e50563ac14bb356526694b2ddee6f",
+  "notes": "v1.3.6.1 removes the legacy Tk UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and strengthens online update, ASR, and translation reliability.",
+  "notes_i18n": {
+    "zh-CN": "v1.3.6.1 移除旧 Tk UI，完善 Qt UI；优化启动速度和低性能电脑体验；修复全局热键；新增 Qwen 翻译服务区域选择；提升在线更新、ASR 与翻译稳定性。",
+    "en": "v1.3.6.1 removes the legacy Tk UI, completes the Qt UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and improves online update, ASR, and translation reliability.",
+    "ja": "v1.3.6.1 では旧 Tk UI を削除し、Qt UI を完成させました。起動速度と低スペック環境での動作、グローバルホットキー、Qwen 翻訳のサービス地域選択、オンライン更新、ASR と翻訳の安定性を改善しています。",
+    "ru": "v1.3.6.1 удаляет старый Tk UI, завершает Qt UI, ускоряет запуск и работу на слабых ПК, исправляет глобальные горячие клавиши, добавляет выбор региона Qwen Translation и повышает надежность онлайн-обновлений, ASR и перевода.",
+    "ko": "v1.3.6.1은 기존 Tk UI를 제거하고 Qt UI를 완성했으며, 시작 속도와 저사양 PC 성능을 개선했습니다. 전역 단축키 수정, Qwen 번역 서비스 지역 선택, 온라인 업데이트와 ASR/번역 안정성 개선도 포함됩니다."
+  },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-05-15T22:14:29+08:00",
+  "published_at": "2026-05-28T14:59:59+08:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "37b0148d8fe8c1cc219686ce7a13c678f4e58679d3b19062551054537379ec92c0c649e2ea597d86b34fc101ceccdc5ffe5fa57b8243e168f6408deaaa44a50d"
+  "signature": "a06243a2bdaf4a5a19ed8cc2e865ad948376dde06fbf3bdd4dd13f88f81edb777d9bda2b73e0dbafb352efa89e910c452443f2d904d75cc62ee10761b1e82e07"
 }

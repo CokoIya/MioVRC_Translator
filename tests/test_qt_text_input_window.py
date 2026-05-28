@@ -1,3 +1,5 @@
+from PySide6.QtWidgets import QWidget
+
 from src.ui_qt.text_input_window import TextInputWindow
 
 
@@ -52,3 +54,18 @@ def test_text_input_window_uses_floating_controls_and_icons(qtbot, monkeypatch):
 
     assert window.isVisible()
     assert config["text_input_window"]["topmost"] is False
+
+
+def test_text_input_window_is_not_owned_by_main_window(qtbot, monkeypatch):
+    monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    config = {
+        "ui": {"language": "en", "main_window_theme": "dark"},
+        "text_input_window": {},
+    }
+
+    window = TextInputWindow(parent, config)
+    qtbot.addWidget(window)
+
+    assert window.parentWidget() is None

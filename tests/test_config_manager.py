@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils import config_manager
 from src.utils.ui_config import (
     OUTPUT_FORMAT_2_DISABLED,
+    QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
+    QWEN_TRANSLATION_BASE_URL_MAINLAND,
     TRANSLATION_BACKENDS,
     TRANSLATION_MODEL_PRESETS,
     normalize_output_format_2,
@@ -512,6 +514,92 @@ class TestConfigValidation(unittest.TestCase):
     def test_output_format_2_normalization(self):
         assert normalize_output_format_2("translated1_with_translated2") == "translated1_with_translated2"
         assert normalize_output_format_2("unknown") == OUTPUT_FORMAT_2_DISABLED
+
+    def test_qwen_translation_default_uses_international_endpoint_for_non_chinese_ui(self):
+        config = {
+            "ui": {"language": "ja"},
+            "translation": {
+                "backend": "qianwen",
+                "backend_source": "manual",
+                "qianwen": {"api_key": "test-key"},
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        qwen_cfg = config["translation"]["qianwen"]
+        assert qwen_cfg["region"] == "singapore"
+        assert qwen_cfg["base_url"] == QWEN_TRANSLATION_BASE_URL_INTERNATIONAL
+        assert qwen_cfg["timeout_s"] == TRANSLATION_BACKENDS["qianwen"]["timeout_s"]
+        assert qwen_cfg["max_retries"] == 0
+
+    def test_qwen_translation_default_uses_mainland_endpoint_for_chinese_ui(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "qianwen",
+                "backend_source": "manual",
+                "qianwen": {
+                    "api_key": "test-key",
+                    "base_url": QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
+                },
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={},
+            prefer_auto_backend=True,
+        )
+
+        assert changed is True
+        assert config["translation"]["qianwen"]["region"] == "china_mainland"
+        assert config["translation"]["qianwen"]["base_url"] == QWEN_TRANSLATION_BASE_URL_MAINLAND
+
+    def test_qwen_translation_preserves_selected_region_across_ui_language(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "qianwen",
+                "backend_source": "manual",
+                "qianwen": {
+                    "api_key": "test-key",
+                    "region": "singapore",
+                    "base_url": QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+            prefer_auto_backend=True,
+        )
+
+        assert config["translation"]["qianwen"]["region"] == "singapore"
+        assert config["translation"]["qianwen"]["base_url"] == QWEN_TRANSLATION_BASE_URL_INTERNATIONAL
+
+    def test_qwen_translation_preserves_custom_base_url(self):
+        config = {
+            "ui": {"language": "ja"},
+            "translation": {
+                "backend": "qianwen",
+                "qianwen": {
+                    "api_key": "test-key",
+                    "region": "custom",
+                    "base_url": "https://proxy.example.com/v1",
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(config, loaded={})
+
+        assert config["translation"]["qianwen"]["region"] == "custom"
+        assert config["translation"]["qianwen"]["base_url"] == "https://proxy.example.com/v1"
 
     def test_existing_custom_target_marks_language_pair_manual(self):
         """Old configs with a non-default target should keep that target."""

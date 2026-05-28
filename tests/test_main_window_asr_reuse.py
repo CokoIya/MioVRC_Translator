@@ -1,7 +1,7 @@
 import threading
 
-from src.ui import main_window
-from src.ui.main_window import DESKTOP_SOURCE, MIC_SOURCE, MainWindow
+from src.ui_qt import main_window
+from src.ui_qt.main_window import DESKTOP_SOURCE, MIC_SOURCE, MainWindow
 
 
 def test_listen_asr_reuses_main_asr_when_configuration_matches(monkeypatch):
@@ -97,7 +97,7 @@ def test_shared_asr_instance_drops_desktop_when_mic_is_transcribing():
                 self.active -= 1
             return "ok"
 
-    window = object.__new__(MainWindow)
+    window = MainWindow.__new__(MainWindow)
     shared = SharedASR()
     window._asr = shared
     window._listen_asr = shared

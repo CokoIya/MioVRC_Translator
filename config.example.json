@@ -1,5 +1,15 @@
 {
   "app_mode": "translation",
+  "performance": {
+    "profile": "balanced",
+    "check_updates_on_start": true,
+    "update_check_delay_ms": 3500,
+    "tts_cache_max_mb": 24,
+    "tts_cache_max_items": 60,
+    "download_parallel_max_parts": 3,
+    "style_bert_import_policy": "replace_same_name",
+    "style_bert_max_imported_models": 24
+  },
   "simul_mode": {
     "tts_backend": "edge",
     "tts_strategy": "queue",
@@ -64,7 +74,8 @@
       "max_segment_seconds": 6.0,
       "tail_silence_seconds": 0.7,
       "overlap_ms": 300,
-      "timeout_seconds": 15
+      "timeout_seconds": 25,
+      "max_retries": 0
     },
     "gemini_live": {
       "api_key": "",
@@ -110,27 +121,38 @@
     "openai": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-5.5"
+      "model": "gpt-5.5",
+      "timeout_s": 15.0,
+      "max_retries": 0
     },
     "local_ai": {
       "api_key": "",
       "base_url": "http://127.0.0.1:11434/v1",
-      "model": "qwen2.5:7b-instruct"
+      "model": "qwen2.5:7b-instruct",
+      "timeout_s": 30.0,
+      "max_retries": 0
     },
     "deepseek": {
       "api_key": "",
       "base_url": "https://api.deepseek.com/v1",
-      "model": "deepseek-v4-flash"
+      "model": "deepseek-v4-flash",
+      "timeout_s": 20.0,
+      "max_retries": 0
     },
     "zhipu": {
       "api_key": "",
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
-      "model": "glm-5.1"
+      "model": "glm-5.1",
+      "timeout_s": 15.0,
+      "max_retries": 0
     },
     "qianwen": {
       "api_key": "",
+      "region": "china_mainland",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen-mt-flash"
+      "model": "qwen-mt-flash",
+      "timeout_s": 20.0,
+      "max_retries": 0
     },
     "gemini": {
       "api_key": "",

@@ -1,7 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # UI
-customtkinter>=5.2.0,<6.0.0
 PySide6>=6.8.0,<7.0.0
 Pillow>=10.0.0
 
