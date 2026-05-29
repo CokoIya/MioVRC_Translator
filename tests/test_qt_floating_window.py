@@ -57,3 +57,18 @@ def test_floating_window_is_not_owned_by_main_window(qtbot):
     qtbot.addWidget(window)
 
     assert window.parentWidget() is None
+
+
+def test_floating_window_listen_status_updates_and_relocalizes(qtbot):
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+
+    assert window._status_label.text() == "等待对方说话中..."
+
+    window.set_listen_status(True)
+
+    assert window._status_label.text() == "反向翻译监听中..."
+
+    window.update_language("en")
+
+    assert window._status_label.text() == "Reverse translation listening..."

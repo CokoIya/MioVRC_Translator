@@ -13,6 +13,9 @@ def test_text_input_window_uses_translated_labels(qtbot, monkeypatch):
 
     window = TextInputWindow(None, config, on_send=lambda text: sent.append(text) or True)
     qtbot.addWidget(window)
+    window.show()
+    qtbot.wait(20)
+    assert window.isVisible()
 
     assert window._input_edit.placeholderText() != "text_input_placeholder"
     assert window._send_btn.text() == "翻译并发送"
@@ -25,6 +28,8 @@ def test_text_input_window_uses_translated_labels(qtbot, monkeypatch):
     window._on_send_clicked()
 
     assert sent == ["hello"]
+    assert window.isVisible()
+    assert window._closed is False
 
 
 def test_text_input_window_uses_floating_controls_and_icons(qtbot, monkeypatch):

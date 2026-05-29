@@ -1,21 +1,21 @@
 {
-  "version": "v1.3.6.1",
-  "installer_name": "MioTranslator-Setup-v1.3.6.1.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe",
-  "size_bytes": 310647309,
-  "sha256": "d9ce2383872d65941834f45dcc2ce303042e50563ac14bb356526694b2ddee6f",
-  "notes": "v1.3.6.1 removes the legacy Tk UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and strengthens online update, ASR, and translation reliability.",
+  "version": "v1.3.6.2",
+  "installer_name": "MioTranslator-Setup-v1.3.6.2.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.2/MioTranslator-Setup-v1.3.6.2.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.2/MioTranslator-Setup-v1.3.6.2.exe",
+  "size_bytes": 310659595,
+  "sha256": "1ec294e4b2de079d816c2a4869d9a6043cb7ac953f5369e2a5a852129fa5f828",
+  "notes": "v1.3.6.2 fixes original-only ASR text output so it no longer requires a translation API, restores the Style-Bert-VITS2 BERT model high-speed download progress window, and improves floating-window behavior for everyday use.",
   "notes_i18n": {
-    "zh-CN": "v1.3.6.1 移除旧 Tk UI，完善 Qt UI；优化启动速度和低性能电脑体验；修复全局热键；新增 Qwen 翻译服务区域选择；提升在线更新、ASR 与翻译稳定性。",
-    "en": "v1.3.6.1 removes the legacy Tk UI, completes the Qt UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and improves online update, ASR, and translation reliability.",
-    "ja": "v1.3.6.1 では旧 Tk UI を削除し、Qt UI を完成させました。起動速度と低スペック環境での動作、グローバルホットキー、Qwen 翻訳のサービス地域選択、オンライン更新、ASR と翻訳の安定性を改善しています。",
-    "ru": "v1.3.6.1 удаляет старый Tk UI, завершает Qt UI, ускоряет запуск и работу на слабых ПК, исправляет глобальные горячие клавиши, добавляет выбор региона Qwen Translation и повышает надежность онлайн-обновлений, ASR и перевода.",
-    "ko": "v1.3.6.1은 기존 Tk UI를 제거하고 Qt UI를 완성했으며, 시작 속도와 저사양 PC 성능을 개선했습니다. 전역 단축키 수정, Qwen 번역 서비스 지역 선택, 온라인 업데이트와 ASR/번역 안정성 개선도 포함됩니다."
+    "zh-CN": "我又通宵了，通宵修复了全部已知问题，新增了mimo/nvidia的AI服务，新增了mimo和qwen的音色阅读，做了很多事，强烈建议更新",
+    "en": "I pulled another all-nighter. I spent the whole night fixing all known issues, added Mimo/NVIDIA AI services, added Mimo and Qwen voice read-aloud features, and did a lot of other work. I strongly recommend updating.",
+    "ja": "また徹夜してしまいました。徹夜で既知の問題をすべて修正し、Mimo/NVIDIA のAIサービスを追加し、Mimo と Qwen の音声読み上げ機能も追加しました。他にもたくさん作業したので、更新を強くおすすめします。",
+    "ru": "Я снова не спал всю ночь. За ночь я исправил все известные проблемы, добавил AI-сервисы Mimo/NVIDIA, добавил голосовое озвучивание Mimo и Qwen, а также сделал много других улучшений. Настоятельно рекомендую обновиться.",
+    "ko": "또 밤을 새웠습니다. 밤새 모든 알려진 문제를 수정했고, Mimo/NVIDIA AI 서비스를 추가했으며, Mimo와 Qwen 음성 읽기 기능도 추가했습니다. 그 외에도 많은 작업을 했으니 업데이트를 강력히 권장합니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-05-28T14:59:59+08:00",
+  "published_at": "2026-05-30T06:03:02+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "a06243a2bdaf4a5a19ed8cc2e865ad948376dde06fbf3bdd4dd13f88f81edb777d9bda2b73e0dbafb352efa89e910c452443f2d904d75cc62ee10761b1e82e07"
+  "signature": "21888f53a373faf2d4014eac8b74fffd98add9760218c4ae8a6e101f049540b695a51c01ac9bded0ab03b881e1a2a813e372e550025df56bab2d119e4951f90e"
 }

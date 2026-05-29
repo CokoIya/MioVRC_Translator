@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import queue
+import logging
 from pathlib import Path
 import sys
 
@@ -17,6 +18,7 @@ from src.tts.gtts_engine import GoogleTTS
 from src.tts.manager import (
     TTSManager,
     TTSRequest,
+    _append_tail_silence,
     _portaudio_error_code,
     _virtual_output_score,
     find_best_virtual_output_device,
@@ -96,6 +98,50 @@ def test_tts_manager_queues_and_invokes_playback(monkeypatch):
         manager.stop()
 
 
+def test_tts_manager_cache_returns_audio_bytes(monkeypatch):
+    """Cached TTS requests should return the original audio bytes, not metadata."""
+    fake_engine = FakeTTS()
+
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: fake_engine,
+    )
+
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=True,
+        allow_fallback=False,
+    )
+
+    first = manager._get_audio("hello", "fake-voice", 1.0, 0.8)
+    second = manager._get_audio("hello", "fake-voice", 1.0, 0.8)
+
+    assert first == b"RIFF-fake"
+    assert second == b"RIFF-fake"
+    assert fake_engine.requests == [("hello", "fake-voice", 1.0, 0.8)]
+
+
+def test_tts_manager_rejects_non_byte_audio(monkeypatch):
+    class FloatTTS(FakeTTS):
+        def synthesize(self, *args, **kwargs):
+            return 1.0
+
+    fake_engine = FloatTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: fake_engine,
+    )
+
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid audio data"):
+        manager._get_audio("hello", "fake-voice", 1.0, 0.8)
+
+
 def test_tts_manager_monitor_output_flag_can_be_toggled(monkeypatch):
     fake_engine = FakeTTS()
 
@@ -145,6 +191,34 @@ def test_tts_manager_passes_sbv2_device_to_engine_factory(monkeypatch):
 
     assert manager.is_available() is True
     assert captured == [("style_bert_vits2", "cuda", "en")]
+
+
+def test_tts_manager_passes_api_engine_config_to_factory(monkeypatch):
+    fake_engine = FakeTTS()
+    captured: list[dict[str, object]] = []
+
+    def fake_create_engine(engine_name, **kwargs):
+        captured.append({"engine_name": engine_name, **kwargs})
+        return fake_engine
+
+    monkeypatch.setattr("src.tts.manager.create_tts_engine", fake_create_engine)
+
+    manager = TTSManager(
+        engine_name="mimo_tts",
+        cache_enabled=False,
+        allow_fallback=False,
+        engine_config={
+            "api_key": "mimo-key",
+            "region": "global",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5-tts",
+        },
+    )
+
+    assert manager.is_available() is True
+    assert captured[0]["engine_name"] == "mimo_tts"
+    assert captured[0]["config"]["api_key"] == "mimo-key"
+    assert captured[0]["config"]["model"] == "mimo-v2.5-tts"
 
 
 def test_tts_manager_falls_back_to_cpu_when_sbv2_cuda_is_unavailable(monkeypatch):
@@ -537,6 +611,66 @@ def test_create_output_stream_retries_mixline_endpoint_on_insufficient_memory(mo
     assert playback is not None
     assert done_event.is_set() is False
     assert playback_log == [("open", 62), ("open", 30), ("open", 24)]
+
+
+def test_create_output_stream_finishes_once_and_zeros_tail(monkeypatch, caplog):
+    manager = TTSManager.__new__(TTSManager)
+    captured: dict[str, object] = {}
+
+    class FakePlayback:
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_output_stream(**kwargs):
+        captured.update(kwargs)
+        return FakePlayback()
+
+    monkeypatch.setattr("src.tts.manager.sd.OutputStream", fake_output_stream)
+
+    _playback, done_event = manager._create_output_stream(
+        np.array([0.25, 0.5, -0.25], dtype=np.float32),
+        48000,
+        None,
+        "default",
+    )
+    callback = captured["callback"]
+    finished_callback = captured["finished_callback"]
+
+    outdata = np.full((4, 1), 9.0, dtype=np.float32)
+    with pytest.raises(sd.CallbackStop):
+        callback(outdata, 4, None, None)
+
+    np.testing.assert_allclose(outdata[:3, 0], [0.25, 0.5, -0.25])
+    assert outdata[3, 0] == 0
+    assert done_event.is_set() is False
+
+    repeated_outdata = np.full((4, 1), 9.0, dtype=np.float32)
+    with pytest.raises(sd.CallbackStop):
+        callback(repeated_outdata, 4, None, None)
+    assert np.all(repeated_outdata == 0)
+
+    with caplog.at_level(logging.INFO, logger="src.tts.manager"):
+        finished_callback()
+        finished_callback()
+
+    assert done_event.is_set() is True
+    assert caplog.text.count("Audio playback completed (target=default") == 1
+
+
+def test_append_tail_silence_extends_audio_without_changing_source_frames():
+    audio = np.array([[0.25, -0.25], [0.5, -0.5]], dtype=np.float32)
+
+    padded = _append_tail_silence(audio, 1000)
+
+    assert padded.shape == (182, 2)
+    np.testing.assert_allclose(padded[:2], audio)
+    assert np.all(padded[2:] == 0)
 
 
 def test_play_audio_does_not_fall_back_to_default_when_mixline_required(monkeypatch):

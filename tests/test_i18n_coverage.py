@@ -2,10 +2,15 @@ from src.ui_qt.main_window import MAIN_COPY
 from src.ui_qt.settings_window import FIELD_HINTS, QT_SETTINGS_COPY
 from src.utils.i18n import UI_TEXTS, tr
 from src.utils.ui_config import (
+    backend_region_for_ui_language,
+    get_backend_region_base_url,
     get_output_format_2_options,
     get_output_format_options,
     get_qwen_translation_base_url,
     normalize_qwen_translation_region,
+    normalize_backend_region,
+    XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_EU,
+    NVIDIA_TRANSLATION_BASE_URL,
 )
 
 
@@ -63,3 +68,7 @@ def test_qwen_translation_region_helpers():
     assert normalize_qwen_translation_region("intl") == "singapore"
     assert normalize_qwen_translation_region("china") == "china_mainland"
     assert get_qwen_translation_base_url("singapore").startswith("https://dashscope-intl.")
+    assert normalize_backend_region("xiaomi", "token-plan-sgp") == "singapore_cluster"
+    assert get_backend_region_base_url("xiaomi", "europe_cluster") == XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_EU
+    assert backend_region_for_ui_language("xiaomi", "zh-CN") == "china_cluster"
+    assert get_backend_region_base_url("nvidia", "hosted") == NVIDIA_TRANSLATION_BASE_URL

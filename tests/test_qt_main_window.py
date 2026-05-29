@@ -103,11 +103,63 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert window._mode_simultaneous_button.isChecked()
     assert window._mode_translation_button.property("modeActive") == "false"
     assert window._mode_simultaneous_button.property("modeActive") == "true"
+    assert window._config["tts"]["enabled"] is True
+    assert window._tts_enabled is True
 
     assert window._src_header_label.text()
     assert window._tgt_header_label.text()
     window._on_theme_toggle()
     assert window._config["ui"]["main_window_theme"] == "light"
+    window.destroy()
+
+
+def test_settings_window_theme_toggle_syncs_main_window(qtbot, monkeypatch):
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: None)
+
+    monkeypatch.setattr("src.ui_qt.settings_window.AudioRecorder.list_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.settings_window._list_desktop_output_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.settings_window.find_best_virtual_output_device", lambda: None)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.create_tts_engine",
+        lambda _engine: type("_DummyTTS", (), {"get_available_voices": lambda self: []})(),
+    )
+    monkeypatch.setattr("src.asr.model_manager.model_exists", lambda _spec: True)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.dictionary_status",
+        lambda: {
+            "layers": [
+                {"name": "bundled", "entry_count": 3, "version": "1"},
+                {"name": "user", "entry_count": 1, "version": ""},
+            ],
+            "user_path": "D:/tmp/asr_terms.user.json",
+        },
+    )
+    monkeypatch.setattr("src.ui_qt.settings_window.play_theme_reveal", lambda *args, **kwargs: None)
+
+    window = MainWindow({"ui": {"main_window_theme": "dark", "osc_guide_seen": True}})
+    qtbot.addWidget(window)
+
+    window.show_settings()
+    dialog = window._settings_window
+    assert dialog is not None
+    assert dialog._theme_var.value() == dialog._theme_labels()["dark"]
+
+    dialog._on_theme_toggle()
+
+    assert window._config["ui"]["main_window_theme"] == "light"
+    assert window._main_theme == "light"
+    assert dialog._theme_var.value() == dialog._theme_labels()["light"]
+    assert dialog._active_theme == "light"
+
+    window._on_theme_toggle()
+
+    assert window._config["ui"]["main_window_theme"] == "dark"
+    assert window._main_theme == "dark"
+    assert dialog._theme_var.value() == dialog._theme_labels()["dark"]
+    assert dialog._active_theme == "dark"
+
     window.destroy()
 
 
@@ -149,3 +201,46 @@ def test_trilingual_output_format_uses_second_translation():
     text = MainWindow._format_chatbox_output(window, "原文", "译文1", "译文2")
 
     assert text == "译文1（译文2）（原文）"
+
+
+def test_original_only_output_ignores_stale_second_translation():
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "translation": {
+            "output_format": "original_only",
+            "output_format_2": "translated1_with_translated2_original",
+        }
+    }
+
+    text = MainWindow._format_chatbox_output(window, "原文", "译文1", "译文2")
+
+    assert text == "原文"
+
+
+def test_original_only_manual_translate_does_not_create_translator(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "translation": {
+            "output_format": "original_only",
+            "output_format_2": "translated1_with_translated2_original",
+        }
+    }
+    window._src_text = "hello"
+    window._last_tgt2_text = "old second"
+    window._manual_send_after_translate = False
+    window._manual_done_callback = None
+    shown: list[tuple[str, bool]] = []
+    finished: list[dict] = []
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.create_translator",
+        lambda _config: (_ for _ in ()).throw(AssertionError("translator should not be created")),
+    )
+    window._show_tgt = lambda text, *, is_error=False: shown.append((text, is_error))
+    window._finish_manual_translation = lambda **kwargs: finished.append(kwargs)
+
+    window._do_manual_translate()
+
+    assert shown == [("hello", False)]
+    assert window._last_tgt2_text == ""
+    assert finished == [{}]

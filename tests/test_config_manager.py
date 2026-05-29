@@ -16,6 +16,9 @@ from src.utils.ui_config import (
     QWEN_TRANSLATION_BASE_URL_MAINLAND,
     TRANSLATION_BACKENDS,
     TRANSLATION_MODEL_PRESETS,
+    XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_CN,
+    XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_SG,
+    NVIDIA_TRANSLATION_BASE_URL,
     normalize_output_format_2,
 )
 
@@ -132,6 +135,16 @@ class TestConfigValidation(unittest.TestCase):
         }
         assert config_manager._contains_plaintext_api_key(config) is False
 
+    def test_contains_plaintext_api_key_detects_api_tts_keys(self):
+        config = {
+            "tts": {
+                "mimo_tts": {"api_key": "mimo-key"},
+                "qwen_tts": {"api_key": ""},
+            }
+        }
+
+        assert config_manager._contains_plaintext_api_key(config) is True
+
     def test_ensure_tts_config_defaults_auto_read_enabled(self):
         """New TTS configs should default to auto-read after manual translation."""
         config = {}
@@ -151,6 +164,10 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["style_bert_vits2"]["voice"] is None
         assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
         assert config["tts"]["style_bert_vits2"]["bert_language"] == "jp"
+        assert config["tts"]["mimo_tts"]["model"] == "mimo-v2.5-tts"
+        assert config["tts"]["mimo_tts"]["voice"] == "mimo_default"
+        assert config["tts"]["qwen_tts"]["region"] == "singapore"
+        assert config["tts"]["qwen_tts"]["base_url"].startswith("https://dashscope-intl.")
 
     def test_ensure_tts_config_migrates_existing_output_device(self):
         """Existing non-default output devices should keep VRChat output enabled."""
@@ -601,6 +618,72 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["qianwen"]["region"] == "custom"
         assert config["translation"]["qianwen"]["base_url"] == "https://proxy.example.com/v1"
 
+    def test_xiaomi_translation_default_uses_china_cluster_for_chinese_ui(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "xiaomi",
+                "backend_source": "manual",
+                "xiaomi": {"api_key": "test-key"},
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        xiaomi_cfg = config["translation"]["xiaomi"]
+        assert xiaomi_cfg["region"] == "china_cluster"
+        assert xiaomi_cfg["base_url"] == XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_CN
+        assert xiaomi_cfg["model"] == TRANSLATION_BACKENDS["xiaomi"]["model"]
+        assert xiaomi_cfg["timeout_s"] == TRANSLATION_BACKENDS["xiaomi"]["timeout_s"]
+
+    def test_xiaomi_translation_preserves_selected_token_plan_region(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "xiaomi",
+                "backend_source": "manual",
+                "xiaomi": {
+                    "api_key": "test-key",
+                    "region": "singapore_cluster",
+                    "base_url": XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_SG,
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+            prefer_auto_backend=True,
+        )
+
+        assert config["translation"]["xiaomi"]["region"] == "singapore_cluster"
+        assert config["translation"]["xiaomi"]["base_url"] == XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_SG
+
+    def test_nvidia_translation_default_uses_hosted_endpoint(self):
+        config = {
+            "ui": {"language": "ja"},
+            "translation": {
+                "backend": "nvidia",
+                "backend_source": "manual",
+                "nvidia": {"api_key": "test-key"},
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        nvidia_cfg = config["translation"]["nvidia"]
+        assert nvidia_cfg["region"] == "global"
+        assert nvidia_cfg["base_url"] == NVIDIA_TRANSLATION_BASE_URL
+        assert nvidia_cfg["model"] == TRANSLATION_BACKENDS["nvidia"]["model"]
+
     def test_existing_custom_target_marks_language_pair_manual(self):
         """Old configs with a non-default target should keep that target."""
         config = {
@@ -635,12 +718,14 @@ class TestConfigValidation(unittest.TestCase):
         """All hosted translation backends should expose their current model families."""
         expected_models = {
             "qianwen": ("qwen3.6-plus", "qwen-mt-flash"),
+            "xiaomi": ("mimo-v2-flash", "mimo-v2.5-pro"),
             "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
             "zhipu": ("glm-5.1", "glm-5-turbo"),
             "gemini": ("gemini-3.1-flash-lite", "gemini-3.1-pro-preview"),
             "kimi": ("kimi-k2.6", "kimi-k2.5"),
             "xai": ("grok-4.3",),
             "mistral": ("mistral-small-latest", "mistral-medium-3-5"),
+            "nvidia": ("nvidia/llama-3.1-nemotron-nano-8b-v1", "nvidia/nemotron-3-nano-30b-a3b"),
             "anthropic": ("claude-opus-4-1-20250805", "claude-sonnet-4-20250514"),
         }
 

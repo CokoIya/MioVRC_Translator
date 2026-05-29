@@ -127,10 +127,10 @@ def test_hololive_catalog_labels_matching_imported_voice(tmp_path, monkeypatch):
 
     assert voices[0].id == "SBV2_HoloLow :: MoriCalliope :: Neutral"
     assert voices[0].name == "Mori Calliope / Neutral"
-    assert voices[0].language == "en"
+    assert voices[0].language == "ja"
 
 
-def test_style_bert_synthesis_uses_catalog_voice_language(tmp_path, monkeypatch):
+def test_style_bert_synthesis_uses_configured_bert_language(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     managed_root = model_store.style_bert_models_dir()
     _write_style_model(managed_root, "SBV2_HoloLow")
@@ -167,8 +167,8 @@ def test_style_bert_synthesis_uses_catalog_voice_language(tmp_path, monkeypatch)
     )
 
     assert audio.startswith(b"RIFF")
-    assert ensured_languages == ["en"]
-    assert infer_calls[0]["language"] == "EN"
+    assert ensured_languages == ["jp"]
+    assert infer_calls[0]["language"] == "JP"
 
 
 def test_style_bert_language_mapping_helpers():
@@ -236,6 +236,32 @@ def test_transformers_export_probe_reports_missing_style_bert_symbols():
 
     assert "AutoModelForMaskedLM" in missing
     assert "AutoTokenizer" not in missing
+
+
+def test_transformers_export_recovery_installs_missing_symbol(monkeypatch):
+    fake_transformers = SimpleNamespace(
+        AutoModelForMaskedLM=object(),
+        DebertaV2Model=object(),
+        DebertaV2Tokenizer=object(),
+        PreTrainedModel=object(),
+        PreTrainedTokenizer=object(),
+        PreTrainedTokenizerFast=object(),
+    )
+
+    class AutoTokenizer:
+        pass
+
+    def fake_import_module(name):
+        if name == "transformers.models.auto.tokenization_auto":
+            return SimpleNamespace(AutoTokenizer=AutoTokenizer)
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(engine_store.importlib, "import_module", fake_import_module)
+
+    engine_store._install_transformers_bert_exports(fake_transformers)
+
+    assert fake_transformers.AutoTokenizer is AutoTokenizer
+    assert engine_store._missing_transformers_bert_exports(fake_transformers) == []
 
 
 def test_style_bert_engine_module_imports_without_scipy(monkeypatch):

@@ -154,6 +154,14 @@
       "timeout_s": 20.0,
       "max_retries": 0
     },
+    "xiaomi": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2-flash",
+      "timeout_s": 20.0,
+      "max_retries": 0
+    },
     "gemini": {
       "api_key": "",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -178,6 +186,12 @@
       "api_key": "",
       "base_url": "https://ark.cn-beijing.volces.com/api/compatible/v1",
       "model": "doubao-seed-2.0-pro"
+    },
+    "nvidia": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "model": "nvidia/llama-3.1-nemotron-nano-8b-v1"
     },
     "anthropic": {
       "api_key": "",
@@ -239,6 +253,28 @@
       "voice": null,
       "rate": 1.0,
       "volume": 0.8
+    },
+    "mimo_tts": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.5-tts",
+      "voice": "mimo_default",
+      "rate": 1.0,
+      "volume": 0.8,
+      "timeout_seconds": 30,
+      "max_retries": 0
+    },
+    "qwen_tts": {
+      "api_key": "",
+      "region": "singapore",
+      "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+      "model": "qwen3-tts-flash",
+      "voice": "Cherry",
+      "rate": 1.0,
+      "volume": 0.8,
+      "timeout_seconds": 30,
+      "max_retries": 0
     },
     "style_bert_vits2": {
       "voice": null,

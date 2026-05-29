@@ -70,6 +70,34 @@ def test_mic_final_queue_keeps_latest_segment_under_backpressure():
     assert window._final_task_queues[MIC_SOURCE].empty()
 
 
+def test_mic_vad_state_reports_speaking_status():
+    window = MainWindow.__new__(MainWindow)
+    status_events: list[tuple[str | None, str, str]] = []
+
+    window._running = True
+    window._mic_muted = False
+    window._mic_in_speech = False
+    window._status_label = object()
+    window._status_key = "status_running"
+    window._translating = False
+    window._t = lambda key, **_kwargs: {
+        "status_running": "监听中...",
+        "status_speaking": "说话中...",
+    }.get(key, key)
+
+    def record_status(text, color="default", key=None):
+        window._status_key = key
+        status_events.append((key, text, color))
+
+    window._set_status = record_status
+
+    window._handle_mic_vad_state(True)
+    window._handle_mic_vad_state(False)
+
+    assert status_events[0] == ("status_speaking", "说话中...", "accent")
+    assert status_events[-1] == ("status_running", "监听中...", "accent")
+
+
 def test_stop_workers_replaces_full_queues_with_stop_sentinel():
     window = MainWindow.__new__(MainWindow)
     partial_queue = queue.Queue(maxsize=1)
