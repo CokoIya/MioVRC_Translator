@@ -1,12 +1,15 @@
 import sys
 import types
 
-from src.translators.factory import create_translator
+import pytest
+
+from src.translators.factory import OPENAI_COMPATIBLE_BACKENDS, create_translator
 from src.utils.ui_config import (
     NVIDIA_TRANSLATION_BASE_URL,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
     backend_api_key_is_required,
     backend_base_url_is_editable,
+    get_backend_value,
 )
 
 
@@ -31,6 +34,12 @@ class _FakeChatCompletions:
             ],
             usage=None,
         )
+
+
+class _FakeAnthropic:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+        self.messages = types.SimpleNamespace(create=lambda **_kwargs: None)
 
 
 def test_local_ai_backend_allows_editable_base_url_and_empty_api_key(monkeypatch):
@@ -138,3 +147,71 @@ def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
     assert "max_completion_tokens" in kwargs
     assert "max_tokens" not in kwargs
     assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
+
+
+@pytest.mark.parametrize("backend", sorted([*OPENAI_COMPATIBLE_BACKENDS, "anthropic"]))
+def test_ai_backends_receive_roleplay_prompt_profile(monkeypatch, backend):
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_FakeAnthropic))
+    backend_cfg = {
+        "api_key": "" if backend == "local_ai" else "test-key",
+        "base_url": get_backend_value(backend, "base_url"),
+        "model": get_backend_value(backend, "model"),
+    }
+    config = {
+        "translation": {
+            "backend": backend,
+            "social": {
+                "mode": "roleplay",
+                "persona_preset": "frieren",
+                "politeness": "polite",
+                "tone": "cool",
+                "persona_name": "Frieren Preset",
+                "persona_prompt": "Use calm, understated wording.",
+                "persona_glossary": "Calm and restrained\nShort, plain wording",
+            },
+            backend: backend_cfg,
+        }
+    }
+
+    translator = create_translator(config)
+
+    assert translator._prompt_profile == {
+        "mode": "roleplay",
+        "politeness": "polite",
+        "tone": "cool",
+        "persona_name": "Frieren Preset",
+        "persona_prompt": "Use calm, understated wording.",
+        "glossary": ["Calm and restrained", "Short, plain wording"],
+    }
+
+
+def test_standard_social_config_with_saved_preset_does_not_affect_translation(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    config = {
+        "translation": {
+            "backend": "qianwen",
+            "social": {
+                "mode": "standard",
+                "persona_preset": "frieren",
+                "politeness": "polite",
+                "tone": "cool",
+                "persona_name": "Saved Disabled Preset",
+                "persona_prompt": "This should not affect normal translation.",
+                "persona_glossary": "Should not appear",
+            },
+            "qianwen": {
+                "api_key": "test-key",
+                "base_url": get_backend_value("qianwen", "base_url"),
+                "model": "qwen-mt-flash",
+            },
+        }
+    }
+
+    translator = create_translator(config)
+    prompt = translator._build_prompt("hello", "en", "ja", context_source="mic")
+
+    assert translator._prompt_profile == {}
+    assert "Saved Disabled Preset" not in prompt
+    assert "social style instructions" not in prompt
+    assert translator._should_use_qwen_mt_translation_options("en", "ja")

@@ -136,8 +136,6 @@ def test_settings_window_theme_toggle_syncs_main_window(qtbot, monkeypatch):
             "user_path": "D:/tmp/asr_terms.user.json",
         },
     )
-    monkeypatch.setattr("src.ui_qt.settings_window.play_theme_reveal", lambda *args, **kwargs: None)
-
     window = MainWindow({"ui": {"main_window_theme": "dark", "osc_guide_seen": True}})
     qtbot.addWidget(window)
 
@@ -148,6 +146,7 @@ def test_settings_window_theme_toggle_syncs_main_window(qtbot, monkeypatch):
 
     dialog._on_theme_toggle()
 
+    qtbot.waitUntil(lambda: window._main_theme == "light", timeout=2000)
     assert window._config["ui"]["main_window_theme"] == "light"
     assert window._main_theme == "light"
     assert dialog._theme_var.value() == dialog._theme_labels()["light"]
@@ -193,8 +192,8 @@ def test_trilingual_output_format_uses_second_translation():
     window = MainWindow.__new__(MainWindow)
     window._config = {
         "translation": {
-            "output_format": "translated_with_original",
-            "output_format_2": "translated1_with_translated2_original",
+            # output_format_2 merged into output_format
+            "output_format": "translated1_with_translated2_original",
         }
     }
 
@@ -208,7 +207,6 @@ def test_original_only_output_ignores_stale_second_translation():
     window._config = {
         "translation": {
             "output_format": "original_only",
-            "output_format_2": "translated1_with_translated2_original",
         }
     }
 
@@ -222,7 +220,6 @@ def test_original_only_manual_translate_does_not_create_translator(monkeypatch):
     window._config = {
         "translation": {
             "output_format": "original_only",
-            "output_format_2": "translated1_with_translated2_original",
         }
     }
     window._src_text = "hello"

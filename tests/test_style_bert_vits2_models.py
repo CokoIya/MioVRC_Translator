@@ -5,7 +5,7 @@ import builtins
 import json
 import importlib
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -330,4 +330,16 @@ def test_style_bert_installs_offline_g2p_fallback_when_nltk_is_missing(monkeypat
     import g2p_en
 
     assert getattr(g2p_en, "_MIO_FALLBACK", False) is True
+    assert g2p_en.__spec__ is importlib.util.find_spec("g2p_en")
     assert g2p_en.G2p()("hello") == ["HH", "AH0", "L", "OW1"]
+
+
+def test_style_bert_repairs_packaged_g2p_module_spec(monkeypatch):
+    fake_module = ModuleType("g2p_en")
+    fake_module.__spec__ = None
+    monkeypatch.setitem(sys.modules, "g2p_en", fake_module)
+
+    engine_store._install_g2p_en_offline_fallback()
+
+    assert fake_module.__spec__ is not None
+    assert fake_module.__spec__ is importlib.util.find_spec("g2p_en")

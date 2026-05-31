@@ -1,11 +1,11 @@
 {
-  "version": "v1.3.6.2",
-  "installer_name": "MioTranslator-Setup-v1.3.6.2.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.2/MioTranslator-Setup-v1.3.6.2.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.2/MioTranslator-Setup-v1.3.6.2.exe",
-  "size_bytes": 310659595,
-  "sha256": "1ec294e4b2de079d816c2a4869d9a6043cb7ac953f5369e2a5a852129fa5f828",
-  "notes": "v1.3.6.2 fixes original-only ASR text output so it no longer requires a translation API, restores the Style-Bert-VITS2 BERT model high-speed download progress window, and improves floating-window behavior for everyday use.",
+  "version": "v1.3.6.3",
+  "installer_name": "MioTranslator-Setup-v1.3.6.3.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.3/MioTranslator-Setup-v1.3.6.3.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.3/MioTranslator-Setup-v1.3.6.3.exe",
+  "size_bytes": 310761102,
+  "sha256": "ca5eee29ac72474c0753b4a08dc8d1b59156bbf9c4ebae92769d47feebc8b9e8",
+  "notes": "v1.3.6.3 fixes original-only ASR text output so it no longer requires a translation API, restores the Style-Bert-VITS2 BERT model high-speed download progress window, and improves floating-window behavior for everyday use.",
   "notes_i18n": {
     "zh-CN": "我又通宵了，通宵修复了全部已知问题，新增了mimo/nvidia的AI服务，新增了mimo和qwen的音色阅读，做了很多事，强烈建议更新",
     "en": "I pulled another all-nighter. I spent the whole night fixing all known issues, added Mimo/NVIDIA AI services, added Mimo and Qwen voice read-aloud features, and did a lot of other work. I strongly recommend updating.",

@@ -1,6 +1,14 @@
 import pytest
+from PySide6.QtWidgets import QWidget
 
-from src.ui_qt.settings_window import CapsuleSwitch, SettingsWindow, NAV_ITEMS, TTS_TEST_TEXT_BY_LANGUAGE
+from src.ui_qt.settings_window import (
+    CapsuleSwitch,
+    NAV_ITEMS,
+    ROLEPLAY_PRESETS,
+    SETTINGS_UPDATE_BUTTON_PADDING,
+    SettingsWindow,
+    TTS_TEST_TEXT_BY_LANGUAGE,
+)
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
 from src.utils.ui_config import (
@@ -77,6 +85,64 @@ def test_settings_window_constructs_and_shows_nav(qtbot, config, monkeypatch):
     dialog.accept()
 
 
+def test_settings_window_deferred_initial_page_builds_after_show(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+
+    dialog = SettingsWindow(None, config, defer_initial_page=True)
+    qtbot.addWidget(dialog)
+
+    assert "common" not in dialog._built_pages
+
+    dialog.show()
+
+    qtbot.waitUntil(lambda: "common" in dialog._built_pages, timeout=1000)
+    assert dialog._page_stack is not None
+    assert dialog._page_stack.currentIndex() == 0
+
+    dialog.reject()
+
+
+def test_settings_update_buttons_resize_for_localized_labels(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    for code in ("zh-CN", "en", "ja", "ru", "ko"):
+        if code != dialog._ui_lang:
+            label = next(label for label, value in dialog._ui_lang_codes.items() if value == code)
+            dialog._on_ui_lang_changed(label)
+        for button in dialog._check_update_buttons:
+            text_width = button.fontMetrics().horizontalAdvance(button.text())
+            assert button.minimumWidth() >= text_width + SETTINGS_UPDATE_BUTTON_PADDING
+
+    dialog.reject()
+
+
+def test_roleplay_presets_are_popular_anime_character_labels():
+    expected_ids = [
+        "frieren",
+        "violet_evergarden",
+        "artoria_pendragon",
+        "marin_kitagawa",
+        "maomao",
+        "kurisu_makise",
+        "rem_rezero",
+        "holo",
+        "yor_forger",
+        "mikasa_ackerman",
+    ]
+    assert list(ROLEPLAY_PRESETS.keys()) == ["custom", *expected_ids]
+
+    for preset_id in expected_ids:
+        profile = ROLEPLAY_PRESETS[preset_id]
+        label = profile["labels"]["zh-CN"]
+        assert label.count(" / ") == 2
+        assert profile["persona_name"] == label
+        assert profile["persona_prompt"]
+        assert profile["persona_glossary"]
+
+
 def test_settings_window_nav_switches_pages(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
 
@@ -106,6 +172,23 @@ def test_settings_window_common_page_has_theme_and_bg(qtbot, config, monkeypatch
     assert dialog._theme_var.value() == dialog._theme_labels()["system"]
 
     dialog.accept()
+
+
+def test_settings_theme_toggle_uses_lightweight_fade(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["main_window_theme"] = "dark"
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog._on_theme_toggle()
+
+    qtbot.waitUntil(lambda: dialog._theme_btn is not None and dialog._theme_btn.isEnabled(), timeout=1000)
+    assert dialog._active_theme == "light"
+    assert not any(child.__class__.__name__ == "_ThemeRevealOverlay" for child in dialog.findChildren(QWidget))
+
+    dialog.reject()
 
 
 def test_settings_window_voice_page_shows_dictionary_status(qtbot, config, monkeypatch):
@@ -166,6 +249,27 @@ def test_settings_save_preserves_app_mode_when_tts_is_enabled(qtbot, config, mon
     dialog._save()
 
     assert config["app_mode"] == "translation"
+
+
+def test_settings_save_restores_footer_buttons_before_reopen(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog._save()
+    assert dialog._save_btn is not None
+    assert dialog._cancel_btn is not None
+    assert dialog._save_btn.isEnabled() is False
+    assert dialog._cancel_btn.isEnabled() is False
+
+    qtbot.waitUntil(lambda: not dialog._saving, timeout=2000)
+    dialog.show()
+
+    assert dialog._save_btn.isEnabled() is True
+    assert dialog._cancel_btn.isEnabled() is True
 
 
 def test_settings_window_switches_are_capsules(qtbot, config, monkeypatch):
@@ -252,15 +356,16 @@ def test_output_format_labels_follow_ui_language(qtbot, config, monkeypatch):
     qtbot.addWidget(dialog)
 
     assert "Только перевод" in dialog._fmt_codes
-    assert "Отключить перевод 2" in dialog._fmt2_codes
+    # output_format_2 merged into output_format; fmt2_codes no longer exists
 
     dialog.reject()
 
 
-def test_original_only_output_disables_second_format_on_save(qtbot, config, monkeypatch):
+def test_original_only_output_saved_on_format_change(qtbot, config, monkeypatch):
+    """Changing output_format to original_only saves only output_format (output_format_2 is now merged)."""
     _patch_dialog_deps(monkeypatch)
     monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
-    config["translation"]["output_format_2"] = "translated1_with_translated2_original"
+    config["translation"]["output_format"] = "translated1_with_translated2_original"
 
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
@@ -271,7 +376,6 @@ def test_original_only_output_disables_second_format_on_save(qtbot, config, monk
     dialog._save()
 
     assert config["translation"]["output_format"] == "original_only"
-    assert config["translation"]["output_format_2"] == "disabled"
 
 
 def test_style_bert_saved_voice_id_selects_display_and_tests_with_id(qtbot, config, monkeypatch):

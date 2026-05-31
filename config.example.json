@@ -107,7 +107,6 @@
     "target_language": "ja",
     "target_language_2": "en",
     "output_format": "translated_with_original",
-    "output_format_2": "disabled",
     "send_to_chatbox": true,
     "social": {
       "mode": "standard",

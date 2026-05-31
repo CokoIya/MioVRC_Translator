@@ -257,7 +257,7 @@ def test_final_mic_segment_queues_tts_after_translation():
     window._desktop_capture_enabled = False
     window._own_msgs = set()
     window._get_output_format = lambda: "translated_only"
-    window._get_output_format_2 = lambda: "disabled"
+    # _get_output_format_2 always returns "disabled" (merged into output_format)
     window._final_segment_may_need_translation_api = lambda *args: True
     window._translation_cooldown_active = lambda _source: False
     window._set_translating_state = lambda _active: None
@@ -355,7 +355,6 @@ def test_final_mic_segment_original_only_does_not_create_translator(monkeypatch)
     window._config = {
         "translation": {
             "output_format": "original_only",
-            "output_format_2": "translated1_with_translated2_original",
             "send_to_chatbox": True,
         }
     }

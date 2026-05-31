@@ -138,3 +138,43 @@ def test_qwen_tts_exposes_official_system_voices():
     assert len(voices) >= 48
     assert {"Cherry", "Eldric Sage", "Ono Anna", "Radio Gol", "Kiki"}.issubset(voice_ids)
     assert next(voice for voice in voices if voice.id == "Cherry").name == "Cherry / 芊悦"
+
+
+def test_qwen_tts_filters_hidden_voices(monkeypatch, tmp_path):
+    # Patch writable_app_dir to point to our temp directory
+    monkeypatch.setattr("src.tts.api_tts_engines.writable_app_dir", lambda: tmp_path)
+
+    # Write a seren.json that hides Seren
+    (tmp_path / "seren.json").write_text(
+        '{"hidden_voices": ["Seren"]}', encoding="utf-8"
+    )
+
+    # Reset the module-level cache so the new file is picked up
+    import src.tts.api_tts_engines as api_engines
+
+    api_engines._HIDDEN_VOICES = None
+
+    engine = QwenTTS(
+        {
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    voices = engine.get_available_voices()
+    voice_ids = {v.id for v in voices}
+
+    assert "Seren" not in voice_ids
+    assert "Cherry" in voice_ids
+    assert len(voices) >= 47
+
+    # Re-enable Seren
+    (tmp_path / "seren.json").write_text(
+        '{"hidden_voices": []}', encoding="utf-8"
+    )
+    api_engines._HIDDEN_VOICES = None
+
+    voices_after = engine.get_available_voices()
+    voice_ids_after = {v.id for v in voices_after}
+
+    assert "Seren" in voice_ids_after

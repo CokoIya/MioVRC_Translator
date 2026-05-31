@@ -487,7 +487,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["source_language"] == "zh"
         assert config["translation"]["target_language"] == "ja"
         assert config["translation"]["target_language_2"] == "en"
-        assert config["translation"]["output_format_2"] == OUTPUT_FORMAT_2_DISABLED
+        assert "output_format_2" not in config["translation"]
         assert config["translation"]["language_pair_source"] == "auto"
 
     def test_auto_language_pair_defaults_non_chinese_to_chinese(self):

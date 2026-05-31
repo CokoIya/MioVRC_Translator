@@ -122,6 +122,7 @@ for package_name in (
     "av",
     "style_bert_vits2",
     "transformers",
+    "packaging",
     "sentencepiece",
     "google.protobuf",
     "jieba",
