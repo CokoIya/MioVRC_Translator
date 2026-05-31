@@ -1,21 +1,21 @@
 {
-  "version": "v1.3.6.3",
-  "installer_name": "MioTranslator-Setup-v1.3.6.3.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.3/MioTranslator-Setup-v1.3.6.3.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.3/MioTranslator-Setup-v1.3.6.3.exe",
-  "size_bytes": 310761102,
-  "sha256": "ca5eee29ac72474c0753b4a08dc8d1b59156bbf9c4ebae92769d47feebc8b9e8",
-  "notes": "v1.3.6.3 fixes original-only ASR text output so it no longer requires a translation API, restores the Style-Bert-VITS2 BERT model high-speed download progress window, and improves floating-window behavior for everyday use.",
+  "version": "v1.3.6.5",
+  "installer_name": "MioTranslator-Setup-v1.3.6.5.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.5/MioTranslator-Setup-v1.3.6.5.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.5/MioTranslator-Setup-v1.3.6.5.exe",
+  "size_bytes": 310763945,
+  "sha256": "2927cbbcb35874d5fb57c06a3649ba6c3de1b45b4b8949911c58ca0d8078a524",
+  "notes": "v1.3.6.5 fixes SBV2 CPU inference stalls by limiting PyTorch CPU threads, skipping the expensive stochastic duration branch in CPU mode, and adding deeper SBV2 text/BERT/acoustic timing diagnostics.",
   "notes_i18n": {
-    "zh-CN": "我又通宵了，通宵修复了全部已知问题，新增了mimo/nvidia的AI服务，新增了mimo和qwen的音色阅读，做了很多事，强烈建议更新",
-    "en": "I pulled another all-nighter. I spent the whole night fixing all known issues, added Mimo/NVIDIA AI services, added Mimo and Qwen voice read-aloud features, and did a lot of other work. I strongly recommend updating.",
-    "ja": "また徹夜してしまいました。徹夜で既知の問題をすべて修正し、Mimo/NVIDIA のAIサービスを追加し、Mimo と Qwen の音声読み上げ機能も追加しました。他にもたくさん作業したので、更新を強くおすすめします。",
-    "ru": "Я снова не спал всю ночь. За ночь я исправил все известные проблемы, добавил AI-сервисы Mimo/NVIDIA, добавил голосовое озвучивание Mimo и Qwen, а также сделал много других улучшений. Настоятельно рекомендую обновиться.",
-    "ko": "또 밤을 새웠습니다. 밤새 모든 알려진 문제를 수정했고, Mimo/NVIDIA AI 서비스를 추가했으며, Mimo와 Qwen 음성 읽기 기능도 추가했습니다. 그 외에도 많은 작업을 했으니 업데이트를 강력히 권장합니다."
+    "zh-CN": "v1.3.6.5 修复 SBV2 在部分低性能 CPU 上推理卡死的问题：限制 PyTorch CPU 线程，CPU 模式跳过高开销随机时长分支，并新增 text/BERT/acoustic 分阶段耗时日志。",
+    "en": "v1.3.6.5 fixes SBV2 CPU inference stalls by limiting PyTorch CPU threads, skipping the expensive stochastic duration branch in CPU mode, and adding deeper SBV2 text/BERT/acoustic timing diagnostics.",
+    "ja": "v1.3.6.5 では、一部の低性能 CPU で SBV2 推論が停止する問題を修正しました。PyTorch CPU スレッドを制限し、CPU モードで高負荷なランダム duration 分岐をスキップし、text/BERT/acoustic の詳細な段階別ログを追加しています。",
+    "ru": "v1.3.6.5 исправляет зависания инференса SBV2 на некоторых слабых CPU: ограничивает CPU-потоки PyTorch, пропускает затратную stochastic duration ветку в CPU-режиме и добавляет подробные логи этапов text/BERT/acoustic.",
+    "ko": "v1.3.6.5는 일부 저사양 CPU에서 SBV2 추론이 멈추는 문제를 수정합니다. PyTorch CPU 스레드를 제한하고, CPU 모드에서 비용이 큰 stochastic duration 분기를 건너뛰며, text/BERT/acoustic 단계별 진단 로그를 추가했습니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-05-30T06:03:02+09:00",
+  "published_at": "2026-05-31T19:58:58+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "21888f53a373faf2d4014eac8b74fffd98add9760218c4ae8a6e101f049540b695a51c01ac9bded0ab03b881e1a2a813e372e550025df56bab2d119e4951f90e"
+  "signature": "458feb97c23b26b0415eb1011f70c5358dc22e967ef5276ec30b537aba79839749b56ab39b628b2c78f15bb9443e2623cf283c5da782d91f06160d322fb7d501"
 }

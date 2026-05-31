@@ -6,7 +6,9 @@ from src.ui_qt.settings_window import (
     NAV_ITEMS,
     ROLEPLAY_PRESETS,
     SETTINGS_UPDATE_BUTTON_PADDING,
+    STYLE_BERT_TTS_TEST_TIMEOUT_MS,
     SettingsWindow,
+    TTS_TEST_TIMEOUT_MS,
     TTS_TEST_TEXT_BY_LANGUAGE,
 )
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
@@ -781,6 +783,27 @@ def test_tts_test_button_recovers_on_timeout(qtbot, config, monkeypatch):
     qtbot.waitUntil(lambda: dialog._tts_testing is False, timeout=3000)
     assert test_btn.text() == "测试"
     assert test_btn.isEnabled() is True
+
+
+def test_style_bert_tts_test_uses_extended_timeout(qtbot, config, monkeypatch):
+    monkeypatch.setattr("src.ui_qt.settings_window.create_tts_engine", lambda _engine: _DummyTTS())
+    config["tts"] = {
+        "enabled": True,
+        "engine": "style_bert_vits2",
+        "style_bert_vits2": {"voice": None, "rate": 1.0, "volume": 0.8},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._current_tts_test_timeout_ms("edge") == TTS_TEST_TIMEOUT_MS
+    assert (
+        dialog._current_tts_test_timeout_ms("style_bert_vits2")
+        == STYLE_BERT_TTS_TEST_TIMEOUT_MS
+    )
+
+    dialog._tts_test_timeout_ms = 10
+    assert dialog._current_tts_test_timeout_ms("style_bert_vits2") == 10
 
 
 def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monkeypatch):

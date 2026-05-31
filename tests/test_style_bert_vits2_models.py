@@ -108,6 +108,7 @@ def test_style_bert_engine_lists_and_synthesizes_imported_voice(tmp_path, monkey
             "speaker_id": 7,
             "style": "Happy",
             "length": 0.5,
+            "sdp_ratio": 0.0,
         }
     ]
 
@@ -169,6 +170,7 @@ def test_style_bert_synthesis_uses_configured_bert_language(tmp_path, monkeypatc
     assert audio.startswith(b"RIFF")
     assert ensured_languages == ["jp"]
     assert infer_calls[0]["language"] == "JP"
+    assert infer_calls[0]["sdp_ratio"] == 0.0
 
 
 def test_style_bert_language_mapping_helpers():

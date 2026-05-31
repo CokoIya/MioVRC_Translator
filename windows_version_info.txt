@@ -1,7 +1,7 @@
 ﻿VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 3, 6, 3),
-    prodvers=(1, 3, 6, 3),
+    filevers=(1, 3, 6, 5),
+    prodvers=(1, 3, 6, 5),
     mask=0x3F,
     flags=0x0,
     OS=0x40004,
@@ -17,12 +17,12 @@
           [
             StringStruct(u"CompanyName", u"\u307f\u304a_Mio"),
             StringStruct(u"FileDescription", u"Mio RealTime Translator"),
-            StringStruct(u"FileVersion", u"v1.3.6.3"),
+            StringStruct(u"FileVersion", u"v1.3.6.5"),
             StringStruct(u"InternalName", u"MioTranslator"),
             StringStruct(u"LegalCopyright", u"Copyright (C) 2026 \u307f\u304a_Mio"),
             StringStruct(u"OriginalFilename", u"MioTranslator.exe"),
             StringStruct(u"ProductName", u"Mio RealTime Translator"),
-            StringStruct(u"ProductVersion", u"v1.3.6.3"),
+            StringStruct(u"ProductVersion", u"v1.3.6.5"),
           ]
         )
       ]
