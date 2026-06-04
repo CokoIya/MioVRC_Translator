@@ -727,6 +727,7 @@
     }
     .dl-note {
       font-size: 11.5px; color: var(--txt3); margin-top: 2px; line-height: 1.65;
+      overflow-wrap: anywhere;
     }
     .privacy-block {
       width: min(100%, var(--maxw));
@@ -1067,7 +1068,7 @@
       <div class="step-num">4</div>
       <div class="step-body">
         <h4 id="guide-step-4-title">下载并安装</h4>
-        <p id="guide-step-4-body">运行安装包后，程序会检测本地 SenseVoice 模型并按需弹出下载向导。在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。首次本地模型约需下载 950 MB。</p>
+        <p id="guide-step-4-body">运行安装包后，程序会按需下载本地 ASR 或 TTS 模型；已下载的模型会被复用，不会重复下载。SenseVoice 约 950 MB，Whisper 约 1.5 GB；在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。</p>
       </div>
     </div>
     <div class="guide-step full">
@@ -1084,16 +1085,16 @@
 <section class="fp-section" id="download">
   <p class="eyebrow" id="download-eyebrow">下载</p>
   <h2 class="sec-title" id="download-title">新版下载</h2>
-  <p class="sec-sub" id="download-sub">v1.3.6.5 修复 SBV2 在部分低性能 CPU 上推理卡死的问题：限制 PyTorch CPU 线程，CPU 模式跳过高开销随机时长分支，并新增 text/BERT/acoustic 分阶段耗时日志。</p>
+  <p class="sec-sub" id="download-sub">v1.3.7 新增本地 Whisper ASR，修复 Whisper 下载通路和依赖打包问题，并加入本地 ASR/TTS 可选 GPU 支持。默认仍为 CPU，强显卡玩家可在设置中开启 GPU 支持。</p>
   <div class="dl-cards">
     <div class="dl-card">
       <div class="dl-icon-wrap">⬇️</div>
       <h3 id="download-card-title">Mio RealTime Translator</h3>
-      <p id="download-card-body">Windows x64 · v1.3.6.5 正式版 · SBV2 CPU 卡死修复 · 分阶段诊断日志</p>
-      <p class="dl-note" id="download-release-note">v1.3.6.5 适合直接下载安装；本版修复部分低性能 CPU 上 SBV2 推理长时间卡住的问题，并加入更详细的 text/BERT/acoustic 耗时诊断。</p>
+      <p id="download-card-body">Windows x64 · v1.3.7 正式版 · 约 297 MB · Whisper 本地 ASR · 可选 GPU 支持</p>
+      <p class="dl-note" id="download-release-note">安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。</p>
       <div class="dl-btns">
-        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.5/MioTranslator-Setup-v1.3.6.5.exe"
-           download="MioTranslator-Setup-v1.3.6.5.exe"
+        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7/MioTranslator-Setup-v1.3.7.exe"
+           download="MioTranslator-Setup-v1.3.7.exe"
            id="download-direct-link" class="btn-dl prim">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span id="download-button-text">下载安装包</span>
@@ -1103,7 +1104,7 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
           <span id="download-model-text">Beta版下载</span>
         </a>
-        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.3.6.5 正式版安装包。</p>
+        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.3.7 正式版安装包。SHA256：afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20</p>
         <div class="download-community">
           <a href="https://qm.qq.com/q/BB1z8mldeM" target="_blank" rel="noopener" class="btn-dl sec">
             <span id="download-qq-1-text">QQ 1 群</span>
@@ -1467,25 +1468,25 @@
       'guide-step-3-title': '设置游戏输入',
       'guide-step-3-body': 'VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：',
       'guide-step-4-title': '下载并安装',
-      'guide-step-4-body': '运行安装包后，程序会检测本地 SenseVoice 模型并按需弹出下载向导。在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。首次本地模型约需下载 950 MB。',
+      'guide-step-4-body': '运行安装包后，程序会按需下载本地 ASR 或 TTS 模型；已下载的模型会被复用，不会重复下载。SenseVoice 约 950 MB，Whisper 约 1.5 GB；在线 ASR 不需要本地模型，可在设置中选择并填写对应 API Key。',
       'guide-step-5-title': '开始翻译或同传',
       'guide-step-5-body': '模型加载完成后，对着麦克风说话即可翻译；开启反向翻译和语音阅读后，译文会被 AI 语音读出并经 MixLine 进入游戏麦克风。',
       'download-eyebrow': '下载',
       'download-title': '新版下载',
-      'download-sub': 'v1.3.6.5 修复 SBV2 在部分低性能 CPU 上推理卡死的问题：限制 PyTorch CPU 线程，CPU 模式跳过高开销随机时长分支，并新增 text/BERT/acoustic 分阶段耗时日志。',
+      'download-sub': 'v1.3.7 新增本地 Whisper ASR，修复 Whisper 下载通路和依赖打包问题，并加入本地 ASR/TTS 可选 GPU 支持。默认仍为 CPU，强显卡玩家可在设置中开启 GPU 支持。',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.6.5 正式版 · SBV2 CPU 卡死修复 · 分阶段诊断日志',
-      'download-release-note': 'v1.3.6.5 适合直接下载安装；本版修复部分低性能 CPU 上 SBV2 推理长时间卡住的问题，并加入更详细的 text/BERT/acoustic 耗时诊断。',
+      'download-card-body': 'Windows x64 · v1.3.7 正式版 · 约 297 MB · Whisper 本地 ASR · 可选 GPU 支持',
+      'download-release-note': '安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。',
       'download-button-text': '下载安装包',
       'download-button-loading': '正在准备安装包...',
       'download-model-text': 'Beta版下载',
-      'download-model-note': '暂无测试版提供，当前请使用 v1.3.6.5 正式版安装包。',
+      'download-model-note': '暂无测试版提供，当前请使用 v1.3.7 正式版安装包。SHA256：afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20',
       'download-qq-1-text': 'QQ 1 群',
       'download-qq-2-text': 'QQ 2 群',
       'download-community-note': '下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。',
       'download-releases-text': '暂无测试版提供',
       'download-releases-loading': '暂无测试版提供',
-      'download-releases-note': 'v1.3.6.5 是当前正式版手动下载，当前暂无测试版提供。',
+      'download-releases-note': 'v1.3.7 是当前正式版手动下载，当前暂无测试版提供。',
       'download-dict-title': 'ASR 官方词典',
       'download-dict-body': '这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。',
       'download-dict-module-text': '打开词典页面',
@@ -1545,25 +1546,25 @@
       'guide-step-3-title': 'Set up game input',
       'guide-step-3-body': 'VRChat chatbox sending still needs OSC. To make a game hear AI speech, install MixLine separately and select the MixLine virtual microphone in the game. VRChat OSC path:',
       'guide-step-4-title': 'Download and install',
-      'guide-step-4-body': 'Run the installer and the app checks the local SenseVoice model. If it is missing, the model wizard downloads it; online ASR options do not need local model files and can be configured from Settings. The local model is about 950 MB.',
+      'guide-step-4-body': 'After installation, the app downloads local ASR or TTS models only when you use them. Existing downloads are reused. SenseVoice is about 950 MB, Whisper is about 1.5 GB, and online ASR options do not need local model files.',
       'guide-step-5-title': 'Start translation or interpretation',
       'guide-step-5-body': 'After the model loads, speak into your mic to translate. Enable reverse translation and voice reading to have translated lines spoken by AI and routed through MixLine into the game microphone.',
       'download-eyebrow': 'Download',
       'download-title': 'Release Downloads',
-      'download-sub': 'v1.3.6.5 fixes SBV2 CPU inference stalls by limiting PyTorch CPU threads, skipping the expensive stochastic duration branch in CPU mode, and adding deeper SBV2 text/BERT/acoustic timing diagnostics.',
+      'download-sub': 'v1.3.7 adds local Whisper ASR, fixes Whisper download routes and dependency packaging, and adds optional GPU support for local ASR/TTS. CPU remains the default; stronger NVIDIA PCs can enable GPU support in Settings.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.6.5 Release · SBV2 CPU stall fix · Timing diagnostics',
-      'download-release-note': 'v1.3.6.5 is ready for direct install: it fixes SBV2 CPU inference stalls on some low-performance PCs and adds detailed text/BERT/acoustic timing diagnostics.',
+      'download-card-body': 'Windows x64 · v1.3.7 Release · About 297 MB · Local Whisper ASR · Optional GPU support',
+      'download-release-note': 'The installer does not bundle SenseVoice, Whisper, or TTS voice models. Local models download on demand. GPU support checks the NVIDIA driver and can automatically install CUDA PyTorch.',
       'download-button-text': 'Download Installer',
       'download-button-loading': 'Preparing installer...',
       'download-model-text': 'Download Beta',
-      'download-model-note': 'No beta build is available right now. Please use the v1.3.6.5 release installer.',
+      'download-model-note': 'No beta build is available right now. Please use the v1.3.7 release installer. SHA256: afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20',
       'download-qq-1-text': 'QQ Group 1',
       'download-qq-2-text': 'QQ Group 2',
       'download-community-note': 'Downloads are hosted on GitHub. If the download is slow, join a QQ group and use the group files, which include a picture-based guide.',
       'download-releases-text': 'No Beta Available',
       'download-releases-loading': 'No beta available',
-      'download-releases-note': 'v1.3.6.5 is the current release download. No beta build is available right now.',
+      'download-releases-note': 'v1.3.7 is the current release download. No beta build is available right now.',
       'download-dict-title': 'ASR Official Dictionary',
       'download-dict-body': 'Official recognition terms and update files are provided here. The app only connects when you open these links manually.',
       'download-dict-module-text': 'Open Dictionary Page',
@@ -1623,25 +1624,25 @@
       'guide-step-3-title': 'ゲーム入力を設定',
       'guide-step-3-body': 'VRChat のチャットボックス送信には OSC が必要です。AI 音声をゲームに聞かせる場合は MixLine を別途インストールし、ゲーム側で MixLine 仮想マイクを選択してください。VRChat の OSC パス：',
       'guide-step-4-title': 'ダウンロードしてインストール',
-      'guide-step-4-body': 'インストーラー実行後、アプリはローカル SenseVoice モデルを確認します。未導入ならダウンロードウィザードが起動し、オンライン ASR はローカルモデル不要で設定から選べます。ローカルモデルは約 950 MB です。',
+      'guide-step-4-body': 'インストール後、ローカル ASR/TTS モデルは必要になった時だけダウンロードされます。既存のモデルは再利用します。SenseVoice は約 950 MB、Whisper は約 1.5 GB です。オンライン ASR はローカルモデル不要です。',
       'guide-step-5-title': '翻訳または同時通訳を開始',
       'guide-step-5-body': 'モデルの読み込み後、マイクに話すと翻訳できます。逆翻訳と音声読み上げを有効にすると、訳文が AI 音声で読み上げられ、MixLine 経由でゲームのマイク入力へ送られます。',
       'download-eyebrow': 'ダウンロード',
       'download-title': 'リリース版ダウンロード',
-      'download-sub': 'v1.3.6.5 では、一部の低性能 CPU で SBV2 推論が停止する問題を修正しました。PyTorch CPU スレッドを制限し、CPU モードで高負荷なランダム duration 分岐をスキップし、text/BERT/acoustic の段階別ログを追加しています。',
+      'download-sub': 'v1.3.7 ではローカル Whisper ASR を追加し、Whisper のダウンロード経路と依存関係の同梱を修正しました。ローカル ASR/TTS には任意の GPU サポートを追加し、既定は CPU のままです。',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.6.5 正式版 · SBV2 CPU 停止修正 · 段階別診断ログ',
-      'download-release-note': 'v1.3.6.5 はそのままインストールできます。一部の低性能 CPU で SBV2 推論が長時間止まる問題を修正し、text/BERT/acoustic の詳細な時間診断を追加しました。',
+      'download-card-body': 'Windows x64 · v1.3.7 正式版 · 約 297 MB · ローカル Whisper ASR · 任意の GPU サポート',
+      'download-release-note': 'インストーラーには SenseVoice、Whisper、TTS 音声モデルは同梱していません。ローカルモデルは必要時にダウンロードします。GPU サポートは NVIDIA ドライバーを確認し、CUDA 版 PyTorch を自動インストールできます。',
       'download-button-text': 'インストーラーをダウンロード',
       'download-button-loading': '準備中...',
       'download-model-text': 'beta 版をダウンロード',
-      'download-model-note': '現在 beta 版は提供していません。v1.3.6.5 正式版インストーラーをご利用ください。',
+      'download-model-note': '現在 beta 版は提供していません。v1.3.7 正式版インストーラーをご利用ください。SHA256: afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20',
       'download-qq-1-text': 'QQ 1 群',
       'download-qq-2-text': 'QQ 2 群',
       'download-community-note': 'ダウンロードは GitHub 経由です。遅い場合は QQ グループに参加し、グループファイルからダウンロードしてください。画像付きガイドも含まれています。',
       'download-releases-text': 'beta 版なし',
       'download-releases-loading': 'beta 版なし',
-      'download-releases-note': 'v1.3.6.5 が現在の正式版ダウンロードです。beta 版は提供していません。',
+      'download-releases-note': 'v1.3.7 が現在の正式版ダウンロードです。beta 版は提供していません。',
       'download-dict-title': 'ASR 公式辞書',
       'download-dict-body': '公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。',
       'download-dict-module-text': '辞書ページを開く',
@@ -1701,25 +1702,25 @@
       'guide-step-3-title': 'Настройте вход в игре',
       'guide-step-3-body': 'Для отправки в чатбокс VRChat нужен OSC. Чтобы игра слышала AI-голос, отдельно установите MixLine и выберите виртуальный микрофон MixLine в игре. Путь OSC в VRChat:',
       'guide-step-4-title': 'Скачайте и установите',
-      'guide-step-4-body': 'После запуска установщика приложение проверяет локальную модель SenseVoice. Если её нет, мастер загрузит модель; онлайн ASR не требует локальных файлов и настраивается в Settings. Размер локальной модели около 950 МБ.',
+      'guide-step-4-body': 'После установки локальные модели ASR или TTS загружаются только при необходимости. Уже загруженные модели используются повторно. SenseVoice занимает около 950 МБ, Whisper около 1,5 ГБ; онлайн ASR не требует локальных файлов.',
       'guide-step-5-title': 'Начните перевод или синхронный режим',
       'guide-step-5-body': 'После загрузки модели говорите в микрофон для перевода. Включите обратный перевод и озвучивание, чтобы переведённые строки произносились AI-голосом и шли через MixLine в микрофон игры.',
       'download-eyebrow': 'Скачать',
       'download-title': 'Загрузки релиза',
-      'download-sub': 'v1.3.6.5 исправляет зависания инференса SBV2 на некоторых слабых CPU: ограничивает CPU-потоки PyTorch, пропускает затратную stochastic duration ветку в CPU-режиме и добавляет подробные логи этапов text/BERT/acoustic.',
+      'download-sub': 'v1.3.7 добавляет локальный Whisper ASR, исправляет маршруты загрузки Whisper и упаковку зависимостей, а также добавляет необязательную поддержку GPU для локальных ASR/TTS. CPU остается режимом по умолчанию.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.6.5 Release · SBV2 CPU · Диагностика этапов',
-      'download-release-note': 'v1.3.6.5 готов к установке: исправлены зависания инференса SBV2 на некоторых слабых CPU и добавлены подробные логи этапов text/BERT/acoustic.',
+      'download-card-body': 'Windows x64 · v1.3.7 Release · около 297 МБ · Локальный Whisper ASR · Опциональный GPU',
+      'download-release-note': 'Установщик не включает модели SenseVoice, Whisper или голоса TTS. Локальные модели загружаются по требованию. Поддержка GPU проверяет драйвер NVIDIA и может автоматически установить CUDA PyTorch.',
       'download-button-text': 'Скачать установщик',
       'download-button-loading': 'Подготовка установщика...',
       'download-model-text': 'Скачать beta',
-      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.3.6.5.',
+      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.3.7. SHA256: afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20',
       'download-qq-1-text': 'QQ группа 1',
       'download-qq-2-text': 'QQ группа 2',
       'download-community-note': 'Загрузка идёт через GitHub. Если скорость низкая, вступите в QQ-группу и скачайте файл из группы; там также есть инструкция с изображениями.',
       'download-releases-text': 'Beta недоступна',
       'download-releases-loading': 'Beta недоступна',
-      'download-releases-note': 'v1.3.6.5 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
+      'download-releases-note': 'v1.3.7 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
       'download-dict-title': 'Официальный словарь ASR',
       'download-dict-body': 'Здесь размещены официальные термины распознавания и файлы обновлений. Приложение обращается к ним только при ручном открытии.',
       'download-dict-module-text': 'Открыть страницу словаря',
@@ -1779,25 +1780,25 @@
       'guide-step-3-title': '게임 입력 설정',
       'guide-step-3-body': 'VRChat 채팅박스 전송에는 OSC가 필요합니다. 게임에서 AI 음성을 듣게 하려면 MixLine을 별도로 설치하고 게임 안에서 MixLine 가상 마이크를 선택하세요. VRChat OSC 경로:',
       'guide-step-4-title': '다운로드 후 설치',
-      'guide-step-4-body': '설치 파일 실행 후 앱은 로컬 SenseVoice 모델을 확인합니다. 없으면 다운로드 마법사가 모델을 받으며, 온라인 ASR은 로컬 모델이 필요 없고 설정에서 선택할 수 있습니다. 로컬 모델은 약 950 MB입니다.',
+      'guide-step-4-body': '설치 후 로컬 ASR 또는 TTS 모델은 필요할 때만 다운로드됩니다. 이미 받은 모델은 다시 사용합니다. SenseVoice는 약 950 MB, Whisper는 약 1.5 GB이며 온라인 ASR은 로컬 모델이 필요 없습니다.',
       'guide-step-5-title': '번역 또는 동시통역 시작',
       'guide-step-5-body': '모델 로드가 끝나면 마이크에 말해 번역합니다. 역번역과 음성 읽기를 켜면 번역문이 AI 음성으로 읽히고 MixLine을 통해 게임 마이크 입력으로 들어갑니다.',
       'download-eyebrow': '다운로드',
       'download-title': '릴리스 다운로드',
-      'download-sub': 'v1.3.6.5는 일부 저사양 CPU에서 SBV2 추론이 멈추는 문제를 수정합니다. PyTorch CPU 스레드를 제한하고, CPU 모드에서 비용이 큰 stochastic duration 분기를 건너뛰며, text/BERT/acoustic 단계별 진단 로그를 추가했습니다.',
+      'download-sub': 'v1.3.7은 로컬 Whisper ASR을 추가하고 Whisper 다운로드 경로와 의존성 패키징 문제를 수정합니다. 로컬 ASR/TTS에는 선택형 GPU 지원을 추가했으며 기본값은 CPU입니다.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.6.5 Release · SBV2 CPU 멈춤 수정 · 단계별 진단 로그',
-      'download-release-note': 'v1.3.6.5는 바로 설치해 사용할 수 있습니다. 일부 저사양 CPU에서 SBV2 추론이 오래 멈추는 문제를 수정하고 text/BERT/acoustic 단계별 시간 진단을 추가했습니다.',
+      'download-card-body': 'Windows x64 · v1.3.7 Release · 약 297 MB · 로컬 Whisper ASR · 선택형 GPU 지원',
+      'download-release-note': '설치 파일에는 SenseVoice, Whisper, TTS 음성 모델이 포함되지 않습니다. 로컬 모델은 필요할 때 다운로드됩니다. GPU 지원은 NVIDIA 드라이버를 확인하고 CUDA PyTorch를 자동 설치할 수 있습니다.',
       'download-button-text': '설치 파일 다운로드',
       'download-button-loading': '준비 중...',
       'download-model-text': 'Beta 다운로드',
-      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.3.6.5 정식 설치 파일을 사용해 주세요.',
+      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.3.7 정식 설치 파일을 사용해 주세요. SHA256: afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20',
       'download-qq-1-text': 'QQ 1 그룹',
       'download-qq-2-text': 'QQ 2 그룹',
       'download-community-note': '다운로드는 GitHub를 통해 진행됩니다. 속도가 느리면 QQ 그룹에 참여해 그룹 파일에서 다운로드하세요. 이미지 가이드도 포함되어 있습니다.',
       'download-releases-text': 'Beta 없음',
       'download-releases-loading': 'Beta 없음',
-      'download-releases-note': 'v1.3.6.5가 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
+      'download-releases-note': 'v1.3.7가 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
       'download-dict-title': 'ASR 공식 사전',
       'download-dict-body': '공식 인식 사전과 업데이트 파일을 제공합니다. 사용자가 수동으로 열 때만 접근합니다.',
       'download-dict-module-text': '사전 페이지 열기',

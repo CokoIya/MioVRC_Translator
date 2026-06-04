@@ -1,22 +1,19 @@
 {
-  "version": "v1.3.6.5",
-  "installer_name": "MioTranslator-Setup-v1.3.6.5.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.5/MioTranslator-Setup-v1.3.6.5.exe",
-  "size_bytes": 310763945,
-  "sha256": "2927cbbcb35874d5fb57c06a3649ba6c3de1b45b4b8949911c58ca0d8078a524",
-  "notes": "v1.3.6.5 fixes SBV2 CPU inference stalls by limiting PyTorch CPU threads, skipping the expensive stochastic duration branch in CPU mode, and adding deeper SBV2 text/BERT/acoustic timing diagnostics.",
+  "version": "v1.3.7",
+  "installer_name": "MioTranslator-Setup-v1.3.7.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7/MioTranslator-Setup-v1.3.7.exe",
+  "size_bytes": 311110280,
+  "sha256": "afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20",
+  "notes": "v1.3.7 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
   "notes_i18n": {
-    "zh-CN": "v1.3.6.5 修复 SBV2 在部分低性能 CPU 上推理卡死的问题：限制 PyTorch CPU 线程，CPU 模式跳过高开销随机时长分支，并新增 text/BERT/acoustic 分阶段耗时日志。",
-    "en": "v1.3.6.5 fixes SBV2 CPU inference stalls by limiting PyTorch CPU threads, skipping the expensive stochastic duration branch in CPU mode, and adding deeper SBV2 text/BERT/acoustic timing diagnostics.",
-    "ja": "v1.3.6.5 では、一部の低性能 CPU で SBV2 推論が停止する問題を修正しました。PyTorch CPU スレッドを制限し、CPU モードで高負荷なランダム duration 分岐をスキップし、text/BERT/acoustic の詳細な段階別ログを追加しています。",
-    "ru": "v1.3.6.5 исправляет зависания инференса SBV2 на некоторых слабых CPU: ограничивает CPU-потоки PyTorch, пропускает затратную stochastic duration ветку в CPU-режиме и добавляет подробные логи этапов text/BERT/acoustic.",
-    "ko": "v1.3.6.5는 일부 저사양 CPU에서 SBV2 추론이 멈추는 문제를 수정합니다. PyTorch CPU 스레드를 제한하고, CPU 모드에서 비용이 큰 stochastic duration 분기를 건너뛰며, text/BERT/acoustic 단계별 진단 로그를 추가했습니다."
+    "zh-CN": "v1.3.7 新增本地 Whisper ASR 支持，修复 Whisper ModelScope 下载和依赖打包问题，并为本地 ASR/TTS 提供可选 GPU 支持；默认仍使用 CPU，适合低配设备。",
+    "en": "v1.3.7 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
+    "ja": "v1.3.7 ではローカル Whisper ASR を追加し、Whisper の ModelScope ダウンロードと依存関係の同梱を修正しました。ローカル ASR/TTS には任意の GPU サポートを追加し、低スペック環境向けに既定は CPU のままです。",
+    "ru": "v1.3.7 добавляет локальный Whisper ASR, исправляет загрузку Whisper через ModelScope и упаковку зависимостей, а также добавляет необязательную поддержку GPU для локальных ASR/TTS. По умолчанию остается CPU для слабых ПК.",
+    "ko": "v1.3.7은 로컬 Whisper ASR을 추가하고 Whisper ModelScope 다운로드와 의존성 패키징 문제를 수정합니다. 로컬 ASR/TTS에는 선택형 GPU 지원을 추가했으며, 저사양 PC를 위해 기본값은 계속 CPU입니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-05-31T19:58:58+09:00",
-  "signature_algorithm": "ed25519",
-  "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "eca575fd2c70e0d0ede7f9d5430c264590b27fc75a166abc3328c821f774b1a56b6296d7c04bb688d853eaaad4790d97d93ca14de98383b50f84a770934c620d"
+  "published_at": "2026-06-05T01:45:38+09:00"
 }

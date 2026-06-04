@@ -14,6 +14,7 @@ from src.ui_qt.settings_window import (
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
 from src.utils.ui_config import (
+    DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
     QWEN_TRANSLATION_BASE_URL_MAINLAND,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
     XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_SG,
@@ -317,6 +318,58 @@ def test_qwen_translation_region_controls_base_url(qtbot, config, monkeypatch):
     dialog.reject()
 
 
+def test_deepseek_translation_region_controls_base_url_and_saves(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+
+    config["translation"]["backend"] = "deepseek"
+    config["translation"]["deepseek"] = {
+        "api_key": "test-key",
+        "region": "official",
+        "base_url": DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
+        "model": "deepseek-v4-flash",
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    custom_label = next(
+        label for label, code in dialog._qwen_translation_region_codes.items()
+        if code == "custom"
+    )
+    dialog._qwen_translation_region_var.set(custom_label)
+    dialog._on_qwen_translation_region_changed(custom_label)
+
+    assert dialog._backend_base_url_entry is not None
+    assert dialog._backend_base_url_entry.isReadOnly() is False
+
+    dialog._backend_base_url_var.set("https://proxy.example.com/v1")
+    dialog._save()
+
+    assert config["translation"]["deepseek"]["region"] == "custom"
+    assert config["translation"]["deepseek"]["base_url"] == "https://proxy.example.com/v1"
+
+    dialog.reject()
+
+
+def test_asr_engine_lists_whisper_for_main_and_listen(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    main_options = {code: label for label, code in dialog._asr_engine_options()}
+    listen_options = {code: label for label, code in dialog._listen_asr_engine_options()}
+
+    assert "whisper-large-v3-turbo" in main_options
+    assert "Whisper Large V3 Turbo" in main_options["whisper-large-v3-turbo"]
+    assert "whisper-large-v3-turbo" in listen_options
+    assert "Whisper Large V3 Turbo" in listen_options["whisper-large-v3-turbo"]
+
+    dialog.reject()
+
+
 def test_xiaomi_translation_region_controls_base_url_and_saves(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
     monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
@@ -326,7 +379,7 @@ def test_xiaomi_translation_region_controls_base_url_and_saves(qtbot, config, mo
         "api_key": "test-key",
         "region": "global",
         "base_url": XIAOMI_TRANSLATION_BASE_URL_PAYG,
-        "model": "mimo-v2-flash",
+        "model": "mimo-v2.5-pro",
     }
 
     dialog = SettingsWindow(None, config)
@@ -441,6 +494,349 @@ def test_style_bert_saved_voice_id_selects_display_and_tests_with_id(qtbot, conf
 
     assert spoken_voices == [voice_id]
     assert config["tts"]["style_bert_vits2"]["voice"] == voice_id
+
+
+def test_style_bert_gpu_device_option_resets_when_cuda_missing(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: False)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
+        lambda self: shown.append(True),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "style_bert_vits2",
+        "style_bert_vits2": {
+            "voice": None,
+            "rate": 1.0,
+            "volume": 0.8,
+            "device": "cpu",
+            "bert_language": "jp",
+        },
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.wait(30)
+
+    gpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cuda")
+    cpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cpu")
+    assert "GPU" in gpu_label
+
+    dialog._tts_device_combo.setCurrentText(gpu_label)
+
+    assert shown == [True]
+    assert dialog._tts_device_var.value() == cpu_label
+    assert dialog._tts_device_combo.currentText() == cpu_label
+
+
+def test_style_bert_gpu_device_saves_when_cuda_available(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+    config["tts"] = {
+        "enabled": True,
+        "engine": "style_bert_vits2",
+        "style_bert_vits2": {
+            "voice": None,
+            "rate": 1.0,
+            "volume": 0.8,
+            "device": "cpu",
+            "bert_language": "jp",
+        },
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.wait(30)
+
+    gpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cuda")
+    dialog._tts_device_combo.setCurrentText(gpu_label)
+    dialog._save()
+
+    assert config["tts"]["style_bert_vits2"]["device"] == "cuda"
+
+
+def test_style_bert_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: True)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
+        lambda self: shown.append(True),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "style_bert_vits2",
+        "style_bert_vits2": {
+            "voice": None,
+            "rate": 1.0,
+            "volume": 0.8,
+            "device": "cpu",
+            "bert_language": "jp",
+        },
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.wait(30)
+
+    gpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cuda")
+    dialog._tts_device_combo.setCurrentText(gpu_label)
+
+    assert shown == []
+    assert dialog._tts_device_codes[dialog._tts_device_var.value()] == "cuda"
+
+
+def test_local_asr_gpu_device_option_resets_when_cuda_missing(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: False)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
+        lambda self: shown.append(True),
+    )
+    config["asr"] = {
+        "engine": "whisper-large-v3-turbo",
+        "device": "cpu",
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
+    cpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cpu")
+    assert "GPU" in gpu_label
+
+    dialog._asr_device_combo.setCurrentText(gpu_label)
+
+    assert shown == [True]
+    assert dialog._asr_device_var.value() == cpu_label
+    assert dialog._asr_device_combo.currentText() == cpu_label
+
+
+def test_local_asr_gpu_device_saves_when_cuda_available(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+    config["asr"] = {
+        "engine": "sensevoice-small",
+        "device": "cpu",
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
+    dialog._asr_device_combo.setCurrentText(gpu_label)
+    dialog._save()
+
+    assert config["asr"]["device"] == "cuda"
+
+
+def test_local_asr_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: True)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
+        lambda self: shown.append(True),
+    )
+    config["asr"] = {
+        "engine": "whisper-large-v3-turbo",
+        "device": "cpu",
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
+    dialog._asr_device_combo.setCurrentText(gpu_label)
+
+    assert shown == []
+    assert dialog._asr_device_codes[dialog._asr_device_var.value()] == "cuda"
+
+
+def test_online_asr_hides_local_inference_device_and_saves_cpu(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+    shown: list[bool] = []
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
+        lambda self: shown.append(True),
+    )
+    config["asr"] = {
+        "engine": "qwen3-asr",
+        "device": "cuda",
+        "qwen3_asr": {"api_key": "key"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._asr_device_combo.isVisible() is False
+    assert dialog._asr_device_var.value() in dialog._asr_device_codes
+    assert dialog._asr_device_codes[dialog._asr_device_var.value()] == "cpu"
+
+    gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
+    dialog._asr_device_combo.setCurrentText(gpu_label)
+
+    assert shown == []
+    assert dialog._asr_device_codes[dialog._asr_device_var.value()] == "cpu"
+
+    dialog._save()
+
+    assert config["asr"]["device"] == "cpu"
+
+
+def test_style_bert_gpu_unavailable_dialog_installs_pytorch_when_driver_ready(qtbot, config, monkeypatch):
+    from src.utils.gpu_support import NvidiaDriverStatus
+
+    _patch_dialog_deps(monkeypatch)
+    opened_urls: list[str] = []
+    install_dialogs: list[bool] = []
+
+    class FakeMessageBox:
+        instances = []
+
+        class Icon:
+            Information = object()
+
+        class ButtonRole:
+            ActionRole = object()
+            RejectRole = object()
+
+        def __init__(self, parent):
+            self.parent = parent
+            self.title = ""
+            self.text = ""
+            self.buttons = []
+            self._clicked_button = None
+            self.instances.append(self)
+
+        def setIcon(self, _icon):
+            pass
+
+        def setWindowTitle(self, title):
+            self.title = title
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, text, role):
+            button = object()
+            self.buttons.append((text, role, button))
+            return button
+
+        def exec(self):
+            self._clicked_button = self.buttons[0][2]
+
+        def clickedButton(self):
+            return self._clicked_button
+
+    monkeypatch.setattr("src.ui_qt.settings_window.QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.detect_nvidia_driver",
+        lambda: NvidiaDriverStatus(True, name="NVIDIA RTX"),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_external_url",
+        lambda self, url: opened_urls.append(url),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_pytorch_cuda_install_dialog",
+        lambda self: install_dialogs.append(True),
+    )
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    dialog._show_tts_gpu_unavailable_dialog()
+
+    message = FakeMessageBox.instances[0]
+    button_texts = [text for text, _role, _button in message.buttons]
+    assert "CUDA" in message.text
+    assert not any("NVIDIA" in text for text in button_texts)
+    assert any("PyTorch" in text for text in button_texts)
+    assert opened_urls == []
+    assert install_dialogs == [True]
+
+
+def test_style_bert_gpu_unavailable_dialog_offers_driver_when_missing(qtbot, config, monkeypatch):
+    from src.utils.gpu_support import NvidiaDriverStatus
+
+    _patch_dialog_deps(monkeypatch)
+    opened_urls: list[str] = []
+
+    class FakeMessageBox:
+        instances = []
+
+        class Icon:
+            Information = object()
+
+        class ButtonRole:
+            ActionRole = object()
+            RejectRole = object()
+
+        def __init__(self, parent):
+            self.parent = parent
+            self.text = ""
+            self.buttons = []
+            self._clicked_button = None
+            self.instances.append(self)
+
+        def setIcon(self, _icon):
+            pass
+
+        def setWindowTitle(self, _title):
+            pass
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, text, role):
+            button = object()
+            self.buttons.append((text, role, button))
+            return button
+
+        def exec(self):
+            self._clicked_button = self.buttons[0][2]
+
+        def clickedButton(self):
+            return self._clicked_button
+
+    monkeypatch.setattr("src.ui_qt.settings_window.QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.detect_nvidia_driver",
+        lambda: NvidiaDriverStatus(False),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_external_url",
+        lambda self, url: opened_urls.append(url),
+    )
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    dialog._show_tts_gpu_unavailable_dialog()
+
+    message = FakeMessageBox.instances[0]
+    button_texts = [text for text, _role, _button in message.buttons]
+    assert any("NVIDIA" in text for text in button_texts)
+    assert any("PyTorch" in text for text in button_texts)
+    assert opened_urls == ["https://www.nvidia.com/Download/index.aspx"]
 
 
 def test_style_bert_preset_voice_keeps_manual_bert_language_and_test_uses_selection(qtbot, config, monkeypatch):

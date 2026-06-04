@@ -50,6 +50,12 @@
       "model_revision": "master",
       "ncpu": null
     },
+    "whisper": {
+      "model_id": "iic/Whisper-large-v3-turbo",
+      "model_revision": "master",
+      "language": "auto",
+      "ncpu": null
+    },
     "webspeech": {
       "language": "ja-JP",
       "continuous": true,
@@ -67,7 +73,7 @@
       "api_key": "",
       "region": "singapore",
       "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen3-asr-flash",
+      "model": "qwen3-asr-flash-2026-02-10",
       "language": "ja",
       "mode": "vad_chunked",
       "sample_rate": 16000,
@@ -133,7 +139,8 @@
     },
     "deepseek": {
       "api_key": "",
-      "base_url": "https://api.deepseek.com/v1",
+      "region": "official",
+      "base_url": "https://api.deepseek.com",
       "model": "deepseek-v4-flash",
       "timeout_s": 20.0,
       "max_retries": 0
@@ -149,7 +156,7 @@
       "api_key": "",
       "region": "china_mainland",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen-mt-flash",
+      "model": "qwen-mt-plus",
       "timeout_s": 20.0,
       "max_retries": 0
     },
@@ -157,14 +164,14 @@
       "api_key": "",
       "region": "global",
       "base_url": "https://api.xiaomimimo.com/v1",
-      "model": "mimo-v2-flash",
+      "model": "mimo-v2.5-pro",
       "timeout_s": 20.0,
       "max_retries": 0
     },
     "gemini": {
       "api_key": "",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-      "model": "gemini-3.1-flash-lite"
+      "model": "gemini-3.5-flash"
     },
     "kimi": {
       "api_key": "",
@@ -179,22 +186,22 @@
     "mistral": {
       "api_key": "",
       "base_url": "https://api.mistral.ai/v1",
-      "model": "mistral-small-latest"
+      "model": "mistral-medium-3-5"
     },
     "doubao": {
       "api_key": "",
-      "base_url": "https://ark.cn-beijing.volces.com/api/compatible/v1",
-      "model": "doubao-seed-2.0-pro"
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-0-pro-260215"
     },
     "nvidia": {
       "api_key": "",
       "region": "global",
       "base_url": "https://integrate.api.nvidia.com/v1",
-      "model": "nvidia/llama-3.1-nemotron-nano-8b-v1"
+      "model": "nvidia/nemotron-3-super-120b-a12b"
     },
     "anthropic": {
       "api_key": "",
-      "model": "claude-sonnet-4-20250514"
+      "model": "claude-opus-4-8"
     },
     "custom": {
       "api_key": "",

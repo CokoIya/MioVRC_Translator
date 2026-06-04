@@ -13,7 +13,6 @@
 > 面向 VRChat / VRC 用户的本地实时语音翻译工具、VRChat Chatbox 翻译助手
 > 作者：`ここ_Mio` / 开源项目 / 禁止收费分发
 > 下载官网：[https://78hejiu.top/](https://78hejiu.top/)
-> 警告：源代码被人扒走换皮付费发行了，现在决定仅开放部分源代码，遇到相同功能的插件请注意不要被收费骗钱。
 
 ## 简介
 
@@ -119,10 +118,7 @@ $env:MODELSCOPE_CACHE = "./models"
 
 ## 开发者文档
 
-- [架构文档](./docs/ARCHITECTURE.md) - 系统架构和设计说明
-- [贡献指南](./CONTRIBUTING.md) - 如何参与项目开发
 - [第三方许可证](./THIRD_PARTY_LICENSES.md) - 依赖库许可证信息
-- [测试文档](./tests/README.md) - 测试指南
 
 ## 许可证
 

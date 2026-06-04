@@ -82,6 +82,7 @@ numpy==1.26.4
 omegaconf==2.3.0
 onnxruntime==1.25.1
 openai==1.109.1
+openai-whisper==20250625
 oss2==2.19.1
 packaging==26.2
 pefile==2024.8.26
@@ -136,6 +137,7 @@ tabulate==0.10.0
 tensorboardX==2.6.5
 tenacity==9.1.4
 threadpoolctl==3.6.0
+tiktoken==0.13.0
 tokenizers==0.22.2
 torch==2.11.0+cpu
 torch-complex==0.4.4
@@ -148,7 +150,7 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 umap-learn==0.5.12
 urllib3==2.7.0
-webrtcvad==2.0.10
+webrtcvad-wheels==2.0.14
 websockets==16.0
 win32_setctime==1.2.0
 yarl==1.23.0

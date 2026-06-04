@@ -97,7 +97,7 @@ def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
                 "xiaomi": {
                     "api_key": "test-xiaomi",
                     "base_url": XIAOMI_TRANSLATION_BASE_URL_PAYG,
-                    "model": "mimo-v2-flash",
+                    "model": "mimo-v2.5-pro",
                 },
             }
         }
@@ -105,7 +105,7 @@ def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
 
     assert xiaomi._client.kwargs["api_key"] == "test-xiaomi"
     assert xiaomi._client.kwargs["base_url"] == XIAOMI_TRANSLATION_BASE_URL_PAYG
-    assert xiaomi.model == "mimo-v2-flash"
+    assert xiaomi.model == "mimo-v2.5-pro"
     assert xiaomi._extra_body["thinking"]["type"] == "disabled"
 
     nvidia = create_translator(
@@ -115,7 +115,7 @@ def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
                 "nvidia": {
                     "api_key": "test-nvidia",
                     "base_url": NVIDIA_TRANSLATION_BASE_URL,
-                    "model": "nvidia/llama-3.1-nemotron-nano-8b-v1",
+                    "model": "nvidia/nemotron-3-nano-30b-a3b",
                 },
             }
         }
@@ -123,7 +123,7 @@ def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
 
     assert nvidia._client.kwargs["api_key"] == "test-nvidia"
     assert nvidia._client.kwargs["base_url"] == NVIDIA_TRANSLATION_BASE_URL
-    assert nvidia.model == "nvidia/llama-3.1-nemotron-nano-8b-v1"
+    assert nvidia.model == "nvidia/nemotron-3-nano-30b-a3b"
 
 
 def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
@@ -135,7 +135,7 @@ def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
                 "xiaomi": {
                     "api_key": "test-xiaomi",
                     "base_url": XIAOMI_TRANSLATION_BASE_URL_PAYG,
-                    "model": "mimo-v2-flash",
+                    "model": "mimo-v2.5-pro",
                 },
             }
         }
@@ -143,7 +143,7 @@ def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
 
     assert translator.translate("hello", "en", "zh") == "你好"
     kwargs = translator._client.chat.completions.last_kwargs
-    assert kwargs["model"] == "mimo-v2-flash"
+    assert kwargs["model"] == "mimo-v2.5-pro"
     assert "max_completion_tokens" in kwargs
     assert "max_tokens" not in kwargs
     assert kwargs["extra_body"]["thinking"]["type"] == "disabled"

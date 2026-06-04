@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils import config_manager
 from src.utils.ui_config import (
+    DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
     OUTPUT_FORMAT_2_DISABLED,
     QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
     QWEN_TRANSLATION_BASE_URL_MAINLAND,
@@ -19,6 +20,7 @@ from src.utils.ui_config import (
     XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_CN,
     XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_SG,
     NVIDIA_TRANSLATION_BASE_URL,
+    get_backend_model_profile,
     normalize_output_format_2,
 )
 
@@ -201,12 +203,27 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["tts"]["style_bert_vits2"]["bert_language"] == "zh"
 
-    def test_ensure_tts_config_removes_style_bert_gpu_device(self):
-        """Style-Bert-VITS2 should use CPU because GPU is not exposed in the UI."""
+    def test_ensure_tts_config_preserves_style_bert_gpu_device(self):
+        """Style-Bert-VITS2 should preserve the optional CUDA device setting."""
         config = {
             "tts": {
                 "style_bert_vits2": {
                     "device": "cuda",
+                }
+            }
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["style_bert_vits2"]["device"] == "cuda"
+
+    def test_ensure_tts_config_normalizes_invalid_style_bert_device_to_cpu(self):
+        """Invalid Style-Bert-VITS2 devices should fall back to the CPU default."""
+        config = {
+            "tts": {
+                "style_bert_vits2": {
+                    "device": "gpu",
                 }
             }
         }
@@ -372,13 +389,45 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["asr"]["auto_fallback"] is True
+        assert config["asr"]["device"] == "cpu"
         assert config["asr"]["fallback_engine"] == "sensevoice-small"
         assert config["asr"]["webspeech"]["language"] == "ja-JP"
-        assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash"
+        assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash-2026-02-10"
         assert config["asr"]["qwen3_asr"]["base_url"] == (
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         )
+        assert config["asr"]["whisper"]["model_id"] == "iic/Whisper-large-v3-turbo"
+        assert config["asr"]["whisper"]["model_revision"] == "master"
+        assert config["asr"]["whisper"]["language"] == "auto"
+        assert config["asr"]["whisper"]["ncpu"] is None
         assert config["asr"]["gemini_live"]["transcribe_only"] is True
+
+    def test_ensure_asr_config_adds_whisper_defaults(self):
+        config = {"asr": {"engine": "whisper-large-v3-turbo"}}
+
+        changed = config_manager._ensure_asr_config(config)
+
+        assert changed is True
+        assert config["asr"]["engine"] == "whisper-large-v3-turbo"
+        assert config["asr"]["whisper"]["model_id"] == "iic/Whisper-large-v3-turbo"
+        assert config["asr"]["whisper"]["model_revision"] == "master"
+        assert config["asr"]["whisper"]["language"] == "auto"
+
+    def test_ensure_asr_config_preserves_gpu_device(self):
+        config = {"asr": {"engine": "whisper-large-v3-turbo", "device": "cuda"}}
+
+        changed = config_manager._ensure_asr_config(config)
+
+        assert changed is True
+        assert config["asr"]["device"] == "cuda"
+
+    def test_ensure_asr_config_normalizes_invalid_device_to_cpu(self):
+        config = {"asr": {"engine": "sensevoice-small", "device": "gpu"}}
+
+        changed = config_manager._ensure_asr_config(config)
+
+        assert changed is True
+        assert config["asr"]["device"] == "cpu"
 
     def test_ensure_asr_config_migrates_legacy_qwen3_model(self):
         config = {"asr": {"engine": "qwen3-asr", "qwen3_asr": {"model": "qwen3-asr-0.6b"}}}
@@ -386,7 +435,7 @@ class TestConfigValidation(unittest.TestCase):
         changed = config_manager._ensure_asr_config(config)
 
         assert changed is True
-        assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash"
+        assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash-2026-02-10"
 
     def test_ensure_asr_config_updates_known_qwen3_base_url_for_region(self):
         config = {
@@ -618,6 +667,51 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["qianwen"]["region"] == "custom"
         assert config["translation"]["qianwen"]["base_url"] == "https://proxy.example.com/v1"
 
+    def test_deepseek_translation_default_uses_official_endpoint(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "deepseek",
+                "backend_source": "manual",
+                "deepseek": {"api_key": "test-key"},
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        deepseek_cfg = config["translation"]["deepseek"]
+        assert deepseek_cfg["region"] == "official"
+        assert deepseek_cfg["base_url"] == DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL
+        assert deepseek_cfg["model"] == TRANSLATION_BACKENDS["deepseek"]["model"]
+        assert deepseek_cfg["timeout_s"] == TRANSLATION_BACKENDS["deepseek"]["timeout_s"]
+
+    def test_deepseek_translation_preserves_custom_proxy_base_url(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "deepseek",
+                "backend_source": "manual",
+                "deepseek": {
+                    "api_key": "test-key",
+                    "region": "custom",
+                    "base_url": "https://proxy.example.com/v1",
+                    "model": "deepseek-v4-flash",
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert config["translation"]["deepseek"]["region"] == "custom"
+        assert config["translation"]["deepseek"]["base_url"] == "https://proxy.example.com/v1"
+
     def test_xiaomi_translation_default_uses_china_cluster_for_chinese_ui(self):
         config = {
             "ui": {"language": "zh-CN"},
@@ -717,22 +811,116 @@ class TestConfigValidation(unittest.TestCase):
     def test_api_provider_presets_include_latest_model_families(self):
         """All hosted translation backends should expose their current model families."""
         expected_models = {
-            "qianwen": ("qwen3.6-plus", "qwen-mt-flash"),
-            "xiaomi": ("mimo-v2-flash", "mimo-v2.5-pro"),
+            "qianwen": ("qwen3.7-max", "qwen-mt-plus", "qwen-mt-flash"),
+            "xiaomi": ("mimo-v2.5-pro", "mimo-v2-flash"),
             "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
             "zhipu": ("glm-5.1", "glm-5-turbo"),
-            "gemini": ("gemini-3.1-flash-lite", "gemini-3.1-pro-preview"),
+            "gemini": ("gemini-3.5-flash", "gemini-2.5-flash"),
             "kimi": ("kimi-k2.6", "kimi-k2.5"),
             "xai": ("grok-4.3",),
-            "mistral": ("mistral-small-latest", "mistral-medium-3-5"),
-            "nvidia": ("nvidia/llama-3.1-nemotron-nano-8b-v1", "nvidia/nemotron-3-nano-30b-a3b"),
-            "anthropic": ("claude-opus-4-1-20250805", "claude-sonnet-4-20250514"),
+            "mistral": ("mistral-medium-3-5", "mistral-small-latest"),
+            "nvidia": ("nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-nano-30b-a3b"),
+            "anthropic": ("claude-opus-4-8", "claude-sonnet-4-6"),
         }
 
         for backend, models in expected_models.items():
             presets = TRANSLATION_MODEL_PRESETS[backend]
             for model in models:
                 assert model in presets
+
+        assert TRANSLATION_BACKENDS["qianwen"]["model"] == "qwen-mt-plus"
+        assert TRANSLATION_BACKENDS["mistral"]["model"] == "mistral-medium-3-5"
+        assert (
+            TRANSLATION_BACKENDS["nvidia"]["model"]
+            == "nvidia/nemotron-3-super-120b-a12b"
+        )
+        assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-opus-4-8"
+        qwen_flash = TRANSLATION_MODEL_PRESETS["qianwen"].index("qwen-mt-flash")
+        qwen_plus = TRANSLATION_MODEL_PRESETS["qianwen"].index("qwen-mt-plus")
+        assert qwen_plus < qwen_flash
+        assert "qwen3.6-max-preview" not in TRANSLATION_MODEL_PRESETS["qianwen"]
+        assert "qwen3.6-plus" not in TRANSLATION_MODEL_PRESETS["qianwen"]
+        assert "qwen3.6-flash" not in TRANSLATION_MODEL_PRESETS["qianwen"]
+
+    def test_model_profiles_expose_ten_point_live_scores(self):
+        qwen_mt = get_backend_model_profile("qianwen", "qwen-mt-plus")
+        gpt = get_backend_model_profile("openai", "gpt-5.5")
+        opus = get_backend_model_profile("anthropic", "claude-opus-4-8")
+        custom = get_backend_model_profile("openai", "custom-router-model")
+
+        assert qwen_mt["score"] == "9.7"
+        assert gpt["score"] == "9.5"
+        assert opus["score"] == "7.8"
+        assert custom["score"] == "6.5"
+        assert float(qwen_mt["score"]) > float(opus["score"])
+
+    def test_legacy_provider_defaults_migrate_to_runnable_model_ids(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "qianwen",
+                "backend_source": "manual",
+                "source_language": "zh",
+                "target_language": "ja",
+                "language_pair_source": "manual",
+                "qianwen": {
+                    "model": "qwen-mt-flash",
+                    "base_url": QWEN_TRANSLATION_BASE_URL_MAINLAND,
+                },
+                "doubao": {
+                    "base_url": "https://ark.cn-beijing.volces.com/api/compatible/v1",
+                    "model": "doubao-seed-2.0-pro",
+                },
+                "deepseek": {"base_url": "https://api.deepseek.com/v1"},
+                "xiaomi": {"model": "mimo-v2-flash"},
+                "gemini": {"model": "gemini-3.1-flash-lite"},
+                "nvidia": {"model": "nvidia/llama-3.1-nemotron-nano-8b-v1"},
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        assert config["translation"]["qianwen"]["model"] == "qwen-mt-plus"
+        assert (
+            config["translation"]["doubao"]["base_url"]
+            == "https://ark.cn-beijing.volces.com/api/v3"
+        )
+        assert config["translation"]["doubao"]["model"] == "doubao-seed-2-0-pro-260215"
+        assert config["translation"]["deepseek"]["base_url"] == "https://api.deepseek.com"
+        assert config["translation"]["xiaomi"]["model"] == "mimo-v2.5-pro"
+        assert config["translation"]["gemini"]["model"] == "gemini-3.5-flash"
+        assert (
+            config["translation"]["nvidia"]["model"]
+            == TRANSLATION_BACKENDS["nvidia"]["model"]
+        )
+
+    def test_unroutable_qwen36_models_migrate_to_qwen37(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "qianwen",
+                "backend_source": "manual",
+                "source_language": "zh",
+                "target_language": "ja",
+                "language_pair_source": "manual",
+                "qianwen": {
+                    "model": "qwen3.6-plus",
+                    "base_url": QWEN_TRANSLATION_BASE_URL_MAINLAND,
+                },
+            },
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        assert config["translation"]["qianwen"]["model"] == "qwen3.7-max"
 
     def test_legacy_openai_model_migrates_to_live_default(self):
         """Old GPT-4 defaults should migrate without touching newer official ids."""
@@ -765,7 +953,7 @@ class TestConfigValidation(unittest.TestCase):
                 "source_language": "zh",
                 "target_language": "ja",
                 "language_pair_source": "manual",
-                "anthropic": {"model": "claude-haiku-4-5-20251001"},
+                "anthropic": {"model": "claude-sonnet-4-20250514"},
             },
         }
 

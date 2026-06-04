@@ -173,6 +173,35 @@ def test_style_bert_synthesis_uses_configured_bert_language(tmp_path, monkeypatc
     assert infer_calls[0]["sdp_ratio"] == 0.0
 
 
+def test_style_bert_cuda_prepares_acoustic_model_as_fp32(monkeypatch):
+    monkeypatch.setattr(engine_store, "style_bert_cuda_available", lambda: True)
+
+    class FakeNet:
+        def __init__(self):
+            self.float_calls = 0
+
+        def float(self):
+            self.float_calls += 1
+            return self
+
+    class FakeModel:
+        def __init__(self):
+            self.net = FakeNet()
+            self.load_calls = 0
+
+        def load(self):
+            self.load_calls += 1
+            setattr(self, "_TTSModel__net_g", self.net)
+
+    engine = StyleBertVits2TTS(device="cuda")
+    model = FakeModel()
+
+    engine._prepare_voice_model_for_device(model)
+
+    assert model.load_calls == 1
+    assert model.net.float_calls == 1
+
+
 def test_style_bert_language_mapping_helpers():
     assert engine_store.normalize_style_bert_bert_language("ja") == "jp"
     assert engine_store.normalize_style_bert_bert_language("english") == "en"
