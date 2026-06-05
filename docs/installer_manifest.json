@@ -1,19 +1,19 @@
-{
-  "version": "v1.3.7",
-  "installer_name": "MioTranslator-Setup-v1.3.7.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7/MioTranslator-Setup-v1.3.7.exe",
-  "size_bytes": 311110280,
-  "sha256": "afda229c6e95c0b7f64b3f0e9625fa7944c9c8548057aca630db71288690dd20",
-  "notes": "v1.3.7 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
+﻿{
+  "version": "v1.3.7.1",
+  "installer_name": "MioTranslator-Setup-v1.3.7.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.1/MioTranslator-Setup-v1.3.7.1.exe",
+  "size_bytes": 373777681,
+  "sha256": "4c920db5cb1d183b9689060bebfc4a57d7c1cfe854655c49c7d32a0215c1ca72",
+  "notes": "v1.3.7.1 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7 新增本地 Whisper ASR 支持，修复 Whisper ModelScope 下载和依赖打包问题，并为本地 ASR/TTS 提供可选 GPU 支持；默认仍使用 CPU，适合低配设备。",
-    "en": "v1.3.7 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
-    "ja": "v1.3.7 ではローカル Whisper ASR を追加し、Whisper の ModelScope ダウンロードと依存関係の同梱を修正しました。ローカル ASR/TTS には任意の GPU サポートを追加し、低スペック環境向けに既定は CPU のままです。",
-    "ru": "v1.3.7 добавляет локальный Whisper ASR, исправляет загрузку Whisper через ModelScope и упаковку зависимостей, а также добавляет необязательную поддержку GPU для локальных ASR/TTS. По умолчанию остается CPU для слабых ПК.",
-    "ko": "v1.3.7은 로컬 Whisper ASR을 추가하고 Whisper ModelScope 다운로드와 의존성 패키징 문제를 수정합니다. 로컬 ASR/TTS에는 선택형 GPU 지원을 추가했으며, 저사양 PC를 위해 기본값은 계속 CPU입니다."
+    "zh-CN": "v1.3.7.1 新增本地 Whisper ASR 支持，修复 Whisper ModelScope 下载和依赖打包问题，并为本地 ASR/TTS 提供可选 GPU 支持；默认仍使用 CPU，适合低配设备。",
+    "en": "v1.3.7.1 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
+    "ja": "v1.3.7.1 ではローカル Whisper ASR を追加し、Whisper の ModelScope ダウンロードと依存関係の同梱を修正しました。ローカル ASR/TTS には任意の GPU サポートを追加し、低スペック環境向けに既定は CPU のままです。",
+    "ru": "v1.3.7.1 добавляет локальный Whisper ASR, исправляет загрузку Whisper через ModelScope и упаковку зависимостей, а также добавляет необязательную поддержку GPU для локальных ASR/TTS. По умолчанию остается CPU для слабых ПК.",
+    "ko": "v1.3.7.1은 로컬 Whisper ASR을 추가하고 Whisper ModelScope 다운로드와 의존성 패키징 문제를 수정합니다. 로컬 ASR/TTS에는 선택형 GPU 지원을 추가했으며, 저사양 PC를 위해 기본값은 계속 CPU입니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-06-05T01:45:38+09:00"
+  "published_at": "2026-06-05T18:54:58+09:00"
 }

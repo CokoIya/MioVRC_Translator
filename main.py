@@ -264,7 +264,7 @@ def main() -> int:
     if CUDA_PIP_VERIFY_ARG in sys.argv:
         return _run_cuda_pytorch_verify()
 
-    if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1":
+    if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1" or "--mio-selftest" in sys.argv:
         return _run_selftest()
 
     if "--setup" in sys.argv:

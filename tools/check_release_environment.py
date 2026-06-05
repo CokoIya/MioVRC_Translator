@@ -14,6 +14,10 @@ REQUIRED_MODULES = (
     "torchaudio",
     "websockets",
     "whisper",
+    "librosa",
+    "scipy",
+    "numba",
+    "llvmlite",
 )
 
 
