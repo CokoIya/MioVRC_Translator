@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from src.updater import update_checker
 from src.updater.manifest_signature import (
@@ -84,6 +85,30 @@ class UpdateCheckerTests(unittest.TestCase):
             url,
             "https://78hejiu.top/installer_manifest.json?lang=zh&_mio_update_check=12345",
         )
+
+    def test_fetch_update_info_accepts_utf8_bom_manifest(self):
+        class FakeResponse:
+            content = (
+                b"\xef\xbb\xbf"
+                + json.dumps(
+                    {
+                        "version": "v9.9.9",
+                        "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v9.9.9/app.exe",
+                        "installer_name": "app.exe",
+                        "size_bytes": 123,
+                        "sha256": "a" * 64,
+                    }
+                ).encode("utf-8")
+            )
+
+            def raise_for_status(self):
+                return None
+
+        with patch("src.updater.update_checker.requests.get", return_value=FakeResponse()):
+            info = update_checker._fetch_update_info("https://78hejiu.top/installer_manifest.json")
+
+        self.assertIsNotNone(info)
+        self.assertEqual(info.version, "v9.9.9")
 
     def test_verify_update_manifest_requires_trusted_signature_when_configured(self):
         seed = "11" * 32

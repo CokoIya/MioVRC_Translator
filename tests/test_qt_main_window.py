@@ -188,6 +188,105 @@ def test_ui_language_switch_refreshes_dynamic_buttons(qtbot, monkeypatch):
     window.destroy()
 
 
+def test_auto_microphone_resolves_current_default_device(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {"audio": {"input_device_mode": "auto", "input_device": ""}}
+    window._devices = {}
+
+    devices = [
+        {"index": 7, "name": "PicoStreamingMicrophone"},
+        {"index": 1, "name": "Razer Seiren V2 X"},
+    ]
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: devices)
+    monkeypatch.setattr(
+        MainWindow,
+        "_current_default_input_device_name",
+        lambda self, _devices: "Razer Seiren V2 X",
+    )
+
+    assert MainWindow._resolve_mic_input_device_name(window, refresh=True) == "Razer Seiren V2 X"
+    assert window._devices["Razer Seiren V2 X"] == 1
+
+
+def test_start_microphone_capture_resolves_fixed_device_index(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "audio": {
+            "input_device_mode": "fixed",
+            "input_device": "Razer Seiren V2 X",
+        }
+    }
+    window._devices = {}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window._list_microphone_devices",
+        lambda: [{"index": 1, "name": "Razer Seiren V2 X"}],
+    )
+
+    class DummyRecorder:
+        active_input_device_name = "Razer Seiren V2 X"
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("src.audio.recorder.AudioRecorder", DummyRecorder)
+
+    MainWindow._start_microphone_capture(window)
+
+    assert captured["input_device"] == 1
+    assert window._active_mic_input_device_name == "Razer Seiren V2 X"
+
+
+def test_main_device_combo_restarts_microphone_while_running(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._config = {"audio": {}}
+    restarted: list[str] = []
+
+    monkeypatch.setattr(window, "_copy", lambda key, **_kwargs: {
+        "input_device_missing": "No microphone",
+        "mic_device_auto_option": "Auto",
+    }.get(key, key))
+    monkeypatch.setattr(window, "_refresh_device_combo", lambda: None)
+    monkeypatch.setattr(window, "_schedule_config_save", lambda: None)
+    monkeypatch.setattr(window, "_restart_microphone_capture", lambda reason: restarted.append(reason))
+
+    MainWindow._on_device_combo_changed(window, "Razer Seiren V2 X")
+
+    assert window._config["audio"]["input_device_mode"] == "fixed"
+    assert window._config["audio"]["input_device"] == "Razer Seiren V2 X"
+    assert restarted == ["microphone device changed by user"]
+
+
+def test_desktop_audio_watch_restarts_when_output_signature_changes(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = True
+    window._desktop_capture_enabled = True
+    window._listen_available = True
+    window._listen_recorder = type("_Recorder", (), {"is_running": True})()
+    window._last_desktop_device_signature = (("Old Speakers",), "Old Speakers")
+    restarted: list[bool] = []
+
+    monkeypatch.setattr(window, "_refresh_listen_availability", lambda refresh_devices=False: True)
+    monkeypatch.setattr(window, "_refresh_desktop_capture_button", lambda: None)
+    monkeypatch.setattr(window, "_maybe_log_listen_diagnostics", lambda: None)
+    monkeypatch.setattr(
+        window,
+        "_desktop_device_signature",
+        lambda refresh=False: (("New Speakers",), "New Speakers"),
+    )
+    monkeypatch.setattr(window, "_restart_desktop_capture", lambda message=None: restarted.append(True))
+
+    MainWindow._poll_desktop_audio_watch(window)
+
+    assert restarted == [True]
+
+
 def test_trilingual_output_format_uses_second_translation():
     window = MainWindow.__new__(MainWindow)
     window._config = {

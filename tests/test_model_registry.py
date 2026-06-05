@@ -46,6 +46,14 @@ def test_unknown_legacy_engine_normalizes_to_default_local_asr():
     assert spec.requires_local_model is True
 
 
+def test_sensevoice_spec_includes_tokenizer_and_cmvn_files():
+    spec = get_asr_runtime_spec({"asr": {"engine": "sensevoice-small"}})
+
+    assert "model.pt" in spec.required_files
+    assert "chn_jpn_yue_eng_ko_spectok.bpe.model" in spec.required_files
+    assert "am.mvn" in spec.required_files
+
+
 def test_whisper_asr_spec_is_local_user_selectable_model():
     config = {"asr": {"engine": "whisper-large-v3-turbo"}}
 

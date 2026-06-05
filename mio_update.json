@@ -1,18 +1,18 @@
-﻿{
-  "version": "v1.3.7.1",
-  "installer_name": "MioTranslator-Setup-v1.3.7.1.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.1/MioTranslator-Setup-v1.3.7.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.1/MioTranslator-Setup-v1.3.7.1.exe",
-  "size_bytes": 373777681,
-  "sha256": "4c920db5cb1d183b9689060bebfc4a57d7c1cfe854655c49c7d32a0215c1ca72",
-  "notes": "v1.3.7.1 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
-  "notes_i18n": {
-    "zh-CN": "v1.3.7.1 新增本地 Whisper ASR 支持，修复 Whisper ModelScope 下载和依赖打包问题，并为本地 ASR/TTS 提供可选 GPU 支持；默认仍使用 CPU，适合低配设备。",
-    "en": "v1.3.7.1 adds local Whisper ASR support, fixes Whisper ModelScope downloads and dependency packaging, and adds optional GPU support for local ASR/TTS while keeping CPU as the default for low-end PCs.",
-    "ja": "v1.3.7.1 ではローカル Whisper ASR を追加し、Whisper の ModelScope ダウンロードと依存関係の同梱を修正しました。ローカル ASR/TTS には任意の GPU サポートを追加し、低スペック環境向けに既定は CPU のままです。",
-    "ru": "v1.3.7.1 добавляет локальный Whisper ASR, исправляет загрузку Whisper через ModelScope и упаковку зависимостей, а также добавляет необязательную поддержку GPU для локальных ASR/TTS. По умолчанию остается CPU для слабых ПК.",
-    "ko": "v1.3.7.1은 로컬 Whisper ASR을 추가하고 Whisper ModelScope 다운로드와 의존성 패키징 문제를 수정합니다. 로컬 ASR/TTS에는 선택형 GPU 지원을 추가했으며, 저사양 PC를 위해 기본값은 계속 CPU입니다."
-  },
-  "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-06-05T18:54:58+09:00"
+{
+    "version":  "v1.3.7.2",
+    "installer_name":  "MioTranslator-Setup-v1.3.7.2.exe",
+    "url":  "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.2/MioTranslator-Setup-v1.3.7.2.exe",
+    "installer_url":  "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.2/MioTranslator-Setup-v1.3.7.2.exe",
+    "size_bytes":  373770128,
+    "sha256":  "6870b667afe6382700b42f15ffa458235944b48db7238bd55ac25b234943344e",
+    "notes":  "v1.3.7.2 fixes SenseVoice model-file checks, blocks online translation startup when the required API Key is empty, fixes microphone auto/fixed device resolution and hot switching, fixes reverse-listen output hot switching, and keeps local Whisper ASR plus optional GPU support.",
+    "notes_i18n":  {
+                       "zh-CN":  "v1.3.7.2 修复 SenseVoice 模型文件检查，修复在线翻译后端未填写 API Key 仍可保存并开始监听的问题，修复麦克风自动/固定设备解析与热切换，修复反向翻译输出设备热切换，并保留本地 Whisper ASR 与可选 GPU 支持。",
+                       "en":  "v1.3.7.2 fixes SenseVoice model-file checks, blocks saving and startup when an online translation backend is missing its API Key, fixes automatic/fixed microphone device resolution and hot switching, fixes reverse-listen output hot switching, and keeps local Whisper ASR plus optional GPU support.",
+                       "ja":  "v1.3.7.2 では SenseVoice モデルファイル確認、オンライン翻訳 API Key 未設定時の保存/起動ブロック、マイクの自動/固定デバイス解決とホット切替、逆翻訳出力デバイスのホット切替を修正し、ローカル Whisper ASR と任意の GPU サポートも維持しています。",
+                       "ru":  "v1.3.7.2 исправляет проверку файлов модели SenseVoice, блокирует сохранение и запуск онлайн-перевода без API Key, исправляет авто/фиксированный выбор и горячее переключение микрофона, горячее переключение вывода обратного перевода, а также сохраняет локальный Whisper ASR и необязательную поддержку GPU.",
+                       "ko":  "v1.3.7.2는 SenseVoice 모델 파일 확인을 수정하고, 온라인 번역 백엔드의 API Key가 비어 있을 때 저장 및 시작을 막으며, 자동/고정 마이크 장치 해석과 핫스위칭, 역번역 출력 장치 핫스위칭을 수정합니다. 로컬 Whisper ASR과 선택형 GPU 지원도 유지됩니다."
+                   },
+    "homepage_url":  "https://78hejiu.top",
+    "published_at":  "2026-06-06T01:52:36+09:00"
 }
