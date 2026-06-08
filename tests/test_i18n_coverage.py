@@ -1,11 +1,19 @@
 from src.ui_qt.main_window import MAIN_COPY
+from src.ui_qt.audio_diagnostics_window import _COPY as AUDIO_DIAGNOSTICS_COPY
 from src.ui_qt.settings_window import FIELD_HINTS, QT_SETTINGS_COPY
+from src.ui_qt.vad_calibration_window import _COPY as VAD_CALIBRATION_COPY
 from src.utils.i18n import UI_TEXTS, tr
 from src.utils.ui_config import (
+    DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
+    backend_region_for_ui_language,
+    get_backend_region_base_url,
     get_output_format_2_options,
     get_output_format_options,
     get_qwen_translation_base_url,
     normalize_qwen_translation_region,
+    normalize_backend_region,
+    XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_EU,
+    NVIDIA_TRANSLATION_BASE_URL,
 )
 
 
@@ -26,6 +34,18 @@ def test_settings_copy_tables_cover_supported_languages():
             key: [language for language in SUPPORTED_UI_LANGUAGES if language not in values]
             for key, values in table.items()
             if any(language not in values for language in SUPPORTED_UI_LANGUAGES)
+        }
+        assert missing == {}
+
+
+def test_tool_window_copy_tables_cover_supported_languages():
+    for table in (AUDIO_DIAGNOSTICS_COPY, VAD_CALIBRATION_COPY):
+        assert set(SUPPORTED_UI_LANGUAGES).issubset(table)
+        all_keys = set().union(*(texts.keys() for texts in table.values()))
+        missing = {
+            language: sorted(all_keys - set(table[language]))
+            for language in SUPPORTED_UI_LANGUAGES
+            if all_keys - set(table[language])
         }
         assert missing == {}
 
@@ -63,3 +83,9 @@ def test_qwen_translation_region_helpers():
     assert normalize_qwen_translation_region("intl") == "singapore"
     assert normalize_qwen_translation_region("china") == "china_mainland"
     assert get_qwen_translation_base_url("singapore").startswith("https://dashscope-intl.")
+    assert normalize_backend_region("deepseek", "china") == "official"
+    assert get_backend_region_base_url("deepseek", "official") == DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL
+    assert normalize_backend_region("xiaomi", "token-plan-sgp") == "singapore_cluster"
+    assert get_backend_region_base_url("xiaomi", "europe_cluster") == XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_EU
+    assert backend_region_for_ui_language("xiaomi", "zh-CN") == "china_cluster"
+    assert get_backend_region_base_url("nvidia", "hosted") == NVIDIA_TRANSLATION_BASE_URL

@@ -30,6 +30,19 @@ def test_floating_window_reveal_makes_window_visible(qtbot):
     assert window._visible is True
 
 
+def test_floating_window_service_hide_does_not_emit_close_callback(qtbot):
+    closed: list[bool] = []
+    window = FloatingWindow(None, "zh-CN", on_close=lambda: closed.append(True))
+    qtbot.addWidget(window)
+
+    window.reveal()
+    window.hide_from_service()
+
+    assert window.isVisible() is False
+    assert window._visible is False
+    assert closed == []
+
+
 def test_floating_window_close_and_pin_keep_state_consistent(qtbot):
     closed: list[bool] = []
     window = FloatingWindow(None, "zh-CN", on_close=lambda: closed.append(True))
@@ -57,3 +70,18 @@ def test_floating_window_is_not_owned_by_main_window(qtbot):
     qtbot.addWidget(window)
 
     assert window.parentWidget() is None
+
+
+def test_floating_window_listen_status_updates_and_relocalizes(qtbot):
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+
+    assert window._status_label.text() == "等待对方说话中..."
+
+    window.set_listen_status(True)
+
+    assert window._status_label.text() == "正在听别人说话..."
+
+    window.update_language("en")
+
+    assert window._status_label.text() == "Reverse translation listening..."

@@ -39,6 +39,30 @@ class ModelIntegrityTests(unittest.TestCase):
         self.assertTrue(SenseVoiceASR()._runtime_spec().required_file_sha256)
         self.assertTrue(_resolve_spec("iic/SenseVoiceSmall").required_file_sha256)
 
+    def test_trusted_hashes_allow_unhashed_required_support_files(self):
+        root = Path("tests/.tmp_model_integrity_support")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            model_file = root / "model.pt"
+            model_file.write_bytes(b"trusted model")
+            (root / "support.txt").write_text("support", encoding="utf-8")
+            digest = hashlib.sha256(b"trusted model").hexdigest()
+            spec = ASRRuntimeSpec(
+                engine="test",
+                label="Test",
+                config_key="test",
+                model_id="example/model",
+                model_revision="rev",
+                required_files=("model.pt", "support.txt"),
+                required_file_sha256=(("model.pt", digest),),
+            )
+
+            self.assertTrue(verify_model_integrity(root, spec))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

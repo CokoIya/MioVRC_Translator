@@ -21,6 +21,7 @@ Resume safety:
   downloader picks each part up where it left off. When every segment is
   finished the parts are stitched into `dest` and removed.
 """
+
 from __future__ import annotations
 
 import copy
@@ -47,24 +48,24 @@ logger = logging.getLogger(__name__)
 _CHUNK_SIZE = 2 * 1024 * 1024
 
 # Parallel range download tuning
-_PARALLEL_THRESHOLD_BYTES = 32 * 1024 * 1024   # files >= 32 MB use ranges
-_PARALLEL_PART_TARGET     = 64 * 1024 * 1024   # ~64 MB per segment
-_PARALLEL_MIN_PARTS       = 2
-_PARALLEL_MAX_PARTS       = 6                  # cap to avoid mirror throttling
+_PARALLEL_THRESHOLD_BYTES = 32 * 1024 * 1024  # files >= 32 MB use ranges
+_PARALLEL_PART_TARGET = 64 * 1024 * 1024  # ~64 MB per segment
+_PARALLEL_MIN_PARTS = 2
+_PARALLEL_MAX_PARTS = 3  # cap CPU/disk pressure on low-end PCs
 
-_SPEED_WINDOW_S  = 4.0    # rolling window for speed / ETA
-_UI_EMIT_MIN_S   = 0.15   # throttle: emit to UI at most every 150 ms
+_SPEED_WINDOW_S = 4.0  # rolling window for speed / ETA
+_UI_EMIT_MIN_S = 0.15  # throttle: emit to UI at most every 150 ms
 
 # Mirror candidates — tried in order; first to respond wins.
 _MIRRORS = (
-    "https://hf-mirror.com",       # mainland China CDN (ModelScope-backed)
-    "https://huggingface.co",      # official
+    "https://hf-mirror.com",  # mainland China CDN (ModelScope-backed)
+    "https://huggingface.co",  # official
 )
-_PROBE_TIMEOUT      = 4     # max seconds for any single mirror probe
-_PROBE_BYTES        = 768 * 1024   # bytes pulled to measure throughput
-_PROBE_LOCALE_BONUS = 1.5   # locale-preferred mirror wins ties up to this ratio
-_CONNECT_TIMEOUT    = 15
-_READ_TIMEOUT       = 60
+_PROBE_TIMEOUT = 4  # max seconds for any single mirror probe
+_PROBE_BYTES = 768 * 1024  # bytes pulled to measure throughput
+_PROBE_LOCALE_BONUS = 1.5  # locale-preferred mirror wins ties up to this ratio
+_CONNECT_TIMEOUT = 15
+_READ_TIMEOUT = 60
 
 # Browser-style UA: a few mirror CDNs (incl. some hf-mirror nodes) reject
 # the default python-requests UA with 403.
@@ -74,7 +75,7 @@ _DEFAULT_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0 Safari/537.36 MioTranslator/1.3"
     ),
-    "Accept-Encoding": "identity",   # model.bin is already compressed
+    "Accept-Encoding": "identity",  # model.bin is already compressed
 }
 
 
@@ -93,28 +94,28 @@ def _make_session() -> requests.Session:
 
 
 class DownloadState(str, Enum):
-    IDLE       = "idle"
+    IDLE = "idle"
     DOWNLOADING = "downloading"
-    PAUSED     = "paused"
-    COMPLETED  = "completed"
-    CANCELLED  = "cancelled"
-    ERROR      = "error"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    ERROR = "error"
 
 
 @dataclass
 class DownloadProgress:
-    state:       DownloadState = DownloadState.IDLE
-    file_name:   str   = ""
-    file_index:  int   = 0
-    file_count:  int   = 0
-    file_bytes:  int   = 0
-    file_total:  int   = 0
-    total_bytes: int   = 0
-    total_total: int   = 0
-    speed_bps:   float = 0.0
-    eta_s:       float = 0.0
-    error:       str   = ""
-    mirror:      str   = ""   # which base URL is being used
+    state: DownloadState = DownloadState.IDLE
+    file_name: str = ""
+    file_index: int = 0
+    file_count: int = 0
+    file_bytes: int = 0
+    file_total: int = 0
+    total_bytes: int = 0
+    total_total: int = 0
+    speed_bps: float = 0.0
+    eta_s: float = 0.0
+    error: str = ""
+    mirror: str = ""  # which base URL is being used
 
     @property
     def overall_fraction(self) -> float:
@@ -135,8 +136,16 @@ class DownloadProgress:
 
 
 # File list for each HF model repo. Ordered so the tiny files come first
-# (fast to resume), the large model.bin is last.
+# (fast to resume), with the large model weight file last.
 _HF_MODEL_FILES: dict[str, list[str]] = {
+    "iic/SenseVoiceSmall": [
+        "configuration.json",
+        "model.pt",
+    ],
+    "iic/speech_whisper-small_asr_english": [
+        "configuration.json",
+        "small.en.pb",
+    ],
     "ku-nlp/deberta-v2-large-japanese-char-wwm": [
         "config.json",
         "special_tokens_map.json",
@@ -243,7 +252,10 @@ def _probe_mirror_throughput(base: str, model_id: str, filename: str) -> float |
     try:
         t0 = time.monotonic()
         resp = requests.get(
-            url, headers=headers, stream=True, timeout=_PROBE_TIMEOUT,
+            url,
+            headers=headers,
+            stream=True,
+            timeout=_PROBE_TIMEOUT,
             allow_redirects=True,
         )
         if resp.status_code >= 400:
@@ -270,6 +282,7 @@ def _preferred_mirror_for_locale() -> str | None:
     """Return the mirror users in this locale should prefer, if any."""
     try:
         from src.utils.locale_detect import get_system_language
+
         lang = get_system_language()
     except Exception:
         return None
@@ -282,7 +295,7 @@ def _preferred_mirror_for_locale() -> str | None:
 def _select_mirror(model_id: str, first_file: str) -> str:
     """Race mirrors by measured throughput; bias by system locale on ties."""
     candidates = _mirror_candidates()
-    results: dict[str, float] = {}     # base_url -> bytes/sec
+    results: dict[str, float] = {}  # base_url -> bytes/sec
     lock = threading.Lock()
 
     def _try(base: str) -> None:
@@ -294,7 +307,9 @@ def _select_mirror(model_id: str, first_file: str) -> str:
         else:
             logger.debug("Mirror probe %s: unreachable / 0 B/s", base)
 
-    threads = [threading.Thread(target=_try, args=(b,), daemon=True) for b in candidates]
+    threads = [
+        threading.Thread(target=_try, args=(b,), daemon=True) for b in candidates
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -322,12 +337,15 @@ def _select_mirror(model_id: str, first_file: str) -> str:
             chosen = preferred
             logger.info(
                 "Mirror: %s wins on locale bias (%.1f MB/s vs %s %.1f MB/s)",
-                preferred, results[preferred] / 1_048_576,
-                fastest, results[fastest] / 1_048_576,
+                preferred,
+                results[preferred] / 1_048_576,
+                fastest,
+                results[fastest] / 1_048_576,
             )
 
-    logger.info("Selected mirror: %s (%.1f MB/s probed)",
-                chosen, results[chosen] / 1_048_576)
+    logger.info(
+        "Selected mirror: %s (%.1f MB/s probed)", chosen, results[chosen] / 1_048_576
+    )
     return chosen
 
 
@@ -335,14 +353,14 @@ class HFModelDownloader:
     """Thread-safe downloader for a single HuggingFace model."""
 
     def __init__(self, model_id: str) -> None:
-        self._model_id    = model_id
-        self._lock        = threading.Lock()
+        self._model_id = model_id
+        self._lock = threading.Lock()
         self._pause_event = threading.Event()
-        self._pause_event.set()          # not paused initially
+        self._pause_event.set()  # not paused initially
         self._cancel_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._progress    = DownloadProgress()
-        self._listeners:  list[ProgressCallback] = []
+        self._progress = DownloadProgress()
+        self._listeners: list[ProgressCallback] = []
         self._speed_samples: deque[tuple[float, int]] = deque()
         self._last_emit_t: float = 0.0
         self._session: requests.Session | None = None
@@ -370,13 +388,18 @@ class HFModelDownloader:
 
     def start(self) -> None:
         with self._lock:
-            if self._progress.state in (DownloadState.DOWNLOADING, DownloadState.COMPLETED):
+            if self._progress.state in (
+                DownloadState.DOWNLOADING,
+                DownloadState.COMPLETED,
+            ):
                 return
             self._progress = DownloadProgress(state=DownloadState.DOWNLOADING)
             self._cancel_event.clear()
             self._pause_event.set()
             self._last_emit_t = 0.0
-        self._thread = threading.Thread(target=self._run, daemon=True, name="hf-download")
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="hf-download"
+        )
         self._thread.start()
 
     def pause(self) -> None:
@@ -397,7 +420,7 @@ class HFModelDownloader:
 
     def cancel(self) -> None:
         self._cancel_event.set()
-        self._pause_event.set()   # unblock if paused
+        self._pause_event.set()  # unblock if paused
         with self._lock:
             self._progress.state = DownloadState.CANCELLED
         self._emit(force=True)
@@ -453,15 +476,15 @@ class HFModelDownloader:
             remaining = total_total - total_bytes
             eta_s = remaining / speed_bps if speed_bps > 0 else 0.0
 
-            self._progress.file_name   = file_name
-            self._progress.file_index  = file_index
-            self._progress.file_count  = file_count
-            self._progress.file_bytes  = file_bytes
-            self._progress.file_total  = file_total
+            self._progress.file_name = file_name
+            self._progress.file_index = file_index
+            self._progress.file_count = file_count
+            self._progress.file_bytes = file_bytes
+            self._progress.file_total = file_total
             self._progress.total_bytes = total_bytes
             self._progress.total_total = total_total
-            self._progress.speed_bps   = speed_bps
-            self._progress.eta_s       = eta_s
+            self._progress.speed_bps = speed_bps
+            self._progress.eta_s = eta_s
 
         self._emit()
 
@@ -512,9 +535,13 @@ class HFModelDownloader:
             if expected_size > 0 and existing == expected_size:
                 total_bytes_done += existing
                 self._update_progress(
-                    file_name=filename, file_index=i, file_count=len(files),
-                    file_bytes=existing, file_total=expected_size,
-                    total_bytes=total_bytes_done, total_total=total_total,
+                    file_name=filename,
+                    file_index=i,
+                    file_count=len(files),
+                    file_bytes=existing,
+                    file_total=expected_size,
+                    total_bytes=total_bytes_done,
+                    total_total=total_total,
                 )
                 continue
 
@@ -536,10 +563,12 @@ class HFModelDownloader:
             with self._lock:
                 self._progress.total_bytes = total_total
                 self._progress.total_total = total_total
-                self._progress.file_bytes  = file_sizes[-1] if file_sizes else 0
-                self._progress.file_total  = file_sizes[-1] if file_sizes else 0
+                self._progress.file_bytes = file_sizes[-1] if file_sizes else 0
+                self._progress.file_total = file_sizes[-1] if file_sizes else 0
             self._emit(force=True)
-            logger.info("Model download complete: %s (via %s)", self._model_id, base_url)
+            logger.info(
+                "Model download complete: %s (via %s)", self._model_id, base_url
+            )
 
     def _download_file_with_fallback(
         self,
@@ -592,7 +621,9 @@ class HFModelDownloader:
         url = _repo_url(base_url, self._model_id, filename)
         try:
             assert self._session is not None
-            resp = self._session.head(url, timeout=_CONNECT_TIMEOUT, allow_redirects=True)
+            resp = self._session.head(
+                url, timeout=_CONNECT_TIMEOUT, allow_redirects=True
+            )
             return int(resp.headers.get("Content-Length") or 0)
         except Exception:
             return 0
@@ -623,7 +654,10 @@ class HFModelDownloader:
                     total_total=total_total,
                 )
             except _RangeNotSupported:
-                logger.info("Server refused Range; falling back to single stream for %s", filename)
+                logger.info(
+                    "Server refused Range; falling back to single stream for %s",
+                    filename,
+                )
 
         return self._download_file_single(
             base_url=base_url,
@@ -669,9 +703,9 @@ class HFModelDownloader:
             resume_from = 0
             dest.unlink(missing_ok=True)
 
-        file_bytes  = resume_from
+        file_bytes = resume_from
         total_bytes = total_bytes_so_far + resume_from
-        mode        = "ab" if resume_from > 0 else "wb"
+        mode = "ab" if resume_from > 0 else "wb"
 
         with dest.open(mode) as fh:
             for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
@@ -683,7 +717,7 @@ class HFModelDownloader:
                 if chunk:
                     fh.write(chunk)
                     n = len(chunk)
-                    file_bytes  += n
+                    file_bytes += n
                     total_bytes += n
                     self._update_progress(
                         file_name=filename,
@@ -701,9 +735,13 @@ class HFModelDownloader:
 
     def _plan_segments(self, expected_size: int) -> list[tuple[int, int]]:
         """Split [0, expected_size) into N inclusive byte ranges."""
-        n = max(_PARALLEL_MIN_PARTS, min(_PARALLEL_MAX_PARTS,
-                                          (expected_size + _PARALLEL_PART_TARGET - 1)
-                                          // _PARALLEL_PART_TARGET))
+        n = max(
+            _PARALLEL_MIN_PARTS,
+            min(
+                _PARALLEL_MAX_PARTS,
+                (expected_size + _PARALLEL_PART_TARGET - 1) // _PARALLEL_PART_TARGET,
+            ),
+        )
         seg_size = expected_size // n
         ranges: list[tuple[int, int]] = []
         for i in range(n):
@@ -729,7 +767,9 @@ class HFModelDownloader:
         n_parts = len(ranges)
         logger.info(
             "Parallel download: %s in %d parts (%.0f MB each, ~%.0f MB total)",
-            filename, n_parts, expected_size / n_parts / 1_048_576,
+            filename,
+            n_parts,
+            expected_size / n_parts / 1_048_576,
             expected_size / 1_048_576,
         )
 
@@ -738,7 +778,9 @@ class HFModelDownloader:
         if not self._probe_range(url, ranges[0]):
             raise _RangeNotSupported()
 
-        part_paths = [dest.with_suffix(dest.suffix + f".part{i}") for i in range(n_parts)]
+        part_paths = [
+            dest.with_suffix(dest.suffix + f".part{i}") for i in range(n_parts)
+        ]
 
         # Resume: existing parts contribute to total_bytes baseline
         baseline = sum(p.stat().st_size if p.exists() else 0 for p in part_paths)
@@ -781,14 +823,16 @@ class HFModelDownloader:
                     span=span,
                     on_chunk=_on_chunk,
                 )
-            except BaseException as exc:   # noqa: BLE001 — propagate to driver
+            except BaseException as exc:  # noqa: BLE001 — propagate to driver
                 with worker_lock:
                     worker_error.append(exc)
                 # Cancel the rest so we exit fast on a failure
                 self._cancel_event.set()
                 self._pause_event.set()
 
-        with ThreadPoolExecutor(max_workers=n_parts, thread_name_prefix="hf-range") as pool:
+        with ThreadPoolExecutor(
+            max_workers=n_parts, thread_name_prefix="hf-range"
+        ) as pool:
             futs = [pool.submit(_worker, i, span) for i, span in enumerate(ranges)]
             for _ in as_completed(futs):
                 pass
@@ -803,6 +847,7 @@ class HFModelDownloader:
 
         # Stitch parts → final file. Use shutil.copyfileobj for streaming copy.
         import shutil
+
         missing = [p for p in part_paths if not p.exists()]
         if missing:
             # This should not happen on a clean run, but guard against OS-level

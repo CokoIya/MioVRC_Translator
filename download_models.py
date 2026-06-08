@@ -1,7 +1,7 @@
 """
-SenseVoiceSmall を  パッケージ同梱用にリポジトリ内   models     へ保存する  
+SenseVoiceSmall を  パッケージ同梱用にリポジトリ内   models     へ保存する
 
-使い方  
+使い方
     python download  models  py
 """
 
@@ -63,4 +63,3 @@ if __name__ == "__main__":
     print(f"Saving models to: {packaging_models_dir().resolve()}\n")
     download_sensevoice()
     print("\nSenseVoiceSmall is ready. You can now launch the app.")
-

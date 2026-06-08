@@ -13,6 +13,9 @@ from pythonosc import udp_client
 MAX_CHATBOX_CHARS = 144
 _VALID_AVATAR_PARAM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
+CHATBOX_DYNAMIC_INTERVAL_BASE_S = 0.45
+CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND = 36.0
+CHATBOX_DYNAMIC_INTERVAL_MAX_S = 4.0
 SEND_QUEUE_MAXSIZE = 32
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ class _QueuedOSCMessage:
     arguments: tuple[object, ...]
     rate_limited: bool = False
     queued_at: float = 0.0
+    min_interval_s: float | None = None
 
 
 class VRCOSCSender:
@@ -97,6 +101,13 @@ class VRCOSCSender:
             safe = safe[: MAX_CHATBOX_CHARS - 3] + "..."
         return safe
 
+    def _chatbox_min_interval_s(self, text: str) -> float:
+        dynamic = CHATBOX_DYNAMIC_INTERVAL_BASE_S + (
+            len(str(text or "")) / CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND
+        )
+        dynamic = min(dynamic, CHATBOX_DYNAMIC_INTERVAL_MAX_S)
+        return max(self._min_send_interval_s, dynamic)
+
     def _send_loop(self) -> None:
         while True:
             payload = self._queue.get()
@@ -107,7 +118,12 @@ class VRCOSCSender:
             rate_wait_s = 0.0
             try:
                 if payload.rate_limited:
-                    wait_s = self._min_send_interval_s - (dequeued_at - self._last_sent_at)
+                    min_interval_s = (
+                        payload.min_interval_s
+                        if payload.min_interval_s is not None
+                        else self._min_send_interval_s
+                    )
+                    wait_s = min_interval_s - (dequeued_at - self._last_sent_at)
                     if wait_s > 0:
                         rate_wait_s = wait_s
                         time.sleep(wait_s)
@@ -190,6 +206,7 @@ class VRCOSCSender:
                 address="/chatbox/input",
                 arguments=(safe, immediate, False),
                 rate_limited=True,
+                min_interval_s=self._chatbox_min_interval_s(safe),
             )
         )
         return safe if queued else ""

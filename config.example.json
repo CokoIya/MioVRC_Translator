@@ -50,6 +50,12 @@
       "model_revision": "master",
       "ncpu": null
     },
+    "whisper": {
+      "model_id": "iic/speech_whisper-small_asr_english",
+      "model_revision": "master",
+      "language": "auto",
+      "ncpu": null
+    },
     "webspeech": {
       "language": "ja-JP",
       "continuous": true,
@@ -67,7 +73,7 @@
       "api_key": "",
       "region": "singapore",
       "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen3-asr-flash",
+      "model": "qwen3-asr-flash-2026-02-10",
       "language": "ja",
       "mode": "vad_chunked",
       "sample_rate": 16000,
@@ -106,9 +112,11 @@
     "language_pair_source": "auto",
     "target_language": "ja",
     "target_language_2": "en",
+    "target_language_3": "",
     "output_format": "translated_with_original",
-    "output_format_2": "disabled",
+    "chatbox_template": "",
     "send_to_chatbox": true,
+    "fallback_backends": [],
     "social": {
       "mode": "standard",
       "persona_preset": "custom",
@@ -134,7 +142,8 @@
     },
     "deepseek": {
       "api_key": "",
-      "base_url": "https://api.deepseek.com/v1",
+      "region": "official",
+      "base_url": "https://api.deepseek.com",
       "model": "deepseek-v4-flash",
       "timeout_s": 20.0,
       "max_retries": 0
@@ -150,14 +159,22 @@
       "api_key": "",
       "region": "china_mainland",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen-mt-flash",
+      "model": "qwen-mt-plus",
+      "timeout_s": 20.0,
+      "max_retries": 0
+    },
+    "xiaomi": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.5-pro",
       "timeout_s": 20.0,
       "max_retries": 0
     },
     "gemini": {
       "api_key": "",
       "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-      "model": "gemini-3.1-flash-lite"
+      "model": "gemini-3.5-flash"
     },
     "kimi": {
       "api_key": "",
@@ -172,16 +189,22 @@
     "mistral": {
       "api_key": "",
       "base_url": "https://api.mistral.ai/v1",
-      "model": "mistral-small-latest"
+      "model": "mistral-medium-3-5"
     },
     "doubao": {
       "api_key": "",
-      "base_url": "https://ark.cn-beijing.volces.com/api/compatible/v1",
-      "model": "doubao-seed-2.0-pro"
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-0-pro-260215"
+    },
+    "nvidia": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "model": "nvidia/nemotron-3-super-120b-a12b"
     },
     "anthropic": {
       "api_key": "",
-      "model": "claude-sonnet-4-20250514"
+      "model": "claude-opus-4-8"
     },
     "custom": {
       "api_key": "",
@@ -192,6 +215,11 @@
   "vrc_listen": {
     "enabled": false,
     "loopback_device": null,
+    "capture_mode": "output_device_loopback",
+    "target_process_names": ["VRChat.exe"],
+    "process_preset": "custom",
+    "recent_process_names": [],
+    "fallback_to_device_loopback": true,
     "asr_engine": "same_as_main",
     "source_language": "auto",
     "target_language": "zh",
@@ -200,12 +228,41 @@
     "self_suppress": false,
     "self_suppress_seconds": 0.65,
     "show_overlay": false,
-    "send_to_chatbox": true
+    "send_to_chatbox": true,
+    "vad_speech_ratio": 0.4,
+    "vad_activation_threshold_s": 0.06,
+    "vad_min_rms": 0.02,
+    "denoise_strength": 0.35,
+    "silero_speech_threshold": 0.15,
+    "vad_type": "webrtc"
   },
   "osc": {
     "send_host": "127.0.0.1",
     "send_port": 9000,
-    "min_send_interval_s": 0.8
+    "min_send_interval_s": 0.8,
+    "receive_host": "127.0.0.1",
+    "receive_port": 9001,
+    "listener_enabled": false,
+    "sync_mute_self": true,
+    "allow_avatar_control": false,
+    "control_prefix": "Mio",
+    "control_params": {
+      "mic": "MioToggleMic",
+      "listen": "MioToggleListen",
+      "tts": "MioToggleTts",
+      "overlay": "MioToggleOverlay"
+    },
+    "avatar_sync": {
+      "enabled": false,
+      "params": {
+        "translating": "MioTranslating",
+        "speaking": "MioSpeaking",
+        "muted": "MioMuted",
+        "error": "MioError",
+        "target_language": "MioTargetLanguage",
+        "overlay": "MioOverlayActive"
+      }
+    }
   },
   "tts": {
     "enabled": false,
@@ -240,6 +297,28 @@
       "rate": 1.0,
       "volume": 0.8
     },
+    "mimo_tts": {
+      "api_key": "",
+      "region": "global",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.5-tts",
+      "voice": "mimo_default",
+      "rate": 1.0,
+      "volume": 0.8,
+      "timeout_seconds": 30,
+      "max_retries": 0
+    },
+    "qwen_tts": {
+      "api_key": "",
+      "region": "singapore",
+      "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+      "model": "qwen3-tts-flash",
+      "voice": "Cherry",
+      "rate": 1.0,
+      "volume": 0.8,
+      "timeout_seconds": 30,
+      "max_retries": 0
+    },
     "style_bert_vits2": {
       "voice": null,
       "rate": 1.0,
@@ -253,6 +332,7 @@
     "language_source": "auto",
     "allow_ip_language_detection": false,
     "osc_guide_seen": false,
+    "mode_wizard_seen": false,
     "theme": "dark",
     "background_image_path": ""
   },

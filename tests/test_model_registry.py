@@ -1,4 +1,7 @@
 from src.asr.model_registry import (
+    LISTEN_SELECTABLE_ASR_ENGINES,
+    USER_SELECTABLE_ASR_ENGINES,
+    WHISPER_ASR_DEFAULT_MODEL,
     get_asr_runtime_spec,
     get_qwen3_asr_base_url,
     normalize_qwen3_asr_region,
@@ -41,3 +44,25 @@ def test_unknown_legacy_engine_normalizes_to_default_local_asr():
     assert spec.engine == "sensevoice-small"
     assert spec.model_id == "iic/SenseVoiceSmall"
     assert spec.requires_local_model is True
+
+
+def test_sensevoice_spec_includes_tokenizer_and_cmvn_files():
+    spec = get_asr_runtime_spec({"asr": {"engine": "sensevoice-small"}})
+
+    assert "model.pt" in spec.required_files
+    assert "chn_jpn_yue_eng_ko_spectok.bpe.model" in spec.required_files
+    assert "am.mvn" in spec.required_files
+
+
+def test_whisper_asr_spec_is_local_user_selectable_model():
+    config = {"asr": {"engine": "whisper-large-v3-turbo"}}
+
+    spec = get_asr_runtime_spec(config)
+
+    assert spec.engine == "whisper-large-v3-turbo"
+    assert spec.model_id == WHISPER_ASR_DEFAULT_MODEL
+    assert spec.model_revision == "master"
+    assert spec.requires_local_model is True
+    assert spec.required_files == ("small.en.pb",)
+    assert "whisper-large-v3-turbo" in USER_SELECTABLE_ASR_ENGINES
+    assert "whisper-large-v3-turbo" in LISTEN_SELECTABLE_ASR_ENGINES

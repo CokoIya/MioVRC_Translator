@@ -1,4 +1,5 @@
 """Edge TTS (Microsoft Edge Read Aloud) implementation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,13 +12,115 @@ from .base import BaseTTS, TTSVoice
 logger = logging.getLogger(__name__)
 
 
-# Recommended voices for each language
+# Recommended voices for each language. Keep this list static so the settings
+# UI can still offer a useful Edge voice list when Microsoft voice discovery is
+# temporarily unreachable.
+EDGE_FALLBACK_VOICES: tuple[TTSVoice, ...] = (
+    TTSVoice(
+        "zh-CN-XiaoxiaoNeural",
+        "Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)",
+        "zh",
+        "Female",
+        "zh-CN",
+    ),
+    TTSVoice(
+        "zh-CN-XiaoyiNeural",
+        "Microsoft Xiaoyi Online (Natural) - Chinese (Mainland)",
+        "zh",
+        "Female",
+        "zh-CN",
+    ),
+    TTSVoice(
+        "zh-CN-YunxiNeural",
+        "Microsoft Yunxi Online (Natural) - Chinese (Mainland)",
+        "zh",
+        "Male",
+        "zh-CN",
+    ),
+    TTSVoice(
+        "zh-CN-YunyangNeural",
+        "Microsoft Yunyang Online (Natural) - Chinese (Mainland)",
+        "zh",
+        "Male",
+        "zh-CN",
+    ),
+    TTSVoice(
+        "ja-JP-NanamiNeural",
+        "Microsoft Nanami Online (Natural) - Japanese (Japan)",
+        "ja",
+        "Female",
+        "ja-JP",
+    ),
+    TTSVoice(
+        "ja-JP-AoiNeural",
+        "Microsoft Aoi Online (Natural) - Japanese (Japan)",
+        "ja",
+        "Female",
+        "ja-JP",
+    ),
+    TTSVoice(
+        "ja-JP-KeitaNeural",
+        "Microsoft Keita Online (Natural) - Japanese (Japan)",
+        "ja",
+        "Male",
+        "ja-JP",
+    ),
+    TTSVoice(
+        "en-US-JennyNeural",
+        "Microsoft Jenny Online (Natural) - English (United States)",
+        "en",
+        "Female",
+        "en-US",
+    ),
+    TTSVoice(
+        "en-US-AriaNeural",
+        "Microsoft Aria Online (Natural) - English (United States)",
+        "en",
+        "Female",
+        "en-US",
+    ),
+    TTSVoice(
+        "en-US-GuyNeural",
+        "Microsoft Guy Online (Natural) - English (United States)",
+        "en",
+        "Male",
+        "en-US",
+    ),
+    TTSVoice(
+        "ko-KR-SunHiNeural",
+        "Microsoft SunHi Online (Natural) - Korean (Korea)",
+        "ko",
+        "Female",
+        "ko-KR",
+    ),
+    TTSVoice(
+        "ko-KR-InJoonNeural",
+        "Microsoft InJoon Online (Natural) - Korean (Korea)",
+        "ko",
+        "Male",
+        "ko-KR",
+    ),
+    TTSVoice(
+        "ru-RU-SvetlanaNeural",
+        "Microsoft Svetlana Online (Natural) - Russian (Russia)",
+        "ru",
+        "Female",
+        "ru-RU",
+    ),
+    TTSVoice(
+        "ru-RU-DmitryNeural",
+        "Microsoft Dmitry Online (Natural) - Russian (Russia)",
+        "ru",
+        "Male",
+        "ru-RU",
+    ),
+)
 RECOMMENDED_VOICES = {
-    "zh": "zh-CN-XiaoxiaoNeural",  # Chinese female
-    "en": "en-US-JennyNeural",      # English US female
-    "ja": "ja-JP-NanamiNeural",     # Japanese female
-    "ko": "ko-KR-SunHiNeural",      # Korean female
-    "ru": "ru-RU-SvetlanaNeural",   # Russian female
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "en": "en-US-JennyNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "ru": "ru-RU-SvetlanaNeural",
 }
 
 
@@ -45,6 +148,7 @@ class EdgeTTS(BaseTTS):
         self._edge_tts = None
         try:
             import edge_tts
+
             self._edge_tts = edge_tts
         except ImportError:
             logger.warning("edge-tts not installed, Edge TTS unavailable")
@@ -77,21 +181,27 @@ class EdgeTTS(BaseTTS):
                 locale = voice_data["Locale"]
                 language = locale.split("-")[0] if "-" in locale else locale
 
-                voices.append(TTSVoice(
-                    id=voice_id,
-                    name=voice_data["FriendlyName"],
-                    language=language,
-                    gender=voice_data["Gender"],
-                    locale=locale,
-                ))
+                voices.append(
+                    TTSVoice(
+                        id=voice_id,
+                        name=voice_data["FriendlyName"],
+                        language=language,
+                        gender=voice_data["Gender"],
+                        locale=locale,
+                    )
+                )
 
             self._voices_cache = voices
             logger.info("Loaded %d voices from Edge TTS", len(voices))
             return voices
 
         except Exception as exc:
-            logger.error("Failed to get Edge TTS voices: %s", exc)
-            return []
+            logger.warning(
+                "Failed to get Edge TTS voices from Microsoft; using bundled voice catalog: %s",
+                exc,
+            )
+            self._voices_cache = list(EDGE_FALLBACK_VOICES)
+            return self._voices_cache
 
     def synthesize(
         self,
@@ -184,7 +294,9 @@ class EdgeTTS(BaseTTS):
                 last_error = exc
                 if not _edge_no_audio_error(exc) or index >= len(attempts):
                     raise
-                logger.warning("Edge TTS returned no audio; retrying with safe parameters")
+                logger.warning(
+                    "Edge TTS returned no audio; retrying with safe parameters"
+                )
 
         if last_error is not None:
             raise last_error

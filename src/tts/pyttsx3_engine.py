@@ -8,6 +8,8 @@ import wave
 from pathlib import Path
 from typing import Optional
 
+from src.utils.app_paths import app_temp_dir
+
 from .base import BaseTTS, TTSVoice
 
 logger = logging.getLogger(__name__)
@@ -112,7 +114,7 @@ class Pyttsx3TTS(BaseTTS):
             self._engine.setProperty("volume", volume)
 
             # Save to temporary file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False, dir=app_temp_dir()) as tmp_file:
                 tmp_path = Path(tmp_file.name)
 
             try:

@@ -4,6 +4,7 @@ import collections
 import logging
 import queue
 import threading
+import time
 from math import gcd
 from typing import Callable, Optional
 
@@ -117,6 +118,11 @@ class AudioRecorder:
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
         self._active_device_name: str | None = None
+        self._frames_processed = 0
+        self._segments_emitted = 0
+        self._last_frame_rms = 0.0
+        self._peak_frame_rms = 0.0
+        self._last_non_silent_at = 0.0
         self._denoiser = AdaptiveDenoiser(strength=denoise_strength)
         self._chunk_streamer = (
             ChunkStreamer(
@@ -140,6 +146,11 @@ class AudioRecorder:
         self._speech_samples = 0
         self._was_in_speech = False
         self._capture_rate = self.sample_rate
+        self._frames_processed = 0
+        self._segments_emitted = 0
+        self._last_frame_rms = 0.0
+        self._peak_frame_rms = 0.0
+        self._last_non_silent_at = 0.0
         self._clear_frame_queue()
         self._denoiser.reset()
         if self._chunk_streamer is not None:
@@ -170,6 +181,34 @@ class AudioRecorder:
     @property
     def active_input_device_name(self) -> str | None:
         return self._active_device_name
+
+    def diagnostics_snapshot(self) -> dict[str, object]:
+        activation_window = getattr(self.vad, "_activation_window", None)
+        try:
+            activation_ratio = (
+                sum(bool(item) for item in activation_window) / len(activation_window)
+                if activation_window is not None and len(activation_window) > 0
+                else 0.0
+            )
+        except Exception:
+            activation_ratio = 0.0
+        return {
+            "active_device": self._active_device_name,
+            "running": self.is_running,
+            "frames_processed": self._frames_processed,
+            "segments_emitted": self._segments_emitted,
+            "last_frame_rms": round(self._last_frame_rms, 6),
+            "peak_frame_rms": round(self._peak_frame_rms, 6),
+            "last_non_silent_at": self._last_non_silent_at,
+            "capture_rate": self._capture_rate,
+            "target_rate": self.sample_rate,
+            "channels": self._capture_channels,
+            "dtype": self._capture_dtype,
+            "vad_min_rms": getattr(self.vad, "_min_rms", None),
+            "vad_in_speech": bool(getattr(self.vad, "in_speech", False)),
+            "vad_speech_ratio": getattr(self.vad, "_speech_ratio", None),
+            "vad_activation_ratio": round(float(activation_ratio), 3),
+        }
 
     def _open_stream(self, device, extra_settings=None) -> sd.InputStream:
         loopback_enabled = extra_settings is not None
@@ -440,6 +479,12 @@ class AudioRecorder:
                 normalized,
                 update_profile=not previous_in_speech,
             )
+            rms = float(np.sqrt(np.mean(np.square(normalized)))) if normalized.size else 0.0
+            self._frames_processed += 1
+            self._last_frame_rms = rms
+            self._peak_frame_rms = max(self._peak_frame_rms, rms)
+            if rms >= max(float(getattr(self.vad, "_min_rms", 0.0) or 0.0), 0.004):
+                self._last_non_silent_at = time.monotonic()
 
             pcm = np.clip(normalized * 32768.0, -32768.0, 32767.0).astype(np.int16)
             if not previous_in_speech:
@@ -490,6 +535,7 @@ class AudioRecorder:
             if segment is None or speech_samples < self._min_segment_samples:
                 continue
             try:
+                self._segments_emitted += 1
                 self.on_segment(segment)
             except Exception as exc:
                 logger.exception("AudioRecorder on_segment callback failed: %s", exc)

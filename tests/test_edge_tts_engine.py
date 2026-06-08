@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.tts.edge_tts_engine import EdgeTTS
+from src.tts.edge_tts_engine import EDGE_FALLBACK_VOICES, EdgeTTS
 
 
 def test_edge_tts_retries_no_audio_with_safe_parameters():
@@ -49,3 +49,19 @@ def test_edge_tts_raises_when_safe_retry_still_has_no_audio():
 
     with pytest.raises(RuntimeError, match="No audio"):
         engine.synthesize("hello", "en-US-JennyNeural")
+
+
+def test_edge_tts_uses_static_voice_catalog_when_online_listing_fails():
+    class FakeEdgeTts:
+        @staticmethod
+        async def list_voices():
+            raise RuntimeError("network blocked")
+
+    engine = EdgeTTS.__new__(EdgeTTS)
+    engine._edge_tts = FakeEdgeTts
+    engine._voices_cache = None
+
+    voices = engine.get_available_voices()
+
+    assert voices == list(EDGE_FALLBACK_VOICES)
+    assert engine.get_voice_by_language("ja").id == "ja-JP-NanamiNeural"

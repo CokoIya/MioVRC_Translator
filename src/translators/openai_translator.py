@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+import time
 
 from .base import BaseTranslator, _TRANSLATION_SYSTEM_PROMPT
 from src.utils.input_validation import validate_translation_text, ValidationError
@@ -28,6 +29,13 @@ _QWEN_JA_COLLOQUIAL_GUIDE = (
     "- Use casual particles and sentence endings when appropriate, but do not overdo anime-like speech unless the source has that flavor.\n"
     "- Preserve politeness if the source is clearly polite."
 )
+_QWEN_EN_COLLOQUIAL_GUIDE = (
+    "Qwen colloquial English guide:\n"
+    "- Target English should sound like a natural spoken line in a casual VRChat conversation.\n"
+    "- Avoid direct calques from Japanese, Chinese, or Korean word order.\n"
+    "- Correct obvious ASR wording or punctuation artifacts only when the intended meaning is clear.\n"
+    "- Prefer short everyday phrasing and contractions when they fit, while preserving tone."
+)
 
 
 class OpenAITranslator(BaseTranslator):
@@ -40,6 +48,7 @@ class OpenAITranslator(BaseTranslator):
         max_output_tokens: int = 192,
         max_retries: int = 0,
         extra_body: dict | None = None,
+        prefer_max_completion_tokens: bool = False,
         prompt_profile: dict[str, object] | None = None,
     ):
         super().__init__(prompt_profile=prompt_profile)
@@ -48,11 +57,13 @@ class OpenAITranslator(BaseTranslator):
         except ImportError:
             raise RuntimeError("openai 未安装，请先执行: pip install openai")
 
+        self._timeout_s = max(float(timeout_s), 1.0)
+        self._max_retries = max(int(max_retries), 0)
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            timeout=timeout_s,
-            max_retries=max(int(max_retries), 0),
+            timeout=self._timeout_s,
+            max_retries=self._max_retries,
         )
         self.model = model
         self._base_url = str(base_url or "").strip().lower()
@@ -64,7 +75,9 @@ class OpenAITranslator(BaseTranslator):
             or "thinking" in model_name
         )
         self._uses_max_completion_tokens = (
-            self._is_openai_api and model_name.startswith("gpt-5")
+            (self._is_openai_api and model_name.startswith("gpt-5"))
+            or bool(prefer_max_completion_tokens)
+            or model_name.startswith("mimo-")
         )
         self._uses_qwen_mt_translation_options = (
             "dashscope" in self._base_url and model_name.startswith("qwen-mt-")
@@ -135,6 +148,8 @@ class OpenAITranslator(BaseTranslator):
             text = validate_translation_text(text)
         except ValidationError as e:
             raise ValueError(f"Invalid translation input: {e}")
+        if self._source_matches_target(src_lang, tgt_lang):
+            return text
 
         context_snapshot = self._context_snapshot(
             src_lang,
@@ -234,6 +249,9 @@ class OpenAITranslator(BaseTranslator):
             model=self.model,
             messages=messages,
         )
+        request_timeout = getattr(self, "_timeout_s", None)
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
         if not uses_translation_options and not self._omits_temperature:
             kwargs["temperature"] = self._translation_temperature(
                 tgt_lang,
@@ -247,7 +265,27 @@ class OpenAITranslator(BaseTranslator):
         if extra_body:
             kwargs["extra_body"] = extra_body
 
-        response = self._client.chat.completions.create(**kwargs)
+        started = time.perf_counter()
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            logger.warning(
+                "Translation API request failed (model=%s base_url=%s elapsed=%.2fs error=%s)",
+                self.model,
+                self._base_url,
+                elapsed,
+                exc,
+                exc_info=True,
+            )
+            raise
+        elapsed = time.perf_counter() - started
+        logger.info(
+            "Translation API request finished (model=%s base_url=%s elapsed=%.2fs)",
+            self.model,
+            self._base_url,
+            elapsed,
+        )
         output = self._chat_completion_output_text(response)
         translated = self._finalize_translation_output(
             output,
@@ -341,12 +379,35 @@ class OpenAITranslator(BaseTranslator):
             input=prompt,
             max_output_tokens=self._estimate_max_tokens(text),
         )
+        request_timeout = getattr(self, "_timeout_s", None)
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
         if not self._omits_temperature:
             kwargs["temperature"] = 0.0
         if self._extra_body:
             kwargs["extra_body"] = self._extra_body
 
-        response = self._client.responses.create(**kwargs)
+        started = time.perf_counter()
+        try:
+            response = self._client.responses.create(**kwargs)
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            logger.warning(
+                "Translation Responses API request failed (model=%s base_url=%s elapsed=%.2fs error=%s)",
+                self.model,
+                self._base_url,
+                elapsed,
+                exc,
+                exc_info=True,
+            )
+            raise
+        elapsed = time.perf_counter() - started
+        logger.info(
+            "Translation Responses API request finished (model=%s base_url=%s elapsed=%.2fs)",
+            self.model,
+            self._base_url,
+            elapsed,
+        )
         translated = self._finalize_translation_output(
             str(response.output_text or ""),
             source_text=text,
@@ -418,6 +479,8 @@ class OpenAITranslator(BaseTranslator):
             return _QWEN_ZH_COLLOQUIAL_GUIDE
         if target == "ja":
             return _QWEN_JA_COLLOQUIAL_GUIDE
+        if target == "en":
+            return _QWEN_EN_COLLOQUIAL_GUIDE
         return ""
 
     def _translation_temperature(
@@ -437,21 +500,12 @@ class OpenAITranslator(BaseTranslator):
             return False
 
         profile = self._prompt_profile
-        if str(profile.get("mode", "standard")).strip() not in {"", "standard"}:
-            return True
-        if str(profile.get("politeness", "neutral")).strip() not in {"", "neutral"}:
-            return True
-        if str(profile.get("tone", "natural")).strip() not in {"", "natural"}:
-            return True
-        if str(profile.get("persona_name", "")).strip():
-            return True
-        if str(profile.get("persona_prompt", "")).strip():
-            return True
-
-        glossary = profile.get("glossary", ())
-        if isinstance(glossary, (list, tuple)):
-            return any(str(item).strip() for item in glossary)
-        return False
+        social_mode = str(profile.get("mode", "standard")).strip()
+        if social_mode in {"", "standard"}:
+            return False
+        if social_mode not in {"language_exchange", "roleplay"}:
+            return False
+        return True
 
     def _should_use_qwen_mt_translation_options(
         self,
@@ -460,7 +514,11 @@ class OpenAITranslator(BaseTranslator):
         *,
         context_source: str = "default",
     ) -> bool:
-        del src_lang, tgt_lang
+        del src_lang
         if not self._uses_qwen_mt_translation_options:
+            return False
+        if self._normalize_language_code(tgt_lang) == "en":
+            # Player reports point to English needing the richer colloquial
+            # prompt/context path instead of the literal MT fast path.
             return False
         return not self._has_custom_social_style(context_source=context_source)

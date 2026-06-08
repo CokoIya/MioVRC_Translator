@@ -70,6 +70,34 @@ def test_mic_final_queue_keeps_latest_segment_under_backpressure():
     assert window._final_task_queues[MIC_SOURCE].empty()
 
 
+def test_mic_vad_state_reports_speaking_status():
+    window = MainWindow.__new__(MainWindow)
+    status_events: list[tuple[str | None, str, str]] = []
+
+    window._running = True
+    window._mic_muted = False
+    window._mic_in_speech = False
+    window._status_label = object()
+    window._status_key = "status_running"
+    window._translating = False
+    window._t = lambda key, **_kwargs: {
+        "status_running": "监听中...",
+        "status_speaking": "说话中...",
+    }.get(key, key)
+
+    def record_status(text, color="default", key=None):
+        window._status_key = key
+        status_events.append((key, text, color))
+
+    window._set_status = record_status
+
+    window._handle_mic_vad_state(True)
+    window._handle_mic_vad_state(False)
+
+    assert status_events[0] == ("status_speaking", "说话中...", "accent")
+    assert status_events[-1] == ("status_running", "监听中...", "accent")
+
+
 def test_stop_workers_replaces_full_queues_with_stop_sentinel():
     window = MainWindow.__new__(MainWindow)
     partial_queue = queue.Queue(maxsize=1)
@@ -126,3 +154,37 @@ def test_mic_mute_drops_already_queued_final_mic_audio():
         window._listen_session,
         MIC_SOURCE,
     )
+
+
+def test_mic_mute_syncs_avatar_muted_and_speaking_state():
+    window = MainWindow.__new__(MainWindow)
+    events: list[tuple[str, bool, bool]] = []
+
+    class _Sender:
+        def send_avatar_bool(self, name, value, *, force=False):
+            events.append((name, value, force))
+            return True
+
+    window._mic_muted = False
+    window._mic_in_speech = True
+    window._desktop_in_speech = False
+    window._config = {
+        "osc": {
+            "avatar_sync": {
+                "enabled": True,
+                "params": {
+                    "muted": "MioMuted",
+                    "speaking": "MioSpeaking",
+                },
+            }
+        }
+    }
+    window._refresh_mic_mute_button = lambda: None
+    window._set_bottom = lambda *args, **kwargs: None
+    window._copy = lambda key: key
+    window._ensure_sender = lambda: _Sender()
+
+    window._toggle_mic_mute()
+
+    assert ("MioMuted", True, True) in events
+    assert ("MioSpeaking", False, True) in events

@@ -8,6 +8,7 @@ import math
 import queue
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -17,6 +18,7 @@ import sounddevice as sd
 
 from .base import BaseTTS
 from .factory import create_tts_engine, create_tts_engine_with_fallback
+from .style_bert_vits2_engine import style_bert_cuda_available
 from src.utils.input_validation import validate_tts_text, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,10 @@ logger = logging.getLogger(__name__)
 # Cache settings
 MAX_CACHE_SIZE_MB = 50
 MAX_CACHE_ITEMS = 100
+CACHE_TTL_SECONDS = 900.0
+TTS_FAILURE_SUSPEND_THRESHOLD = 3
+TTS_FAILURE_SUSPEND_SECONDS = 30.0
+TTS_PLAYBACK_TAIL_PADDING_MS = 180
 OutputDeviceRef = int | str | None
 
 _VIRTUAL_OUTPUT_KEYWORDS = (
@@ -32,6 +38,11 @@ _VIRTUAL_OUTPUT_KEYWORDS = (
 )
 
 _RECOVERABLE_MIXLINE_PORTAUDIO_ERRORS = {-9999, -9996, -9992}
+_SCIPY_RESAMPLE_FALLBACK_LOGGED = False
+
+
+def _style_bert_cuda_available() -> bool:
+    return style_bert_cuda_available()
 
 
 def _portaudio_error_code(exc: Exception) -> int | None:
@@ -41,6 +52,20 @@ def _portaudio_error_code(exc: Exception) -> int | None:
             if isinstance(arg, int):
                 return arg
     return None
+
+
+def _append_tail_silence(audio_array: np.ndarray, sample_rate: int) -> np.ndarray:
+    audio = np.asarray(audio_array, dtype=np.float32)
+    if sample_rate <= 0 or audio.size == 0:
+        return audio
+
+    tail_frames = int(math.ceil(sample_rate * TTS_PLAYBACK_TAIL_PADDING_MS / 1000.0))
+    if tail_frames <= 0:
+        return audio
+
+    silence_shape = (tail_frames, *audio.shape[1:])
+    silence = np.zeros(silence_shape, dtype=audio.dtype)
+    return np.concatenate((audio, silence), axis=0)
 
 
 def _is_rejected_mixline_device(device_name: str) -> bool:
@@ -86,27 +111,65 @@ class TTSManager:
         device: str = "cpu",
         sbv2_device: Optional[str] = None,
         sbv2_bert_language: Optional[str] = None,
+        engine_config: Optional[dict[str, object]] = None,
+        max_cache_size_mb: Optional[int] = None,
+        max_cache_items: Optional[int] = None,
     ):
         self._engine: Optional[BaseTTS] = None
         self._engine_name = engine_name
         self._device = str(sbv2_device or device or "cpu").strip().lower()
         if self._device not in {"cpu", "cuda"}:
             self._device = "cpu"
-        self._bert_language = str(sbv2_bert_language or "jp").strip().lower()
-        if self._bert_language in {"ja", "japanese"}:
+        if self._device == "cuda" and not _style_bert_cuda_available():
+            logger.warning(
+                "Style-Bert-VITS2 CUDA was requested, but CUDA is not available "
+                "in this build; falling back to CPU"
+            )
+            self._device = "cpu"
+        self._bert_language = (
+            str(sbv2_bert_language or "jp").strip().lower().replace("_", "-")
+        )
+        if self._bert_language in {"ja", "japanese", "日本語", "日文", "日语"}:
             self._bert_language = "jp"
-        elif self._bert_language in {"cn", "zh-cn", "chinese"}:
+        elif self._bert_language in {"en-us", "en-gb", "eng", "english", "英文", "英语"}:
+            self._bert_language = "en"
+        elif self._bert_language in {
+            "cn",
+            "zh-cn",
+            "zh-hans",
+            "zh-sg",
+            "zh-tw",
+            "zh-hant",
+            "chinese",
+            "中文",
+            "简体中文",
+            "繁體中文",
+            "中国語",
+        }:
             self._bert_language = "zh"
         elif self._bert_language not in {"jp", "en", "zh"}:
             self._bert_language = "jp"
         self._cache_enabled = cache_enabled
+        self._max_cache_size_mb = self._normalize_cache_limit(
+            max_cache_size_mb,
+            MAX_CACHE_SIZE_MB,
+            minimum=0,
+            maximum=512,
+        )
+        self._max_cache_items = self._normalize_cache_limit(
+            max_cache_items,
+            MAX_CACHE_ITEMS,
+            minimum=0,
+            maximum=2048,
+        )
         self._allow_fallback = allow_fallback
         self._output_device = output_device
         self._output_device_name = str(output_device_name or "").strip()
         self._prefer_virtual_output = prefer_virtual_output
         self._monitor_output = bool(monitor_output)
         self._config_save_callback = config_save_callback
-        self._cache: dict[str, bytes] = {}
+        self._engine_config = dict(engine_config or {})
+        self._cache: OrderedDict[str, tuple[bytes, float]] = OrderedDict()
         self._cache_size_bytes = 0
         self._cache_lock = threading.Lock()
 
@@ -120,9 +183,27 @@ class TTSManager:
 
         self._device_sample_rates_cache: dict[OutputDeviceRef, list[int]] = {}
         self._device_cache_lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._last_failure_message = ""
+        self._suspended_until = 0.0
 
-        # Initialize engine
+        # Initialize engine eagerly so is_available() and get_available_voices()
+        # return correct values before start() is called.
         self._initialize_engine()
+
+    @staticmethod
+    def _normalize_cache_limit(
+        value: Optional[int],
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        try:
+            parsed = int(default if value is None else value)
+        except (TypeError, ValueError):
+            parsed = int(default)
+        return max(minimum, min(parsed, maximum))
 
     def _initialize_engine(self) -> None:
         """Initialize TTS engine."""
@@ -132,12 +213,14 @@ class TTSManager:
                     self._engine_name,
                     device=self._device,
                     bert_language=self._bert_language,
+                    config=self._engine_config,
                 )
             else:
                 self._engine = create_tts_engine(
                     self._engine_name,
                     device=self._device,
                     bert_language=self._bert_language,
+                    config=self._engine_config,
                 )
             if self._engine is None:
                 logger.error("Failed to initialize any TTS engine")
@@ -165,12 +248,14 @@ class TTSManager:
 
     def stop(self) -> None:
         """Stop TTS manager."""
-        if not self._running:
+        if self._worker_thread is None:
+            self.stop_playback()
             return
 
         self._running = False
         self.clear_queue()
-        self._signal_worker_stop()
+        if self._worker_thread is not None:
+            self._signal_worker_stop()
 
         if self._worker_thread:
             self._worker_thread.join(timeout=2.0)
@@ -213,6 +298,17 @@ class TTSManager:
         """
         if not self._running:
             logger.warning("TTS manager not running")
+            return False
+
+        suspended_for = self._suspended_until - time.monotonic()
+        if suspended_for > 0:
+            message = (
+                "TTS playback is temporarily paused after repeated failures. "
+                f"Please try again in {int(max(1, suspended_for))} seconds."
+            )
+            logger.info(message)
+            if callback:
+                callback(False, message)
             return False
 
         # Validate input
@@ -335,40 +431,43 @@ class TTSManager:
 
         playback_done = threading.Event()
         audio_index = [0]
+        natural_end_reached = [False]
+        completion_reported = [False]
+
+        def mark_finished() -> None:
+            if natural_end_reached[0] and not completion_reported[0]:
+                completion_reported[0] = True
+                logger.info(
+                    "Audio playback completed (target=%s, total frames: %d)",
+                    label,
+                    audio_index[0],
+                )
+            playback_done.set()
 
         def audio_callback(outdata, frames, time_info, status):
             if status:
                 logger.warning("Audio callback status (%s): %s", label, status)
 
             start_idx = audio_index[0]
-            end_idx = start_idx + frames
+            if natural_end_reached[0] or start_idx >= len(audio_array):
+                outdata[:] = 0
+                natural_end_reached[0] = True
+                raise sd.CallbackStop
 
-            if end_idx > len(audio_array):
-                remaining = len(audio_array) - start_idx
-                if remaining > 0:
-                    chunk = audio_array[start_idx:]
-                    if audio_array.ndim == 1:
-                        outdata[:remaining, 0] = chunk
-                        outdata[remaining:, 0] = 0
-                    else:
-                        outdata[:remaining] = chunk
-                        outdata[remaining:] = 0
-                else:
-                    outdata[:] = 0
-                audio_index[0] = len(audio_array)
-                logger.info(
-                    "Audio playback completed (target=%s, total frames: %d)",
-                    label,
-                    audio_index[0],
-                )
-                playback_done.set()
-            else:
-                chunk = audio_array[start_idx:end_idx]
+            end_idx = min(start_idx + frames, len(audio_array))
+            chunk = audio_array[start_idx:end_idx]
+            chunk_frames = end_idx - start_idx
+            outdata[:] = 0
+            if chunk_frames > 0:
                 if audio_array.ndim == 1:
-                    outdata[:, 0] = chunk
+                    outdata[:chunk_frames, 0] = chunk
                 else:
-                    outdata[:] = chunk
-                audio_index[0] = end_idx
+                    outdata[:chunk_frames] = chunk
+            audio_index[0] = end_idx
+
+            if end_idx >= len(audio_array):
+                natural_end_reached[0] = True
+                raise sd.CallbackStop
 
         channels = 1 if audio_array.ndim == 1 else audio_array.shape[1]
         logger.debug(
@@ -385,6 +484,7 @@ class TTSManager:
                 channels=channels,
                 device=playback_device,
                 callback=audio_callback,
+                finished_callback=mark_finished,
                 blocksize=2048,
             )
             return playback, playback_done
@@ -507,6 +607,9 @@ class TTSManager:
             self._play_audio(audio_data)
 
             # Callback success
+            self._consecutive_failures = 0
+            self._last_failure_message = ""
+            self._suspended_until = 0.0
             if request.callback:
                 try:
                     request.callback(True, "")
@@ -514,12 +617,58 @@ class TTSManager:
                     logger.error("TTS callback error: %s", exc)
 
         except Exception as exc:
+            message = str(exc)
+            self._record_request_failure(message)
             logger.error("TTS request failed: %s", exc)
             if request.callback:
                 try:
-                    request.callback(False, str(exc))
+                    request.callback(False, message)
                 except Exception:
                     pass
+
+    def _record_request_failure(self, message: str) -> None:
+        clean_message = str(message or "").strip() or "Unknown TTS error"
+        if clean_message == self._last_failure_message:
+            self._consecutive_failures += 1
+        else:
+            self._last_failure_message = clean_message
+            self._consecutive_failures = 1
+
+        if self._consecutive_failures < TTS_FAILURE_SUSPEND_THRESHOLD:
+            return
+
+        self._suspended_until = time.monotonic() + TTS_FAILURE_SUSPEND_SECONDS
+        dropped = self._drop_pending_requests(
+            "TTS playback was paused after repeated failures."
+        )
+        logger.warning(
+            "TTS playback paused for %.0f seconds after %d repeated failures "
+            "(dropped %d queued request(s)): %s",
+            TTS_FAILURE_SUSPEND_SECONDS,
+            self._consecutive_failures,
+            dropped,
+            clean_message,
+        )
+
+    def _drop_pending_requests(self, message: str) -> int:
+        dropped = 0
+        while True:
+            try:
+                pending = self._request_queue.get_nowait()
+            except queue.Empty:
+                return dropped
+            if pending is None:
+                try:
+                    self._request_queue.put_nowait(None)
+                except queue.Full:
+                    pass
+                return dropped
+            if pending.callback:
+                try:
+                    pending.callback(False, message)
+                except Exception:
+                    pass
+            dropped += 1
 
     def _get_audio(
         self,
@@ -535,15 +684,36 @@ class TTSManager:
         # Try cache first
         if self._cache_enabled:
             with self._cache_lock:
+                now = time.monotonic()
+                # Evict expired entries (LRU + TTL)
+                expired: list[str] = []
+                for k, (_, timestamp) in list(self._cache.items()):
+                    if now - timestamp > CACHE_TTL_SECONDS:
+                        expired.append(k)
+                for k in expired:
+                    data = self._cache.pop(k)
+                    self._cache_size_bytes -= len(data[0])
+
                 if cache_key in self._cache:
                     logger.debug("TTS cache hit")
-                    return self._cache[cache_key]
+                    # Move to end to mark as recently used (LRU)
+                    self._cache.move_to_end(cache_key)
+                    return self._cache[cache_key][0]
 
         # Synthesize
         if self._engine is None:
             raise RuntimeError("TTS engine not available")
 
         audio_data = self._engine.synthesize(text, voice, rate, volume)
+        if isinstance(audio_data, (bytearray, memoryview)):
+            audio_data = bytes(audio_data)
+        if not isinstance(audio_data, bytes):
+            raise RuntimeError(
+                "TTS engine returned invalid audio data "
+                f"({type(audio_data).__name__}); expected audio bytes"
+            )
+        if not audio_data:
+            raise RuntimeError("TTS engine returned empty audio")
 
         # Store in cache
         if self._cache_enabled:
@@ -566,22 +736,31 @@ class TTSManager:
         """Add audio data to cache."""
         with self._cache_lock:
             data_size = len(data)
+            if self._max_cache_size_mb <= 0 or self._max_cache_items <= 0:
+                return
 
             # Check if cache is full
-            max_size_bytes = MAX_CACHE_SIZE_MB * 1024 * 1024
+            max_size_bytes = self._max_cache_size_mb * 1024 * 1024
+            if data_size > max_size_bytes:
+                logger.debug(
+                    "Skipping oversized TTS cache item: %.2f MB > %d MB limit",
+                    data_size / (1024 * 1024),
+                    self._max_cache_size_mb,
+                )
+                return
             while (
                 self._cache_size_bytes + data_size > max_size_bytes
-                or len(self._cache) >= MAX_CACHE_ITEMS
+                or len(self._cache) >= self._max_cache_items
             ):
                 if not self._cache:
                     break
-                # Remove oldest item (FIFO)
+                # Remove oldest item (LRU eviction)
                 oldest_key = next(iter(self._cache))
                 oldest_data = self._cache.pop(oldest_key)
-                self._cache_size_bytes -= len(oldest_data)
+                self._cache_size_bytes -= len(oldest_data[0])
 
-            # Add to cache
-            self._cache[key] = data
+            # Add to cache with timestamp for TTL
+            self._cache[key] = (data, time.monotonic())
             self._cache_size_bytes += data_size
             logger.debug(
                 "TTS cache: %d items, %.2f MB",
@@ -640,8 +819,18 @@ class TTSManager:
             len(audio_data),
         )
 
-        # Stop any current playback
-        self.stop_playback()
+        # Wait briefly so the audio device is fully released before starting the next stream
+        # (avoids brief audio overlap/duplicate playback). Use the existing done event from
+        # the prior playback so we don't wait longer than necessary — it fires as soon as
+        # the stream finishes. Fall back to a short sleep if the event is already gone.
+        done_event = self._current_playback_done
+        with self._playback_lock:
+            active_streams = list(getattr(self, "_current_playbacks", []))
+        if done_event is not None:
+            released = done_event.wait(timeout=0.05)
+            del done_event
+        elif active_streams:
+            time.sleep(0.05)
 
         stream_records: list[
             tuple[sd.OutputStream, threading.Event, str, bool, OutputDeviceRef]
@@ -655,6 +844,12 @@ class TTSManager:
                 sample_rate,
                 audio_array.shape,
                 audio_array.dtype,
+            )
+            audio_array = _append_tail_silence(audio_array, sample_rate)
+            logger.debug(
+                "Audio tail padding applied: tail_ms=%d, padded_shape=%s",
+                TTS_PLAYBACK_TAIL_PADDING_MS,
+                audio_array.shape,
             )
 
             def build_stream(
@@ -844,72 +1039,6 @@ class TTSManager:
             if registered_playback:
                 playbacks = self._release_current_playbacks(playbacks)
             self._close_playbacks(playbacks)
-
-    def _play_audio_with_fallback(
-        self,
-        audio_array: np.ndarray,
-        sample_rate: int,
-        fallback_device: int | None
-    ) -> None:
-        """Play audio with a fallback device."""
-        import threading
-
-        playback_done = threading.Event()
-        audio_index = [0]
-
-        def audio_callback(outdata, frames, time_info, status):
-            if status:
-                logger.warning("Audio callback status: %s", status)
-
-            start_idx = audio_index[0]
-            end_idx = start_idx + frames
-
-            if end_idx > len(audio_array):
-                remaining = len(audio_array) - start_idx
-                if remaining > 0:
-                    chunk = audio_array[start_idx:]
-                    if audio_array.ndim == 1:
-                        outdata[:remaining, 0] = chunk
-                        outdata[remaining:, 0] = 0
-                    else:
-                        outdata[:remaining] = chunk
-                        outdata[remaining:] = 0
-                else:
-                    outdata[:] = 0
-                playback_done.set()
-            else:
-                chunk = audio_array[start_idx:end_idx]
-                if audio_array.ndim == 1:
-                    outdata[:, 0] = chunk
-                else:
-                    outdata[:] = chunk
-                audio_index[0] = end_idx
-
-        playback = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=1 if audio_array.ndim == 1 else audio_array.shape[1],
-            device=fallback_device,
-            callback=audio_callback,
-            blocksize=2048,
-        )
-        with self._playback_lock:
-            self._current_playback = playback
-            self._current_playback_done = playback_done
-
-        playback.start()
-
-        try:
-            if not playback_done.wait(timeout=30):
-                logger.warning("Audio playback timeout on fallback device")
-        finally:
-            with self._playback_lock:
-                if self._current_playback is playback:
-                    try:
-                        playback.stop()
-                        playback.close()
-                    finally:
-                        self._current_playback = None
-                        self._current_playback_done = None
 
     def _probe_supported_sample_rates(self, device: OutputDeviceRef) -> list[int]:
         """Probe which sample rates the device supports.
@@ -1222,10 +1351,24 @@ class TTSManager:
             down = source_rate // divisor
             resampled = resample_poly(audio_float, up, down, axis=0)
         except Exception as exc:
-            logger.warning(
-                "scipy resample failed, falling back to numpy interpolation: %s",
-                exc,
+            global _SCIPY_RESAMPLE_FALLBACK_LOGGED
+            is_missing_scipy = isinstance(exc, ModuleNotFoundError) and (
+                getattr(exc, "name", None) == "scipy"
+                or "No module named 'scipy'" in str(exc)
             )
+            if is_missing_scipy:
+                if not _SCIPY_RESAMPLE_FALLBACK_LOGGED:
+                    logger.info(
+                        "scipy is not bundled; using numpy interpolation for audio resampling"
+                    )
+                    _SCIPY_RESAMPLE_FALLBACK_LOGGED = True
+                else:
+                    logger.debug("Using numpy interpolation for audio resampling")
+            else:
+                logger.warning(
+                    "scipy resample failed, falling back to numpy interpolation: %s",
+                    exc,
+                )
             source_len = len(audio_float)
             if source_len <= 1:
                 return audio_float

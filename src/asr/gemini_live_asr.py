@@ -26,7 +26,7 @@ from src.utils.config_manager import is_protected_secret_blob
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 DEFAULT_LIVE_MODEL = "gemini-3.1-flash-live-preview"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_LIVE_SILENCE_DURATION_MS = 600

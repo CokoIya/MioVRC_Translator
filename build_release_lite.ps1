@@ -19,6 +19,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& $releasePython tools\ensure_pyopenjtalk_dict.py
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 $env:MIO_TRANSLATOR_BUNDLE_MODELS = "0"
 & $releasePython -m PyInstaller --clean --noconfirm MioTranslator.spec
 
@@ -41,4 +46,3 @@ foreach ($name in $forbiddenRuntimeDirs) {
 }
 
 Write-Host "Release-lite build finished. Models are excluded from the bundle."
-

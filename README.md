@@ -4,14 +4,14 @@
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./docs/README.en.md)
 [![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](./LICENSE)
+[![License: GPLv3-or-later](https://img.shields.io/badge/License-GPLv3--or--later-blue.svg?style=for-the-badge)](./LICENSE)
 
 ## 官网下载
 
 ### [https://78hejiu.top/](https://78hejiu.top/)
 
 > 面向 VRChat / VRC 用户的本地实时语音翻译工具、VRChat Chatbox 翻译助手
-> 作者：`ここ_Mio` / 开源项目 / 禁止收费分发
+> 作者：`ここ_Mio` / 官方版本永久免费 / 代码采用 GPLv3-or-later 开源
 > 下载官网：[https://78hejiu.top/](https://78hejiu.top/)
 
 ## 简介
@@ -118,14 +118,16 @@ $env:MODELSCOPE_CACHE = "./models"
 
 ## 开发者文档
 
-- [架构文档](./docs/ARCHITECTURE.md) - 系统架构和设计说明
-- [贡献指南](./CONTRIBUTING.md) - 如何参与项目开发
 - [第三方许可证](./THIRD_PARTY_LICENSES.md) - 依赖库许可证信息
-- [测试文档](./tests/README.md) - 测试指南
+- [品牌与非官方分发规则](./BRANDING.md) - Mio 名称、Logo、图标、官网素材和非官方构建说明
 
-## 许可证
+## 许可证与品牌声明
 
-本项目采用 [MIT 许可证](./LICENSE)。
+本项目代码从当前版本起采用 [GNU GPLv3-or-later](./LICENSE) 发布。你可以自由使用、学习、修改和分发源码；如果你分发修改版或二进制构建，必须遵守 GPLv3-or-later 的要求，包括保留版权与许可证声明，并提供对应源码。
+
+`Mio RealTime Translator`、`Mio Translator`、项目 Logo、应用图标、官网素材、发布页素材和其他品牌资产不随 GPL 授权。未经许可，不得使用这些名称或素材发布换皮版、付费版、镜像版，或让用户误以为非官方构建是官方版本。详细规则见 [BRANDING.md](./BRANDING.md)。
+
+官方版本永久免费。请优先从 [https://78hejiu.top/](https://78hejiu.top/) 或官方 GitHub Release 下载。
 
 ## 致谢
 

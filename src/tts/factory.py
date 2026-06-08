@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from .base import BaseTTS
 from .aivis_speech_engine import AivisSpeechTTS
+from .api_tts_engines import MimoTTS, QwenTTS
 from .edge_tts_engine import EdgeTTS
 from .gtts_engine import GoogleTTS
 from .pyttsx3_engine import Pyttsx3TTS
@@ -15,10 +17,18 @@ from .voicevox_engine import VoicevoxTTS
 logger = logging.getLogger(__name__)
 
 
+def _normalize_engine_name(name: str) -> str:
+    """Normalize TTS engine name by stripping locale annotation in display labels."""
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
+    name = re.sub(r"\s*（[^）]*）\s*$", "", name).strip()
+    return name
+
+
 def create_tts_engine(
     engine_name: str,
     device: str = "cpu",
     bert_language: str = "jp",
+    config: dict | None = None,
 ) -> Optional[BaseTTS]:
     """Create TTS engine by name.
 
@@ -28,7 +38,7 @@ def create_tts_engine(
     Returns:
         TTS engine instance, or None if unavailable.
     """
-    engine_name = engine_name.lower().strip()
+    engine_name = _normalize_engine_name(engine_name.lower().strip())
 
     if engine_name == "edge":
         engine = EdgeTTS()
@@ -70,12 +80,29 @@ def create_tts_engine(
         logger.warning("AivisSpeech not available")
         return None
 
+    if engine_name in {"mimo_tts", "mimo", "xiaomi_tts"}:
+        engine = MimoTTS(config=config)
+        if engine.is_available():
+            logger.info("Created MiMo TTS engine")
+            return engine
+        logger.warning("MiMo TTS not available")
+        return None
+
+    if engine_name in {"qwen_tts", "qwen3_tts", "qwen-tts"}:
+        engine = QwenTTS(config=config)
+        if engine.is_available():
+            logger.info("Created Qwen TTS engine")
+            return engine
+        logger.warning("Qwen TTS not available")
+        return None
+
     if engine_name in {"style_bert_vits2", "stylebertvits2", "sbv2"}:
         engine = StyleBertVits2TTS(device=device, bert_language=bert_language)
         if engine.is_available():
+            actual_device = getattr(engine, "device", device)
             logger.info(
                 "Created Style-Bert-VITS2 TTS engine (device=%s, bert_language=%s)",
-                device,
+                actual_device,
                 bert_language,
             )
             return engine
@@ -90,6 +117,7 @@ def create_tts_engine_with_fallback(
     preferred: str = "edge",
     device: str = "cpu",
     bert_language: str = "jp",
+    config: dict | None = None,
 ) -> Optional[BaseTTS]:
     """Create TTS engine with automatic fallback.
 
@@ -105,6 +133,7 @@ def create_tts_engine_with_fallback(
         preferred,
         device=device,
         bert_language=bert_language,
+        config=config,
     )
     if engine is not None:
         return engine
@@ -119,6 +148,7 @@ def create_tts_engine_with_fallback(
             engine_name,
             device=device,
             bert_language=bert_language,
+            config=config,
         )
         if engine is not None:
             logger.info("Using fallback TTS engine: %s", engine_name)

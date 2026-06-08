@@ -3,22 +3,33 @@ from __future__ import annotations
 import importlib.util
 import sys
 
-
 REQUIRED_PYTHON = (3, 11)
 REQUIRED_MODULES = (
     "PyInstaller",
     "funasr",
     "google.genai",
+    "tiktoken",
     "torch",
     "torchaudio",
     "websockets",
+    "whisper",
+    "librosa",
+    "scipy",
+    "numba",
+    "llvmlite",
+    "edge_tts",
+    "aiohttp",
 )
 
 
 def _missing_modules() -> list[str]:
     missing: list[str] = []
     for module_name in REQUIRED_MODULES:
-        if importlib.util.find_spec(module_name) is None:
+        try:
+            spec = importlib.util.find_spec(module_name)
+        except ModuleNotFoundError:
+            spec = None
+        if spec is None:
             missing.append(module_name)
     return missing
 
@@ -59,7 +70,9 @@ def main() -> int:
         )
         return 1
 
-    print(f"Release environment OK: Python {sys.version.split()[0]}, CPU-only PyTorch {torch.__version__}")
+    print(
+        f"Release environment OK: Python {sys.version.split()[0]}, CPU-only PyTorch {torch.__version__}"
+    )
     return 0
 
 

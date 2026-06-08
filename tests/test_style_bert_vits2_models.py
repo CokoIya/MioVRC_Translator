@@ -5,7 +5,7 @@ import builtins
 import json
 import importlib
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -108,6 +108,7 @@ def test_style_bert_engine_lists_and_synthesizes_imported_voice(tmp_path, monkey
             "speaker_id": 7,
             "style": "Happy",
             "length": 0.5,
+            "sdp_ratio": 0.0,
         }
     ]
 
@@ -127,10 +128,29 @@ def test_hololive_catalog_labels_matching_imported_voice(tmp_path, monkeypatch):
 
     assert voices[0].id == "SBV2_HoloLow :: MoriCalliope :: Neutral"
     assert voices[0].name == "Mori Calliope / Neutral"
-    assert voices[0].language == "en"
+    assert voices[0].language == "ja"
 
 
-def test_style_bert_synthesis_uses_catalog_voice_language(tmp_path, monkeypatch):
+def test_light_style_bert_voice_listing_does_not_load_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "sample_voice")
+    monkeypatch.setattr(
+        engine_store,
+        "_load_runtime_tts_model_cls",
+        lambda: (_ for _ in ()).throw(AssertionError("runtime should not load")),
+    )
+
+    voices = engine_store.list_style_bert_vits2_voices("en")
+
+    assert [voice.id for voice in voices] == [
+        "sample_voice :: Alice :: Neutral",
+        "sample_voice :: Alice :: Happy",
+    ]
+    assert [voice.language for voice in voices] == ["en", "en"]
+
+
+def test_style_bert_synthesis_uses_configured_bert_language(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     managed_root = model_store.style_bert_models_dir()
     _write_style_model(managed_root, "SBV2_HoloLow")
@@ -167,8 +187,38 @@ def test_style_bert_synthesis_uses_catalog_voice_language(tmp_path, monkeypatch)
     )
 
     assert audio.startswith(b"RIFF")
-    assert ensured_languages == ["en"]
-    assert infer_calls[0]["language"] == "EN"
+    assert ensured_languages == ["jp"]
+    assert infer_calls[0]["language"] == "JP"
+    assert infer_calls[0]["sdp_ratio"] == 0.0
+
+
+def test_style_bert_cuda_prepares_acoustic_model_as_fp32(monkeypatch):
+    monkeypatch.setattr(engine_store, "style_bert_cuda_available", lambda: True)
+
+    class FakeNet:
+        def __init__(self):
+            self.float_calls = 0
+
+        def float(self):
+            self.float_calls += 1
+            return self
+
+    class FakeModel:
+        def __init__(self):
+            self.net = FakeNet()
+            self.load_calls = 0
+
+        def load(self):
+            self.load_calls += 1
+            setattr(self, "_TTSModel__net_g", self.net)
+
+    engine = StyleBertVits2TTS(device="cuda")
+    model = FakeModel()
+
+    engine._prepare_voice_model_for_device(model)
+
+    assert model.load_calls == 1
+    assert model.net.float_calls == 1
 
 
 def test_style_bert_language_mapping_helpers():
@@ -215,6 +265,76 @@ def test_style_bert_chinese_dependency_probe_reports_missing_segmenter(monkeypat
     assert "jieba POS tokenizer" in message
 
 
+def test_style_bert_english_text_processing_preflight(monkeypatch):
+    calls = []
+    fake_languages = SimpleNamespace(EN="EN", ZH="ZH")
+    fake_constants = SimpleNamespace(Languages=fake_languages)
+    fake_nlp = SimpleNamespace(clean_text=lambda text, language: calls.append((text, language)))
+
+    engine_store._SBV2_LANGUAGE_PREFLIGHTED.discard("en")
+    monkeypatch.setitem(sys.modules, "style_bert_vits2.constants", fake_constants)
+    monkeypatch.setitem(sys.modules, "style_bert_vits2.nlp", fake_nlp)
+
+    engine_store._preflight_style_bert_text_processing("en")
+    engine_store._preflight_style_bert_text_processing("en")
+
+    assert calls == [("Hello, Mio 2026.", "EN")]
+    assert "en" in engine_store._SBV2_LANGUAGE_PREFLIGHTED
+
+
+def test_style_bert_chinese_text_processing_preflight(monkeypatch):
+    calls = []
+    fake_languages = SimpleNamespace(EN="EN", ZH="ZH")
+    fake_constants = SimpleNamespace(Languages=fake_languages)
+    fake_nlp = SimpleNamespace(clean_text=lambda text, language: calls.append((text, language)))
+
+    engine_store._SBV2_LANGUAGE_PREFLIGHTED.discard("zh")
+    monkeypatch.setitem(sys.modules, "style_bert_vits2.constants", fake_constants)
+    monkeypatch.setitem(sys.modules, "style_bert_vits2.nlp", fake_nlp)
+
+    engine_store._preflight_style_bert_text_processing("zh")
+    engine_store._preflight_style_bert_text_processing("zh")
+
+    assert calls == [("你好，Mio 2026。", "ZH")]
+    assert "zh" in engine_store._SBV2_LANGUAGE_PREFLIGHTED
+
+
+def test_style_bert_japanese_dependency_probe_requires_packaged_openjtalk_dict(
+    tmp_path, monkeypatch
+):
+    fake_dict_dir = tmp_path / "missing-dic"
+    fake_pyopenjtalk = SimpleNamespace(
+        OPEN_JTALK_DICT_DIR=str(fake_dict_dir).encode("utf-8")
+    )
+
+    monkeypatch.setattr(engine_store.sys, "frozen", True, raising=False)
+    monkeypatch.setitem(sys.modules, "pyopenjtalk", fake_pyopenjtalk)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine_store._ensure_style_bert_language_runtime_dependencies("jp")
+
+    message = str(excinfo.value)
+    assert "Open JTalk dictionary is missing" in message
+    assert str(fake_dict_dir) in message
+
+
+def test_style_bert_japanese_dependency_probe_accepts_packaged_openjtalk_dict(
+    tmp_path, monkeypatch
+):
+    fake_dict_dir = tmp_path / "open_jtalk_dic_utf_8-1.11"
+    fake_dict_dir.mkdir()
+    for name in engine_store._OPEN_JTALK_REQUIRED_DICT_FILES:
+        (fake_dict_dir / name).write_bytes(b"ok")
+    fake_pyopenjtalk = SimpleNamespace(
+        OPEN_JTALK_DICT_DIR=str(fake_dict_dir).encode("utf-8")
+    )
+
+    monkeypatch.setattr(engine_store.sys, "frozen", True, raising=False)
+    monkeypatch.setitem(sys.modules, "pyopenjtalk", fake_pyopenjtalk)
+
+    engine_store._ensure_style_bert_language_runtime_dependencies("jp")
+
+
 def test_style_bert_engine_requires_shared_runtime_assets(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     _write_style_model(model_store.style_bert_models_dir(), "sample_voice")
@@ -236,6 +356,32 @@ def test_transformers_export_probe_reports_missing_style_bert_symbols():
 
     assert "AutoModelForMaskedLM" in missing
     assert "AutoTokenizer" not in missing
+
+
+def test_transformers_export_recovery_installs_missing_symbol(monkeypatch):
+    fake_transformers = SimpleNamespace(
+        AutoModelForMaskedLM=object(),
+        DebertaV2Model=object(),
+        DebertaV2Tokenizer=object(),
+        PreTrainedModel=object(),
+        PreTrainedTokenizer=object(),
+        PreTrainedTokenizerFast=object(),
+    )
+
+    class AutoTokenizer:
+        pass
+
+    def fake_import_module(name):
+        if name == "transformers.models.auto.tokenization_auto":
+            return SimpleNamespace(AutoTokenizer=AutoTokenizer)
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(engine_store.importlib, "import_module", fake_import_module)
+
+    engine_store._install_transformers_bert_exports(fake_transformers)
+
+    assert fake_transformers.AutoTokenizer is AutoTokenizer
+    assert engine_store._missing_transformers_bert_exports(fake_transformers) == []
 
 
 def test_style_bert_engine_module_imports_without_scipy(monkeypatch):
@@ -289,6 +435,61 @@ def test_style_bert_replaces_numba_backed_monotonic_alignment(monkeypatch):
     assert fake_module._MIO_FALLBACK is True
 
 
+def test_style_bert_disables_pyopenjtalk_worker_in_frozen_runtime(monkeypatch):
+    class FakeWorkerClient:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    first_client = FakeWorkerClient()
+    fake_worker_module = SimpleNamespace(
+        WORKER_CLIENT=first_client,
+        initialize_worker=lambda *_args, **_kwargs: None,
+        terminate_worker=lambda: None,
+    )
+
+    monkeypatch.setattr(engine_store.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(engine_store, "_SBV2_PYOPENJTALK_WORKER_PATCHED", False)
+    monkeypatch.setitem(
+        sys.modules,
+        "style_bert_vits2.nlp.japanese.pyopenjtalk_worker",
+        fake_worker_module,
+    )
+
+    engine_store._disable_packaged_pyopenjtalk_worker()
+
+    assert first_client.closed is True
+    assert fake_worker_module.WORKER_CLIENT is None
+
+    second_client = FakeWorkerClient()
+    fake_worker_module.WORKER_CLIENT = second_client
+    fake_worker_module.initialize_worker()
+
+    assert second_client.closed is True
+    assert fake_worker_module.WORKER_CLIENT is None
+
+
+def test_style_bert_disables_typeguard_in_frozen_runtime(monkeypatch):
+    def broken_typechecked(target=None, **_kwargs):
+        raise OSError("could not get source code")
+
+    fake_typeguard = SimpleNamespace(typechecked=broken_typechecked)
+    fake_decorators = SimpleNamespace(typechecked=broken_typechecked)
+    wrapped = lambda: "ok"
+
+    monkeypatch.setattr(engine_store.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(engine_store, "_SBV2_TYPEGUARD_PATCHED", False)
+    monkeypatch.setitem(sys.modules, "typeguard", fake_typeguard)
+    monkeypatch.setitem(sys.modules, "typeguard._decorators", fake_decorators)
+
+    engine_store._install_packaged_typeguard_noop_patch()
+
+    assert fake_typeguard.typechecked(wrapped) is wrapped
+    assert fake_decorators.typechecked()(wrapped) is wrapped
+
+
 def test_style_bert_installs_offline_g2p_fallback_when_nltk_is_missing(monkeypatch):
     monkeypatch.delitem(sys.modules, "g2p_en", raising=False)
     original_import = builtins.__import__
@@ -304,4 +505,16 @@ def test_style_bert_installs_offline_g2p_fallback_when_nltk_is_missing(monkeypat
     import g2p_en
 
     assert getattr(g2p_en, "_MIO_FALLBACK", False) is True
+    assert g2p_en.__spec__ is importlib.util.find_spec("g2p_en")
     assert g2p_en.G2p()("hello") == ["HH", "AH0", "L", "OW1"]
+
+
+def test_style_bert_repairs_packaged_g2p_module_spec(monkeypatch):
+    fake_module = ModuleType("g2p_en")
+    fake_module.__spec__ = None
+    monkeypatch.setitem(sys.modules, "g2p_en", fake_module)
+
+    engine_store._install_g2p_en_offline_fallback()
+
+    assert fake_module.__spec__ is not None
+    assert fake_module.__spec__ is importlib.util.find_spec("g2p_en")

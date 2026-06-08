@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import logging
 import re
 import threading
@@ -22,10 +23,17 @@ from src.version import (
 
 logger = logging.getLogger(__name__)
 
-_REQUEST_TIMEOUT = 8
+_REQUEST_TIMEOUT = (4, 10)
 _MAX_RETRIES = 3
-_RETRY_DELAYS = [5, 15]  # seconds to wait before 2nd and 3rd attempt
+_RETRY_DELAYS = (5, 15)  # seconds to wait before 2nd and 3rd attempt
 _MANIFEST_CACHE_BUST_PARAM = "_mio_update_check"
+# Serialise all HTTPS manifest fetches to prevent SSL socket corruption on
+# concurrent requests (Python 3.11 + OpenSSL 3.x + Windows: shared urllib3
+# pool cannot safely handle simultaneous SSL reads across threads).
+_http_lock = threading.Lock()
+# Prevent concurrent update-check workers from causing SSL crashes.
+_update_check_in_progress = False
+_update_check_lock = threading.Lock()
 _MANIFEST_HEADERS = {
     "Accept": "application/json",
     "Cache-Control": "no-cache, no-store, max-age=0",
@@ -110,7 +118,7 @@ def _parse_sha256(value: object) -> str:
 
 def _parse_localized_notes(data: dict) -> dict[str, str]:
     localized: dict[str, str] = {}
-    notes_i18n = data.get("notes_i18n")
+    notes_i18n = data.get("notes_i18n") or data.get("release_notes_i18n")
     if isinstance(notes_i18n, dict):
         for key, value in notes_i18n.items():
             lang = str(key or "").strip().lower().replace("_", "-")
@@ -120,9 +128,14 @@ def _parse_localized_notes(data: dict) -> dict[str, str]:
 
     for key, value in data.items():
         field_name = str(key or "").strip().lower()
-        if not field_name.startswith("notes_") or field_name == "notes_i18n":
+        prefix = ""
+        if field_name.startswith("notes_") and field_name != "notes_i18n":
+            prefix = "notes_"
+        elif field_name.startswith("release_notes_") and field_name != "release_notes_i18n":
+            prefix = "release_notes_"
+        if not prefix:
             continue
-        lang = field_name[6:].strip().replace("_", "-")
+        lang = field_name[len(prefix):].strip().replace("_", "-")
         text = str(value or "").strip()
         if lang and text:
             localized[lang] = text
@@ -142,7 +155,7 @@ def _parse_update_info(data: dict) -> UpdateInfo | None:
     return UpdateInfo(
         version=version,
         download_url=download_url,
-        notes=str(data.get("notes", "")).strip(),
+        notes=str(data.get("notes") or data.get("release_notes") or "").strip(),
         localized_notes=_parse_localized_notes(data),
         installer_name=str(data.get("installer_name", "")).strip(),
         size_bytes=_parse_size(data.get("size_bytes")),
@@ -171,8 +184,11 @@ def _verify_update_manifest(data: dict) -> bool:
             required=REQUIRE_UPDATE_MANIFEST_SIGNATURE,
             expected_key_id=UPDATE_MANIFEST_PUBLIC_KEY_ID,
         )
-    except ManifestSignatureError:
-        raise
+    except ManifestSignatureError as exc:
+        if REQUIRE_UPDATE_MANIFEST_SIGNATURE:
+            raise
+        logger.warning("Update manifest signature was ignored: %s", exc)
+        return False
     except Exception as exc:
         raise ManifestSignatureError(f"Update manifest signature check failed: {exc}") from exc
 
@@ -266,18 +282,33 @@ def _select_newest_update_info(candidates: list[UpdateInfo]) -> UpdateInfo | Non
     return selected
 
 
+def update_notes_for_language(update_info: UpdateInfo, language: str | None, *, fallback: str = "") -> str:
+    lang = str(language or "").strip().lower().replace("_", "-")
+    localized = update_info.localized_notes or {}
+    for key in (lang, lang.split("-", 1)[0] if lang else "", "en"):
+        if key and localized.get(key):
+            return localized[key].strip()
+    if update_info.notes:
+        return update_info.notes.strip()
+    for key in ("zh-cn", "zh"):
+        if localized.get(key):
+            return localized[key].strip()
+    return str(fallback or "").strip()
+
+
 def _fetch_update_info(manifest_url: str) -> UpdateInfo | None:
-    resp = requests.get(
-        _manifest_request_url(manifest_url),
-        headers=_MANIFEST_HEADERS,
-        timeout=_REQUEST_TIMEOUT,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    if not isinstance(data, dict):
-        raise RuntimeError("Update manifest is not a JSON object")
-    _verify_update_manifest(data)
-    return _parse_update_info(data)
+    with _http_lock:
+        resp = requests.get(
+            _manifest_request_url(manifest_url),
+            headers=_MANIFEST_HEADERS,
+            timeout=_REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = json.loads(resp.content.decode("utf-8-sig"))
+        if not isinstance(data, dict):
+            raise RuntimeError("Update manifest is not a JSON object")
+        _verify_update_manifest(data)
+        return _parse_update_info(data)
 
 
 def check_for_update(
@@ -285,7 +316,9 @@ def check_for_update(
     *,
     on_no_update: Callable[[], None] | None = None,
     on_error: Callable[[str], None] | None = None,
-) -> None:
+    max_retries: int | None = None,
+    retry_delays: tuple[float, ...] | list[float] | None = None,
+) -> threading.Thread | None:
     """Silently check for updates in a daemon thread.
 
     Calls *on_update_available(update_info)* when a newer version is detected.
@@ -296,55 +329,76 @@ def check_for_update(
     * *on_no_update* - called when the remote version is not newer.
     * *on_error* - called with an error message after all retries are exhausted.
     """
+    global _update_check_in_progress
+    with _update_check_lock:
+        if _update_check_in_progress:
+            logger.debug("Update check skipped: another check is already in progress")
+            return None
+        _update_check_in_progress = True
+
+    def release_progress() -> None:
+        global _update_check_in_progress
+        _update_check_in_progress = False
+
+    retries = _MAX_RETRIES if max_retries is None else max(1, int(max_retries))
+    delays = tuple(_RETRY_DELAYS if retry_delays is None else retry_delays)
+    last_error: Exception | None = None
 
     def _worker() -> None:
-        last_error: Exception | None = None
+        nonlocal last_error
+        try:
 
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                logger.info(
-                    "Update check attempt %d/%d  (local %s)",
-                    attempt, _MAX_RETRIES, APP_VERSION,
-                )
-                candidates: list[UpdateInfo] = []
-                source_errors: list[str] = []
-                for manifest_url in _update_check_urls():
-                    try:
-                        update_info = _fetch_update_info(manifest_url)
-                    except Exception as exc:
-                        source_errors.append(f"{manifest_url}: {exc}")
-                        logger.warning("Update source failed (%s): %s", manifest_url, exc)
-                        continue
-                    if update_info is not None:
-                        candidates.append(update_info)
-                update_info = _select_newest_update_info(candidates)
-                if update_info is None and source_errors:
-                    raise RuntimeError("; ".join(source_errors))
-                remote_version = update_info.version if update_info else ""
-
-                if update_info is not None and _is_newer(remote_version, APP_VERSION):
-                    logger.info("Update available: %s -> %s", APP_VERSION, remote_version)
-                    on_update_available(update_info)
-                else:
+            for attempt in range(1, retries + 1):
+                try:
                     logger.info(
-                        "No update needed (local=%s, remote=%s)",
-                        APP_VERSION, remote_version or "<empty>",
+                        "Update check attempt %d/%d  (local %s)",
+                        attempt, retries, APP_VERSION,
                     )
-                    if on_no_update is not None:
-                        on_no_update()
-                return  # request succeeded; done regardless of version comparison
+                    candidates: list[UpdateInfo] = []
+                    source_errors: list[str] = []
+                    for manifest_url in _update_check_urls():
+                        try:
+                            update_info = _fetch_update_info(manifest_url)
+                        except Exception as exc:
+                            source_errors.append(f"{manifest_url}: {exc}")
+                            logger.warning("Update source failed (%s): %s", manifest_url, exc)
+                            continue
+                        if update_info is not None:
+                            candidates.append(update_info)
+                    update_info = _select_newest_update_info(candidates)
+                    if update_info is None and source_errors:
+                        raise RuntimeError("; ".join(source_errors))
+                    remote_version = update_info.version if update_info else ""
 
-            except Exception as exc:
-                last_error = exc
-                logger.warning(
-                    "Update check attempt %d/%d failed: %s", attempt, _MAX_RETRIES, exc,
-                )
-                if attempt < _MAX_RETRIES:
-                    time.sleep(_RETRY_DELAYS[attempt - 1])
+                    if update_info is not None and _is_newer(remote_version, APP_VERSION):
+                        logger.info("Update available: %s -> %s", APP_VERSION, remote_version)
+                        on_update_available(update_info)
+                    else:
+                        logger.info(
+                            "No update needed (local=%s, remote=%s)",
+                            APP_VERSION, remote_version or "<empty>",
+                        )
+                        if on_no_update is not None:
+                            on_no_update()
+                    return  # request succeeded; done regardless of version comparison
 
-        msg = str(last_error) if last_error else "unknown error"
-        logger.warning("All %d update check attempts failed: %s", _MAX_RETRIES, msg)
-        if on_error is not None:
-            on_error(msg)
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Update check attempt %d/%d failed: %s", attempt, retries, exc,
+                    )
+                    if attempt < retries:
+                        delay = delays[min(attempt - 1, len(delays) - 1)] if delays else 0
+                        if delay > 0:
+                            time.sleep(delay)
 
-    threading.Thread(target=_worker, daemon=True).start()
+            msg = str(last_error) if last_error else "unknown error"
+            logger.warning("All %d update check attempts failed: %s", retries, msg)
+            if on_error is not None:
+                on_error(msg)
+        finally:
+            release_progress()
+
+    thread = threading.Thread(target=_worker, daemon=True, name="mio-update-check")
+    thread.start()
+    return thread

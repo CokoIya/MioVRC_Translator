@@ -42,6 +42,8 @@ class AnthropicTranslator(BaseTranslator):
             text = validate_translation_text(text)
         except ValidationError as e:
             raise ValueError(f"Invalid translation input: {e}")
+        if self._source_matches_target(src_lang, tgt_lang):
+            return text
 
         context_snapshot = self._context_snapshot(
             src_lang,

@@ -15,12 +15,14 @@ _TRANSLATION_SYSTEM_PROMPT = (
     "Prefer everyday spoken wording over formal written phrasing unless the source is clearly formal. "
     "Never sound stiff, word-for-word, or textbook-like. Preserve emotion, humor, slang, internet expressions, "
     "and gaming or VR-specific terms. Keep names, acronyms, product names, community jargon, and standard spellings "
-    "in their modern commonly used forms. Return only the translated text with no explanations, notes, quotes, "
+    "in their modern commonly used forms. Correct obvious speech-recognition mistakes only when the intended meaning is clear. "
+    "Return only the translated text with no explanations, notes, quotes, "
     "or repeated context. Do not add decorative punctuation, wrapping quotes, or unmatched brackets that are not required."
 )
 _CONTEXT_MAX_TURNS = 3
 _CONTEXT_MAX_AGE_S = 75.0
 _CONTEXT_TEXT_LIMIT = 160
+_MAX_CACHE_TEXT_LEN = 512
 _WRAP_PAIRS = {
     '"': '"',
     "\u201c": "\u201d",
@@ -40,6 +42,18 @@ _SENTENCE_ENDING_PUNCT = "\u3002\uff0e.!?\uff01\uff1f\u2026"
 _CJK_SCRIPT_RANGE = r"\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af"
 _CJK_CLOSE_PUNCT = r"\u3001\u3002\uff0c\uff01\uff1f\uff1b\uff1a\uff09\uff3d\uff5d\u300d\u300f"
 _CJK_OPEN_PUNCT = r"\uff08\uff3b\uff5b\u300c\u300e"
+_TRANSLATION_BOILERPLATE_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:(?:\u4ee5\u4e0b|\u4e0b\u9762|\u8fd9\u662f|\u9019\u662f)?\s*(?:\u662f)?\s*"
+    r"(?:\u7ffb\u8bd1|\u7ffb\u8b6f|\u8bd1\u6587|\u8b6f\u6587)"
+    r"(?:\u7ed3\u679c|\u7d50\u679c)?\s*(?:\u662f|\u5982\u4e0b|\u4e3a|\u70ba)?\s*[:\uff1a]\s*)"
+    r"|(?:(?:\u7ffb\u8a33|\u8a33\u6587|\u8a33)(?:\u7d50\u679c)?\s*"
+    r"(?:\u306f|\u3067\u3059)?\s*[:\uff1a]\s*)"
+    r"|(?:(?:here(?:'s| is)?(?:\s+the)?|the)?\s*"
+    r"(?:translation|translated text)(?:\s+is)?\s*[:\uff1a]\s*)"
+    r")",
+    re.IGNORECASE,
+)
 _LANGUAGE_ALIASES = {
     "zh-cn": "zh",
     "zh-hans": "zh",
@@ -117,6 +131,11 @@ class BaseTranslator(ABC):
             return "Auto-detect from the current text"
         return self._language_name(normalized)
 
+    def _source_matches_target(self, src_lang: str, tgt_lang: str) -> bool:
+        src = self._normalize_language_code(src_lang)
+        tgt = self._normalize_language_code(tgt_lang)
+        return bool(src and tgt and src != "auto" and src == tgt)
+
     def _direction_specific_requirements(
         self,
         src_lang: str,
@@ -144,6 +163,15 @@ class BaseTranslator(ABC):
                     "when the source is Japanese, do not leave honorific or keigo stiffness in Chinese unless it is semantically important",
                 ]
             )
+        if tgt == "en":
+            requirements.extend(
+                [
+                    "write in natural conversational English, not literal subtitle English",
+                    "avoid Japanese, Chinese, or Korean word order and avoid translationese",
+                    "correct obvious ASR segmentation, homophone, or punctuation artifacts only when the intended meaning is clear",
+                    "use contractions and short everyday phrasing when it sounds natural, while preserving the speaker's tone",
+                ]
+            )
         if context_source == "listen":
             requirements.append(
                 "for reverse-listen translations, preserve the other speaker's tone and do not apply the user's persona"
@@ -166,6 +194,8 @@ class BaseTranslator(ABC):
             "preserve emotion, tone, humor, slang, and gaming or VR terms",
             "prefer modern internet-native wording and community-standard names when appropriate",
             "keep meaning accurate but prioritize natural flow over word-for-word literalness",
+            "correct obvious ASR mistakes only when the intended meaning is clear",
+            "preserve line breaks when the input contains multiple lines",
             "use recent context only to disambiguate the current text when helpful",
             "translate only the current text and do not repeat previous lines",
             "do not add decorative quotes or extra punctuation",
@@ -242,6 +272,10 @@ class BaseTranslator(ABC):
 
         lines: list[str] = []
         social_mode = str(self._prompt_profile.get("mode", "standard")).strip()
+        if social_mode in {"", "standard"}:
+            return ""
+        if social_mode not in {"language_exchange", "roleplay"}:
+            return ""
         if social_mode == "language_exchange":
             lines.append(
                 "- Social mode: language exchange. Prefer easy-to-understand, friendly wording "
@@ -267,29 +301,40 @@ class BaseTranslator(ABC):
             "natural": "Keep the translation natural and conversational.",
             "cute": "Use a lightly cute and playful tone when it fits.",
             "cool": "Use a concise, cool, composed tone when it fits.",
+            "clear": "Use clean, precise, socially safe wording.",
+            "cheerful": "Use a bright, friendly, energetic tone without adding meaning.",
+            "playful": "Use light playful phrasing or teasing only when the source supports it.",
+            "warm": "Use a gentle, supportive, sincere tone without becoming melodramatic.",
             "host": "Use a clear, welcoming host or guide tone when it fits.",
         }
         if tone in tone_map:
             lines.append(f"- Tone: {tone_map[tone]}")
 
-        persona_name = str(self._prompt_profile.get("persona_name", "")).strip()
-        if persona_name:
-            lines.append(f"- Persona name: {persona_name}")
+        if social_mode == "roleplay":
+            persona_name = str(self._prompt_profile.get("persona_name", "")).strip()
+            if persona_name:
+                lines.append(f"- Persona name: {persona_name}")
 
-        persona_prompt = str(self._prompt_profile.get("persona_prompt", "")).strip()
-        if persona_prompt:
-            lines.append(f"- Persona notes: {persona_prompt}")
+            persona_prompt = str(self._prompt_profile.get("persona_prompt", "")).strip()
+            if persona_prompt:
+                lines.append(f"- Persona notes: {persona_prompt}")
 
-        glossary = self._prompt_profile.get("glossary", ())
-        if isinstance(glossary, (list, tuple)) and glossary:
-            glossary_items = [
-                str(item).strip()
-                for item in glossary
-                if str(item).strip()
-            ]
-            if glossary_items:
-                lines.append("- Preferred glossary:")
-                lines.extend(f"  * {item}" for item in glossary_items)
+            glossary = self._prompt_profile.get("glossary", ())
+            if isinstance(glossary, (list, tuple)) and glossary:
+                glossary_items = [
+                    str(item).strip()
+                    for item in glossary
+                    if str(item).strip()
+                ]
+                if glossary_items:
+                    lines.append("- Preferred glossary:")
+                    lines.extend(f"  * {item}" for item in glossary_items)
+
+            lines.append(
+                "- Persona safety: Apply the persona only to wording and register; "
+                "do not add new facts, actions, emotions, catchphrases, honorifics, "
+                "or roleplay content not present in the source."
+            )
 
         if not lines:
             return ""
@@ -313,8 +358,20 @@ class BaseTranslator(ABC):
         normalized = re.sub(rf"(?<=[{_CJK_OPEN_PUNCT}])\s+", "", normalized)
         return normalized.strip()
 
+    @staticmethod
+    def _strip_translation_boilerplate(text: str) -> str:
+        cleaned = str(text or "").strip()
+        previous = None
+        while cleaned and cleaned != previous:
+            previous = cleaned
+            cleaned = _TRANSLATION_BOILERPLATE_PREFIX_RE.sub("", cleaned, count=1).strip()
+        return cleaned
+
     def _finalize_translation_output(self, text: str, *, source_text: str = "") -> str:
         cleaned = " ".join(str(text or "").split()).strip()
+        if not cleaned:
+            return ""
+        cleaned = self._strip_translation_boilerplate(cleaned)
         if not cleaned:
             return ""
 
@@ -331,6 +388,7 @@ class BaseTranslator(ABC):
                     inner = cleaned[1:-1].strip()
                     if inner:
                         cleaned = inner
+                        cleaned = self._strip_translation_boilerplate(cleaned)
                     break
 
         if _TRAILING_ARTIFACT_OPENERS:
@@ -441,7 +499,7 @@ class BaseTranslator(ABC):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
         context_source: str = "default",
     ) -> str | None:
-        if self._cache_size <= 0:
+        if self._cache_size <= 0 or len(str(text or "")) > _MAX_CACHE_TEXT_LEN:
             return None
         key = self._cache_key(
             text,
@@ -468,7 +526,7 @@ class BaseTranslator(ABC):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
         context_source: str = "default",
     ) -> str:
-        if self._cache_size <= 0:
+        if self._cache_size <= 0 or len(str(text or "")) > _MAX_CACHE_TEXT_LEN:
             return translated
         key = self._cache_key(
             text,

@@ -397,7 +397,7 @@ class DesktopAudioRecorder(AudioRecorder):
         max_segment_s: float = 6.0,
         denoise_strength: float = 0.0,
         silero_speech_threshold: float = 0.5,
-        vad_type: str = "webrtc",
+        vad_type: str = "silero",  # silero is tolerant of background music and SFX; change to "webrtc" if you need maximum sensitivity to quiet speech
         on_runtime_error: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(
@@ -423,11 +423,11 @@ class DesktopAudioRecorder(AudioRecorder):
             denoise_strength=denoise_strength,
         )
         # VAD selection for desktop audio:
-        #   - "webrtc" (default): WebRTC VAD - same as mic, well-tested, permissive.
-        #     False positives from game SFX get dropped by ASR (empty transcript).
-        #   - "silero": Neural VAD - more selective but can miss Opus-decoded VoIP
-        #     audio entirely. Use only if WebRTC produces too many false positives.
-        vad_type_normalized = str(vad_type or "webrtc").strip().lower()
+        #   - "silero" (default): Neural VAD - tolerant of background music and SFX,
+        #     significantly reduces false positives from game audio.
+        #   - "webrtc": WebRTC VAD - same as mic, well-tested, permissive.
+        #     May produce false positives from game music/SFX.
+        vad_type_normalized = str(vad_type or "silero").strip().lower()
         if vad_type_normalized == "silero":
             self.vad = SileroVADDetector(
                 sample_rate=sample_rate,
@@ -556,6 +556,15 @@ class DesktopAudioRecorder(AudioRecorder):
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
 
+        # Pre-warm Silero VAD model in the background while capture initializes.
+        # This avoids blocking the first audio frame with torch.jit.load.
+        if isinstance(self.vad, SileroVADDetector):
+            threading.Thread(
+                target=lambda: self.vad.prewarm(),
+                name="vad-prewarm",
+                daemon=True,
+            ).start()
+
         if not self._capture_ready_event.wait(timeout=_CAPTURE_START_TIMEOUT_S):
             error = RuntimeError("Desktop audio capture did not become ready in time")
             self._capture_start_error = error
@@ -621,22 +630,50 @@ class DesktopAudioRecorder(AudioRecorder):
         logger.info("DesktopAudioRecorder stopped (requested_output=%s)", self._output_device_name or "auto")
 
     def diagnostics_snapshot(self) -> dict[str, object]:
+        activation_window = getattr(self.vad, "_activation_window", None)
+        try:
+            activation_ratio = (
+                sum(bool(item) for item in activation_window) / len(activation_window)
+                if activation_window is not None and len(activation_window) > 0
+                else 0.0
+            )
+        except Exception:
+            activation_ratio = 0.0
         with self._stats_lock:
             return {
+                "running": self.is_running,
                 "last_frame_at": self._last_frame_at,
                 "last_non_silent_at": self._last_non_silent_at,
                 "last_rms": self._last_rms,
+                "last_frame_rms": round(float(getattr(self, "_last_frame_rms", self._last_prepared_rms) or self._last_prepared_rms), 6),
+                "peak_frame_rms": round(float(getattr(self, "_peak_frame_rms", self._last_prepared_rms) or self._last_prepared_rms), 6),
                 "last_prepared_rms": self._last_prepared_rms,
                 "total_frames": self._total_frames,
+                "frames_processed": self._total_frames,
                 "non_silent_frames": self._non_silent_frames,
+                "segments_emitted": int(getattr(self, "_segments_emitted", 0) or 0),
                 "requested_output_device": self._output_device_name or None,
                 "loopback_device": (
                     str(self._loopback_device_info.get("name", "")).strip()
                     if self._loopback_device_info is not None
                     else None
                 ),
+                "active_output_device": self._active_device_name,
+                "active_device": self._active_device_name,
+                "backend": (
+                    self._loopback_device_info.get("backend")
+                    if isinstance(self._loopback_device_info, dict)
+                    else None
+                ),
                 "capture_rate": self._capture_rate,
+                "target_rate": self.sample_rate,
                 "capture_channels": self._capture_channels,
+                "channels": self._capture_channels,
+                "dtype": self._capture_dtype,
+                "vad_min_rms": getattr(self.vad, "_min_rms", None),
+                "vad_in_speech": bool(getattr(self.vad, "in_speech", False)),
+                "vad_speech_ratio": getattr(self.vad, "_speech_ratio", None),
+                "vad_activation_ratio": round(float(activation_ratio), 3),
                 "last_error": self._last_error,
             }
 

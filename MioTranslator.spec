@@ -6,7 +6,6 @@ from pathlib import Path
 from PyInstaller.building.datastruct import TOC
 from PyInstaller.utils.hooks import collect_all
 
-
 _APPLOCAL_RUNTIME_OVERRIDES = {
     "msvcp140.dll",
     "msvcp140_1.dll",
@@ -86,6 +85,10 @@ def _sanitize_analysis_binaries(entries) -> TOC:
 
 datas = [
     ("config.example.json", "."),
+    ("LICENSE", "."),
+    ("NOTICE", "."),
+    ("BRANDING.md", "."),
+    ("THIRD_PARTY_LICENSES.md", "."),
     ("assets", "assets"),
 ]
 
@@ -99,8 +102,16 @@ for package_name in (
     "funasr",
     "modelscope",
     "torch",
+    "pip",
     "PIL",
     "torchaudio",
+    "whisper",
+    "librosa",
+    "soundfile",
+    "soxr",
+    "scipy",
+    "numba",
+    "llvmlite",
     "huggingface_hub",
     "tokenizers",
     "tqdm",
@@ -119,22 +130,35 @@ for package_name in (
     "rich",
     "markdown_it",
     "mdurl",
+    "edge_tts",
+    "aiohttp",
+    "aiosignal",
+    "aiohappyeyeballs",
+    "frozenlist",
+    "multidict",
+    "yarl",
+    "propcache",
     "av",
     "style_bert_vits2",
+    "pyopenjtalk",
     "transformers",
+    "packaging",
     "sentencepiece",
     "google.protobuf",
+    "inflect",
+    "typeguard",
     "jieba",
     "pypinyin",
     "cn2an",
-    "g2p_en",
 ):
     tmp_ret = collect_all(package_name)
     datas += tmp_ret[0]
     binaries += tmp_ret[1]
     hiddenimports += tmp_ret[2]
 
-binaries += _collect_qt_plugins(("platforms", "imageformats", "styles", "iconengines", "graphicseffects"))
+binaries += _collect_qt_plugins(
+    ("platforms", "imageformats", "styles", "iconengines", "graphicseffects")
+)
 
 hiddenimports += [
     "typing_extensions",
@@ -145,6 +169,7 @@ hiddenimports += [
     "src.asr.text_corrections",
     "src.asr.fallback_asr",
     "src.asr.sensevoice_asr",
+    "src.asr.whisper_asr",
     "src.asr.model_manager",
     "src.asr.qwen3_asr",
     "src.asr.gemini_live_asr",
@@ -159,11 +184,12 @@ hiddenimports += [
     "google.protobuf",
     "google.protobuf.message",
     "google.protobuf.internal",
+    "inflect",
+    "typeguard",
     "jieba",
     "jieba.posseg",
     "pypinyin",
     "cn2an",
-    "g2p_en",
     "src.asr.sensevoice_model_manager",
     "src.asr.hf_model_downloader",
     "src.utils.locale_detect",
@@ -185,9 +211,6 @@ excludes = [
     "torchvision",
     "tensorflow",
     "keras",
-    "numba",
-    "llvmlite",
-    "scipy",
     "sklearn",
     "scikit_learn",
     "matplotlib",
@@ -199,6 +222,8 @@ excludes = [
     "pandas",
     "lxml",
     "aliyunsdkcore",
+    "g2p_en",
+    "nltk",
     "tkinter",
     "_tkinter",
 ]

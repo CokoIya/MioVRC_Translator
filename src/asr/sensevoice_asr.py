@@ -5,6 +5,7 @@ import sys
 import threading
 import logging
 import os
+from importlib import import_module
 from typing import Optional
 
 import numpy as np
@@ -120,6 +121,8 @@ def _dependency_error_message(exc: Exception) -> str:
 
 def _load_runtime_symbols():
     patch_sentencepiece_unicode_path_support()
+    for module_name in ("scipy", "numba", "llvmlite", "librosa"):
+        import_module(module_name)
     from funasr import AutoModel
     from funasr.utils.postprocess_utils import rich_transcription_postprocess
 

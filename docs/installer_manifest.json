@@ -1,22 +1,19 @@
 {
-  "version": "v1.3.6.1",
-  "installer_name": "MioTranslator-Setup-v1.3.6.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe",
-  "size_bytes": 310647309,
-  "sha256": "d9ce2383872d65941834f45dcc2ce303042e50563ac14bb356526694b2ddee6f",
-  "notes": "v1.3.6.1 removes the legacy Tk UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and strengthens online update, ASR, and translation reliability.",
-  "notes_i18n": {
-    "zh-CN": "v1.3.6.1 移除旧 Tk UI，完善 Qt UI；优化启动速度和低性能电脑体验；修复全局热键；新增 Qwen 翻译服务区域选择；提升在线更新、ASR 与翻译稳定性。",
-    "en": "v1.3.6.1 removes the legacy Tk UI, completes the Qt UI, improves startup and low-power performance, fixes global hotkeys, adds Qwen translation service-region selection, and improves online update, ASR, and translation reliability.",
-    "ja": "v1.3.6.1 では旧 Tk UI を削除し、Qt UI を完成させました。起動速度と低スペック環境での動作、グローバルホットキー、Qwen 翻訳のサービス地域選択、オンライン更新、ASR と翻訳の安定性を改善しています。",
-    "ru": "v1.3.6.1 удаляет старый Tk UI, завершает Qt UI, ускоряет запуск и работу на слабых ПК, исправляет глобальные горячие клавиши, добавляет выбор региона Qwen Translation и повышает надежность онлайн-обновлений, ASR и перевода.",
-    "ko": "v1.3.6.1은 기존 Tk UI를 제거하고 Qt UI를 완성했으며, 시작 속도와 저사양 PC 성능을 개선했습니다. 전역 단축키 수정, Qwen 번역 서비스 지역 선택, 온라인 업데이트와 ASR/번역 안정성 개선도 포함됩니다."
-  },
-  "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
-  "app_exe": "MioTranslator.exe",
-  "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-05-28T14:59:59+08:00",
-  "signature_algorithm": "ed25519",
-  "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "557d885fc2f19dda152bc4d680bef51d9636b8fc879c3ac0b45d31a6af10fd7b6fe5d01330baf97f902235cc88884bf1bd423a7fb381f7625b5851de6c6b9505"
+    "version":  "v1.3.7.3",
+    "installer_name":  "MioTranslator-Setup-v1.3.7.3.exe",
+    "installer_url":  "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.3/MioTranslator-Setup-v1.3.7.3.exe",
+    "size_bytes":  379895752,
+    "sha256":  "3d75d1c396ea12ff1b1e64b2242a57fb00e71e111498ac5a175e92d0855f1c8e",
+    "notes":  "v1.3.7.3 fixes packaged startup and SBV2 multilingual dependency issues, switches the default local Whisper model to faster Whisper Small, and improves installer path defaults.",
+    "notes_i18n":  {
+                       "zh-CN":  "v1.3.7.3 修复打包安装版启动崩溃和 SBV2 多语言依赖问题，将默认 Whisper 本地模型换成更快的 Whisper Small，并优化安装器默认路径。",
+                       "en":  "v1.3.7.3 fixes packaged startup and SBV2 multilingual dependency issues, switches the default local Whisper model to faster Whisper Small, and improves installer path defaults.",
+                       "ja":  "v1.3.7.3 では、パッケージ版の起動問題と SBV2 の多言語依存関係を修正し、既定のローカル Whisper を高速な Whisper Small に変更し、インストーラーの既定パスを改善しました。",
+                       "ru":  "v1.3.7.3 исправляет запуск пакета и зависимости SBV2 для нескольких языков, меняет локальную модель Whisper по умолчанию на более быструю Whisper Small и улучшает путь установки по умолчанию.",
+                       "ko":  "v1.3.7.3은 패키지 시작 문제와 SBV2 다국어 의존성을 수정하고, 기본 로컬 Whisper 모델을 더 빠른 Whisper Small로 바꾸며, 설치 프로그램 기본 경로를 개선합니다."
+                   },
+    "model_runtime_dir":  "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
+    "app_exe":  "MioTranslator.exe",
+    "homepage_url":  "https://78hejiu.top",
+    "published_at":  "2026-06-08T14:40:21+09:00"
 }

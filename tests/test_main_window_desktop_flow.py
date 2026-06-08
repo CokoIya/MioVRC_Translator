@@ -30,6 +30,8 @@ def _base_desktop_window(*, send_to_chatbox: bool):
 
     window._running = True
     window._listen_session = 5
+    window._config = {"translation": {}}
+    window._output_dispatcher = None
     window._merge_lock = threading.Lock()
     window._translator = _Translator()
     window._get_output_format = lambda: "translated_with_original"
@@ -51,11 +53,13 @@ def _base_desktop_window(*, send_to_chatbox: bool):
     window._remember_recent_listen_text = lambda _text: None
     window._listen_translation_source_language = lambda selected: selected or "auto"
     window._listen_target_language = lambda: "ja"
-    window._show_listen_translation = (
-        lambda text, *, payload=None, source="listen": shown_overlay.append((text, payload))
+    window._dispatch_output_message = (
+        lambda message, *, sinks=None: shown_overlay.append((message.display_text, message.chatbox_text)) or {"overlay": True}
     )
     window._listen_send_to_chatbox_enabled = lambda: send_to_chatbox
-    window._send_listen_chatbox = lambda text: sent_chatbox.append((text, window._listen_session))
+    window._send_listen_chatbox = (
+        lambda text, *, session_id=None: sent_chatbox.append((text, session_id))
+    )
     window._auto_read_mic_translation = lambda **kwargs: auto_read_calls.append(kwargs) or True
     window._record_translation_success = lambda: None
     window._refresh_runtime_status = lambda: None

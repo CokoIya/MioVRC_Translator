@@ -8,7 +8,7 @@
 **Official download: <https://78hejiu.top>**
 
 > A local real-time translation tool for VRChat users
-> Author: `ここ_Mio` / Open-source project / No paid redistribution
+> Author: `ここ_Mio` / Official builds are free / Source code is GPLv3-or-later
 > Download site: <https://78hejiu.top>
 
 ## Overview
@@ -93,3 +93,9 @@ $env:MODELSCOPE_CACHE = "./models"
 - Native VRChat OSC does not expose other players' raw chat text
 - Reverse translation depends on loopback capture from your local playback device, so system audio routing matters
 - VRChat Chatbox has rate limits and per-message length limits
+
+## License and Branding
+
+The project source code is released under [GNU GPLv3-or-later](../LICENSE) from the current version onward. If you distribute modified source code or binary builds, you must follow GPLv3-or-later and provide the corresponding source code.
+
+`Mio RealTime Translator`, `Mio Translator`, the logo, app icon, official website materials, and release assets are not licensed under the GPL. Unofficial builds must use a different name and assets, and must clearly state that they are not official releases. See [BRANDING.md](../BRANDING.md) for details.

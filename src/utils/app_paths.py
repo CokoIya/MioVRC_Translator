@@ -4,9 +4,6 @@ import os
 import sys
 from pathlib import Path
 
-APP_DIR_NAME = "Mio RealTime Translator"
-
-
 def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -25,22 +22,19 @@ def resource_base_dirs() -> list[Path]:
 
 
 def writable_app_dir() -> Path:
-    if not getattr(sys, "frozen", False):
-        return project_root()
-
     override = os.environ.get("MIO_TRANSLATOR_HOME")
     if override:
         return Path(override).expanduser()
+    return resource_base_dirs()[0]
 
-    local_appdata = os.environ.get("LOCALAPPDATA")
-    if local_appdata:
-        return Path(local_appdata) / APP_DIR_NAME
 
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP_DIR_NAME
+def app_temp_dir() -> Path:
+    path = writable_app_dir() / "temp"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
-    xdg_data_home = os.environ.get("XDG_DATA_HOME")
-    if xdg_data_home:
-        return Path(xdg_data_home) / APP_DIR_NAME
 
-    return Path.home() / ".local" / "share" / APP_DIR_NAME
+def backgrounds_dir() -> Path:
+    path = writable_app_dir() / "backgrounds"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

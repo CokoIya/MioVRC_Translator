@@ -188,6 +188,14 @@ class SileroVADDetector:
 
         return self._model
 
+    def prewarm(self) -> None:
+        """Load the Silero VAD model in the background so the first audio frame
+        is not blocked by torch.jit.load. Safe to call multiple times."""
+        try:
+            self._get_model()
+        except Exception as exc:
+            logger.debug("Silero VAD prewarm skipped: %s", exc)
+
     def process_frame(self, pcm_bytes: bytes) -> bool:
         """Accept int16 PCM bytes and return the current in-speech state."""
         audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0

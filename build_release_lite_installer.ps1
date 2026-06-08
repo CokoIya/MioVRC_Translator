@@ -19,6 +19,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+& $releasePython tools\ensure_pyopenjtalk_dict.py
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 $env:MIO_TRANSLATOR_BUNDLE_MODELS = "0"
 & $releasePython -m PyInstaller --clean --noconfirm MioTranslator.spec
 
@@ -32,7 +37,7 @@ if (Test-Path $bundledModelsDir) {
 }
 
 $internalDir = "dist\MioTranslator\_internal"
-$forbiddenRuntimeDirs = @("scipy", "scipy.libs", "numba", "llvmlite")
+$forbiddenRuntimeDirs = @()
 foreach ($name in $forbiddenRuntimeDirs) {
     $candidate = Join-Path $internalDir $name
     if (Test-Path $candidate) {
@@ -42,7 +47,8 @@ foreach ($name in $forbiddenRuntimeDirs) {
 
 $compilerCandidates = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
 )
 
 $iscc = $compilerCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
@@ -76,4 +82,3 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Release-lite installer finished. Upload it for existing users and in-app updates."
-

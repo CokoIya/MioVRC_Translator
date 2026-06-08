@@ -8,7 +8,7 @@
 **官网下载安装：<https://78hejiu.top>**
 
 > 面向 VRChat 用户的本地实时语音翻译工具
-> 作者：`ここ_Mio` / 开源项目 / 禁止收费分发
+> 作者：`ここ_Mio` / 官方版本永久免费 / 代码采用 GPLv3-or-later 开源
 > 下载官网：<https://78hejiu.top>
 
 ## 简介
@@ -93,3 +93,9 @@ $env:MODELSCOPE_CACHE = "./models"
 - VRChat 原生 OSC 不提供其他玩家的原始聊天文本
 - 反向翻译依赖本机播放设备回环采集，体验会受系统音频链路影响
 - VRChat Chatbox 有发送频率和单条长度限制
+
+## 许可证与品牌声明
+
+本项目代码从当前版本起采用 [GNU GPLv3-or-later](../LICENSE) 发布。分发修改版或二进制构建时，必须遵守 GPLv3-or-later，并提供对应源码。
+
+`Mio RealTime Translator`、`Mio Translator`、Logo、图标、官网素材和发布素材不随 GPL 授权。非官方构建必须使用不同名称和素材，并明确标注不是官方版本。详细规则见 [BRANDING.md](../BRANDING.md)。

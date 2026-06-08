@@ -3,6 +3,7 @@ import sys
 import logging
 import warnings
 import subprocess
+import shutil
 from pathlib import Path
 
 # pydub emits a RuntimeWarning at import time when ffmpeg is not on PATH.
@@ -140,8 +141,130 @@ def _run_setup_mode() -> int:
     return 0
 
 
+def _activate_cuda_runtime_site(site_packages: Path) -> None:
+    if not site_packages.is_dir():
+        return
+    site_text = str(site_packages)
+    if site_text not in sys.path:
+        sys.path.insert(0, site_text)
+    for candidate in (
+        site_packages,
+        site_packages / "torch" / "lib",
+        site_packages / "torchaudio" / "lib",
+    ):
+        if not candidate.is_dir():
+            continue
+        try:
+            os.add_dll_directory(str(candidate))
+        except (AttributeError, FileNotFoundError, OSError):
+            pass
+        current_path = os.environ.get("PATH", "")
+        entries = current_path.split(os.pathsep) if current_path else []
+        candidate_text = str(candidate)
+        if candidate_text not in entries:
+            os.environ["PATH"] = (
+                candidate_text if not current_path else candidate_text + os.pathsep + current_path
+            )
+
+
+def _run_cuda_pip_check() -> int:
+    try:
+        import pip
+
+        print("pip=" + str(getattr(pip, "__version__", "")))
+        return 0
+    except Exception as exc:
+        print(f"pip import failed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _clean_cuda_runtime_target(target: Path) -> None:
+    from src.utils.gpu_support import cuda_runtime_site_packages
+
+    expected = cuda_runtime_site_packages().resolve(strict=False)
+    resolved = target.resolve(strict=False)
+    if resolved != expected:
+        raise RuntimeError(f"Refusing to clean unexpected CUDA runtime path: {target}")
+    if resolved.exists():
+        shutil.rmtree(resolved)
+    resolved.mkdir(parents=True, exist_ok=True)
+
+
+def _run_cuda_pytorch_install(target_arg: str | None) -> int:
+    from src.utils.gpu_support import PYTORCH_CUDA_INDEX_URL, PYTORCH_CUDA_PACKAGES
+
+    if not target_arg:
+        print("CUDA runtime target path is missing.", file=sys.stderr)
+        return 2
+
+    target = Path(target_arg)
+    try:
+        _clean_cuda_runtime_target(target)
+    except Exception as exc:
+        print(f"Could not prepare CUDA runtime target: {exc}", file=sys.stderr)
+        return 2
+
+    _meipass = getattr(sys, "_MEIPASS", None)
+    if _meipass and _meipass not in sys.path:
+        sys.path.insert(0, _meipass)
+
+    try:
+        from pip._internal.cli.main import main as pip_main
+    except Exception as exc:
+        print(f"pip is not bundled in this installer: {exc}", file=sys.stderr)
+        return 3
+
+    args = [
+        "install",
+        "--upgrade",
+        "--force-reinstall",
+        "--target",
+        str(target),
+        *PYTORCH_CUDA_PACKAGES,
+        "--index-url",
+        PYTORCH_CUDA_INDEX_URL,
+    ]
+    print("> pip " + " ".join(args), flush=True)
+    return int(pip_main(args) or 0)
+
+
+def _run_cuda_pytorch_verify() -> int:
+    from src.utils.gpu_support import cuda_runtime_site_packages
+
+    _activate_cuda_runtime_site(cuda_runtime_site_packages())
+    try:
+        import torch
+
+        print("torch=" + str(torch.__version__))
+        print("cuda=" + str(getattr(torch.version, "cuda", "") or ""))
+        available = bool(torch.cuda.is_available())
+        print("available=" + str(available))
+        print("device=" + (torch.cuda.get_device_name(0) if available else ""))
+        return 0 if available else 2
+    except Exception as exc:
+        print(f"CUDA PyTorch verification failed: {exc}", file=sys.stderr)
+        return 2
+
+
 def main() -> int:
-    if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1":
+    from src.utils.gpu_support import (
+        CUDA_PIP_CHECK_ARG,
+        CUDA_PIP_INSTALL_ARG,
+        CUDA_PIP_VERIFY_ARG,
+    )
+
+    if CUDA_PIP_CHECK_ARG in sys.argv:
+        return _run_cuda_pip_check()
+
+    if CUDA_PIP_INSTALL_ARG in sys.argv:
+        idx = sys.argv.index(CUDA_PIP_INSTALL_ARG)
+        target_arg = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
+        return _run_cuda_pytorch_install(target_arg)
+
+    if CUDA_PIP_VERIFY_ARG in sys.argv:
+        return _run_cuda_pytorch_verify()
+
+    if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1" or "--mio-selftest" in sys.argv:
         return _run_selftest()
 
     if "--setup" in sys.argv:
@@ -166,6 +289,22 @@ def main() -> int:
     logger.info("Log file ready at %s", log_file)
 
     from src.utils import config_manager
+    from src.utils import catalog_fetcher, catalog_loader
+
+    # Load catalog from cache synchronously so config_manager uses the right defaults
+    cached = catalog_fetcher._load_cache()
+    if cached:
+        from src.utils.ui_config import set_catalog
+        merged = catalog_loader.load_catalog_from_data(cached)
+        set_catalog(merged)
+        logger.info("Translation catalog loaded from cache")
+
+    def _on_catalog_loaded(data: dict) -> None:
+        from src.utils.ui_config import set_catalog as _sc
+        merged = catalog_loader.load_catalog_from_data(data)
+        _sc(merged)
+
+    catalog_fetcher.get_catalog(_on_catalog_loaded)
 
     try:
         config = config_manager.load_config()

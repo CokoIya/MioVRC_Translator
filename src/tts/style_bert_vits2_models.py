@@ -142,8 +142,12 @@ def import_style_bert_model_path(source: Path) -> list[StyleBertVits2ModelInfo]:
             validation_errors.append(f"{candidate.name}: {exc}")
             continue
 
-        target_dir = _unique_target_dir(style_bert_models_dir(), inspected.name)
+        target_root = style_bert_models_dir()
+        target_dir = _replaceable_target_dir(target_root, inspected.name)
+        if target_dir.exists():
+            _remove_managed_model_dir(target_dir, target_root)
         shutil.copytree(inspected.directory, target_dir)
+        _write_import_metadata(target_dir, inspected)
         imported.append(inspect_style_bert_model_dir(target_dir))
 
     if imported:
@@ -262,14 +266,37 @@ def _dict_keys_as_tuple(value: object) -> tuple[str, ...]:
     return tuple(str(key).strip() for key in value.keys() if str(key).strip())
 
 
-def _unique_target_dir(root: Path, raw_name: str) -> Path:
-    safe_name = _safe_folder_name(raw_name)
-    candidate = root / safe_name
-    suffix = 2
-    while candidate.exists():
-        candidate = root / f"{safe_name}-{suffix}"
-        suffix += 1
-    return candidate
+def _replaceable_target_dir(root: Path, raw_name: str) -> Path:
+    return root / _safe_folder_name(raw_name)
+
+
+def _remove_managed_model_dir(target_dir: Path, root: Path) -> None:
+    try:
+        resolved_root = root.resolve(strict=False)
+        resolved_target = target_dir.resolve(strict=False)
+        resolved_target.relative_to(resolved_root)
+    except (OSError, ValueError) as exc:
+        raise StyleBertVits2ModelError(f"Unsafe model replacement path: {target_dir}") from exc
+    if resolved_target == resolved_root:
+        raise StyleBertVits2ModelError("Refusing to replace the model root.")
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+
+
+def _write_import_metadata(target_dir: Path, inspected: StyleBertVits2ModelInfo) -> None:
+    payload = {
+        "schema": "mio-style-bert-vits2-import-v1",
+        "source_name": inspected.name,
+        "speakers": list(inspected.speakers),
+        "styles": list(inspected.styles),
+    }
+    try:
+        (target_dir / ".mio-style-bert-vits2.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.debug("Failed to write Style-Bert-VITS2 import metadata", exc_info=True)
 
 
 def _safe_folder_name(value: str) -> str:

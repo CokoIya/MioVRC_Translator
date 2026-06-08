@@ -35,6 +35,22 @@ def _create_sensevoice(config: dict, corrector: LayeredASRCorrector):
     )
 
 
+def _create_whisper(config: dict, corrector: LayeredASRCorrector):
+    asr_cfg = config.get("asr", {})
+    spec = get_asr_runtime_spec(config, "whisper-large-v3-turbo")
+    device = _resolve_device(asr_cfg.get("device", "cpu"))
+    from src.asr.whisper_asr import WhisperASR
+    whisper_cfg = asr_cfg.get("whisper", {})
+    ncpu = whisper_cfg.get("ncpu") if isinstance(whisper_cfg, dict) else None
+    return WhisperASR(
+        device=device,
+        model_id=spec.model_id,
+        model_revision=spec.model_revision,
+        corrector=corrector,
+        ncpu=ncpu,
+    )
+
+
 def _auto_fallback_enabled(config: dict) -> bool:
     asr_cfg = config.get("asr", {})
     if not isinstance(asr_cfg, dict):
@@ -80,5 +96,8 @@ def create_asr(config: dict, engine: str | None = None):
                 auto_fallback=True,
             )
         return primary
+
+    if engine == "whisper-large-v3-turbo":
+        return _create_whisper(config, corrector)
 
     return _create_sensevoice(config, corrector)

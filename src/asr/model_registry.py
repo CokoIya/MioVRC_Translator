@@ -4,10 +4,13 @@ from dataclasses import dataclass, replace
 
 from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
-QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash"
+WHISPER_ASR_LEGACY_DEFAULT_MODELS = frozenset({"iic/Whisper-large-v3-turbo"})
+WHISPER_ASR_DEFAULT_MODEL = "iic/speech_whisper-small_asr_english"
+WHISPER_ASR_DEFAULT_REVISION = "master"
+QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash-2026-02-10"
 QWEN3_ASR_MODEL_CHOICES = (
     QWEN3_ASR_DEFAULT_MODEL,
-    "qwen3-asr-flash-2026-02-10",
+    "qwen3-asr-flash",
 )
 QWEN3_ASR_DEFAULT_REGION = "singapore"
 QWEN3_ASR_REGION_BASE_URLS = {
@@ -27,6 +30,7 @@ QWEN3_ASR_LEGACY_MODEL_IDS = frozenset(
     {
         "qwen3-asr-0.6b",
         "qwen3-asr-1.7b",
+        "qwen3-asr-flash",
     }
 )
 ASR_ENGINE_FOLLOW_MAIN = "same_as_main"
@@ -54,13 +58,27 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
         model_revision="master",
         requires_local_model=True,
         bundled_dir_names=("sensevoice-small",),
-        required_files=("model.pt",),
+        required_files=(
+            "model.pt",
+            "chn_jpn_yue_eng_ko_spectok.bpe.model",
+            "am.mvn",
+        ),
         required_file_sha256=(
             (
                 "model.pt",
                 "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
             ),
         ),
+    ),
+    "whisper-large-v3-turbo": ASRRuntimeSpec(
+        engine="whisper-large-v3-turbo",
+        label="Whisper Small",
+        config_key="whisper",
+        model_id=WHISPER_ASR_DEFAULT_MODEL,
+        model_revision=WHISPER_ASR_DEFAULT_REVISION,
+        requires_local_model=True,
+        bundled_dir_names=("whisper-small",),
+        required_files=("small.en.pb",),
     ),
     "webspeech": ASRRuntimeSpec(
         engine="webspeech",
@@ -92,6 +110,7 @@ USER_SELECTABLE_ASR_ENGINES = (
     "webspeech",
     "qwen3-asr",
     "gemini-live",
+    "whisper-large-v3-turbo",
     "sensevoice-small",
 )
 LISTEN_SELECTABLE_ASR_ENGINES = (
@@ -146,26 +165,33 @@ def get_asr_runtime_spec(
         engine_cfg = {}
     if not base_spec.requires_local_model:
         model_id_key = "model" if "model" in engine_cfg else "model_id"
-        model_id = str(engine_cfg.get(model_id_key, base_spec.model_id)).strip() or base_spec.model_id
-        if (
-            base_spec.engine == "qwen3-asr"
-            and model_id in QWEN3_ASR_LEGACY_MODEL_IDS
-        ):
+        model_id = (
+            str(engine_cfg.get(model_id_key, base_spec.model_id)).strip()
+            or base_spec.model_id
+        )
+        if base_spec.engine == "qwen3-asr" and model_id in QWEN3_ASR_LEGACY_MODEL_IDS:
             model_id = QWEN3_ASR_DEFAULT_MODEL
         return replace(base_spec, model_id=model_id, required_file_sha256=())
-    model_id = str(engine_cfg.get("model_id", base_spec.model_id)).strip() or base_spec.model_id
+    model_id = (
+        str(engine_cfg.get("model_id", base_spec.model_id)).strip()
+        or base_spec.model_id
+    )
     model_revision = (
         str(engine_cfg.get("model_revision", base_spec.model_revision)).strip()
         or base_spec.model_revision
     )
+    if (
+        base_spec.engine == "whisper-large-v3-turbo"
+        and model_id in WHISPER_ASR_LEGACY_DEFAULT_MODELS
+    ):
+        model_id = base_spec.model_id
+        model_revision = base_spec.model_revision
     model_owner = _BUILTIN_MODEL_OWNER.get(model_id)
     if model_owner is not None and model_owner != resolved_engine:
         model_id = base_spec.model_id
         model_revision = base_spec.model_revision
     required_file_sha256 = (
-        base_spec.required_file_sha256
-        if model_id == base_spec.model_id
-        else ()
+        base_spec.required_file_sha256 if model_id == base_spec.model_id else ()
     )
     return replace(
         base_spec,

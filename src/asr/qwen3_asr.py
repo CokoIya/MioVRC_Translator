@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = QWEN3_ASR_DEFAULT_MODEL
 DEFAULT_REGION = QWEN3_ASR_DEFAULT_REGION
-DEFAULT_TIMEOUT_SECONDS = 15.0
+DEFAULT_TIMEOUT_SECONDS = 25.0
 
 _LANGUAGE_ALIASES = {
     "ja-jp": "ja",
@@ -112,6 +112,7 @@ class Qwen3ASRProvider(ASRProvider):
             provider_cfg.get("timeout_seconds"),
             DEFAULT_TIMEOUT_SECONDS,
         )
+        self.max_retries = _int_value(provider_cfg.get("max_retries"), 0)
         self._corrector = corrector
         self._client = None
         self._lock = threading.RLock()
@@ -138,6 +139,7 @@ class Qwen3ASRProvider(ASRProvider):
                 api_key=self.api_key,
                 base_url=self._resolved_base_url(),
                 timeout=self.timeout_seconds,
+                max_retries=self.max_retries,
             )
             if progress_callback is not None:
                 progress_callback({"stage": "ready", "message": "Qwen3-ASR ready"})
@@ -197,6 +199,14 @@ def _float_value(value: object, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _int_value(value: object, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(parsed, 0)
 
 
 def _raise_provider_error(exc: Exception) -> None:

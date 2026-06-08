@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import pathlib
 import sys
@@ -18,6 +19,8 @@ _DOWNLOAD_LOCK = threading.Lock()
 _FILE_HASH_CACHE_LOCK = threading.Lock()
 _FILE_HASH_CACHE: dict[tuple[str, int, int], str] = {}
 _MODEL_METADATA_FILENAME = ".mio-model.json"
+_DOWNLOAD_ATTEMPTS = 3
+logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[dict[str, object]], None]
 
@@ -41,7 +44,9 @@ def model_dir(spec: ASRRuntimeSpec) -> pathlib.Path:
 
 
 def cache_dir() -> pathlib.Path:
-    override = os.environ.get("MIO_TRANSLATOR_SENSEVOICE_CACHE_DIR")
+    override = os.environ.get("MIO_TRANSLATOR_MODELSCOPE_CACHE_DIR", "").strip()
+    if not override:
+        override = os.environ.get("MIO_TRANSLATOR_SENSEVOICE_CACHE_DIR", "").strip()
     if override:
         return pathlib.Path(override).expanduser()
     return writable_app_dir() / "runtime_cache" / "modelscope"
@@ -127,9 +132,9 @@ def _required_file_hashes(path: pathlib.Path, spec: ASRRuntimeSpec) -> dict[str,
 def _trusted_hashes_match(path: pathlib.Path, spec: ASRRuntimeSpec) -> bool:
     trusted_hashes = dict(spec.required_file_sha256 or ())
     if trusted_hashes:
-        for filename in spec.required_files:
+        for filename, expected_value in trusted_hashes.items():
             expected = str(trusted_hashes.get(filename) or "").strip().lower()
-            if not expected:
+            if not filename or not expected or not str(expected_value or "").strip():
                 return False
             file_path = path / filename
             if not file_path.is_file() or _sha256_file(file_path) != expected:
@@ -293,6 +298,34 @@ def _emit_progress(
     progress_callback(event)
 
 
+def _repo_file_name(repo_file: dict[str, object]) -> str:
+    for key in ("Name", "Path", "Key", "FilePath", "FileName"):
+        value = str(repo_file.get(key) or "").strip().replace("\\", "/")
+        if value:
+            return value.lstrip("/")
+    return ""
+
+
+def _download_file_patterns(spec: ASRRuntimeSpec) -> tuple[str, ...]:
+    patterns: list[str] = []
+    for filename in ("configuration.json", "config.yaml", *spec.required_files):
+        clean = str(filename or "").strip().replace("\\", "/")
+        if clean and clean not in patterns:
+            patterns.append(clean)
+    return tuple(patterns)
+
+
+def _file_matches_patterns(filename: str, patterns: tuple[str, ...]) -> bool:
+    if not patterns:
+        return True
+    normalized = filename.replace("\\", "/").lstrip("/")
+    return any(
+        normalized == pattern
+        or normalized.endswith("/" + pattern)
+        for pattern in patterns
+    )
+
+
 def _fetch_remote_snapshot_info(model_id: str, model_revision: str) -> dict[str, object]:
     try:
         from modelscope.hub.api import HubApi
@@ -333,6 +366,47 @@ def _fetch_remote_snapshot_info(model_id: str, model_revision: str) -> dict[str,
         "resolved_revision": resolved_revision,
         "total_size": total_size or None,
     }
+
+
+def _fetch_required_snapshot_info(spec: ASRRuntimeSpec, model_revision: str) -> dict[str, object]:
+    snapshot_info = _fetch_remote_snapshot_info(spec.model_id, model_revision)
+    patterns = _download_file_patterns(spec)
+    try:
+        from modelscope.hub.api import HubApi
+
+        api = HubApi()
+        endpoint = api.get_endpoint_for_read(repo_id=spec.model_id, repo_type="model")
+        cookies = api.get_cookies()
+        resolved_revision = str(snapshot_info.get("resolved_revision") or model_revision)
+        repo_files = api.get_model_files(
+            model_id=spec.model_id,
+            revision=resolved_revision,
+            recursive=True,
+            use_cookies=False if cookies is None else cookies,
+            headers={"Snapshot": "True"},
+            endpoint=endpoint,
+        )
+    except Exception:
+        return snapshot_info
+
+    total_size = 0
+    for repo_file in repo_files:
+        if repo_file.get("Type") == "tree":
+            continue
+        filename = _repo_file_name(repo_file)
+        if _file_matches_patterns(filename, patterns):
+            total_size += int(repo_file.get("Size") or 0)
+    if total_size > 0:
+        snapshot_info["total_size"] = total_size
+    return snapshot_info
+
+
+def _target_has_corrupt_complete_model(target_dir: pathlib.Path, spec: ASRRuntimeSpec) -> bool:
+    return (
+        target_dir.exists()
+        and _is_complete_model_dir(target_dir, spec)
+        and not verify_model_integrity(target_dir, spec)
+    )
 
 
 class _AggregateDownloadProgress:
@@ -400,14 +474,15 @@ def _download_model_to(
             "modelscope is required to download ASR models."
         ) from exc
 
-    snapshot_info = _fetch_remote_snapshot_info(spec.model_id, model_revision)
+    snapshot_info = _fetch_required_snapshot_info(spec, model_revision)
     resolved_revision = str(snapshot_info.get("resolved_revision", "")).strip() or model_revision
     total_bytes = snapshot_info.get("total_size")
     if not isinstance(total_bytes, int):
         total_bytes = None
+    file_patterns = _download_file_patterns(spec)
 
     target_dir.parent.mkdir(parents=True, exist_ok=True)
-    if target_dir.exists() and not verify_model_integrity(target_dir, spec):
+    if _target_has_corrupt_complete_model(target_dir, spec):
         shutil.rmtree(target_dir, ignore_errors=True)
     modelscope_cache = cache_dir()
     modelscope_cache.mkdir(parents=True, exist_ok=True)
@@ -430,18 +505,59 @@ def _download_model_to(
         downloaded_bytes=0,
     )
 
-    try:
-        with _ensure_download_stdio():
-            snapshot_download(
-                spec.model_id,
-                revision=resolved_revision,
-                cache_dir=str(modelscope_cache),
-                local_dir=str(target_dir),
-                enable_file_lock=True,
-                progress_callbacks=[_ModelscopeProgress],
+    last_error: Exception | None = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with _ensure_download_stdio():
+                logger.info(
+                    "Downloading %s model via ModelScope (revision=%s, files=%s, cache=%s, target=%s)",
+                    spec.label,
+                    resolved_revision,
+                    ", ".join(file_patterns),
+                    modelscope_cache,
+                    target_dir,
+                )
+                snapshot_download(
+                    spec.model_id,
+                    revision=resolved_revision,
+                    cache_dir=str(modelscope_cache),
+                    local_dir=str(target_dir),
+                    allow_file_pattern=list(file_patterns),
+                    enable_file_lock=True,
+                    max_workers=1,
+                    progress_callbacks=[_ModelscopeProgress],
+                )
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "%s model download attempt %d/%d failed",
+                spec.label,
+                attempt,
+                _DOWNLOAD_ATTEMPTS,
+                exc_info=True,
             )
-    except Exception as exc:
-        raise RuntimeError(f"{spec.label} model download failed: {exc}") from exc
+            if attempt >= _DOWNLOAD_ATTEMPTS:
+                break
+            _emit_progress(
+                progress_callback,
+                stage="download_retry",
+                message=(
+                    f"{spec.label} download interrupted. Retrying "
+                    f"{attempt + 1}/{_DOWNLOAD_ATTEMPTS}..."
+                ),
+                indeterminate=True,
+                total_bytes=total_bytes,
+                downloaded_bytes=tracker.downloaded_bytes,
+            )
+            time.sleep(min(2.0 * attempt, 5.0))
+    if last_error is not None:
+        raise RuntimeError(
+            f"{spec.label} model download failed after {_DOWNLOAD_ATTEMPTS} attempts. "
+            f"The cached partial download was kept in {modelscope_cache}. "
+            f"Original error: {last_error}"
+        ) from last_error
 
     if not _is_complete_model_dir(target_dir, spec):
         raise RuntimeError(

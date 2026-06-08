@@ -99,7 +99,7 @@ def test_gemini_generate_content_path_sends_wav_and_cleans_text(monkeypatch):
             "asr": {
                 "gemini_live": {
                     "api_key": "test-key",
-                    "model": "gemini-2.0-flash",
+                    "model": "gemini-3.5-flash",
                     "use_live_api": False,
                 }
             }
@@ -110,7 +110,7 @@ def test_gemini_generate_content_path_sends_wav_and_cleans_text(monkeypatch):
 
     assert text == "ありがとう"
     assert _FakeClient.last_init_kwargs == {"api_key": "test-key"}
-    assert _FakeClient.last_generate_kwargs["model"] == "gemini-2.0-flash"
+    assert _FakeClient.last_generate_kwargs["model"] == "gemini-3.5-flash"
     part = _FakeClient.last_generate_kwargs["contents"][1]
     assert part.mime_type == "audio/wav"
     assert part.data.startswith(b"RIFF")
@@ -123,7 +123,7 @@ def test_gemini_live_path_sends_pcm_stream_and_collects_input_transcription(monk
             "asr": {
                 "gemini_live": {
                     "api_key": "test-key",
-                    "model": "gemini-2.0-flash",
+                    "model": "gemini-3.5-flash",
                     "use_live_api": True,
                     "live_silence_duration_ms": 500,
                 }

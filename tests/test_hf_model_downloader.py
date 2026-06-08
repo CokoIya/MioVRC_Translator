@@ -25,7 +25,9 @@ def test_mirror_candidates_allow_custom_mainland_proxy(monkeypatch):
 def test_select_mirror_uses_locale_preferred_base_when_probes_fail(monkeypatch):
     _clear_mirror_env(monkeypatch)
     monkeypatch.setattr(downloader, "_probe_mirror_throughput", lambda *args: None)
-    monkeypatch.setattr(downloader, "_preferred_mirror_for_locale", lambda: "https://hf-mirror.com")
+    monkeypatch.setattr(
+        downloader, "_preferred_mirror_for_locale", lambda: "https://hf-mirror.com"
+    )
 
     selected = downloader._select_mirror("model/repo", "config.json")
 
@@ -35,7 +37,9 @@ def test_select_mirror_uses_locale_preferred_base_when_probes_fail(monkeypatch):
 def test_mirror_fallback_order_keeps_selected_then_locale_then_official(monkeypatch):
     _clear_mirror_env(monkeypatch)
     monkeypatch.setenv("MIO_HF_MIRROR_BASES", "https://mirror.example")
-    monkeypatch.setattr(downloader, "_preferred_mirror_for_locale", lambda: "https://hf-mirror.com")
+    monkeypatch.setattr(
+        downloader, "_preferred_mirror_for_locale", lambda: "https://hf-mirror.com"
+    )
 
     order = downloader._mirror_fallback_order("https://mirror.example")
 
@@ -44,3 +48,11 @@ def test_mirror_fallback_order_keeps_selected_then_locale_then_official(monkeypa
         "https://hf-mirror.com",
         "https://huggingface.co",
     ]
+
+
+def test_asr_model_file_lists_use_real_weight_names_not_default_model_bin():
+    assert downloader._HF_MODEL_FILES["iic/speech_whisper-small_asr_english"] == [
+        "configuration.json",
+        "small.en.pb",
+    ]
+    assert "model.bin" not in downloader._HF_MODEL_FILES["iic/SenseVoiceSmall"]

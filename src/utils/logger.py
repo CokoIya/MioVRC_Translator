@@ -8,30 +8,17 @@ import faulthandler
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from src.utils.app_paths import resource_base_dirs, writable_app_dir
+from src.utils.app_paths import writable_app_dir
 
 _LOG_INITIALIZED = False
 _LOG_PATH: Path | None = None
 _FAULT_HANDLER_FILE = None
 
 
-def _preferred_logs_dir() -> Path:
-    return resource_base_dirs()[0] / "logs"
-
-
-def _fallback_logs_dir() -> Path:
-    return writable_app_dir() / "logs"
-
-
 def logs_dir() -> Path:
-    preferred = _preferred_logs_dir()
-    try:
-        preferred.mkdir(parents=True, exist_ok=True)
-        return preferred
-    except OSError:
-        fallback = _fallback_logs_dir()
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    target = writable_app_dir() / "logs"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def log_path() -> Path:
@@ -46,6 +33,18 @@ def _build_formatter() -> logging.Formatter:
         fmt="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+def _stdout_is_usable() -> bool:
+    stream = getattr(sys, "stdout", None)
+    if stream is None:
+        return False
+    try:
+        stream.write("")
+        stream.flush()
+        return True
+    except Exception:
+        return False
 
 
 def setup_logging(console_level: int = logging.INFO) -> Path:
@@ -83,10 +82,11 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    if _stdout_is_usable():
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
 
     logging.captureWarnings(True)
 

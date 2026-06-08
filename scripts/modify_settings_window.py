@@ -95,7 +95,6 @@ def modify_settings_window():
     print("✅ 修改完成！")
     print(f"原文件已备份到: {backup_path}")
     print("\n注意: 由于文件复杂，建议手动检查并添加 TTS UI 代码")
-    print("请参考: docs/SETTINGS_WINDOW_MODIFICATIONS.md")
 
     return True
 

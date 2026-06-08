@@ -5,6 +5,15 @@ from src.audio.recorder import AudioRecorder
 
 
 class AudioRecorderTests(unittest.TestCase):
+    def test_diagnostics_snapshot_includes_vad_meter_fields(self):
+        recorder = AudioRecorder(lambda _audio: None)
+        snapshot = recorder.diagnostics_snapshot()
+
+        self.assertIn("vad_in_speech", snapshot)
+        self.assertIn("vad_speech_ratio", snapshot)
+        self.assertIn("vad_activation_ratio", snapshot)
+        self.assertEqual(snapshot["vad_min_rms"], 0.012)
+
     def test_start_failure_resets_running_state(self):
         recorder = AudioRecorder(lambda _audio: None)
 

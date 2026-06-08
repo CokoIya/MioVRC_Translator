@@ -9,7 +9,8 @@ from ctypes import wintypes
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TEXT_INPUT_HOTKEY = "Ctrl+Alt+X"
+DEFAULT_TEXT_INPUT_HOTKEY = "Alt+X"
+DEFAULT_MIC_MUTE_HOTKEY = "Alt+C"
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -125,13 +126,14 @@ class GlobalHotkey:
         callback: Callable[[], None],
         *,
         name: str = "global-hotkey",
+        hotkey_id: int = 0x4D10,
     ) -> None:
         self.hotkey = normalize_hotkey(hotkey)
         self._callback = callback
         self._name = name
         self._thread: threading.Thread | None = None
         self._thread_id = 0
-        self._hotkey_id = 0x4D10
+        self._hotkey_id = hotkey_id
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
         self._registered = False

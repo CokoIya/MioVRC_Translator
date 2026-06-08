@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mio Translator v1.3.6.1 Downloads</title>
+  <title>Mio Translator v1.3.7.3 Downloads</title>
   <style>
     :root {
       color-scheme: light;
@@ -66,22 +66,25 @@
       margin-top: 18px;
       color: var(--muted);
       font-size: 14px;
+      overflow-wrap: anywhere;
     }
   </style>
 </head>
 <body>
   <main class="card">
-    <h1>Mio Translator v1.3.6.1 Downloads</h1>
-    <p>这里是官网手动下载页。v1.3.6.1 是正式版，安装包已内置 Style-Bert-VITS2 相关依赖，但不捆绑语音模型，首次启动时仍会按系统语言自动推荐并下载。</p>
-    <p>安装器会检测已有 SenseVoice 模型，不会重复下载；Web Speech、Qwen3-ASR 与 Gemini Live 属于在线 ASR，不需要本地模型。Qwen3-ASR 面向全语言的高精度快速识别，更适合多语言场景。</p>
-    <p>v1.3.6.1 继续把语音阅读、反向翻译和 MixLine 虚拟麦克风串成同传链路：译文和手打文字都可以被 AI 声音读出来，再作为麦克风输入送进 VRChat 或其他支持自选麦克风的游戏。</p>
+    <h1>Mio Translator v1.3.7.3 Downloads</h1>
+    <p>这里是官网手动下载页。v1.3.7.3 修复打包安装版启动崩溃和 SBV2 多语言依赖问题，将默认 Whisper 本地模型换成更快的 Whisper Small，并优化安装器默认路径。</p>
+    <p>默认仍使用 CPU，适合低配设备。强显卡玩家可以在设置中开启 GPU 支持，程序会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。</p>
+    <p>安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时会按需下载；已下载过的模型会被检测复用，不会重复下载。在线 ASR 包括 Web Speech、Qwen3-ASR 与 Gemini Live，不需要本地模型。</p>
+    <p>译文和手打文字可以被 AI 声音读出来，再作为麦克风输入送进 VRChat 或其他支持自选麦克风的游戏。</p>
     <p>如果你想让游戏里的其他玩家听到 AI 语音，需要额外安装 MixLine，然后在游戏内选择 MixLine 虚拟麦克风。</p>
     <div class="actions">
-      <a class="primary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.6.1/MioTranslator-Setup-v1.3.6.1.exe">下载正式版安装包</a>
+      <a class="primary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.3/MioTranslator-Setup-v1.3.7.3.exe" download="MioTranslator-Setup-v1.3.7.3.exe">下载正式版安装包</a>
       <a class="secondary" href="#" onclick="alert('暂无测试版提供'); return false;">Beta版下载</a>
     </div>
-    <p class="meta">如果你是第一次安装或从旧版本升级，都使用同一个 v1.3.6.1 安装包。</p>
-    <p class="meta">安装后按向导下载语音模型；更新校验信息由官方 installer_manifest.json 提供。</p>
+    <p class="meta">如果你是第一次安装或从旧版本升级，都使用同一个 v1.3.7.3 安装包。文件大小：379,895,752 bytes，约 362 MB。</p>
+    <p class="meta">SHA256：3d75d1c396ea12ff1b1e64b2242a57fb00e71e111498ac5a175e92d0855f1c8e</p>
+    <p class="meta">安装后按向导下载需要的模型；更新校验信息由官方 installer_manifest.json 提供。</p>
   </main>
 </body>
 </html>

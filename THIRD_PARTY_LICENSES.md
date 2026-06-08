@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-This document lists the open-source libraries used by Mio RealTime Translator and their licenses.
+This document lists the third-party libraries, tools, and bundled models used by Mio RealTime Translator and their licenses. Mio RealTime Translator itself is licensed under GPLv3-or-later; third-party components remain under their respective licenses.
 
 ## Runtime Dependencies
 
@@ -215,13 +215,13 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## Compliance Notes
 
-1. **MIT and Apache 2.0 Licenses**: These licenses are permissive and allow commercial use, modification, and distribution. We comply by including this attribution document.
+1. **Project License**: Mio RealTime Translator is licensed under GPLv3-or-later. The project license is separate from the licenses of bundled third-party components.
 
-2. **BSD Licenses**: Similar to MIT, these are permissive licenses. We comply by including copyright notices and disclaimers.
+2. **MIT, Apache 2.0, and BSD Licenses**: These permissive licenses allow use, modification, and distribution with attribution and license notice requirements. We comply by including this attribution document.
 
-3. **GPL with Exception (PyInstaller)**: PyInstaller's license allows bundling with proprietary applications without making them GPL. We comply by using PyInstaller only as a build tool.
+3. **GPL with Exception (PyInstaller)**: PyInstaller's license allows bundling with applications without requiring the bundled application to use GPL solely because PyInstaller was used as a build tool.
 
-4. **Model Licenses**: The SenseVoice model is licensed under MIT, allowing commercial use with attribution.
+4. **Model Licenses**: The SenseVoice model is licensed under MIT, allowing use and redistribution with attribution.
 
 ## Updating This Document
 
@@ -229,7 +229,7 @@ When adding new dependencies:
 
 1. Check the dependency's license
 2. Add it to the appropriate section above
-3. Ensure license compatibility with MIT
+3. Ensure license compatibility with GPLv3-or-later and the project's distribution model
 4. Include copyright and URL information
 
 ## Questions?

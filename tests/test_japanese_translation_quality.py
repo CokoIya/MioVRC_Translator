@@ -40,7 +40,12 @@ def _openai_translator_stub(
 ):
     translator = OpenAITranslator.__new__(OpenAITranslator)
     BaseTranslator.__init__(translator, prompt_profile=prompt_profile or {})
-    translator.model = "qwen-mt-flash" if uses_qwen_mt else "qwen3.6-plus"
+    translator.model = "qwen-mt-flash" if uses_qwen_mt else "qwen3.7-max"
+    translator._base_url = (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if is_qwen
+        else "https://api.openai.com/v1"
+    )
     translator._is_qwen_backend = is_qwen
     translator._uses_qwen_mt_translation_options = uses_qwen_mt
     return translator
@@ -180,6 +185,25 @@ def test_japanese_to_chinese_prompt_demands_natural_simplified_chinese():
     assert "natural Mainland Simplified Chinese" in prompt
     assert "idiomatic spoken Chinese" in prompt
     assert "avoid translationese" in prompt
+    assert "correct obvious ASR mistakes" in prompt
+    assert "preserve line breaks" in prompt
+
+
+def test_prompt_demands_natural_conversational_english():
+    translator = DummyTranslator()
+
+    prompt = translator._build_prompt(
+        "hello, today I am kind of sleepy",
+        "ja",
+        "en",
+        context_source="mic",
+    )
+
+    assert "Target language: English" in prompt
+    assert "natural conversational English" in prompt
+    assert "avoid translationese" in prompt
+    assert "obvious ASR" in prompt
+    assert "contractions" in prompt
 
 
 def test_listen_prompt_does_not_apply_user_persona():
@@ -208,12 +232,103 @@ def test_listen_prompt_does_not_apply_user_persona():
     assert "Cool Senpai" in mic_prompt
 
 
+def test_roleplay_profile_adds_persona_tone_and_safety_to_mic_prompt():
+    translator = DummyTranslator(
+        prompt_profile={
+            "mode": "roleplay",
+            "politeness": "casual",
+            "tone": "cheerful",
+            "persona_name": "Marin Preset",
+            "persona_prompt": "Use bright, friendly wording.",
+            "glossary": [
+                "Cheerful and casual",
+                "Do not make neutral text childish",
+            ],
+        }
+    )
+
+    mic_prompt = translator._build_prompt(
+        "hello",
+        "en",
+        "ja",
+        context_source="mic",
+    )
+    listen_prompt = translator._build_prompt(
+        "hello",
+        "en",
+        "ja",
+        context_source="listen",
+    )
+
+    assert "follow the social style instructions below" in mic_prompt
+    assert "Social mode: roleplay" in mic_prompt
+    assert "bright, friendly, energetic" in mic_prompt
+    assert "Persona name: Marin Preset" in mic_prompt
+    assert "Persona notes: Use bright, friendly wording." in mic_prompt
+    assert "Preferred glossary" in mic_prompt
+    assert "Persona safety" in mic_prompt
+    assert "Marin Preset" not in listen_prompt
+    assert "social style instructions" not in listen_prompt
+
+
+def test_standard_profile_does_not_add_saved_persona_to_prompt():
+    translator = DummyTranslator(
+        prompt_profile={
+            "mode": "standard",
+            "politeness": "polite",
+            "tone": "cool",
+            "persona_name": "Saved Disabled Preset",
+            "persona_prompt": "This should not affect normal translation.",
+            "glossary": ["Should not appear"],
+        }
+    )
+
+    prompt = translator._build_prompt(
+        "hello",
+        "en",
+        "ja",
+        context_source="mic",
+    )
+
+    assert "Saved Disabled Preset" not in prompt
+    assert "social style instructions" not in prompt
+
+
+def test_openai_translator_skips_api_when_source_matches_target():
+    translator = OpenAITranslator.__new__(OpenAITranslator)
+    BaseTranslator.__init__(translator)
+
+    assert translator.translate("hello", "en", "en") == "hello"
+
+
+def test_anthropic_translator_skips_api_when_source_matches_target():
+    translator = AnthropicTranslator.__new__(AnthropicTranslator)
+    BaseTranslator.__init__(translator)
+
+    assert translator.translate("hello", "ja", "ja") == "hello"
+
+
 def test_translation_output_removes_cjk_spacing_artifacts():
     translator = DummyTranslator()
 
     output = translator._finalize_translation_output("我 们 去 VRChat 吧 。")
 
     assert output == "我们去 VRChat 吧。"
+
+
+def test_translation_output_removes_model_boilerplate_prefixes():
+    translator = DummyTranslator()
+
+    assert (
+        translator._finalize_translation_output('Here is the translation:\n"Hello there."')
+        == "Hello there."
+    )
+    assert (
+        translator._finalize_translation_output(
+            "\u4ee5\u4e0b\u662f\u7ffb\u8bd1\uff1a\n\u4f60\u597d"
+        )
+        == "\u4f60\u597d"
+    )
 
 
 def test_qwen_prompt_adds_colloquial_chinese_calibration():
@@ -231,6 +346,22 @@ def test_qwen_prompt_adds_colloquial_chinese_calibration():
     assert "今天有点困了" in messages[1]["content"]
 
 
+def test_qwen_prompt_adds_colloquial_english_calibration():
+    translator = _openai_translator_stub(uses_qwen_mt=False)
+
+    messages = translator._build_messages(
+        "hello, today I am kind of sleepy",
+        "ja",
+        "en",
+        context_source="mic",
+    )
+
+    assert "Qwen style calibration" in messages[0]["content"]
+    assert "Qwen colloquial English guide" in messages[1]["content"]
+    assert "natural spoken line" in messages[1]["content"]
+    assert "Avoid direct calques" in messages[1]["content"]
+
+
 def test_qwen_mt_options_are_used_for_plain_mt_models():
     translator = _openai_translator_stub(uses_qwen_mt=True)
 
@@ -243,6 +374,13 @@ def test_qwen_mt_options_are_used_for_plain_mt_models():
         context_source="listen",
     )
     assert translator._should_use_qwen_mt_translation_options("en", "ru")
+
+
+def test_qwen_mt_options_are_disabled_for_english_target_quality():
+    translator = _openai_translator_stub(uses_qwen_mt=True)
+
+    assert not translator._should_use_qwen_mt_translation_options("ja", "en")
+    assert not translator._should_use_qwen_mt_translation_options("zh", "en")
 
 
 def test_qwen_mt_options_are_disabled_when_persona_is_active():
@@ -339,12 +477,61 @@ def test_openai_pro_responses_request_omits_temperature():
     assert "temperature" not in translator._client.responses.kwargs
 
 
+def test_openai_responses_request_includes_roleplay_profile():
+    translator = _openai_translator_stub(
+        is_qwen=False,
+        uses_qwen_mt=False,
+        prompt_profile={
+            "mode": "roleplay",
+            "tone": "warm",
+            "persona_name": "Rem Preset",
+            "persona_prompt": "Use gentle, supportive wording.",
+            "glossary": ["Warm but not melodramatic"],
+        },
+    )
+    translator.model = "gpt-5.5"
+    translator._client = _CaptureClient()
+    translator._extra_body = {}
+    translator._is_reasoning_model = False
+    translator._max_output_tokens = 192
+    translator._omits_temperature = True
+
+    assert translator._translate_with_responses("hello", "en", "zh") == "ok"
+    prompt = translator._client.responses.kwargs["input"]
+    assert "Rem Preset" in prompt
+    assert "gentle, supportive" in prompt
+    assert "Persona safety" in prompt
+
+
+def test_anthropic_request_includes_roleplay_profile(monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=_AnthropicClient))
+    translator = AnthropicTranslator(
+        api_key="test-key",
+        model="claude-sonnet-4-20250514",
+        prompt_profile={
+            "mode": "roleplay",
+            "tone": "playful",
+            "persona_name": "Holo Preset",
+            "persona_prompt": "Use wise, lightly playful wording.",
+            "glossary": ["Light teasing only when suitable"],
+        },
+    )
+
+    with pytest.raises(RuntimeError):
+        translator.translate("hello", "en", "zh")
+
+    prompt = translator._client.messages.kwargs["messages"][0]["content"]
+    assert "Holo Preset" in prompt
+    assert "wise, lightly playful" in prompt
+    assert "Persona safety" in prompt
+
+
 def test_deepseek_v4_translation_disables_thinking(monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
     translator = OpenAITranslator(
         api_key="test-key",
         model="deepseek-v4-flash",
-        base_url="https://api.deepseek.com/v1",
+        base_url="https://api.deepseek.com",
     )
 
     assert translator._extra_body["thinking"]["type"] == "disabled"
@@ -359,7 +546,7 @@ def test_deepseek_empty_response_reports_provider_summary(monkeypatch):
     translator = OpenAITranslator(
         api_key="test-key",
         model="deepseek-v4-flash",
-        base_url="https://api.deepseek.com/v1",
+        base_url="https://api.deepseek.com",
     )
 
     with pytest.raises(RuntimeError) as excinfo:

@@ -10,7 +10,7 @@ SoundCard>=0.4.5,<1.0.0
 PyAudioWPatch>=0.2.12,<1.0.0
 numpy>=1.26.4,<2.0.0; python_version < "3.12"
 numpy>=2.0.0; python_version >= "3.12"
-webrtcvad>=2.0.10,<3.0.0
+webrtcvad-wheels>=2.0.14,<3.0.0
 scipy>=1.10.0
 
 # ASR - SenseVoiceSmall (Chinese / Cantonese)
@@ -19,6 +19,9 @@ modelscope>=1.28.0,<2.0.0
 torch>=2.4.0
 torchaudio>=2.4.0
 editdistance>=0.8.1,<1.0.0
+
+# ASR - Whisper runtime (default local model: Whisper Small)
+openai-whisper>=20240930,<20270000
 
 # ASR - shared HF download helpers
 huggingface-hub>=0.20.0,<2.0.0

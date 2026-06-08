@@ -105,7 +105,11 @@ def test_desktop_prepare_frame_avoids_stereo_phase_cancellation():
 
     assert prepared.shape == tone.shape
     assert float(np.sqrt(np.mean(np.square(prepared)))) > 0.25
-    assert recorder.diagnostics_snapshot()["last_prepared_rms"] > 0.25
+    snapshot = recorder.diagnostics_snapshot()
+    assert snapshot["last_prepared_rms"] > 0.25
+    assert "vad_min_rms" in snapshot
+    assert "vad_in_speech" in snapshot
+    assert snapshot["running"] is False
 
 
 def test_desktop_prepare_frame_keeps_normal_stereo_mix():

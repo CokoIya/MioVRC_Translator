@@ -31,6 +31,20 @@ def test_chatbox_duplicate_text_is_still_queued():
     assert second.arguments == ("hello", True, False)
 
 
+def test_chatbox_pacing_scales_with_text_length():
+    sender = _sender_without_worker()
+    sender._min_send_interval_s = 0.8
+
+    assert sender.send_chatbox("hi") == "hi"
+    assert sender.send_chatbox("x" * 120) == "x" * 120
+
+    short = sender._queue.get_nowait()
+    long = sender._queue.get_nowait()
+    assert short.min_interval_s == 0.8
+    assert long.min_interval_s is not None
+    assert long.min_interval_s > short.min_interval_s
+
+
 def test_chatbox_send_reports_failure_when_enqueue_fails():
     sender = _sender_without_worker()
     sender._enqueue_payload = lambda _payload: False
