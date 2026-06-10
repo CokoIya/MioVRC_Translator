@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # ── 每次发版前改这两行 ──────────────────────────────────────────────────────
-APP_VERSION = "1.3.7.3"
+APP_VERSION = "1.3.7.5"
 UPDATE_CHECK_URL = "https://78hejiu.top/installer_manifest.json"
 UPDATE_CHECK_URLS: tuple[str, ...] = (
     UPDATE_CHECK_URL,

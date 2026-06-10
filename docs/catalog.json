@@ -11,6 +11,18 @@
       "max_retries": 0,
       "model_input": "select"
     },
+    "openai_compatible": {
+      "label": "GPT Compatible",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.5",
+      "timeout_s": 15.0,
+      "max_output_tokens": 192,
+      "max_retries": 0,
+      "model_input": "select",
+      "base_url_input": "entry",
+      "api_key_hint": "Use this for OpenAI-compatible proxy or relay providers. Enter the Base URL and model id supplied by that provider.",
+      "model_hint": "Choose the model id exposed by your proxy. If your saved model is not in the preset list, Mio keeps it available in this dropdown."
+    },
     "local_ai": {
       "label": "Local AI",
       "base_url": "http://127.0.0.1:11434/v1",
@@ -135,10 +147,23 @@
       "timeout_s": 15.0,
       "max_output_tokens": 192,
       "model_input": "select"
+    },
+    "anthropic_compatible": {
+      "label": "Claude Compatible",
+      "base_url": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-6",
+      "timeout_s": 15.0,
+      "max_output_tokens": 192,
+      "max_retries": 0,
+      "model_input": "select",
+      "base_url_input": "entry",
+      "api_key_hint": "Use this for Claude-compatible proxy or relay providers. Enter the Base URL and model id supplied by that provider.",
+      "model_hint": "Choose the Claude model id exposed by your proxy. If your saved model is not in the preset list, Mio keeps it available in this dropdown."
     }
   },
   "translation_model_presets": {
     "openai": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
+    "openai_compatible": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
     "deepseek": ["deepseek-v4-flash", "deepseek-v4-pro"],
     "zhipu": ["glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7-flash", "glm-4.7-flashx", "glm-4.7", "glm-4.6"],
     "qianwen": ["qwen-mt-plus", "qwen-mt-flash", "qwen3.7-max", "qwen-mt-turbo", "qwen-mt-lite"],
@@ -149,7 +174,8 @@
     "mistral": ["mistral-medium-3-5", "mistral-medium-latest", "mistral-small-latest", "mistral-large-latest", "ministral-8b-latest", "ministral-3b-latest", "magistral-small-latest", "magistral-medium-latest"],
     "doubao": [],
     "nvidia": ["nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-nano-30b-a3b", "nvidia/llama-3.1-nemotron-nano-8b-v1"],
-    "anthropic": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-1-20250805", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]
+    "anthropic": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-1-20250805", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"],
+    "anthropic_compatible": ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-1-20250805", "claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]
   },
   "translation_model_profiles": {
     "openai": {
@@ -158,6 +184,7 @@
       "gpt-5.4-mini": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
       "gpt-5.4-nano": {"speed": "very_fast", "quality": "balanced", "fit": "general", "note": "economy_first"}
     },
+    "openai_compatible": {},
     "deepseek": {
       "deepseek-v4-flash": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
       "deepseek-v4-pro": {"speed": "balanced", "quality": "high", "fit": "recommended", "note": "general_high_quality"},
@@ -250,7 +277,8 @@
       "claude-3-7-sonnet-20250219": {"speed": "balanced", "quality": "high", "fit": "general", "note": "general_high_quality"},
       "claude-3-5-sonnet-20241022": {"speed": "balanced", "quality": "high", "fit": "general", "note": "balanced_quality"},
       "claude-3-5-haiku-20241022": {"speed": "fast", "quality": "balanced", "fit": "very_recommended", "note": "live_default"}
-    }
+    },
+    "anthropic_compatible": {}
   },
   "translation_backend_region_base_urls": {
     "qianwen": {

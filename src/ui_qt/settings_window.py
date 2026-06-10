@@ -59,6 +59,7 @@ from src.tts.api_tts_config import (
     TTS_API_ENGINE_IDS,
     get_tts_api_base_url,
     get_tts_api_default_value,
+    get_tts_api_model_options,
     get_tts_api_region_options,
     get_tts_api_voice_options,
     normalize_tts_api_region,
@@ -1725,7 +1726,7 @@ class SettingsWindow(QDialog):
         self._tts_api_key_entry: QLineEdit | None = None
         self._tts_api_region_combo: QComboBox | None = None
         self._tts_api_base_url_entry: QLineEdit | None = None
-        self._tts_api_model_entry: QLineEdit | None = None
+        self._tts_api_model_entry: QComboBox | None = None
         self._tts_device_combo: QComboBox | None = None
         self._asr_device_combo: QComboBox | None = None
         self._dictionary_status_label: QLabel | None = None
@@ -2396,7 +2397,20 @@ class SettingsWindow(QDialog):
                 api_entry.setText(self._tts_api_key_var.value())
             model_entry = getattr(self, "_tts_api_model_entry", None)
             if model_entry is not None:
-                model_entry.setText(self._tts_api_model_var.value())
+                items = list(
+                    get_tts_api_model_options(
+                        self._selected_tts_api_engine(),
+                        self._tts_api_model_var.value(),
+                    )
+                ) or [self._tts_api_model_var.value()]
+                current = self._tts_api_model_var.value()
+                model_entry.blockSignals(True)
+                try:
+                    model_entry.clear()
+                    model_entry.addItems(items)
+                    model_entry.setEditText(current)
+                finally:
+                    model_entry.blockSignals(False)
             combo = getattr(self, "_tts_api_region_combo", None)
             if combo is not None:
                 items = list(self._tts_api_region_codes.keys()) or [""]
@@ -4049,7 +4063,48 @@ class SettingsWindow(QDialog):
                 engine_cfg["language_type"] = self._qwen_tts_language_type_from_code(
                     self._selected_tts_test_language()
                 )
+                self._apply_qwen_tts_persona_instructions(engine_cfg)
         return engine_cfg
+
+    def _apply_qwen_tts_persona_instructions(self, engine_cfg: dict[str, object]) -> None:
+        from src.tts.persona_instructions import (
+            build_qwen_tts_persona_instructions,
+            qwen_tts_model_supports_instructions,
+        )
+
+        if engine_cfg.get("instructions"):
+            return
+        if not qwen_tts_model_supports_instructions(engine_cfg.get("model", "")):
+            return
+        instructions = build_qwen_tts_persona_instructions(
+            self._config_with_current_roleplay_settings()
+        )
+        if not instructions:
+            return
+        engine_cfg["instructions"] = instructions
+        engine_cfg.setdefault("optimize_instructions", True)
+
+    def _config_with_current_roleplay_settings(self) -> dict[str, object]:
+        config = dict(self._config) if isinstance(self._config, dict) else {}
+        trans_source = config.get("translation", {})
+        trans_cfg = dict(trans_source) if isinstance(trans_source, dict) else {}
+        social_source = trans_cfg.get("social", {})
+        social_cfg = dict(social_source) if isinstance(social_source, dict) else {}
+        if hasattr(self, "_roleplay_enabled_var"):
+            social_cfg["mode"] = "roleplay" if self._roleplay_enabled_var.value() else "standard"
+        if hasattr(self, "_roleplay_preset_codes") and hasattr(self, "_roleplay_preset_var"):
+            social_cfg["persona_preset"] = self._roleplay_preset_codes.get(
+                self._roleplay_preset_var.value(), "custom"
+            )
+        if hasattr(self, "_persona_name_var"):
+            social_cfg["persona_name"] = self._persona_name_var.value().strip()
+        if hasattr(self, "_roleplay_prompt_var"):
+            social_cfg["persona_prompt"] = self._roleplay_prompt_var.value()
+        if hasattr(self, "_roleplay_glossary_var"):
+            social_cfg["persona_glossary"] = self._roleplay_glossary_var.value()
+        trans_cfg["social"] = social_cfg
+        config["translation"] = trans_cfg
+        return config
 
     @staticmethod
     def _qwen_tts_language_type_from_code(language: object) -> str:
@@ -4566,7 +4621,21 @@ class SettingsWindow(QDialog):
         self._tts_api_base_url_entry = base
         self._row_layout(frame_layout, self._copy("base_url"), base)
 
-        model = self._line_edit("tts_api_model", self._tts_api_model_var)
+        model = NoWheelComboBox()
+        model.setEditable(True)
+        model.addItems(
+            list(
+                get_tts_api_model_options(
+                    self._selected_tts_api_engine(),
+                    self._tts_api_model_var.value(),
+                )
+            )
+            or [self._tts_api_model_var.value()]
+        )
+        model.setMinimumHeight(32)
+        model.setMaximumHeight(32)
+        model.setEditText(self._tts_api_model_var.value())
+        model.currentTextChanged.connect(self._tts_api_model_var.set)
         self._tts_api_model_entry = model
         self._row_layout(frame_layout, self._copy("tts_api_model"), model)
 

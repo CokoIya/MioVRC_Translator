@@ -12,6 +12,7 @@ from .api_tts_config import (
     resolve_tts_api_config,
 )
 from .base import BaseTTS, TTSVoice
+from .persona_instructions import qwen_tts_model_supports_instructions
 from src.translators.factory import _float_setting, _int_setting
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ class _APITTSBase(BaseTTS):
         self.language_type_hint = str(
             resolved.get("language_type") or resolved.get("language_hint") or ""
         ).strip()
+        self.instructions = str(resolved.get("instructions", "") or "").strip()
+        self.optimize_instructions = bool(resolved.get("optimize_instructions", True))
         self.timeout_seconds = _float_setting(
             resolved.get("timeout_seconds"), 30.0, minimum=3.0, maximum=120.0
         )
@@ -257,6 +260,9 @@ class QwenTTS(_APITTSBase):
                 "language_type": _qwen_language_type(clean_text, self.language_type_hint),
             },
         }
+        if self.instructions and qwen_tts_model_supports_instructions(self.model):
+            payload["input"]["instructions"] = self.instructions
+            payload["input"]["optimize_instructions"] = self.optimize_instructions
         try:
             return self._request_json_audio(
                 f"{self.base_url}/services/aigc/multimodal-generation/generation",

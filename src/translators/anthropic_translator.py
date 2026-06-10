@@ -5,7 +5,6 @@ import logging
 from .base import BaseTranslator, _TRANSLATION_SYSTEM_PROMPT
 from src.utils.input_validation import validate_translation_text, ValidationError
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -14,7 +13,9 @@ class AnthropicTranslator(BaseTranslator):
         self,
         api_key: str,
         model: str = "claude-3-5-haiku-20241022",
+        base_url: str = "https://api.anthropic.com",
         timeout_s: float = 15.0,
+        max_retries: int = 0,
         max_output_tokens: int = 192,
         prompt_profile: dict[str, object] | None = None,
     ):
@@ -22,11 +23,15 @@ class AnthropicTranslator(BaseTranslator):
         try:
             import anthropic
         except ImportError:
-            raise RuntimeError(
-                "anthropic 未安装，请先执行: pip install anthropic"
-            )
-        self._client = anthropic.Anthropic(api_key=api_key, timeout=timeout_s)
+            raise RuntimeError("anthropic 未安装，请先执行: pip install anthropic")
+        self._client = anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout_s,
+            max_retries=max(int(max_retries), 0),
+        )
         self.model = model
+        self._base_url = str(base_url or "").strip().rstrip("/")
         self._max_output_tokens = max(int(max_output_tokens), 48)
         self._last_response_summary = ""
 
@@ -92,7 +97,9 @@ class AnthropicTranslator(BaseTranslator):
             )
             summary = str(getattr(self, "_last_response_summary", "") or "").strip()
             if summary:
-                raise RuntimeError(f"Translation API returned an empty response ({summary})")
+                raise RuntimeError(
+                    f"Translation API returned an empty response ({summary})"
+                )
             raise RuntimeError("Translation API returned an empty response")
         translated = self._store_cached_translation(
             text,

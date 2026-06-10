@@ -1436,6 +1436,13 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
     assert engine_config["region"] == "china_mainland"
     assert engine_config["base_url"] == QWEN_TTS_BASE_URL_MAINLAND
     assert engine_config["model"] == "qwen3-tts-flash"
+    assert dialog._tts_api_model_entry is not None
+    model_items = [
+        dialog._tts_api_model_entry.itemText(i)
+        for i in range(dialog._tts_api_model_entry.count())
+    ]
+    assert "qwen3-tts-flash" in model_items
+    assert "qwen3-tts-instruct-flash" in model_items
     assert spoken[0] == (TTS_TEST_TEXT_BY_LANGUAGE["jp"], "Cherry")
 
     dialog._save()

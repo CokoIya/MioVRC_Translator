@@ -106,6 +106,47 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
     assert fake.gets == [("https://audio.test/qwen.wav", 30.0)]
 
 
+def test_qwen_tts_instruct_model_sends_style_instructions(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-instruct-flash",
+            "instructions": "Read with a warm playful tone.",
+            "optimize_instructions": True,
+        }
+    )
+
+    engine.synthesize("Hello there", "Cherry")
+
+    _url, _headers, payload, _timeout = fake.posts[0]
+    assert payload["input"]["instructions"] == "Read with a warm playful tone."
+    assert payload["input"]["optimize_instructions"] is True
+
+
+def test_qwen_tts_plain_model_omits_style_instructions(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+            "instructions": "Read with a warm playful tone.",
+        }
+    )
+
+    engine.synthesize("Hello there", "Cherry")
+
+    _url, _headers, payload, _timeout = fake.posts[0]
+    assert "instructions" not in payload["input"]
+    assert "optimize_instructions" not in payload["input"]
+
+
 def test_qwen_tts_uses_auto_language_type_for_uncertain_latin_text(monkeypatch):
     fake = _FakeSession()
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)

@@ -133,6 +133,13 @@
       "timeout_s": 15.0,
       "max_retries": 0
     },
+    "openai_compatible": {
+      "api_key": "",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.5",
+      "timeout_s": 15.0,
+      "max_retries": 0
+    },
     "local_ai": {
       "api_key": "",
       "base_url": "http://127.0.0.1:11434/v1",
@@ -204,7 +211,17 @@
     },
     "anthropic": {
       "api_key": "",
-      "model": "claude-opus-4-8"
+      "base_url": "https://api.anthropic.com",
+      "model": "claude-opus-4-8",
+      "timeout_s": 15.0,
+      "max_retries": 0
+    },
+    "anthropic_compatible": {
+      "api_key": "",
+      "base_url": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-6",
+      "timeout_s": 15.0,
+      "max_retries": 0
     },
     "custom": {
       "api_key": "",
@@ -316,6 +333,8 @@
       "voice": "Cherry",
       "rate": 1.0,
       "volume": 0.8,
+      "instructions": "",
+      "optimize_instructions": true,
       "timeout_seconds": 30,
       "max_retries": 0
     },

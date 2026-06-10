@@ -3,9 +3,9 @@
   "updated": "2026-06-03",
   "translation_backends": {
     "openai": {
-      "label": "claude",
+      "label": "GPT",
       "base_url": "https://api.openai.com/v1",
-      "model": "claude",
+      "model": "gpt-5.5",
       "timeout_s": 15.0,
       "max_output_tokens": 192,
       "max_retries": 0,
@@ -147,10 +147,10 @@
   },
   "translation_model_presets": {
     "openai": [
-      "claude",
-      "claude",
-      "claude",
-      "claude"
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.4-nano"
     ],
     "deepseek": [
       "deepseek-v4-flash",
@@ -229,9 +229,27 @@
   },
   "translation_model_profiles": {
     "openai": {
-      "claude": {
+      "gpt-5.5": {
+        "speed": "balanced",
+        "quality": "high",
+        "fit": "recommended",
+        "note": "general_high_quality"
+      },
+      "gpt-5.4": {
+        "speed": "balanced",
+        "quality": "high",
+        "fit": "recommended",
+        "note": "balanced_quality"
+      },
+      "gpt-5.4-mini": {
+        "speed": "fast",
+        "quality": "high",
+        "fit": "very_recommended",
+        "note": "live_default"
+      },
+      "gpt-5.4-nano": {
         "speed": "very_fast",
-        "quality": "basic",
+        "quality": "balanced",
         "fit": "general",
         "note": "economy_first"
       }

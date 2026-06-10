@@ -8,6 +8,7 @@ REQUIRED_MODULES = (
     "PyInstaller",
     "funasr",
     "google.genai",
+    "anthropic",
     "tiktoken",
     "torch",
     "torchaudio",

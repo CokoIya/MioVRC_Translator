@@ -144,17 +144,29 @@ OUTPUT_FORMAT_OPTIONS = (
     ("\u4ec5\u539f\u53e5", "original_only"),
     ("\u539f\u53e5\uff08\u8bd1\u6587\uff09", "original_with_translated"),
     # Second-translation-aware formats (shown when target_2 is configured):
-    ("\u539f\u53e5\uff08\u8bd1\u65871\uff09\uff08\u8bd1\u65872\uff09", "original_with_translated1_translated2"),
+    (
+        "\u539f\u53e5\uff08\u8bd1\u65871\uff09\uff08\u8bd1\u65872\uff09",
+        "original_with_translated1_translated2",
+    ),
     ("\u8bd1\u65871\uff08\u8bd1\u65872\uff09", "translated1_with_translated2"),
-    ("\u8bd1\u65871\uff08\u8bd1\u65872\uff09\uff08\u539f\u53e5\uff09", "translated1_with_translated2_original"),
+    (
+        "\u8bd1\u65871\uff08\u8bd1\u65872\uff09\uff08\u539f\u53e5\uff09",
+        "translated1_with_translated2_original",
+    ),
 )
 
 OUTPUT_FORMAT_2_DISABLED = "disabled"
 OUTPUT_FORMAT_2_OPTIONS = (
-    ("\u539f\u6587\uff08\u8bd1\u65871\uff09\uff08\u8bd1\u65872\uff09", "original_with_translated1_translated2"),
+    (
+        "\u539f\u6587\uff08\u8bd1\u65871\uff09\uff08\u8bd1\u65872\uff09",
+        "original_with_translated1_translated2",
+    ),
     ("\u8bd1\u65871\uff08\u8bd1\u65872\uff09", "translated1_with_translated2"),
     ("\u5173\u95ed\u8bd1\u65872", OUTPUT_FORMAT_2_DISABLED),
-    ("\u8bd1\u65871\uff08\u8bd1\u65872\uff09\uff08\u539f\u6587\uff09", "translated1_with_translated2_original"),
+    (
+        "\u8bd1\u65871\uff08\u8bd1\u65872\uff09\uff08\u539f\u6587\uff09",
+        "translated1_with_translated2_original",
+    ),
 )
 
 OUTPUT_FORMAT_LABELS = {
@@ -375,7 +387,9 @@ LEGACY_OUTPUT_FORMAT_ALIASES = {
 }
 
 QWEN_TRANSLATION_BASE_URL_MAINLAND = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-QWEN_TRANSLATION_BASE_URL_INTERNATIONAL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+QWEN_TRANSLATION_BASE_URL_INTERNATIONAL = (
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+)
 QWEN_TRANSLATION_DEFAULT_REGION = "china_mainland"
 QWEN_TRANSLATION_REGION_BASE_URLS = {
     "china_mainland": QWEN_TRANSLATION_BASE_URL_MAINLAND,
@@ -519,6 +533,24 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "max_retries": 0,
         "model_input": "select",
     },
+    "openai_compatible": {
+        "label": "GPT Compatible",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5.5",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "base_url_input": "entry",
+        "api_key_hint": (
+            "Use this for OpenAI-compatible proxy or relay providers. Enter "
+            "the Base URL and model id supplied by that provider."
+        ),
+        "model_hint": (
+            "Choose the model id exposed by your proxy. If your saved model is "
+            "not in the preset list, Mio keeps it available in this dropdown."
+        ),
+    },
     "local_ai": {
         "label": "Local AI",
         "base_url": "http://127.0.0.1:11434/v1",
@@ -659,10 +691,34 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "max_output_tokens": 192,
         "model_input": "select",
     },
+    "anthropic_compatible": {
+        "label": "Claude Compatible",
+        "base_url": "https://api.anthropic.com",
+        "model": "claude-sonnet-4-6",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "base_url_input": "entry",
+        "api_key_hint": (
+            "Use this for Claude-compatible proxy or relay providers. Enter "
+            "the Base URL and model id supplied by that provider."
+        ),
+        "model_hint": (
+            "Choose the Claude model id exposed by your proxy. If your saved "
+            "model is not in the preset list, Mio keeps it available in this dropdown."
+        ),
+    },
 }
 
 TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "openai": (
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+    ),
+    "openai_compatible": (
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
@@ -733,6 +789,16 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "nvidia/llama-3.1-nemotron-nano-8b-v1",
     ),
     "anthropic": (
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-20250514",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+    ),
+    "anthropic_compatible": (
         "claude-opus-4-8",
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
@@ -813,6 +879,7 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "note": "economy_first",
         },
     },
+    "openai_compatible": {},
     "deepseek": {
         "deepseek-v4-flash": {
             "speed": "fast",
@@ -1271,6 +1338,7 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "note": "live_default",
         },
     },
+    "anthropic_compatible": {},
 }
 
 TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
@@ -1287,6 +1355,7 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "gpt-4.1-mini": "7.4",
         "gpt-4.1-nano": "6.2",
     },
+    "openai_compatible": {},
     "deepseek": {
         "deepseek-v4-flash": "9.1",
         "deepseek-v4-pro": "8.7",
@@ -1380,7 +1449,9 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "claude-opus-4-1-20250805": "7.2",
         "claude-opus-4-20250514": "7.0",
     },
+    "anthropic_compatible": {},
 }
+
 
 def get_backend_order() -> tuple:
     return _catalog_backend_order()
@@ -1536,7 +1607,9 @@ def qwen_translation_region_for_ui_language(language: str | None) -> str:
 
 
 def qwen_translation_base_url_for_ui_language(language: str | None) -> str:
-    return get_qwen_translation_base_url(qwen_translation_region_for_ui_language(language))
+    return get_qwen_translation_base_url(
+        qwen_translation_region_for_ui_language(language)
+    )
 
 
 def _localized_static_label(labels: Mapping[str, str], ui_language: str | None) -> str:
@@ -1550,12 +1623,16 @@ def _localized_static_label(labels: Mapping[str, str], ui_language: str | None) 
     )
 
 
-def get_output_format_label(fmt_code: str | None, ui_language: str | None = None) -> str:
+def get_output_format_label(
+    fmt_code: str | None, ui_language: str | None = None
+) -> str:
     code = normalize_output_format(str(fmt_code or ""))
     return _localized_static_label(OUTPUT_FORMAT_LABELS[code], ui_language)
 
 
-def get_output_format_options(ui_language: str | None = None) -> tuple[tuple[str, str], ...]:
+def get_output_format_options(
+    ui_language: str | None = None,
+) -> tuple[tuple[str, str], ...]:
     return tuple(
         (get_output_format_label(code, ui_language), code)
         for _label, code in OUTPUT_FORMAT_OPTIONS
@@ -1565,12 +1642,16 @@ def get_output_format_options(ui_language: str | None = None) -> tuple[tuple[str
 # Deprecated: output_format_2 has been merged into output_format.
 # Keep the label/options functions for backward compatibility with callers
 # that still reference them during migration.
-def get_output_format_2_label(fmt_code: str | None, ui_language: str | None = None) -> str:
+def get_output_format_2_label(
+    fmt_code: str | None, ui_language: str | None = None
+) -> str:
     code = normalize_output_format_2(str(fmt_code or ""))
     return _localized_static_label(OUTPUT_FORMAT_2_LABELS[code], ui_language)
 
 
-def get_output_format_2_options(ui_language: str | None = None) -> tuple[tuple[str, str], ...]:
+def get_output_format_2_options(
+    ui_language: str | None = None,
+) -> tuple[tuple[str, str], ...]:
     return tuple(
         (get_output_format_2_label(code, ui_language), code)
         for _label, code in OUTPUT_FORMAT_2_OPTIONS
@@ -1634,9 +1715,7 @@ def get_backend_config_value(
 ) -> str:
     normalized_backend = normalize_backend(backend)
     backend_cfg = (
-        trans_cfg.get(normalized_backend, {})
-        if isinstance(trans_cfg, Mapping)
-        else {}
+        trans_cfg.get(normalized_backend, {}) if isinstance(trans_cfg, Mapping) else {}
     )
     if isinstance(backend_cfg, Mapping):
         value = backend_cfg.get(key)
@@ -1667,10 +1746,16 @@ def get_backend_model_profile(
     model: str | None,
 ) -> dict[str, str]:
     normalized_backend = normalize_backend(backend)
-    resolved_model = str(model or "").strip() or get_backend_value(normalized_backend, "model")
-    backend_profiles = _catalog_model_profiles().get(normalized_backend, {})
+    resolved_model = str(model or "").strip() or get_backend_value(
+        normalized_backend, "model"
+    )
+    profile_backend = {
+        "openai_compatible": "openai",
+        "anthropic_compatible": "anthropic",
+    }.get(normalized_backend, normalized_backend)
+    backend_profiles = _catalog_model_profiles().get(profile_backend, {})
     profile = backend_profiles.get(resolved_model, {})
-    score = TRANSLATION_MODEL_RECOMMENDATION_SCORES.get(normalized_backend, {}).get(
+    score = TRANSLATION_MODEL_RECOMMENDATION_SCORES.get(profile_backend, {}).get(
         resolved_model,
         "6.5",
     )
@@ -1698,9 +1783,11 @@ def _localized_option_label(
 # Catalog support — allows remote updates of translation backends/models
 # --------------------------------------------------------------------
 
+
 def _load_catalog_module():
     try:
         from src.utils.catalog_loader import BUILTIN_CATALOG
+
         return BUILTIN_CATALOG
     except Exception:
         return None
@@ -1774,7 +1861,9 @@ def normalize_social_tone(tone: str | None) -> str:
     return SOCIAL_TONE_CODES[0]
 
 
-def get_social_mode_options(ui_language: str | None = None) -> tuple[tuple[str, str], ...]:
+def get_social_mode_options(
+    ui_language: str | None = None,
+) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
             _localized_option_label(SOCIAL_MODE_LABELS, code, ui_language),
@@ -1796,7 +1885,9 @@ def get_social_politeness_options(
     )
 
 
-def get_social_tone_options(ui_language: str | None = None) -> tuple[tuple[str, str], ...]:
+def get_social_tone_options(
+    ui_language: str | None = None,
+) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
             _localized_option_label(SOCIAL_TONE_LABELS, code, ui_language),
@@ -1817,7 +1908,9 @@ def get_target_language_label(code: str | None, ui_language: str | None = None) 
     code_text = str(code or "")
     if not code_text:
         default_code = SUPPORTED_TARGET_LANGUAGE_CODES[0]
-        return _with_code(_localized_language_name(default_code, ui_language), default_code)
+        return _with_code(
+            _localized_language_name(default_code, ui_language), default_code
+        )
     return _with_code(_localized_language_name(code_text, ui_language), code_text)
 
 
@@ -1857,7 +1950,9 @@ def get_manual_source_language_options(
 
 
 TARGET_LANGUAGE_OPTIONS = get_target_language_options(ui_language=DEFAULT_UI_LANGUAGE)
-MANUAL_SOURCE_LANGUAGE_OPTIONS = get_manual_source_language_options(ui_language=DEFAULT_UI_LANGUAGE)
+MANUAL_SOURCE_LANGUAGE_OPTIONS = get_manual_source_language_options(
+    ui_language=DEFAULT_UI_LANGUAGE
+)
 
 
 def get_ui_language(config: Mapping[str, object] | None) -> str:

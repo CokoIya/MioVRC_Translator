@@ -3,12 +3,18 @@ import types
 
 import pytest
 
-from src.translators.factory import FallbackTranslator, OPENAI_COMPATIBLE_BACKENDS, create_translator
+from src.translators.factory import (
+    FallbackTranslator,
+    OPENAI_COMPATIBLE_BACKENDS,
+    create_translator,
+)
 from src.utils.ui_config import (
     NVIDIA_TRANSLATION_BASE_URL,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
     backend_api_key_is_required,
     backend_base_url_is_editable,
+    backend_model_is_selectable,
+    get_backend_model_options,
     get_backend_value,
 )
 
@@ -64,7 +70,9 @@ class _FallbackFakeChatCompletions:
 
 
 def test_local_ai_backend_allows_editable_base_url_and_empty_api_key(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
     config = {
         "translation": {
             "backend": "local_ai",
@@ -85,8 +93,73 @@ def test_local_ai_backend_allows_editable_base_url_and_empty_api_key(monkeypatch
     assert translator.model == "local-model"
 
 
+def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "openai_compatible": {
+                "api_key": "relay-key",
+                "base_url": "https://relay.example.com/v1",
+                "model": "gpt-proxy-router",
+                "timeout_s": "9",
+                "max_retries": "1",
+            },
+        }
+    }
+
+    translator = create_translator(config)
+
+    assert "openai_compatible" in OPENAI_COMPATIBLE_BACKENDS
+    assert backend_base_url_is_editable("openai_compatible") is True
+    assert backend_api_key_is_required("openai_compatible") is True
+    assert backend_model_is_selectable("openai_compatible") is True
+    assert get_backend_model_options("openai_compatible")[0] == "gpt-5.5"
+    assert translator._client.kwargs["api_key"] == "relay-key"
+    assert translator._client.kwargs["base_url"] == "https://relay.example.com/v1"
+    assert translator._client.kwargs["timeout"] == 9.0
+    assert translator._client.kwargs["max_retries"] == 1
+    assert translator.model == "gpt-proxy-router"
+
+
+def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=_FakeAnthropic),
+    )
+    config = {
+        "translation": {
+            "backend": "anthropic_compatible",
+            "anthropic_compatible": {
+                "api_key": "relay-key",
+                "base_url": "https://claude-relay.example.com",
+                "model": "claude-router",
+                "timeout_s": "11",
+                "max_retries": "2",
+            },
+        }
+    }
+
+    translator = create_translator(config)
+
+    assert backend_base_url_is_editable("anthropic_compatible") is True
+    assert backend_api_key_is_required("anthropic_compatible") is True
+    assert backend_model_is_selectable("anthropic_compatible") is True
+    assert get_backend_model_options("anthropic_compatible")[0] == "claude-opus-4-8"
+    assert translator._client.kwargs["api_key"] == "relay-key"
+    assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
+    assert translator._client.kwargs["timeout"] == 11.0
+    assert translator._client.kwargs["max_retries"] == 2
+    assert translator.model == "claude-router"
+
+
 def test_online_backends_expose_network_overrides(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
     config = {
         "translation": {
             "backend": "deepseek",
@@ -110,7 +183,9 @@ def test_online_backends_expose_network_overrides(monkeypatch):
 
 
 def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
     xiaomi = create_translator(
         {
             "translation": {
@@ -148,7 +223,9 @@ def test_new_ai_backends_use_openai_compatible_translator(monkeypatch):
 
 
 def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
     translator = create_translator(
         {
             "translation": {
@@ -171,7 +248,9 @@ def test_xiaomi_backend_uses_mimo_token_budget_parameter(monkeypatch):
 
 
 def test_translation_fallback_backend_is_used_after_primary_failure(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FallbackFakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FallbackFakeOpenAI)
+    )
     translator = create_translator(
         {
             "translation": {
@@ -195,10 +274,17 @@ def test_translation_fallback_backend_is_used_after_primary_failure(monkeypatch)
     assert translator.translate("hello", "en", "zh") == "fallback-ok:ok"
 
 
-@pytest.mark.parametrize("backend", sorted([*OPENAI_COMPATIBLE_BACKENDS, "anthropic"]))
+@pytest.mark.parametrize(
+    "backend",
+    sorted([*OPENAI_COMPATIBLE_BACKENDS, "anthropic", "anthropic_compatible"]),
+)
 def test_ai_backends_receive_roleplay_prompt_profile(monkeypatch, backend):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
-    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_FakeAnthropic))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    monkeypatch.setitem(
+        sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_FakeAnthropic)
+    )
     backend_cfg = {
         "api_key": "" if backend == "local_ai" else "test-key",
         "base_url": get_backend_value(backend, "base_url"),
@@ -232,8 +318,12 @@ def test_ai_backends_receive_roleplay_prompt_profile(monkeypatch, backend):
     }
 
 
-def test_standard_social_config_with_saved_preset_does_not_affect_translation(monkeypatch):
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+def test_standard_social_config_with_saved_preset_does_not_affect_translation(
+    monkeypatch,
+):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
     config = {
         "translation": {
             "backend": "qianwen",

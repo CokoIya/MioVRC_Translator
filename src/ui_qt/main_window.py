@@ -3808,7 +3808,24 @@ class MainWindow(QMainWindow):
             )
             if language_type:
                 resolved["language_type"] = language_type
+            self._apply_qwen_tts_persona_instructions(resolved)
         return resolved
+
+    def _apply_qwen_tts_persona_instructions(self, engine_cfg: dict) -> None:
+        from src.tts.persona_instructions import (
+            build_qwen_tts_persona_instructions,
+            qwen_tts_model_supports_instructions,
+        )
+
+        if engine_cfg.get("instructions"):
+            return
+        if not qwen_tts_model_supports_instructions(engine_cfg.get("model", "")):
+            return
+        instructions = build_qwen_tts_persona_instructions(self._config)
+        if not instructions:
+            return
+        engine_cfg["instructions"] = instructions
+        engine_cfg.setdefault("optimize_instructions", True)
 
     @staticmethod
     def _qwen_tts_language_type_from_target(target_language: object) -> str:

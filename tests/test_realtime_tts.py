@@ -108,6 +108,65 @@ def test_qwen_tts_config_uses_translation_target_language_hint():
     assert engine_cfg["language_type"] == "Japanese"
 
 
+def test_qwen_tts_config_adds_roleplay_instructions_for_instruct_model():
+    window = MainWindow.__new__(MainWindow)
+    window._current_tgt_lang = "ja"
+    window._config = {
+        "translation": {
+            "output_format": "translated_only",
+            "social": {
+                "mode": "roleplay",
+                "politeness": "casual",
+                "tone": "playful",
+                "persona_name": "Energetic Friend",
+                "persona_prompt": "Sounds upbeat and reacts with friendly emotion.",
+            },
+        },
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "model": "qwen3-tts-instruct-flash",
+                "voice": "Cherry",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+    }
+
+    engine_cfg = MainWindow._current_tts_engine_config(window)
+
+    assert "instructions" in engine_cfg
+    assert "Energetic Friend" in engine_cfg["instructions"]
+    assert "playful" in engine_cfg["instructions"]
+    assert engine_cfg["optimize_instructions"] is True
+
+
+def test_qwen_tts_config_preserves_explicit_instructions():
+    window = MainWindow.__new__(MainWindow)
+    window._current_tgt_lang = "ja"
+    window._config = {
+        "translation": {
+            "output_format": "translated_only",
+            "social": {
+                "mode": "roleplay",
+                "persona_name": "Energetic Friend",
+            },
+        },
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "model": "qwen3-tts-instruct-flash",
+                "voice": "Cherry",
+                "instructions": "Use a custom calm announcer style.",
+            },
+        },
+    }
+
+    engine_cfg = MainWindow._current_tts_engine_config(window)
+
+    assert engine_cfg["instructions"] == "Use a custom calm announcer style."
+
+
 def test_qwen_tts_config_does_not_force_hint_for_original_only_output():
     window = MainWindow.__new__(MainWindow)
     window._current_tgt_lang = "ja"

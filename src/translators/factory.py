@@ -32,6 +32,7 @@ OPENAI_COMPATIBLE_BACKENDS = {
     "mistral",
     "doubao",
     "nvidia",
+    "openai_compatible",
 }
 
 
@@ -138,7 +139,9 @@ def _require_text(value: str, label: str) -> str:
     return text
 
 
-def _float_setting(value: object, default: object, *, minimum: float, maximum: float) -> float:
+def _float_setting(
+    value: object, default: object, *, minimum: float, maximum: float
+) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -167,7 +170,9 @@ def _backend_cfg(trans_cfg: Mapping[str, object], backend: str) -> Mapping[str, 
     return {}
 
 
-def _fallback_backends(trans_cfg: Mapping[str, object], primary_backend: str) -> list[str]:
+def _fallback_backends(
+    trans_cfg: Mapping[str, object], primary_backend: str
+) -> list[str]:
     raw = trans_cfg.get("fallback_backends", ())
     if isinstance(raw, str):
         candidates = [item.strip() for item in raw.replace(";", ",").split(",")]
@@ -247,10 +252,12 @@ def _create_translator_for_backend(
     if backend in OPENAI_COMPATIBLE_BACKENDS:
         return _create_openai_compatible_translator(trans_cfg, backend)
 
-    if backend == "anthropic":
+    if backend in {"anthropic", "anthropic_compatible"}:
         spec = get_backend_spec(backend)
         backend_cfg = _backend_cfg(trans_cfg, backend)
-        api_key = _require_text(backend_cfg.get("api_key", ""), f"{get_backend_label(backend)} API Key")
+        api_key = _require_text(
+            backend_cfg.get("api_key", ""), f"{get_backend_label(backend)} API Key"
+        )
         model = _require_text(
             get_backend_config_value(trans_cfg, backend, "model"),
             f"{get_backend_label(backend)} Model",
@@ -258,7 +265,19 @@ def _create_translator_for_backend(
         return AnthropicTranslator(
             api_key=api_key,
             model=model,
-            timeout_s=float(spec.get("timeout_s", 15.0)),
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 15.0),
+                minimum=3.0,
+                maximum=120.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 0),
+                minimum=0,
+                maximum=3,
+            ),
             max_output_tokens=int(spec.get("max_output_tokens", 192)),
             prompt_profile=_translation_prompt_profile(trans_cfg),
         )

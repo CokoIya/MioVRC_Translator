@@ -161,6 +161,24 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["qwen_tts"]["base_url"].startswith(
             "https://dashscope-intl."
         )
+        assert config["tts"]["qwen_tts"]["model"] == "qwen3-tts-flash"
+        assert config["tts"]["qwen_tts"]["optimize_instructions"] is True
+
+    def test_ensure_tts_config_preserves_qwen_flash_model(self):
+        config = {
+            "tts": {
+                "qwen_tts": {
+                    "model": "qwen3-tts-flash",
+                    "region": "singapore",
+                    "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+                }
+            }
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["qwen_tts"]["model"] == "qwen3-tts-flash"
 
     def test_ensure_tts_config_migrates_existing_output_device(self):
         """Existing non-default output devices should keep VRChat output enabled."""
@@ -969,6 +987,17 @@ class TestConfigValidation(unittest.TestCase):
             == "nvidia/nemotron-3-super-120b-a12b"
         )
         assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-opus-4-8"
+        assert TRANSLATION_BACKENDS["openai_compatible"]["model"] == "gpt-5.5"
+        assert (
+            TRANSLATION_BACKENDS["anthropic_compatible"]["model"] == "claude-sonnet-4-6"
+        )
+        assert "gpt-5.5" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "gpt-5.4-mini" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "claude-sonnet-4-6" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
+        assert (
+            "claude-haiku-4-5-20251001"
+            in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
+        )
         qwen_flash = TRANSLATION_MODEL_PRESETS["qianwen"].index("qwen-mt-flash")
         qwen_plus = TRANSLATION_MODEL_PRESETS["qianwen"].index("qwen-mt-plus")
         assert qwen_plus < qwen_flash
@@ -980,11 +1009,19 @@ class TestConfigValidation(unittest.TestCase):
         qwen_mt = get_backend_model_profile("qianwen", "qwen-mt-plus")
         gpt = get_backend_model_profile("openai", "gpt-5.5")
         opus = get_backend_model_profile("anthropic", "claude-opus-4-8")
+        compat_gpt = get_backend_model_profile("openai_compatible", "gpt-5.5")
+        compat_claude = get_backend_model_profile(
+            "anthropic_compatible", "claude-sonnet-4-6"
+        )
         custom = get_backend_model_profile("openai", "custom-router-model")
 
         assert qwen_mt["score"] == "9.7"
         assert gpt["score"] == "9.5"
         assert opus["score"] == "7.8"
+        assert compat_gpt["score"] == "9.5"
+        assert compat_gpt["note"] == "general_high_quality"
+        assert compat_claude["score"] == "9.2"
+        assert compat_claude["note"] == "live_default"
         assert custom["score"] == "6.5"
         assert float(qwen_mt["score"]) > float(opus["score"])
 
@@ -1100,6 +1137,50 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["translation"]["openai"]["model"] == "gpt-5.5"
+
+    def test_compatible_proxy_models_are_preserved(self):
+        config = {
+            "ui": {"language": "zh-CN"},
+            "translation": {
+                "backend": "openai_compatible",
+                "backend_source": "manual",
+                "source_language": "zh",
+                "target_language": "ja",
+                "language_pair_source": "manual",
+                "openai_compatible": {
+                    "api_key": "relay-key",
+                    "base_url": "https://relay.example.com/v1",
+                    "model": "claude-through-openai-relay",
+                },
+                "anthropic_compatible": {
+                    "api_key": "relay-key",
+                    "base_url": "https://claude-relay.example.com",
+                    "model": "custom-claude-router",
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert (
+            config["translation"]["openai_compatible"]["model"]
+            == "claude-through-openai-relay"
+        )
+        assert (
+            config["translation"]["openai_compatible"]["base_url"]
+            == "https://relay.example.com/v1"
+        )
+        assert (
+            config["translation"]["anthropic_compatible"]["model"]
+            == "custom-claude-router"
+        )
+        assert (
+            config["translation"]["anthropic_compatible"]["base_url"]
+            == "https://claude-relay.example.com"
+        )
 
     def test_legacy_anthropic_model_migrates_to_current_default(self):
         config = {

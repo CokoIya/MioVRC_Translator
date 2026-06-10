@@ -84,6 +84,13 @@ TTS_API_DEFAULT_REGIONS = {
     "mimo_tts": XIAOMI_TTS_DEFAULT_REGION,
     "qwen_tts": QWEN_TTS_DEFAULT_REGION,
 }
+TTS_API_MODEL_OPTIONS = {
+    "mimo_tts": (XIAOMI_TTS_DEFAULT_MODEL,),
+    "qwen_tts": (
+        "qwen3-tts-flash",
+        "qwen3-tts-instruct-flash",
+    ),
+}
 TTS_API_DEFAULT_CONFIGS = {
     "mimo_tts": {
         "api_key": "",
@@ -104,6 +111,8 @@ TTS_API_DEFAULT_CONFIGS = {
         "voice": QWEN_TTS_DEFAULT_VOICE,
         "rate": 1.0,
         "volume": 0.8,
+        "instructions": "",
+        "optimize_instructions": True,
         "timeout_seconds": 30,
         "max_retries": 0,
     },
@@ -262,6 +271,15 @@ def get_tts_api_default_config(engine: object) -> dict[str, object]:
 
 def get_tts_api_default_value(engine: object, key: str) -> object:
     return get_tts_api_default_config(engine).get(key)
+
+
+def get_tts_api_model_options(engine: object, current: object = "") -> tuple[str, ...]:
+    engine_code = normalize_tts_api_engine(engine)
+    options = list(TTS_API_MODEL_OPTIONS.get(engine_code, ()))
+    current_text = str(current or "").strip()
+    if current_text and current_text not in options:
+        options.append(current_text)
+    return tuple(options)
 
 
 def get_tts_api_voice_options(engine: object) -> tuple[tuple[str, str, str, str, str], ...]:
