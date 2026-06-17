@@ -98,6 +98,9 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert not window._mode_simultaneous_button.isChecked()
     assert window._mode_translation_button.property("modeActive") == "true"
     assert window._mode_simultaneous_button.property("modeActive") == "false"
+    assert window._tweaks_btn is not None
+    assert not window._tweaks_btn.icon().isNull()
+    assert window._tweaks_btn.iconSize().width() == 18
 
     window._set_app_mode(AppMode.SIMULTANEOUS, persist=True)
 
@@ -112,6 +115,8 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert window._tgt_header_label.text()
     window._on_theme_toggle()
     assert window._config["ui"]["main_window_theme"] == "light"
+    assert not window._tweaks_btn.icon().isNull()
+    assert window._tweaks_btn.iconSize().width() == 18
     window.destroy()
 
 

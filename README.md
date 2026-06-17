@@ -73,7 +73,7 @@ python main.py
 如需提前下载模型：
 
 ```bash
-python download_models.py
+python tools/download_models.py
 ```
 
 如需自定义模型缓存目录：

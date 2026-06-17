@@ -1,7 +1,12 @@
 """Test script for TTS playback functionality."""
-# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import sounddevice as sd
 import numpy as np
@@ -42,9 +47,9 @@ try:
         return max(supported)
 
     test_cases = [
-        (24000, [16000, 44100, 48000], 44100),  # Edge TTS -> Voicemeeter
-        (16000, [16000, 44100, 48000], 16000),  # Exact match
-        (96000, [44100, 48000], 48000),         # Higher than all
+        (24000, [16000, 44100, 48000], 44100),
+        (16000, [16000, 44100, 48000], 16000),
+        (96000, [44100, 48000], 48000),
     ]
 
     all_passed = True
@@ -66,22 +71,20 @@ print("\n[Test 3] Testing audio resampling...")
 try:
     from scipy import signal
 
-    # Create test audio (1 second at 24kHz)
     source_rate = 24000
     target_rate = 48000
     duration = 1.0
 
     t = np.linspace(0, duration, int(source_rate * duration))
-    audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)  # 440Hz sine wave
+    audio = np.sin(2 * np.pi * 440 * t).astype(np.float32)
 
-    # Resample
     num_samples = int(len(audio) * target_rate / source_rate)
     resampled = signal.resample(audio, num_samples)
 
     expected_length = int(source_rate * duration * target_rate / source_rate)
     actual_length = len(resampled)
 
-    if abs(actual_length - expected_length) < 10:  # Allow small rounding error
+    if abs(actual_length - expected_length) < 10:
         print(f"[PASS] Resampled {len(audio)} samples ({source_rate}Hz) to {actual_length} samples ({target_rate}Hz)")
     else:
         print(f"[FAIL] Expected ~{expected_length} samples, got {actual_length}")
@@ -96,7 +99,7 @@ try:
 
     if output_devices:
         print(f"[PASS] Found {len(output_devices)} output devices:")
-        for i, dev in enumerate(output_devices[:5]):  # Show first 5
+        for i, dev in enumerate(output_devices[:5]):
             print(f"  - {dev['name']} (index {dev['index']})")
     else:
         print("[FAIL] No output devices found")
@@ -106,7 +109,6 @@ except Exception as e:
 # Test 5: PortAudio error classification
 print("\n[Test 5] Testing PortAudio error handling...")
 try:
-    # Try to use an invalid device
     try:
         sd.check_output_settings(device=9999, samplerate=44100, channels=1)
         print("[FAIL] Should have raised PortAudioError for invalid device")

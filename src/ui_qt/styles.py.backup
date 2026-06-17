@@ -1,0 +1,931 @@
+from __future__ import annotations
+
+from src.ui_qt.icon_utils import ui_icon_url
+from src.ui_qt.theme import theme_tokens
+from src.ui_qt.style_cache import cached_stylesheet
+
+
+_FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+
+
+def _base(theme: object) -> str:
+    c = theme_tokens(theme)
+    combo_arrow = ui_icon_url("chevron-down-muted.svg")
+    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+    field_bg = "rgba(9, 13, 20, 0.72)" if is_dark else "rgba(248, 251, 255, 0.70)"
+    field_hover = "rgba(22, 28, 42, 0.72)" if is_dark else "rgba(238, 245, 250, 0.78)"
+    button_bg = "rgba(255, 255, 255, 0.04)" if is_dark else "rgba(255, 255, 255, 0.56)"
+    return f"""
+    QWidget {{
+        color: {c["TEXT_PRIMARY"]};
+        font-family: {_FONT_STACK};
+        font-size: 14px;
+    }}
+    QDialog, QMainWindow {{
+        background: {c["APP_BG"]};
+    }}
+    QToolTip {{
+        background: {c["PANEL_BG"]};
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid {c["PANEL_BORDER"]};
+        padding: 6px 8px;
+        border-radius: 8px;
+    }}
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 4px 2px 4px 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {c["PANEL_BORDER"]};
+        min-height: 26px;
+        border-radius: 5px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {c["TEXT_MUTED"]};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+    QScrollBar:horizontal, QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+        background: transparent;
+        border: 0;
+        width: 0px;
+        height: 0px;
+    }}
+    QPlainTextEdit, QTextEdit, QLineEdit, QComboBox {{
+        background: {field_bg};
+        border: 1px solid {c["FIELD_BORDER"]};
+        border-radius: {c["RADIUS_M"]}px;
+        color: {c["INPUT_TEXT"]};
+        selection-background-color: {c["ACCENT"]};
+    }}
+    QPlainTextEdit:hover, QTextEdit:hover, QLineEdit:hover, QComboBox:hover {{
+        background: {field_hover};
+    }}
+    QPlainTextEdit:focus, QTextEdit:focus, QLineEdit:focus, QComboBox:focus {{
+        border-color: {c["FIELD_FOCUS"]};
+    }}
+    QLineEdit {{
+        min-height: 18px;
+        padding: 10px 12px;
+    }}
+    QPlainTextEdit, QTextEdit {{
+        padding: 12px;
+    }}
+    QComboBox {{
+        min-height: 18px;
+        padding: 7px 34px 7px 12px;
+    }}
+    QComboBox::drop-down {{
+        border: 0;
+        width: 26px;
+    }}
+    QComboBox::down-arrow {{
+        image: {combo_arrow};
+        width: 13px;
+        height: 13px;
+        margin-right: 9px;
+    }}
+    QComboBox QAbstractItemView {{
+        background: {c["PANEL_BG"]};
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid {c["PANEL_BORDER"]};
+        border-radius: 12px;
+        padding: 6px;
+        selection-background-color: {c["ACCENT_SOFT"]};
+        selection-color: {c["TEXT_PRIMARY"]};
+        outline: 0;
+    }}
+    QPushButton {{
+        background: {button_bg};
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid {c["FIELD_BORDER"]};
+        border-radius: {c["RADIUS_M"]}px;
+        padding: 8px 13px;
+        min-height: 18px;
+        font-size: 14px;
+        font-weight: 600;
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton:hover {{
+        background: {c["FIELD_HOVER"]};
+        border-color: {c["PANEL_BORDER"]};
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }}
+    QPushButton:pressed {{
+        background: {c["PANEL_RAISED"]};
+        transform: translateY(0px);
+        box-shadow: none;
+    }}
+    QPushButton:disabled {{
+        color: {c["TEXT_MUTED"]};
+        background: {c["PANEL_ALT_BG"]};
+        border-color: {c["PANEL_DIVIDER"]};
+    }}
+    QPushButton#primaryButton {{
+        background: {c["ACCENT"]};
+        color: #ffffff;
+        border: 1px solid {c["ACCENT"]};
+        font-weight: 700;
+        box-shadow: 0 2px 8px {c["ACCENT"]}40;
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#primaryButton:hover {{
+        background: {c["ACCENT_HOVER"]};
+        border-color: {c["ACCENT_HOVER"]};
+        box-shadow: 0 4px 14px {c["ACCENT"]}60;
+        transform: translateY(-1px);
+    }}
+    QPushButton#primaryButton:pressed {{
+        transform: translateY(0px);
+        box-shadow: 0 1px 4px {c["ACCENT"]}50;
+    }}
+    QPushButton#secondaryButton, QPushButton#headerButton, QPushButton#ghostButton, QPushButton#linkButton {{
+        background: {button_bg};
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#secondaryButton:hover, QPushButton#headerButton:hover {{
+        transform: translateY(-1px);
+    }}
+    QPushButton#dangerButton {{
+        background: {c["DANGER"]};
+        color: {c["TEXT_INVERTED"]};
+        border: 1px solid {c["DANGER"]};
+        font-weight: 700;
+    }}
+    QPushButton#dangerButton:hover {{
+        background: #d73737;
+        border-color: #d73737;
+    }}
+    QPushButton#iconButton {{
+        min-width: {c["CONTROL_H"]}px;
+        min-height: {c["CONTROL_H"]}px;
+        max-width: {c["CONTROL_H"]}px;
+        max-height: {c["CONTROL_H"]}px;
+        padding: 0;
+        border-radius: {int(c['CONTROL_H']) // 2}px;
+        transition: all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#iconButton:hover {{
+        transform: translateY(-1px);
+    }}
+    QPushButton#themeIconButton, QPushButton#swapIconButton {{
+        background: transparent;
+        border: 0;
+        padding: 0;
+        border-radius: 999px;
+        transition: all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#themeIconButton:hover, QPushButton#swapIconButton:hover {{
+        background: {c["FIELD_HOVER"]};
+        border: 0;
+        transform: scale(1.08);
+    }}
+    QPushButton#themeIconButton:pressed, QPushButton#swapIconButton:pressed {{
+        background: {c["PANEL_RAISED"]};
+        transform: scale(0.95);
+    }}
+    QPushButton#headerButton {{
+        min-height: {c["CONTROL_H"]}px;
+        padding: 0 16px;
+        font-weight: 600;
+    }}
+    QPushButton#sponsorButton {{
+        background: #c99a2d;
+        border-color: #c99a2d;
+        color: white;
+        min-height: {c["CONTROL_H"]}px;
+        padding: 0 16px;
+        font-weight: 700;
+    }}
+    QLabel#sectionTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 18px;
+        font-weight: 750;
+    }}
+    QLabel#sectionHint, QLabel#mutedLabel, QLabel#bottomLabel, QLabel#fieldHint, QLabel#hintLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+    }}
+    QLabel#fieldHint {{
+        padding-left: 182px;
+        padding-bottom: 4px;
+    }}
+    QLabel#successLabel {{
+        color: {c["SUCCESS"]};
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QLabel#errorLabel {{
+        color: {c["DANGER"]};
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QLabel#fieldLabel, QLabel#controlLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+        font-weight: 700;
+    }}
+    QLabel#recommendationPill {{
+        background: {c["WARNING_SOFT"]};
+        border: 1px solid {c["WARNING_BORDER"]};
+        border-radius: {c["RADIUS_M"]}px;
+        color: {c["WARNING"]};
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 800;
+    }}
+    QLabel#eyebrowLabel {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+    }}
+    QLabel#statusPill {{
+        color: {c["SUCCESS"]};
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        padding: 0 4px;
+        font-size: 12px;
+        font-weight: 800;
+    }}
+    QLabel#versionPill {{
+        background: {c["PANEL_ALT_BG"]};
+        border: 1px solid {c["PANEL_BORDER"]};
+        color: {c["TEXT_SECONDARY"]};
+        border-radius: 14px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QProgressBar {{
+        background: {c["PANEL_ALT_BG"]};
+        border: 1px solid {c["PANEL_DIVIDER"]};
+        border-radius: 999px;
+    }}
+    QProgressBar::chunk {{
+        background: {c["ACCENT"]};
+        border-radius: 999px;
+    }}
+    """
+
+
+def build_app_stylesheet(theme: object) -> str:
+    """构建应用基础样式表（带缓存）"""
+    theme_str = str(theme)
+    return cached_stylesheet("app", theme_str, lambda t: _base(t))
+
+
+
+def build_main_window_styles(theme: object) -> str:
+    """构建主窗口样式表（带缓存和优化）"""
+    theme_str = str(theme)
+    return cached_stylesheet("main_window", theme_str, _build_main_window_styles_impl)
+
+
+def _build_main_window_styles_impl(theme: object) -> str:
+    c = theme_tokens(theme)
+    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+
+    # 现代卡片式设计 - 参考 realtime_tweaks_panel
+    card_bg = "rgba(16, 20, 28, 0.95)" if is_dark else "rgba(255, 255, 255, 0.95)"
+    card_border = "rgba(148, 163, 184, 0.18)" if is_dark else "rgba(141, 151, 168, 0.22)"
+    section_bg = "rgba(22, 27, 40, 0.45)" if is_dark else "rgba(248, 251, 255, 0.65)"
+    section_border = "rgba(148, 163, 184, 0.12)" if is_dark else "rgba(141, 151, 168, 0.18)"
+
+    # 保留原有变量用于兼容
+    shell_bg = "rgba(7, 9, 14, 0.28)" if is_dark else "rgba(247, 250, 255, 0.32)"
+    glass_bg = card_bg
+    glass_alt_bg = section_bg
+    glass_raised_bg = "rgba(28, 34, 50, 0.85)" if is_dark else "rgba(232, 241, 249, 0.88)"
+    glass_border = card_border
+    strong_border = "rgba(47, 111, 255, 0.72)" if is_dark else "rgba(0, 152, 199, 0.68)"
+    return _base(theme) + f"""
+    #shellPanel {{
+        background: transparent;
+        border: 0;
+    }}
+    #appChrome {{
+        background: {shell_bg};
+        border: 0;
+        border-radius: 0px;
+    }}
+
+    /* 现代卡片样式 - 主要内容区域 */
+    #headerPanel, #workspacePanel, #translationCard, #footerPanel {{
+        background: {card_bg};
+        border: 1px solid {card_border};
+        border-radius: 16px;
+        padding: 16px;
+    }}
+
+    /* 分组标题样式 - 大写 + 字母间距 */
+    QLabel#sectionTitleMain {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        margin-top: 12px;
+        margin-bottom: 8px;
+    }}
+
+    /* 次级卡片 - 输入输出区域 */
+    #translationPanel, #editorPanel, #modeBox, #sidePanel, #controlGroup {{
+        background: {section_bg};
+        border: 1px solid {section_border};
+        border-radius: 14px;
+        padding: 14px;
+    }}
+
+    #actionStrip, #langFlowPanel {{
+        background: transparent;
+        border: 0;
+        padding: 8px;
+    }}
+
+    #sidePanel {{
+        background: {card_bg};
+        border: 1px solid {card_border};
+        border-radius: 16px;
+        padding: 16px;
+    }}
+
+    #controlGroup {{
+        background: {section_bg};
+        border: 1px solid {section_border};
+        border-radius: 12px;
+        padding: 12px;
+    }}
+
+    #editorPanel[role="source"], #editorPanel[role="target"] {{
+        background: {section_bg};
+        border: 1px solid {section_border};
+        border-radius: 14px;
+    }}
+
+    #editorPanel[role="target"] {{
+        border-color: {strong_border};
+    }}
+    QLabel#brandTitle {{
+        color: {c["HEADER_TEXT"]};
+        font-size: 25px;
+        font-weight: 800;
+    }}
+    QLabel#brandSubtitle {{
+        color: {c["HEADER_MUTED"]};
+        font-size: 13px;
+    }}
+    QLabel#sectionTitleMain {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 15px;
+        font-weight: 800;
+    }}
+    QLabel#counterLabel {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QLabel#controlSectionTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 16px;
+        font-weight: 800;
+    }}
+    QLabel#hudEyebrow {{
+        color: {c["ACCENT"]};
+        font-size: 11px;
+        font-weight: 800;
+    }}
+    QLabel#miniMetric {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QFrame#lineDivider {{
+        background: {c["PANEL_DIVIDER"]};
+        min-width: 1px;
+        max-width: 1px;
+        border: 0;
+    }}
+    QFrame#footerPanel {{
+        background: {glass_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QPushButton#activeButton {{
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid {glass_border};
+        color: {c["TEXT_PRIMARY"]};
+        text-align: center;
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#activeButton:hover {{
+        background: rgba(255, 255, 255, 0.06);
+        border-color: {c["ACCENT_BORDER"]};
+        transform: translateY(-1px);
+    }}
+    QPushButton#activeButton[active="true"] {{
+        background: {c["ACCENT_SOFT"]};
+        border: 2px solid {c["ACCENT"]};
+        color: {c["TEXT_PRIMARY"]};
+        box-shadow: 0 2px 16px {c["ACCENT"]}50, 0 0 24px {c["ACCENT"]}30;
+    }}
+    QPushButton#activeButton[active="true"]:hover {{
+        box-shadow: 0 4px 20px {c["ACCENT"]}60, 0 0 28px {c["ACCENT"]}40;
+        transform: translateY(-2px);
+    }}
+    QPushButton#modeButton {{
+        border: 1px solid transparent;
+        font-weight: 700;
+        color: {c["TEXT_SECONDARY"]};
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#modeButton[modeActive="true"], QPushButton#modeButton:checked {{
+        background: {c["ACCENT"]};
+        color: #ffffff;
+        border: 1px solid {c["ACCENT"]};
+        font-weight: 800;
+        box-shadow: 0 2px 12px {c["ACCENT"]}50, 0 0 20px {c["ACCENT"]}30;
+    }}
+    QPushButton#modeButton[modeActive="true"]:hover, QPushButton#modeButton:checked:hover {{
+        background: {c["ACCENT_HOVER"]};
+        border-color: {c["ACCENT_HOVER"]};
+        box-shadow: 0 4px 16px {c["ACCENT"]}60, 0 0 24px {c["ACCENT"]}40;
+        transform: translateY(-1px);
+    }}
+    QPushButton#modeButton[modeActive="false"] {{
+        background: transparent;
+        border-color: transparent;
+    }}
+    QPushButton#modeButton[modeActive="false"]:hover {{
+        background: {c["FIELD_HOVER"]};
+        border-color: {c["FIELD_BORDER"]};
+        color: {c["TEXT_PRIMARY"]};
+        transform: translateY(-1px);
+    }}
+    QPlainTextEdit#textPane {{
+        background: transparent;
+        border: 0;
+        color: {c["EDITOR_TEXT"]};
+        font-size: 16px;
+        padding: 4px 2px;
+    }}
+    QPlainTextEdit#textPane:focus {{
+        border: 0;
+    }}
+    QComboBox#headerCombo {{
+        min-height: 26px;
+        max-height: 26px;
+        min-width: 132px;
+        padding: 6px 34px 6px 12px;
+    }}
+    QComboBox#langCombo {{
+        min-height: 30px;
+        max-height: 32px;
+        padding: 5px 30px 5px 10px;
+    }}
+    QPushButton#railButton {{
+        min-height: {c["CONTROL_H"]}px;
+    }}
+    QPushButton#updateBadge {{
+        background: {c["WARNING_SOFT"]};
+        border: 1px solid {c["WARNING_BORDER"]};
+        color: {c["WARNING"]};
+        border-radius: 14px;
+        min-height: 30px;
+        padding: 4px 12px;
+    }}
+    QPushButton#socialButton {{
+        min-width: {c["CONTROL_H"]}px;
+        min-height: {c["CONTROL_H"]}px;
+        max-width: {c["CONTROL_H"]}px;
+        max-height: {c["CONTROL_H"]}px;
+        padding: 0;
+        border-radius: {int(c['CONTROL_H']) // 2}px;
+        background: rgba(255, 255, 255, 0.04);
+    }}
+    QPushButton#deviceButton, QComboBox#deviceCombo {{
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid {glass_border};
+        color: {c["TEXT_PRIMARY"]};
+        text-align: left;
+        padding: 6px 34px 6px 12px;
+        min-height: 24px;
+        max-height: 24px;
+    }}
+    QPushButton#deviceButton:hover, QComboBox#deviceCombo:hover {{
+        background: {c["FIELD_HOVER"]};
+        border-color: {c["ACCENT_BORDER"]};
+    }}
+    """
+
+
+
+def build_settings_window_styles(theme: object) -> str:
+    """构建设置窗口样式表（带缓存）"""
+    theme_str = str(theme)
+    return cached_stylesheet("settings_window", theme_str, _build_settings_window_styles_impl)
+
+
+def _build_settings_window_styles_impl(theme: object) -> str:
+    c = theme_tokens(theme)
+    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+    # 统一现代化玻璃拟态效果
+    shell_bg = "rgba(7, 9, 14, 0.28)" if is_dark else "rgba(247, 250, 255, 0.32)"
+    glass_bg = "rgba(14, 18, 28, 0.88)" if is_dark else "rgba(247, 250, 255, 0.90)"
+    glass_alt_bg = "rgba(22, 27, 40, 0.82)" if is_dark else "rgba(239, 246, 252, 0.85)"
+    glass_raised_bg = "rgba(28, 34, 50, 0.85)" if is_dark else "rgba(232, 241, 249, 0.88)"
+    glass_border = "rgba(148, 163, 184, 0.48)" if is_dark else "rgba(141, 151, 168, 0.52)"
+    return _base(theme) + f"""
+    QDialog {{
+        background: {c["APP_BG"]};
+    }}
+    QWidget#settingsBackground {{
+        background: transparent;
+        border: 0;
+    }}
+    #settingsChrome {{
+        background: {shell_bg};
+        border: 0;
+        border-radius: 0px;
+    }}
+    #headerCard {{
+        background: {glass_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    #headerTitle {{
+        color: {c["HEADER_TEXT"]};
+        font-size: 25px;
+        font-weight: 800;
+    }}
+    #headerSubtitle {{
+        color: {c["HEADER_MUTED"]};
+        font-size: 13px;
+    }}
+    #versionLabel {{
+        color: {c["HEADER_MUTED"]};
+        font-size: 13px;
+        font-weight: 700;
+    }}
+    #navPanel {{
+        background: {glass_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    #navTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 19px;
+        font-weight: 800;
+        padding: 0 12px;
+    }}
+    QListWidget#navList {{
+        background: transparent;
+        border: 0;
+        outline: 0;
+        padding: 10px 12px 12px 12px;
+    }}
+    QListWidget#navList::item {{
+        color: {c["TEXT_SECONDARY"]};
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: {c["RADIUS_M"]}px;
+        padding-left: 12px;
+        margin-bottom: 6px;
+        font-size: 14px;
+        font-weight: 600;
+        transition: all 0.18s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QListWidget#navList::item:hover {{
+        background: {c["FIELD_HOVER"]};
+        color: {c["TEXT_PRIMARY"]};
+        transform: translateX(2px);
+    }}
+    QListWidget#navList::item:selected {{
+        background: {c["ACCENT_SOFT"]};
+        border-color: {c["ACCENT_BORDER"]};
+        color: {c["TEXT_PRIMARY"]};
+        box-shadow: 0 2px 8px {c["ACCENT"]}30;
+    }}
+    #pageStack {{
+        background: transparent;
+        border: 0;
+    }}
+    QScrollArea#settingsPageScroll,
+    QScrollArea#settingsPageScroll > QWidget,
+    QScrollArea#settingsPageScroll QWidget#qt_scrollarea_viewport,
+    QFrame#settingsPageContent,
+    QStackedWidget#pageStack {{
+        background: transparent;
+        border: 0;
+    }}
+    QFrame#settingsPageSurface {{
+        background: {glass_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QFrame#settingsSectionCard, QFrame#subCard, QGroupBox {{
+        background: {glass_alt_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QLabel#pageTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 24px;
+        font-weight: 770;
+    }}
+    QLabel#pageHint {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+    }}
+    QLabel#sectionTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 17px;
+        font-weight: 750;
+    }}
+    QLabel#fieldLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+        font-weight: 700;
+    }}
+    #settingsFooter {{
+        background: {glass_bg};
+        border: 0;
+        border-top: 1px solid {glass_border};
+        border-radius: 0px;
+    }}
+    QFrame#modelInfoCard {{
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_M"]}px;
+    }}
+    QLabel#modelInfoTitle {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 13px;
+        font-weight: 800;
+    }}
+    QLabel#modelBadge {{
+        background: {c["PANEL_ALT_BG"]};
+        border: 1px solid {glass_border};
+        border-radius: 9px;
+        color: {c["TEXT_SECONDARY"]};
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 800;
+    }}
+    QLabel#modelBadge[tone="very_recommended"], QLabel#modelBadge[tone="recommended"] {{
+        background: {c["SUCCESS_SOFT"]};
+        border-color: {c["SUCCESS_BORDER"]};
+        color: {c["SUCCESS"]};
+    }}
+    QLabel#modelBadge[tone="not_recommended"] {{
+        background: {c["DANGER_SOFT"]};
+        border-color: {c["DANGER_BORDER"]};
+        color: {c["DANGER"]};
+    }}
+    QFrame#runtimeNotice {{
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_M"]}px;
+    }}
+    QFrame#sbv2OptionsFrame {{
+        background: transparent;
+        border: 0;
+    }}
+    QFrame#voiceDropZone {{
+        background: rgba(255, 255, 255, 0.025);
+        border: 1px dashed {glass_border};
+        border-radius: {c["RADIUS_M"]}px;
+    }}
+    QPushButton#primaryButton {{
+        min-height: 34px;
+    }}
+    QPushButton#secondaryButton {{
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid {glass_border};
+        min-height: 34px;
+    }}
+    QPushButton#footerPrimaryButton {{
+        background: {c["ACCENT"]};
+        color: #ffffff;
+        border: 1px solid {c["ACCENT"]};
+        border-radius: {c["RADIUS_M"]}px;
+        min-height: 34px;
+        max-height: 34px;
+        padding: 0 14px;
+        font-weight: 700;
+    }}
+    QPushButton#footerPrimaryButton:hover {{
+        background: {c["ACCENT_HOVER"]};
+        border-color: {c["ACCENT_HOVER"]};
+    }}
+    QPushButton#footerSecondaryButton {{
+        background: rgba(255, 255, 255, 0.04);
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_M"]}px;
+        min-height: 34px;
+        max-height: 34px;
+        padding: 0 14px;
+        font-weight: 600;
+    }}
+    QPushButton#footerSecondaryButton:hover {{
+        background: {c["FIELD_HOVER"]};
+        border-color: {c["PANEL_BORDER"]};
+    }}
+    """
+
+
+
+def build_text_input_styles(theme: object) -> str:
+    """构建文本输入窗口样式表（带缓存）"""
+    theme_str = str(theme)
+    return cached_stylesheet("text_input", theme_str, _build_text_input_styles_impl)
+
+
+def _build_text_input_styles_impl(theme: object) -> str:
+    c = theme_tokens(theme)
+    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+
+    # 统一玻璃拟态效果（与 FloatingWindow 一致）
+    shell_bg = "rgba(9, 12, 17, 0.92)" if is_dark else "rgba(255, 255, 255, 0.94)"
+    shell_border = "rgba(148, 163, 184, 0.48)" if is_dark else "rgba(141, 151, 168, 0.52)"
+    input_bg = "rgba(14, 18, 28, 0.68)" if is_dark else "rgba(248, 251, 255, 0.72)"
+    input_border = "rgba(120, 154, 200, 0.32)" if is_dark else "rgba(93, 115, 145, 0.36)"
+
+    return _base(theme) + f"""
+    QDialog {{
+        background: transparent;
+    }}
+    QFrame#textInputShell {{
+        background: {shell_bg};
+        border: 1px solid {shell_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QLabel#opacityLabel, QLabel#textInputCounter {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QTextEdit#inputTextEdit {{
+        background: {input_bg};
+        border: 1px solid {input_border};
+        border-radius: {c["RADIUS_M"]}px;
+        color: {c["TEXT_PRIMARY"]};
+        padding: 12px;
+        font-size: 15px;
+        line-height: 1.5;
+    }}
+    QTextEdit#inputTextEdit:focus {{
+        border-color: {c["ACCENT"]};
+        border-width: 1px;
+    }}
+    QTextEdit#inputTextEdit:hover {{
+        border-color: {c["ACCENT_BORDER"]};
+    }}
+    QPushButton#pinButton {{
+        min-width: 30px;
+        max-width: 30px;
+        min-height: 30px;
+        max-height: 30px;
+        padding: 0;
+        border-radius: 10px;
+        transition: all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#pinButton:hover {{
+        transform: translateY(-1px);
+    }}
+    QPushButton#iconButton {{
+        min-width: 30px;
+        max-width: 30px;
+        min-height: 30px;
+        max-height: 30px;
+        padding: 0;
+        border-radius: 10px;
+        transition: all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#iconButton:hover {{
+        transform: translateY(-1px);
+    }}
+    QPushButton#primaryButton {{
+        min-height: 34px;
+        padding: 0 14px;
+        font-weight: 700;
+        box-shadow: 0 2px 8px {c["ACCENT"]}40;
+    }}
+    QPushButton#primaryButton:hover {{
+        box-shadow: 0 4px 12px {c["ACCENT"]}60;
+        transform: translateY(-1px);
+    }}
+    QSlider::groove:horizontal {{
+        background: {input_border};
+        border-radius: 4px;
+        height: 7px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {c["ACCENT"]};
+        border-radius: 7px;
+        width: 14px;
+        margin: -4px 0;
+        transition: all 0.15s ease;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: {c["ACCENT_HOVER"]};
+        width: 16px;
+        margin: -5px 0;
+    }}
+    """
+
+
+
+def build_floating_window_styles(theme: object) -> str:
+    """构建浮动窗口样式表（带缓存）"""
+    theme_str = str(theme)
+    return cached_stylesheet("floating_window", theme_str, _build_floating_window_styles_impl)
+
+
+def _build_floating_window_styles_impl(theme: object) -> str:
+    c = theme_tokens(theme)
+    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+
+    # 增强玻璃拟态效果
+    shell_bg = "rgba(9, 12, 17, 0.92)" if is_dark else "rgba(255, 255, 255, 0.94)"
+    shell_border = "rgba(148, 163, 184, 0.48)" if is_dark else "rgba(141, 151, 168, 0.52)"
+    panel_bg = "rgba(14, 18, 28, 0.68)" if is_dark else "rgba(248, 251, 255, 0.72)"
+    panel_border = "rgba(120, 154, 200, 0.32)" if is_dark else "rgba(93, 115, 145, 0.36)"
+
+    # 状态标签的精致样式
+    status_bg = "rgba(22, 27, 40, 0.78)" if is_dark else "rgba(239, 246, 252, 0.82)"
+    status_border = "rgba(148, 163, 184, 0.38)" if is_dark else "rgba(141, 151, 168, 0.42)"
+
+    return _base(theme) + f"""
+    QDialog {{
+        background: transparent;
+    }}
+    QFrame#floatingShell {{
+        background: {shell_bg};
+        border: 1px solid {shell_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QScrollArea, QWidget#floatingScrollContent {{
+        background: {panel_bg};
+        border: 1px solid {panel_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QLabel#opacityLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QLabel#floatingStatusLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        background: {status_bg};
+        border: 1px solid {status_border};
+        border-radius: {c["RADIUS_M"]}px;
+        min-height: 28px;
+        padding: 0 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#pinButton {{
+        min-width: 30px;
+        max-width: 30px;
+        min-height: 30px;
+        max-height: 30px;
+        padding: 0;
+        border-radius: 10px;
+        transition: all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1);
+    }}
+    QPushButton#pinButton:hover {{
+        transform: translateY(-1px);
+    }}
+    QPushButton#primaryButton {{
+        min-height: 34px;
+        padding: 0 14px;
+        font-weight: 700;
+        box-shadow: 0 2px 8px {c["ACCENT"]}40;
+    }}
+    QPushButton#primaryButton:hover {{
+        box-shadow: 0 4px 12px {c["ACCENT"]}60;
+        transform: translateY(-1px);
+    }}
+    QSlider::groove:horizontal {{
+        background: {panel_border};
+        border-radius: 4px;
+        height: 7px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {c["ACCENT"]};
+        border-radius: 7px;
+        width: 14px;
+        margin: -4px 0;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: {c["ACCENT_HOVER"]};
+        width: 16px;
+        margin: -5px 0;
+    }}
+    """

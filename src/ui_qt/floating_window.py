@@ -1,13 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2024-2026 ここ_Mio and Mio RealTime Translator contributors
+#
+# This file is part of Mio RealTime Translator.
+
 from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
 import logging
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -28,21 +35,13 @@ logger = logging.getLogger(__name__)
 
 MAX_HISTORY = 15
 DEFAULT_SIZE = (520, 320)
-MIN_SIZE = (300, 180)
+MIN_SIZE = (360, 220)
 DEFAULT_OPACITY = 0.88
 MIN_OPACITY = 0.45
 MAX_OPACITY = 1.0
 BUBBLE_MIN_WRAP = 160
 BUBBLE_MAX_WRAP = 440
 BUBBLE_WRAP_RATIO = 0.72
-
-HISTORY_ITEM_SELECTED_BG = "#f4f8fd"
-HISTORY_INCOMING_BG = "#ffffff"
-HISTORY_OUTGOING_BG = "#f6f9fe"
-HISTORY_ERROR_BG = "#fff6f7"
-HISTORY_ITEM_SELECTED_BORDER = "#dbe4ef"
-HISTORY_DEFAULT_BORDER = "#dbe4ef"
-
 
 class FloatingWindow(QDialog):
     def __init__(
@@ -62,6 +61,7 @@ class FloatingWindow(QDialog):
         self._history: deque[dict[str, object]] = deque(maxlen=MAX_HISTORY)
         self._history_seq = 0
         self._selected_history_id: int | None = None
+        self._drag_position: QPoint | None = None
         self._topmost = True
         self._opacity = DEFAULT_OPACITY
         self._visible = False
@@ -80,7 +80,12 @@ class FloatingWindow(QDialog):
         self.resize(*DEFAULT_SIZE)
         self.setMinimumSize(*MIN_SIZE)
         self.move(24, 96)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        flags = self.windowFlags() | Qt.WindowType.FramelessWindowHint
+        if self._topmost:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
         self.setWindowOpacity(self._opacity)
 
         self._build_ui()
@@ -89,11 +94,59 @@ class FloatingWindow(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(0)
+
+        self._shell = QFrame()
+        self._shell.setObjectName("textInputShell")
+        self._shell.installEventFilter(self)
+        shell_shadow = QGraphicsDropShadowEffect(self._shell)
+        shell_shadow.setBlurRadius(28)
+        shell_shadow.setOffset(0, 12)
+        shell_shadow.setColor(self._shadow_color())
+        self._shell.setGraphicsEffect(shell_shadow)
+        root.addWidget(self._shell, 1)
+
+        shell_layout = QVBoxLayout(self._shell)
+        shell_layout.setContentsMargins(10, 10, 10, 10)
+        shell_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
+
+        self._opacity_label = QLabel(self._opacity_label_text())
+        self._opacity_label.setObjectName("opacityLabel")
+        self._opacity_label.installEventFilter(self)
+        top_row.addWidget(self._opacity_label)
+
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setRange(int(MIN_OPACITY * 100), int(MAX_OPACITY * 100))
+        self._opacity_slider.setValue(int(self._opacity * 100))
+        self._opacity_slider.setFixedWidth(86)
+        self._opacity_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_change)
+        top_row.addWidget(self._opacity_slider)
+        top_row.addStretch(1)
+
+        self._pin_button = QPushButton("")
+        self._pin_button.setObjectName("pinButton")
+        self._pin_button.setFixedSize(30, 30)
+        self._pin_button.setIconSize(QSize(15, 15))
+        self._pin_button.clicked.connect(self.toggle_topmost)
+        self._refresh_pin_button()
+        top_row.addWidget(self._pin_button)
+
+        self._close_button = QPushButton("")
+        self._close_button.setObjectName("iconButton")
+        self._close_button.setFixedSize(30, 30)
+        self._close_button.setIconSize(QSize(15, 15))
+        self._close_button.clicked.connect(self.close)
+        self._refresh_close_button()
+        top_row.addWidget(self._close_button)
+        shell_layout.addLayout(top_row)
 
         self._scroll_area = QScrollArea()
-        self._scroll_area.setObjectName("floatingScrollArea")
+        self._scroll_area.setObjectName("inputTextEdit")
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -104,37 +157,16 @@ class FloatingWindow(QDialog):
         self._scroll_layout.setSpacing(8)
         self._scroll_layout.addStretch(1)
         self._scroll_area.setWidget(self._scroll_content)
-        root.addWidget(self._scroll_area, 1)
+        shell_layout.addWidget(self._scroll_area, 1)
 
         footer = QHBoxLayout()
-        footer.setSpacing(6)
-
-        self._opacity_label = QLabel(self._opacity_label_text())
-        self._opacity_label.setObjectName("opacityLabel")
-        footer.addWidget(self._opacity_label)
-
-        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self._opacity_slider.setRange(int(MIN_OPACITY * 100), int(MAX_OPACITY * 100))
-        self._opacity_slider.setValue(int(self._opacity * 100))
-        self._opacity_slider.setFixedWidth(54)
-        self._opacity_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._opacity_slider.valueChanged.connect(self._on_opacity_change)
-        footer.addWidget(self._opacity_slider)
+        footer.setSpacing(8)
 
         self._status_label = QLabel(self._status_text())
-        self._status_label.setObjectName("floatingStatusLabel")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._status_label.setMaximumWidth(180)
+        self._status_label.setObjectName("textInputCounter")
         self._status_label.setToolTip(self._status_label.text())
+        self._status_label.installEventFilter(self)
         footer.addWidget(self._status_label, 1)
-
-        self._pin_button = QPushButton("")
-        self._pin_button.setObjectName("pinButton")
-        self._pin_button.setIconSize(QSize(15, 15))
-        self._pin_button.clicked.connect(self.toggle_topmost)
-        self._refresh_pin_button()
-        footer.addWidget(self._pin_button)
 
         self._send_selected_button = QPushButton(tr(self._ui_lang, "send_to_vrc"))
         self._send_selected_button.setObjectName("primaryButton")
@@ -144,7 +176,7 @@ class FloatingWindow(QDialog):
             self._send_selected_button.setIconSize(QSize(15, 15))
         self._send_selected_button.clicked.connect(self._send_selected_history)
         footer.addWidget(self._send_selected_button)
-        root.addLayout(footer)
+        shell_layout.addLayout(footer)
 
         self._apply_style()
 
@@ -200,9 +232,24 @@ class FloatingWindow(QDialog):
     def _pin_text(self) -> str:
         return tr(self._ui_lang, "text_input_pin_on" if self._topmost else "text_input_pin_off")
 
+    def _shadow_color(self) -> QColor:
+        """获取阴影颜色"""
+        tokens = theme_tokens(self._theme)
+        shadow = QColor.fromString(str(tokens["SHADOW"]))
+        if shadow.isValid():
+            return shadow
+        return QColor(2, 6, 23, 97) if self._theme == "dark" else QColor(15, 23, 42, 46)
+
     def _apply_style(self) -> None:
+        # 更新阴影颜色
+        if hasattr(self, "_shell"):
+            effect = self._shell.graphicsEffect()
+            if isinstance(effect, QGraphicsDropShadowEffect):
+                effect.setColor(self._shadow_color())
+
         self.setStyleSheet(build_floating_window_styles(self._theme))
         self._refresh_pin_button()
+        self._refresh_close_button()
         for entry_id in self._history_widgets:
             self._style_history_entry(entry_id)
 
@@ -210,12 +257,19 @@ class FloatingWindow(QDialog):
         tokens = theme_tokens(self._theme)
         icon = ui_icon(
             "pin.svg" if self._topmost else "pin-off.svg",
-            15,
+            16,
             str(tokens["ACCENT"]) if self._topmost else icon_tint(self._theme),
         )
         self._pin_button.setIcon(icon)
         self._pin_button.setText(self._pin_text() if icon.isNull() else "")
         self._pin_button.setToolTip(self._pin_text())
+
+    def _refresh_close_button(self) -> None:
+        icon = ui_icon("x.svg", 15, icon_tint(self._theme, strong=True))
+        self._close_button.setIcon(icon)
+        close_text = tr(self._ui_lang, "text_input_close")
+        self._close_button.setText(close_text if icon.isNull() else "")
+        self._close_button.setToolTip(close_text)
 
     def _on_opacity_change(self, value: int) -> None:
         self._opacity = max(MIN_OPACITY, min(MAX_OPACITY, float(value) / 100.0))
@@ -245,16 +299,35 @@ class FloatingWindow(QDialog):
     def _entry_side(entry: dict[str, object]) -> str:
         return "right" if FloatingWindow._entry_source(entry) in {"manual", "mic"} else "left"
 
-    def _bubble_colors(self, source: str, *, selected: bool) -> tuple[str, str, str]:
+    def _bubble_colors(self, source: str, *, selected: bool) -> tuple[str, str, str, str]:
+        """返回 (背景, 边框, 文本, 阴影) 四元组"""
         tokens = theme_tokens(self._theme)
         text = str(tokens["TEXT_PRIMARY"])
+        is_dark = self._theme == "dark"
+
         if selected:
-            return str(tokens["ACCENT_SOFT"]), str(tokens["ACCENT_BORDER"]), text
+            bg = str(tokens["ACCENT_SOFT"])
+            border = str(tokens["ACCENT_BORDER"])
+            shadow = f"rgba(47, 111, 255, 0.28)" if is_dark else f"rgba(0, 152, 199, 0.24)"
+            return bg, border, text, shadow
+
         if source in {"manual", "mic"}:
-            return str(tokens["PANEL_RAISED"]), str(tokens["FIELD_BORDER"]), text
+            bg = "rgba(28, 34, 50, 0.82)" if is_dark else "rgba(232, 241, 249, 0.88)"
+            border = "rgba(120, 154, 200, 0.38)" if is_dark else "rgba(93, 115, 145, 0.42)"
+            shadow = f"rgba(0, 0, 0, 0.12)" if is_dark else f"rgba(0, 0, 0, 0.08)"
+            return bg, border, text, shadow
+
         if source == "error":
-            return str(tokens["DANGER_SOFT"]), str(tokens["DANGER_BORDER"]), text
-        return str(tokens["FIELD_BG"]), str(tokens["FIELD_BORDER"]), text
+            bg = str(tokens["DANGER_SOFT"])
+            border = str(tokens["DANGER_BORDER"])
+            shadow = f"rgba(220, 38, 38, 0.18)"
+            return bg, border, text, shadow
+
+        # 默认 incoming 消息
+        bg = "rgba(22, 27, 40, 0.78)" if is_dark else "rgba(248, 251, 255, 0.92)"
+        border = "rgba(148, 163, 184, 0.32)" if is_dark else "rgba(141, 151, 168, 0.38)"
+        shadow = f"rgba(0, 0, 0, 0.10)" if is_dark else f"rgba(0, 0, 0, 0.06)"
+        return bg, border, text, shadow
 
     def _entry_can_resend(self, entry: dict[str, object]) -> bool:
         return bool(self._entry_payload(entry)) and self._entry_source(entry) != "error"
@@ -373,16 +446,18 @@ class FloatingWindow(QDialog):
         source = str(widgets.get("source", "listen"))
         is_selected = entry_id == self._selected_history_id
         if bubble is not None:
-            bg, border, text = self._bubble_colors(source, selected=is_selected)
+            bg, border, text, shadow = self._bubble_colors(source, selected=is_selected)
             bubble.setStyleSheet(f"""
                 #historyBubble {{
                     background: {bg};
                     border: 1px solid {border};
-                    border-radius: 20px;
+                    border-radius: 16px;
+                    padding: 12px 14px;
                 }}
                 #historyBubble QLabel {{
                     color: {text};
                     font-size: 13px;
+                    line-height: 1.5;
                 }}
             """)
 
@@ -424,6 +499,7 @@ class FloatingWindow(QDialog):
         self._opacity_label.setText(self._opacity_label_text())
         self._refresh_status_label()
         self._refresh_pin_button()
+        self._refresh_close_button()
         self._send_selected_button.setText(tr(self._ui_lang, "send_to_vrc"))
         self._refresh_history()
 
@@ -513,6 +589,54 @@ class FloatingWindow(QDialog):
         super().hide()
         if self._on_close is not None:
             self._on_close()
+
+    def _begin_drag(self, event) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        event.accept()
+        return True
+
+    def _continue_drag(self, event) -> bool:
+        if self._drag_position is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return False
+        self.move(event.globalPosition().toPoint() - self._drag_position)
+        event.accept()
+        return True
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj in {
+            getattr(self, "_shell", None),
+            getattr(self, "_opacity_label", None),
+            getattr(self, "_status_label", None),
+        }:
+            event_type = event.type()
+            if event_type == QEvent.Type.MouseButtonPress:
+                return self._begin_drag(event)
+            if event_type == QEvent.Type.MouseMove:
+                return self._continue_drag(event)
+            if event_type == QEvent.Type.MouseButtonRelease:
+                self._drag_position = None
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            drag_top = self._shell.mapTo(self, self._shell.rect().topLeft()).y()
+            drag_bottom = drag_top + 46
+            if pos.y() <= drag_bottom:
+                if self._begin_drag(event):
+                    return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._continue_drag(event):
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag_position = None
+        super().mouseReleaseEvent(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.hide()

@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 import boto3
 
@@ -46,7 +49,7 @@ CHUNK = 256 * 1024 * 1024
 
 
 def upload_json(local_path: str, key: str) -> None:
-    path = Path(local_path)
+    path = REPO_ROOT / local_path
     raw = path.read_bytes()
     try:
         json.loads(raw)
@@ -67,7 +70,7 @@ def upload_json(local_path: str, key: str) -> None:
 
 
 def upload(local_path: str, key: str) -> None:
-    path = Path(local_path)
+    path = REPO_ROOT / local_path
     size = path.stat().st_size
     size_mb = size / 1024 / 1024
     print(f"\nUploading: {path.name} ({size_mb:.0f} MB) -> {BUCKET}/{key}")
@@ -118,7 +121,6 @@ def upload(local_path: str, key: str) -> None:
 
 
 if __name__ == "__main__":
-    base = Path(__file__).parent
     for local, key in UPLOADS:
-        upload(str(base / local), key)
+        upload(local, key)
     print("\nAll uploads completed.")

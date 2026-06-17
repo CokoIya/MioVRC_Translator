@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from src.ui_qt.icon_utils import ui_icon_url
-from src.ui_qt.theme import theme_tokens
+from src.ui_qt.theme import normalize_theme, theme_tokens
 
 
 _FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif'
@@ -10,7 +10,7 @@ _FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-
 def _base(theme: object) -> str:
     c = theme_tokens(theme)
     combo_arrow = ui_icon_url("chevron-down-muted.svg")
-    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+    is_dark = normalize_theme(theme) == "dark"
     field_bg = "rgba(9, 13, 20, 0.72)" if is_dark else "rgba(248, 251, 255, 0.70)"
     field_hover = "rgba(22, 28, 42, 0.72)" if is_dark else "rgba(238, 245, 250, 0.78)"
     button_bg = "rgba(255, 255, 255, 0.04)" if is_dark else "rgba(255, 255, 255, 0.56)"
@@ -255,7 +255,7 @@ def build_app_stylesheet(theme: object) -> str:
 
 def build_main_window_styles(theme: object) -> str:
     c = theme_tokens(theme)
-    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+    is_dark = normalize_theme(theme) == "dark"
     shell_bg = "rgba(7, 9, 14, 0.18)" if is_dark else "rgba(247, 250, 255, 0.20)"
     glass_bg = "rgba(14, 18, 28, 0.68)" if is_dark else "rgba(247, 250, 255, 0.66)"
     glass_alt_bg = "rgba(22, 27, 40, 0.62)" if is_dark else "rgba(239, 246, 252, 0.58)"
@@ -456,7 +456,7 @@ def build_main_window_styles(theme: object) -> str:
 
 def build_settings_window_styles(theme: object) -> str:
     c = theme_tokens(theme)
-    is_dark = str(c["APP_BG"]).lower() == "#07080d"
+    is_dark = normalize_theme(theme) == "dark"
     shell_bg = "rgba(7, 9, 14, 0.18)" if is_dark else "rgba(247, 250, 255, 0.20)"
     glass_bg = "rgba(14, 18, 28, 0.68)" if is_dark else "rgba(247, 250, 255, 0.66)"
     glass_alt_bg = "rgba(22, 27, 40, 0.62)" if is_dark else "rgba(239, 246, 252, 0.58)"
@@ -675,7 +675,7 @@ def build_text_input_styles(theme: object) -> str:
         color: {c["TEXT_SECONDARY"]};
         font-size: 11px;
     }}
-    QTextEdit#inputTextEdit {{
+    QTextEdit#inputTextEdit, QScrollArea#inputTextEdit {{
         background: {c["PANEL_BG"]};
         border: 1px solid {c["FIELD_BORDER"]};
         border-radius: {c["RADIUS_M"]}px;
@@ -683,7 +683,13 @@ def build_text_input_styles(theme: object) -> str:
         padding: 12px;
         font-size: 15px;
     }}
-    QTextEdit#inputTextEdit:focus {{
+    QScrollArea#inputTextEdit > QWidget,
+    QScrollArea#inputTextEdit QWidget#qt_scrollarea_viewport,
+    QWidget#floatingScrollContent {{
+        background: transparent;
+        border: 0;
+    }}
+    QTextEdit#inputTextEdit:focus, QScrollArea#inputTextEdit:focus {{
         border-color: {c["ACCENT"]};
     }}
     QPushButton#pinButton {{
@@ -722,53 +728,4 @@ def build_text_input_styles(theme: object) -> str:
 
 
 def build_floating_window_styles(theme: object) -> str:
-    c = theme_tokens(theme)
-    return _base(theme) + f"""
-    QDialog {{
-        background: {c["SHELL_BG"]};
-        border: 1px solid {c["SHELL_BORDER"]};
-        border-radius: {c["RADIUS_L"]}px;
-    }}
-    QScrollArea, QWidget#floatingScrollContent {{
-        background: {c["PANEL_BG"]};
-        border: 1px solid {c["PANEL_BORDER"]};
-        border-radius: {c["RADIUS_L"]}px;
-    }}
-    QLabel#opacityLabel {{
-        color: {c["TEXT_SECONDARY"]};
-        font-size: 11px;
-    }}
-    QLabel#floatingStatusLabel {{
-        color: {c["TEXT_SECONDARY"]};
-        background: {c["FIELD_BG"]};
-        border: 1px solid {c["FIELD_BORDER"]};
-        border-radius: {c["RADIUS_M"]}px;
-        min-height: 28px;
-        padding: 0 10px;
-        font-size: 11px;
-        font-weight: 700;
-    }}
-    QPushButton#pinButton {{
-        min-width: 30px;
-        max-width: 30px;
-        min-height: 30px;
-        max-height: 30px;
-        padding: 0;
-        border-radius: 10px;
-    }}
-    QPushButton#primaryButton {{
-        min-height: 34px;
-        padding: 0 14px;
-    }}
-    QSlider::groove:horizontal {{
-        background: {c["PANEL_BORDER"]};
-        border-radius: 4px;
-        height: 7px;
-    }}
-    QSlider::handle:horizontal {{
-        background: {c["ACCENT"]};
-        border-radius: 7px;
-        width: 14px;
-        margin: -4px 0;
-    }}
-    """
+    return build_text_input_styles(theme)

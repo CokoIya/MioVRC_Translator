@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $modelDir = "models\sensevoice-small"
 if (-not ((Test-Path (Join-Path $modelDir "model.pt")) -and ((Test-Path (Join-Path $modelDir "configuration.json")) -or (Test-Path (Join-Path $modelDir "config.yaml"))))) {
-    throw "Bundled SenseVoice model was not found at $modelDir. Run the release Python with download_models.py first."
+    throw "Bundled SenseVoice model was not found at $modelDir. Run the release Python with tools/download_models.py first."
 }
 
 $env:MIO_TRANSLATOR_BUNDLE_MODELS = "1"

@@ -60,7 +60,7 @@ python main.py
 先にモデルをダウンロードしたい場合:
 
 ```bash
-python download_models.py
+python tools/download_models.py
 ```
 
 モデルキャッシュの保存先を変更したい場合:

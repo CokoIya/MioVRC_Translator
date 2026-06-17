@@ -1,18 +1,18 @@
 {
-  "version": "v1.3.7.5",
-  "installer_name": "MioTranslator-Setup-v1.3.7.5.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.5/MioTranslator-Setup-v1.3.7.5.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.5/MioTranslator-Setup-v1.3.7.5.exe",
-  "size_bytes": 380178920,
-  "sha256": "5cea1121b75413a485800a493e467e8b5fc89a38c22cc56a97fb773de580bf12",
-  "notes": "v1.3.7.5 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
+  "version": "v1.3.7.6",
+  "installer_name": "MioTranslator-Setup-v1.3.7.6.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.6/MioTranslator-Setup-v1.3.7.6.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.6/MioTranslator-Setup-v1.3.7.6.exe",
+  "size_bytes": 380265785,
+  "sha256": "bea3ee9c378a0678c05f7014a80e3fc54db3494edae4bc2ac80c49bce699e3b2",
+  "notes": "v1.3.7.6 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7.5 新增 GPT 兼容与 Claude 兼容的中转 API 模型下拉选择，新增 Qwen TTS 普通 flash / instruct 模型选择，默认保留普通 flash 以兼容更多音色，并让翻译人设影响 Qwen instruct TTS 的语气和情绪。",
-    "en": "v1.3.7.5 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
-    "ja": "v1.3.7.5 では、GPT 互換 / Claude 互換の中継 API モデル選択、Qwen TTS の flash / instruct モデル選択を追加し、音色互換性のため通常 flash を既定に保ち、ロールプレイ人設で Qwen instruct TTS の口調と感情を制御できます。",
-    "ru": "v1.3.7.5 добавляет выбор моделей для GPT-совместимых и Claude-совместимых прокси API, добавляет выбор Qwen TTS flash/instruct, оставляет обычный Qwen flash по умолчанию для лучшей совместимости голосов и позволяет ролевому профилю управлять тоном и эмоциями Qwen instruct TTS.",
-    "ko": "v1.3.7.5는 GPT 호환 및 Claude 호환 프록시 API 모델 드롭다운을 추가하고, Qwen TTS flash/instruct 모델 선택을 추가하며, 더 넓은 음색 호환성을 위해 일반 flash를 기본값으로 유지하고, 롤플레이 인물 설정이 Qwen instruct TTS의 말투와 감정에 반영되도록 합니다."
+    "zh-CN": "v1.3.7.6 新增 GPT 兼容与 Claude 兼容的中转 API 模型下拉选择，新增 Qwen TTS 普通 flash / instruct 模型选择，默认保留普通 flash 以兼容更多音色，并让翻译人设影响 Qwen instruct TTS 的语气和情绪。",
+    "en": "v1.3.7.6 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
+    "ja": "v1.3.7.6 では、GPT 互換 / Claude 互換の中継 API モデル選択、Qwen TTS の flash / instruct モデル選択を追加し、音色互換性のため通常 flash を既定に保ち、ロールプレイ人設で Qwen instruct TTS の口調と感情を制御できます。",
+    "ru": "v1.3.7.6 добавляет выбор моделей для GPT-совместимых и Claude-совместимых прокси API, добавляет выбор Qwen TTS flash/instruct, оставляет обычный Qwen flash по умолчанию для лучшей совместимости голосов и позволяет ролевому профилю управлять тоном и эмоциями Qwen instruct TTS.",
+    "ko": "v1.3.7.6는 GPT 호환 및 Claude 호환 프록시 API 모델 드롭다운을 추가하고, Qwen TTS flash/instruct 모델 선택을 추가하며, 더 넓은 음색 호환성을 위해 일반 flash를 기본값으로 유지하고, 롤플레이 인물 설정이 Qwen instruct TTS의 말투와 감정에 반영되도록 합니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-06-08T19:10:41+09:00"
+  "published_at": "2026-06-17T19:23:32+09:00"
 }

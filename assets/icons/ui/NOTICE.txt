@@ -1,9 +1,9 @@
-Icons in this directory were downloaded from the Lucide icon set.
+UI icons in this directory were downloaded from the current Iconoir icon set.
 
-Source: https://github.com/lucide-icons/lucide/tree/main/icons
-License: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+Source: https://github.com/iconoir-icons/iconoir/tree/main/icons
+License: https://github.com/iconoir-icons/iconoir/blob/main/LICENSE
 
-Brand icons were downloaded from Simple Icons.
+Brand and social icons were downloaded from the current Simple Icons set.
 
 Source: https://simpleicons.org/
 License: https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md

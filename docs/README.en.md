@@ -60,7 +60,7 @@ python main.py
 To download the model in advance:
 
 ```bash
-python download_models.py
+python tools/download_models.py
 ```
 
 To override the model cache directory:

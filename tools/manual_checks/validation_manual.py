@@ -1,13 +1,18 @@
 """Test script for input validation."""
-# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 from src.utils.input_validation import (
+    ValidationError,
+    validate_api_key,
     validate_translation_text,
     validate_tts_text,
-    validate_api_key,
-    ValidationError,
 )
 
 print("=" * 60)

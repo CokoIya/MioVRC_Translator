@@ -15,6 +15,7 @@ dist/
 build/
 logs/
 *.log
+catalog_cache.json
 sponsors_cache.json
 .modelscope/
 .tmp/

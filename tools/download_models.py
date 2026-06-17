@@ -2,12 +2,16 @@
 SenseVoiceSmall を  パッケージ同梱用にリポジトリ内   models     へ保存する
 
 使い方
-    python download  models  py
+    python tools/download_models.py
 """
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from src.asr.sensevoice_model_manager import (
     ensure_packaging_model,

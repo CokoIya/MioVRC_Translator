@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2024-2026 ここ_Mio and Mio RealTime Translator contributors
+#
+# This file is part of Mio RealTime Translator.
+
 import collections
 from io import BytesIO
 import logging
@@ -8,6 +13,13 @@ import time
 
 import numpy as np
 import webrtcvad
+
+# Import envelope follower for smooth audio level processing
+try:
+    from src.audio.envelope_follower import EnvelopeFollower
+    ENVELOPE_AVAILABLE = True
+except ImportError:
+    ENVELOPE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +38,7 @@ class VADDetector:
         activation_threshold_s: float = 0.2,
         min_rms: float = 0.012,
         max_speech_s: float = 6.0,
+        use_envelope_follower: bool = True,
     ):
         assert sample_rate in (8000, 16000, 32000, 48000)
         assert frame_duration_ms in (10, 20, 30)
@@ -49,6 +62,19 @@ class VADDetector:
         self._trailing_silence = 0
         self._speech_frames = 0
         self.in_speech = False
+
+        # Envelope follower for smooth RMS (tomari-guruguru inspired)
+        self.envelope_follower = None
+        if use_envelope_follower and ENVELOPE_AVAILABLE:
+            self.envelope_follower = EnvelopeFollower(
+                attack_rate=0.6,
+                release_rate=0.12,
+                gain=1.0  # Gain is applied separately
+            )
+            logger.info("VADDetector: Envelope follower enabled")
+
+        # Store latest smooth RMS for external monitoring
+        self.latest_smooth_rms = 0.0
 
     def process_frame(self, pcm_bytes: bytes) -> bool:
         if len(pcm_bytes) != self.frame_bytes:
@@ -91,7 +117,18 @@ class VADDetector:
         if audio.size == 0:
             return False
 
-        rms = float(np.sqrt(np.mean(np.square(audio / 32768.0))))
+        # Calculate raw RMS
+        raw_rms = float(np.sqrt(np.mean(np.square(audio / 32768.0))))
+
+        # Apply envelope follower for smooth RMS (if enabled)
+        if self.envelope_follower:
+            smooth_rms = self.envelope_follower.process(raw_rms)
+            self.latest_smooth_rms = smooth_rms
+            rms = smooth_rms
+        else:
+            rms = raw_rms
+            self.latest_smooth_rms = raw_rms
+
         if rms < self._min_rms:
             return False
         return self.vad.is_speech(pcm_bytes, self.sample_rate)
@@ -107,6 +144,20 @@ class VADDetector:
         self._trailing_silence = 0
         self._speech_frames = 0
         self.in_speech = False
+        if self.envelope_follower:
+            self.envelope_follower.reset()
+        self.latest_smooth_rms = 0.0
+
+    def set_envelope_params(self, attack_rate: float, release_rate: float):
+        """动态调整包络参数（用于实时调整）"""
+        if self.envelope_follower:
+            self.envelope_follower.set_attack_rate(attack_rate)
+            self.envelope_follower.set_release_rate(release_rate)
+            logger.debug(f"Envelope params updated: attack={attack_rate}, release={release_rate}")
+
+    def get_smooth_rms(self) -> float:
+        """获取平滑后的 RMS 值（用于音量表显示）"""
+        return self.latest_smooth_rms
 
 
 class SileroVADDetector:
@@ -125,6 +176,7 @@ class SileroVADDetector:
         min_rms: float = 0.02,
         max_speech_s: float = 6.0,
         speech_threshold: float = 0.5,
+        use_envelope_follower: bool = True,
     ):
         if sample_rate != 16000:
             raise ValueError("SileroVADDetector only supports sample_rate=16000")
@@ -153,6 +205,18 @@ class SileroVADDetector:
         self._model = None
         self._model_error = None
         self._model_lock = threading.Lock()
+
+        # Envelope follower for smooth RMS (tomari-guruguru inspired)
+        self.envelope_follower = None
+        if use_envelope_follower and ENVELOPE_AVAILABLE:
+            self.envelope_follower = EnvelopeFollower(
+                attack_rate=0.6,
+                release_rate=0.12,
+                gain=1.0
+            )
+            logger.info("SileroVADDetector: Envelope follower enabled")
+
+        self.latest_smooth_rms = 0.0
 
     def _get_model(self):
         if self._model is not None:
@@ -220,9 +284,32 @@ class SileroVADDetector:
                 self._model.reset_states()
             except Exception:
                 pass
+        if self.envelope_follower:
+            self.envelope_follower.reset()
+        self.latest_smooth_rms = 0.0
+
+    def set_envelope_params(self, attack_rate: float, release_rate: float):
+        """动态调整包络参数（用于实时调整）"""
+        if self.envelope_follower:
+            self.envelope_follower.set_attack_rate(attack_rate)
+            self.envelope_follower.set_release_rate(release_rate)
+
+    def get_smooth_rms(self) -> float:
+        """获取平滑后的 RMS 值（用于音量表显示）"""
+        return self.latest_smooth_rms
 
     def _is_voiced(self, chunk: np.ndarray) -> bool:
-        rms = float(np.sqrt(np.mean(np.square(chunk))))
+        raw_rms = float(np.sqrt(np.mean(np.square(chunk))))
+
+        # Apply envelope follower for smooth RMS (if enabled)
+        if self.envelope_follower:
+            smooth_rms = self.envelope_follower.process(raw_rms)
+            self.latest_smooth_rms = smooth_rms
+            rms = smooth_rms
+        else:
+            rms = raw_rms
+            self.latest_smooth_rms = raw_rms
+
         now = time.monotonic()
         if rms < self._min_rms:
             if now - self._last_prob_log_at >= 5.0:

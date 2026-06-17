@@ -1,11 +1,15 @@
 """Test script for logging system improvements."""
-# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import os
 import tempfile
-from pathlib import Path
 from logging.handlers import RotatingFileHandler
 import logging
 
@@ -16,7 +20,6 @@ print("=" * 60)
 # Test 1: Log level environment variable
 print("\n[Test 1] Testing log level environment variable...")
 try:
-    # Test default level
     log_level_str = os.environ.get("MIO_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
 
@@ -25,13 +28,11 @@ try:
     else:
         print(f"[FAIL] Expected INFO, got {log_level}")
 
-    # Test debug mode
     os.environ["MIO_DEBUG"] = "1"
     if os.environ.get("MIO_DEBUG") == "1":
         debug_level = logging.DEBUG
         print(f"[PASS] Debug mode sets level to DEBUG ({debug_level})")
 
-    # Clean up
     del os.environ["MIO_DEBUG"]
 except Exception as e:
     print(f"[FAIL] Error testing log level: {e}")
@@ -44,7 +45,7 @@ try:
 
         handler = RotatingFileHandler(
             log_file,
-            maxBytes=1024,  # 1KB for testing
+            maxBytes=1024,
             backupCount=3,
             encoding="utf-8",
         )
@@ -53,11 +54,9 @@ try:
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
-        # Write enough data to trigger rotation
         for i in range(100):
             logger.info(f"Test log message {i} " + "x" * 50)
 
-        # Check if backup files were created
         backup_files = list(Path(tmpdir).glob("test.log.*"))
 
         if backup_files:
@@ -65,10 +64,9 @@ try:
         else:
             print("[WARN] No backup files created (may need more data)")
 
-        # Check file size limit
         if log_file.exists():
             size = log_file.stat().st_size
-            if size <= 1024 * 2:  # Allow some overhead
+            if size <= 1024 * 2:
                 print(f"[PASS] Log file size controlled: {size} bytes")
             else:
                 print(f"[WARN] Log file larger than expected: {size} bytes")
@@ -95,7 +93,6 @@ try:
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
-        # Write messages with various Unicode characters
         test_messages = [
             "English: Hello World",
             "日本語: こんにちは",
@@ -106,7 +103,6 @@ try:
         for msg in test_messages:
             logger.info(msg)
 
-        # Read back and verify
         content = log_file.read_text(encoding="utf-8")
 
         all_found = all(msg.split(": ")[1] in content for msg in test_messages)
@@ -147,7 +143,6 @@ try:
 
         content = log_file.read_text(encoding="utf-8")
 
-        # Check if format includes expected components
         has_timestamp = any(c.isdigit() for c in content.split("-")[0])
         has_level = "INFO" in content
         has_message = "Test message" in content

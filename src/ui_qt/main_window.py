@@ -42,6 +42,8 @@ from src.ui_qt.styles import build_app_stylesheet, build_main_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme, normalize_theme_preference, resolve_theme, theme_preference_from_config, theme_tokens
 from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
+from src.ui_qt.realtime_tweaks_panel import RealtimeTweaksPanel
+from src.ui_qt.state_manager import AppState
 from src.utils import config_manager
 from src.utils.app_paths import resource_base_dirs
 from src.utils.global_hotkey import GlobalHotkey, DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
@@ -86,7 +88,7 @@ LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?u
 ICON_GITHUB_FILE = "github-brand.svg"
 ICON_QQ_FILE = "qq-brand.svg"
 ICON_LINE_FILE = "line-brand.svg"
-ICON_SPONSOR_FILE = "sponsor.png"
+ICON_SPONSOR_FILE = "sponsor.svg"
 APP_ICON_PNG_FILE = "app_icon_mio.png"
 LISTEN_TTS_ECHO_SUPPRESS_PENDING_S = 3.0
 LISTEN_TTS_ECHO_SUPPRESS_TAIL_S = 0.6
@@ -586,6 +588,9 @@ class MainWindow(QMainWindow):
         self._ui_thread_id = threading.get_ident()
         self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue()
 
+        # Shared state for the realtime tweaks panel.
+        self._state = AppState()
+
         # --- Runtime state ---
         self._running = False
         self._listen_session = 0
@@ -732,6 +737,7 @@ class MainWindow(QMainWindow):
         self._update_badge_btn: QPushButton | None = None
         self._theme_btn: QPushButton | None = None
         self._settings_btn: QPushButton | None = None
+        self._tweaks_btn: QPushButton | None = None
         self._guide_btn: QPushButton | None = None
         self._guide_btn_secondary: QPushButton | None = None
         self._manual_input_btn: QPushButton | None = None
@@ -757,6 +763,7 @@ class MainWindow(QMainWindow):
         self._vad_calibration_windows: dict[str, QDialog] = {}
         self._mode_wizard_dialog = None
         self._floating_window = None
+        self._tweaks_panel = None
         self._sponsor_window = None
         self._social_buttons: list[tuple[QPushButton, str]] = []
         self._update_win = None
@@ -790,6 +797,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(self._startup_update_check_delay_ms(), self._check_for_update)
         self._schedule_settings_preload(450)
         QTimer.singleShot(0, self._apply_osc_listener_config)
+
+        self._subscribe_realtime_tweaks_state()
 
         logger.info("Qt MainWindow initialized")
 
@@ -1037,6 +1046,15 @@ class MainWindow(QMainWindow):
         self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
         self._settings_btn.clicked.connect(self.show_settings)
         action_row.addWidget(self._settings_btn)
+
+        # 实时调整按钮
+        self._tweaks_btn = QPushButton("实时")
+        self._tweaks_btn.setObjectName("headerButton")
+        self._tweaks_btn.setToolTip("实时调整参数（麦克风、VAD、TTS等）")
+        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
+        self._tweaks_btn.clicked.connect(self._toggle_tweaks_panel)
+        self._refresh_tweaks_button()
+        action_row.addWidget(self._tweaks_btn)
 
         self._theme_btn = QPushButton("")
         self._theme_btn.setObjectName("themeIconButton")
@@ -1310,6 +1328,8 @@ class MainWindow(QMainWindow):
         self._sponsors_btn = QPushButton(self._copy("sponsors_btn"))
         self._sponsors_btn.setObjectName("sponsorButton")
         self._sponsors_btn.setFixedHeight(42)
+        self._sponsors_btn.setIconSize(QSize(18, 18))
+        self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 18, "#ffffff"))
         self._sponsors_btn.clicked.connect(self._open_sponsor_window)
         right.addWidget(self._sponsors_btn)
         right.addWidget(self._social_button(ICON_GITHUB_FILE, "Git", GITHUB_REPO_URL))
@@ -1353,12 +1373,14 @@ class MainWindow(QMainWindow):
         if self._settings_btn:
             self._settings_btn.setText(self._copy("settings_short"))
             self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
+        self._refresh_tweaks_button()
         if self._guide_btn:
             self._guide_btn.setText(self._copy("guide_short"))
         if self._guide_btn_secondary:
             self._guide_btn_secondary.setText(self._copy("guide_short"))
         if self._sponsors_btn:
             self._sponsors_btn.setText(self._copy("sponsors_btn"))
+            self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 18, "#ffffff"))
         self._refresh_update_badge()
         if self._manual_input_btn:
             self._manual_input_btn.setText(self._t("manual_input"))
@@ -1461,6 +1483,11 @@ class MainWindow(QMainWindow):
                 self._text_input_window.update_language(code)
             except Exception:
                 logger.debug("Failed to update text input window language", exc_info=True)
+        if self._tweaks_panel is not None:
+            try:
+                self._tweaks_panel.update_language(code)
+            except Exception:
+                logger.debug("Failed to update realtime tweaks panel language", exc_info=True)
         self._schedule_config_save()
 
     def _on_tgt_lang_change(self, selected_label: str | None = None) -> None:
@@ -2278,6 +2305,84 @@ class MainWindow(QMainWindow):
 
     def _on_send_clicked(self) -> None:
         self._send_to_vrc()
+
+    def _toggle_tweaks_panel(self) -> None:
+        """切换实时调整面板的显示/隐藏"""
+        if self._tweaks_panel is None:
+            # 首次创建
+            from src.ui_qt.state_manager import AppState
+            state = getattr(self, '_state', None)
+            if state is None:
+                state = AppState()
+                self._state = state
+
+            self._tweaks_panel = RealtimeTweaksPanel(
+                parent=self,
+                state_manager=state,
+                ui_language=self._ui_lang,
+                theme=self._main_theme
+            )
+            self._tweaks_panel.finished.connect(self._on_tweaks_panel_closed)
+
+        if self._tweaks_panel.isVisible():
+            self._tweaks_panel.hide()
+        else:
+            self._tweaks_panel.show()
+            self._tweaks_panel.raise_()
+            self._tweaks_panel.activateWindow()
+
+    def _on_tweaks_panel_closed(self) -> None:
+        """实时调整面板关闭时的回调"""
+        if self._tweaks_panel:
+            self._tweaks_panel.deleteLater()
+            self._tweaks_panel = None
+
+    def _subscribe_realtime_tweaks_state(self) -> None:
+        """订阅实时调整参数的状态变化"""
+        from src.ui_qt.state_manager import AppState
+
+        # 获取或创建状态管理器
+        if not hasattr(self, '_state'):
+            self._state = AppState()
+
+        # 订阅实时调整参数
+        self._state.subscribe('mic_gain', self._on_mic_gain_changed)
+        self._state.subscribe('envelope_attack_rate', self._on_envelope_params_changed)
+        self._state.subscribe('envelope_release_rate', self._on_envelope_params_changed)
+        self._state.subscribe('overlay_opacity', self._on_overlay_opacity_changed)
+        logger.debug("Realtime tweaks state subscriptions registered")
+
+    def _on_mic_gain_changed(self, gain: float) -> None:
+        """麦克风增益变化处理"""
+        logger.debug(f"Mic gain changed to: {gain}")
+        # 实际的增益应用在音频处理管道中实现
+
+    def _on_envelope_params_changed(self, _value: float) -> None:
+        """包络参数变化处理"""
+        if not hasattr(self, '_state'):
+            return
+        attack = self._state.get('envelope_attack_rate', 0.6)
+        release = self._state.get('envelope_release_rate', 0.12)
+        logger.debug(f"Envelope params changed: attack={attack}, release={release}")
+        # 更新 VAD 检测器的包络参数（如果需要）
+
+    def _on_overlay_opacity_changed(self, opacity: float) -> None:
+        """悬浮窗透明度变化处理"""
+        # 更新悬浮窗透明度
+        if hasattr(self, '_floating_window') and self._floating_window:
+            try:
+                self._floating_window.setWindowOpacity(opacity)
+                logger.debug(f"Floating window opacity changed to: {opacity}")
+            except Exception:
+                logger.debug("Failed to update floating window opacity", exc_info=True)
+
+        # 同步更新文本输入窗口透明度
+        if hasattr(self, '_text_input_window') and self._text_input_window:
+            try:
+                self._text_input_window.setWindowOpacity(opacity)
+                logger.debug(f"Text input window opacity changed to: {opacity}")
+            except Exception:
+                logger.debug("Failed to update text input window opacity", exc_info=True)
 
     def _on_theme_toggle(self) -> None:
         new_theme = "light" if self._main_theme == "dark" else "dark"
@@ -4362,6 +4467,18 @@ class MainWindow(QMainWindow):
             self._mute_btn.style().unpolish(self._mute_btn)
             self._mute_btn.style().polish(self._mute_btn)
 
+    def _refresh_tweaks_button(self) -> None:
+        if not self._tweaks_btn:
+            return
+        self._tweaks_btn.setText("实时")
+        self._tweaks_btn.setToolTip("实时调整参数（麦克风、VAD、TTS等）")
+        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
+        icon = ui_icon("activity.svg", 18, icon_tint(self._main_theme, strong=True))
+        self._tweaks_btn.setIcon(icon)
+        self._tweaks_btn.setIconSize(QSize(18, 18))
+        self._tweaks_btn.style().unpolish(self._tweaks_btn)
+        self._tweaks_btn.style().polish(self._tweaks_btn)
+
     def _refresh_theme_button(self) -> None:
         palette = _main_theme_palette(self._main_theme)
         strong_icon = icon_tint(self._main_theme, strong=True)
@@ -4390,6 +4507,7 @@ class MainWindow(QMainWindow):
             if not send_icon.isNull():
                 self._send_to_vrc_btn.setIcon(send_icon)
                 self._send_to_vrc_btn.setIconSize(QSize(15, 15))
+        self._refresh_tweaks_button()
         self._refresh_social_buttons()
         if self._status_label:
             self._status_label.setText(self._status_label.text())
@@ -4486,6 +4604,11 @@ class MainWindow(QMainWindow):
                 self._floating_window.refresh_theme(self._main_theme)
             except Exception:
                 logger.debug("Failed to update floating window theme", exc_info=True)
+        if self._tweaks_panel is not None:
+            try:
+                self._tweaks_panel.refresh_theme(self._main_theme)
+            except Exception:
+                logger.debug("Failed to update realtime tweaks panel theme", exc_info=True)
         if self._settings_window is not None:
             try:
                 self._settings_window.sync_theme(self._main_theme_preference, smooth=animate)
@@ -4960,7 +5083,6 @@ class MainWindow(QMainWindow):
         shadow.setOffset(0, y_offset)
         shadow.setColor(QColor(0, 0, 0, alpha))
         widget.setGraphicsEffect(shadow)
-
 
 class _StartupCancelled(Exception):
     pass
