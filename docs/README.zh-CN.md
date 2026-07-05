@@ -57,12 +57,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-如需提前下载模型：
-
-```bash
-python tools/download_models.py
-```
-
 如需自定义模型缓存目录：
 
 ```powershell

@@ -57,12 +57,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-先にモデルをダウンロードしたい場合:
-
-```bash
-python tools/download_models.py
-```
-
 モデルキャッシュの保存先を変更したい場合:
 
 ```powershell

@@ -57,11 +57,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-To download the model in advance:
-
-```bash
-python tools/download_models.py
-```
+Voice and ASR models are managed by the app at runtime. Launch the app and use the in-app model download windows when a model is missing.
 
 To override the model cache directory:
 

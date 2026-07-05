@@ -87,7 +87,16 @@ def test_obsolete_packaging_workflows_are_removed() -> None:
         "build_booth_downloader.ps1",
         "Mio_vrc_download.spec",
         "Mio_vrc_download_bundle.spec",
+        "test_ui_modernization.py",
+        "scripts/modify_settings_window.py",
+        "tools/download_models.py",
+        "tools/final_check.py",
+        "tools/test_frontend_optimization.py",
+        "tools/test_realtime_integration.py",
         "tools/check_translation_release_environment.py",
+        "tools/verify_fixes.py",
+        "tools/verify_realtime_integration.py",
+        "tools/verify_reintegration.py",
     )
 
     assert [path for path in obsolete_paths if (ROOT / path).exists()] == []
