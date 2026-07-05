@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import logging
 import math
+import os
 import queue
 import threading
 import time
@@ -18,7 +20,8 @@ import sounddevice as sd
 
 from .base import BaseTTS
 from .factory import create_tts_engine, create_tts_engine_with_fallback
-from .style_bert_vits2_engine import style_bert_cuda_available
+from .wav_utils import decode_wav_bytes
+from src.utils.app_paths import app_temp_dir
 from src.utils.input_validation import validate_tts_text, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,7 @@ CACHE_TTL_SECONDS = 900.0
 TTS_FAILURE_SUSPEND_THRESHOLD = 3
 TTS_FAILURE_SUSPEND_SECONDS = 30.0
 TTS_PLAYBACK_TAIL_PADDING_MS = 180
+TTS_DEBUG_AUDIO_ENV = "MIO_TTS_DEBUG_AUDIO"
 OutputDeviceRef = int | str | None
 
 _VIRTUAL_OUTPUT_KEYWORDS = (
@@ -39,10 +43,6 @@ _VIRTUAL_OUTPUT_KEYWORDS = (
 
 _RECOVERABLE_MIXLINE_PORTAUDIO_ERRORS = {-9999, -9996, -9992}
 _SCIPY_RESAMPLE_FALLBACK_LOGGED = False
-
-
-def _style_bert_cuda_available() -> bool:
-    return style_bert_cuda_available()
 
 
 def _portaudio_error_code(exc: Exception) -> int | None:
@@ -66,6 +66,20 @@ def _append_tail_silence(audio_array: np.ndarray, sample_rate: int) -> np.ndarra
     silence_shape = (tail_frames, *audio.shape[1:])
     silence = np.zeros(silence_shape, dtype=audio.dtype)
     return np.concatenate((audio, silence), axis=0)
+
+
+def _audio_stats(audio_array: np.ndarray, sample_rate: int) -> str:
+    audio = np.asarray(audio_array, dtype=np.float32)
+    if sample_rate <= 0 or audio.size == 0:
+        return "sr=0 duration=0.00s peak=0.000 rms=0.000 clipped=0.000"
+    peak = float(np.max(np.abs(audio)))
+    rms = float(np.sqrt(np.mean(np.square(audio))))
+    clipped = float(np.mean(np.abs(audio) >= 0.98))
+    duration = float(audio.shape[0]) / float(sample_rate)
+    return (
+        f"sr={int(sample_rate)} duration={duration:.2f}s "
+        f"peak={peak:.3f} rms={rms:.3f} clipped={clipped:.3f}"
+    )
 
 
 def _is_rejected_mixline_device(device_name: str) -> bool:
@@ -119,12 +133,6 @@ class TTSManager:
         self._engine_name = engine_name
         self._device = str(sbv2_device or device or "cpu").strip().lower()
         if self._device not in {"cpu", "cuda"}:
-            self._device = "cpu"
-        if self._device == "cuda" and not _style_bert_cuda_available():
-            logger.warning(
-                "Style-Bert-VITS2 CUDA was requested, but CUDA is not available "
-                "in this build; falling back to CPU"
-            )
             self._device = "cpu"
         self._bert_language = (
             str(sbv2_bert_language or "jp").strip().lower().replace("_", "-")
@@ -679,7 +687,12 @@ class TTSManager:
     ) -> bytes:
         """Get audio data (from cache or synthesize)."""
         # Generate cache key
-        cache_key = self._generate_cache_key(text, voice, rate, volume)
+        cache_key = self._generate_cache_key(
+            text,
+            voice,
+            rate,
+            volume,
+        )
 
         # Try cache first
         if self._cache_enabled:
@@ -704,6 +717,12 @@ class TTSManager:
         if self._engine is None:
             raise RuntimeError("TTS engine not available")
 
+        logger.info(
+            "TTS synthesis stage started (engine=%s voice=%s text_chars=%d)",
+            self._engine_name,
+            voice,
+            len(text),
+        )
         audio_data = self._engine.synthesize(text, voice, rate, volume)
         if isinstance(audio_data, (bytearray, memoryview)):
             audio_data = bytes(audio_data)
@@ -714,6 +733,11 @@ class TTSManager:
             )
         if not audio_data:
             raise RuntimeError("TTS engine returned empty audio")
+        logger.info(
+            "TTS synthesis stage finished (engine=%s output_size=%d bytes)",
+            self._engine_name,
+            len(audio_data),
+        )
 
         # Store in cache
         if self._cache_enabled:
@@ -729,8 +753,31 @@ class TTSManager:
         volume: float,
     ) -> str:
         """Generate cache key."""
-        key_str = f"{text}|{voice}|{rate:.2f}|{volume:.2f}"
+        key_str = (
+            f"{text}|{voice}|{rate:.2f}|{volume:.2f}|"
+            f"{self._engine_name}|{self._device}|{self._bert_language}|"
+            f"{self._engine_cache_signature()}"
+        )
         return hashlib.md5(key_str.encode("utf-8")).hexdigest()
+
+    def _engine_cache_signature(self) -> str:
+        def scrub(value: object) -> object:
+            if isinstance(value, dict):
+                return {
+                    str(key): scrub(item)
+                    for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+                    if str(key).lower() not in {"api_key", "secret", "token", "password"}
+                }
+            if isinstance(value, (list, tuple)):
+                return [scrub(item) for item in value]
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                return value
+            return str(value)
+
+        try:
+            return json.dumps(scrub(self._engine_config), sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return repr(self._engine_config)
 
     def _add_to_cache(self, key: str, data: bytes) -> None:
         """Add audio data to cache."""
@@ -839,12 +886,13 @@ class TTSManager:
 
         try:
             audio_array, sample_rate = self._decode_audio_data(audio_data)
-            logger.debug(
-                "Audio decoded: sample_rate=%d, shape=%s, dtype=%s",
-                sample_rate,
+            logger.info(
+                "Decoded TTS playback audio (%s, shape=%s, dtype=%s)",
+                _audio_stats(audio_array, sample_rate),
                 audio_array.shape,
                 audio_array.dtype,
             )
+            self._maybe_save_debug_audio(audio_data, "playback")
             audio_array = _append_tail_silence(audio_array, sample_rate)
             logger.debug(
                 "Audio tail padding applied: tail_ms=%d, padded_shape=%s",
@@ -1208,33 +1256,7 @@ class TTSManager:
     @staticmethod
     def _decode_wav(data: bytes) -> tuple[np.ndarray, int]:
         """Decode WAV audio data."""
-        import wave
-
-        with io.BytesIO(data) as f:
-            with wave.open(f, "rb") as wav:
-                sample_rate = wav.getframerate()
-                n_channels = wav.getnchannels()
-                sample_width = wav.getsampwidth()
-                frames = wav.readframes(wav.getnframes())
-
-                # Convert to numpy array
-                if sample_width == 1:
-                    dtype = np.uint8
-                elif sample_width == 2:
-                    dtype = np.int16
-                else:
-                    dtype = np.int32
-
-                audio_array = np.frombuffer(frames, dtype=dtype)
-
-                # Reshape for multi-channel
-                if n_channels > 1:
-                    audio_array = audio_array.reshape(-1, n_channels)
-
-                # Convert to float32
-                audio_array = audio_array.astype(np.float32) / 32768.0
-
-                return audio_array, sample_rate
+        return decode_wav_bytes(data)
 
     @staticmethod
     def _decode_mp3(data: bytes) -> tuple[np.ndarray, int]:
@@ -1282,6 +1304,21 @@ class TTSManager:
         container.close()
 
         return audio_data, sample_rate
+
+    @staticmethod
+    def _maybe_save_debug_audio(audio_data: bytes, label: str) -> None:
+        if os.environ.get(TTS_DEBUG_AUDIO_ENV) != "1":
+            return
+        try:
+            debug_dir = app_temp_dir() / "tts_debug_audio"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            suffix = "wav" if audio_data.startswith(b"RIFF") else "audio"
+            path = debug_dir / f"{timestamp}-{label}.{suffix}"
+            path.write_bytes(bytes(audio_data))
+            logger.info("Saved debug TTS audio: %s", path)
+        except Exception as exc:
+            logger.warning("Failed to save debug TTS audio: %s", exc)
 
     def get_engine_name(self) -> str:
         """Get current engine name."""

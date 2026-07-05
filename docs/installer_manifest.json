@@ -1,19 +1,19 @@
 {
-  "version": "v1.3.7.6",
-  "installer_name": "MioTranslator-Setup-v1.3.7.6.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.6/MioTranslator-Setup-v1.3.7.6.exe",
-  "size_bytes": 380265785,
-  "sha256": "bea3ee9c378a0678c05f7014a80e3fc54db3494edae4bc2ac80c49bce699e3b2",
-  "notes": "v1.3.7.6 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
+  "version": "v1.3.7.7",
+  "installer_name": "MioTranslator-Setup-v1.3.7.7.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.7/MioTranslator-Setup-v1.3.7.7.exe",
+  "size_bytes": 466294792,
+  "sha256": "80f4ca521fcbc8cfdaab26a1e053a0c8d94f6133fcb07096657f5c0ae0493863",
+  "notes": "v1.3.7.7 adds free translation providers, Voice Cloning with reference audio recording/import, broader Voice Cloning language support, and packaging size optimizations; local ASR/TTS models still download on demand.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7.6 新增 GPT 兼容与 Claude 兼容的中转 API 模型下拉选择，新增 Qwen TTS 普通 flash / instruct 模型选择，默认保留普通 flash 以兼容更多音色，并让翻译人设影响 Qwen instruct TTS 的语气和情绪。",
-    "en": "v1.3.7.6 adds GPT-compatible and Claude-compatible proxy API model dropdowns, adds selectable Qwen TTS flash/instruct models, keeps regular Qwen flash as the default for broader voice compatibility, and lets roleplay persona settings guide Qwen instruct TTS tone and emotion.",
-    "ja": "v1.3.7.6 では、GPT 互換 / Claude 互換の中継 API モデル選択、Qwen TTS の flash / instruct モデル選択を追加し、音色互換性のため通常 flash を既定に保ち、ロールプレイ人設で Qwen instruct TTS の口調と感情を制御できます。",
-    "ru": "v1.3.7.6 добавляет выбор моделей для GPT-совместимых и Claude-совместимых прокси API, добавляет выбор Qwen TTS flash/instruct, оставляет обычный Qwen flash по умолчанию для лучшей совместимости голосов и позволяет ролевому профилю управлять тоном и эмоциями Qwen instruct TTS.",
-    "ko": "v1.3.7.6는 GPT 호환 및 Claude 호환 프록시 API 모델 드롭다운을 추가하고, Qwen TTS flash/instruct 모델 선택을 추가하며, 더 넓은 음색 호환성을 위해 일반 flash를 기본값으로 유지하고, 롤플레이 인물 설정이 Qwen instruct TTS의 말투와 감정에 반영되도록 합니다."
+    "zh-CN": "v1.3.7.7 新增多种免费翻译服务商、Voice Cloning 声音克隆、参考音频录制/导入和更多声音克隆语言支持，并优化打包体积；本地 ASR/TTS 模型仍按需下载，热更新暂未修复，如遇更新问题请加入群聊下载或者在官网下载进行覆盖安装即可。",
+    "en": "v1.3.7.7 adds free translation providers, Voice Cloning with reference audio recording/import, broader Voice Cloning language support, and packaging size optimizations; local ASR/TTS models still download on demand.",
+    "ja": "v1.3.7.7 では、無料翻訳プロバイダー、参照音声の録音/インポートに対応した Voice Cloning、より多くの音声クローン言語、パッケージサイズ最適化を追加しました。ローカル ASR/TTS モデルは引き続き必要時にダウンロードされます。",
+    "ru": "v1.3.7.7 добавляет бесплатные провайдеры перевода, Voice Cloning с записью/импортом эталонного аудио, расширенную языковую поддержку Voice Cloning и оптимизацию размера пакета; локальные модели ASR/TTS по-прежнему загружаются по требованию.",
+    "ko": "v1.3.7.7은 무료 번역 제공자, 기준 음성 녹음/가져오기를 지원하는 Voice Cloning, 더 넓은 Voice Cloning 언어 지원, 패키지 크기 최적화를 추가합니다. 로컬 ASR/TTS 모델은 계속 필요할 때 다운로드됩니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-06-17T19:23:32+09:00"
+  "published_at": "2026-07-06T00:43:49+09:00"
 }

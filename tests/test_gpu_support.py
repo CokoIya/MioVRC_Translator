@@ -143,6 +143,21 @@ def test_gpu_runtime_available_uses_packaged_cuda_runtime(monkeypatch):
     assert gpu_support.gpu_runtime_available() is True
 
 
+def test_packaged_cuda_runtime_available_skips_verify_when_runtime_missing(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(gpu_support, "_is_packaged_runtime", lambda: True)
+    monkeypatch.setattr(gpu_support, "packaged_cuda_pytorch_installed", lambda: False)
+    monkeypatch.setattr(gpu_support.subprocess, "run", fake_run)
+
+    assert gpu_support._packaged_cuda_runtime_available() is False
+    assert calls == []
+
+
 def test_pytorch_cuda_install_command_uses_packaged_helper(monkeypatch, tmp_path):
     app_root = tmp_path / "Mio"
     monkeypatch.setattr(gpu_support.sys, "frozen", True, raising=False)

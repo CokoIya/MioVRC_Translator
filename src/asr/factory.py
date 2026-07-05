@@ -63,6 +63,23 @@ def _auto_fallback_enabled(config: dict) -> bool:
     return bool(asr_cfg.get("auto_fallback", True))
 
 
+def _provider_auto_fallback_enabled(
+    config: dict,
+    provider_key: str,
+    *,
+    default: bool,
+) -> bool:
+    if not _auto_fallback_enabled(config):
+        return False
+    asr_cfg = config.get("asr", {})
+    if not isinstance(asr_cfg, dict):
+        return bool(default)
+    provider_cfg = asr_cfg.get(provider_key, {})
+    if not isinstance(provider_cfg, dict):
+        return bool(default)
+    return bool(provider_cfg.get("auto_fallback", default))
+
+
 def create_asr(config: dict, engine: str | None = None):
     asr_cfg = config.get("asr", {})
     engine = normalize_asr_engine(engine or asr_cfg.get("engine", DEFAULT_ASR_ENGINE))
@@ -94,7 +111,7 @@ def create_asr(config: dict, engine: str | None = None):
     if engine == "webspeech":
         from src.asr.webspeech_asr import WebSpeechASRProvider
         primary = WebSpeechASRProvider(config, corrector=corrector)
-        if _auto_fallback_enabled(config):
+        if _provider_auto_fallback_enabled(config, "webspeech", default=False):
             return FallbackASR(
                 primary,
                 fallback_factory=lambda: _create_sensevoice(config, corrector),

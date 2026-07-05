@@ -50,13 +50,79 @@ _COPY = {
         "apply": "Apply Recommendation",
         "skip": "Skip",
     },
+    "ja": {
+        "title": "Mio 初回設定ガイド",
+        "subtitle": "やりたいことに近い使い方を選んでください。Mio がよく使うスイッチを設定します。API Key、デバイス、モデルは後から設定で調整できます。",
+        "chatbox_title": "チャットボックス翻訳",
+        "chatbox_body": "マイクに向かって話すと、Mio が翻訳して VRChat のチャットボックスへ送信します。",
+        "listen_title": "他者の声を聞く",
+        "listen_body": "VRChat / デスクトップ音声を取り込み、相手の発話を翻訳して表示します。",
+        "tts_title": "Mio に読み上げてもらう",
+        "tts_body": "翻訳後のテキストを選んだ音声で読み上げ、仮想デバイス経由で VRChat に送れます。",
+        "manual_title": "手入力で翻訳",
+        "manual_body": "テキストを手入力し、翻訳してチャットボックスへ送信できます。",
+        "overlay_title": "VR 字幕",
+        "overlay_body": "聞き取った内容をフローティング字幕に表示し、ヘッドセット中でも確認できます。",
+        "steps": "次の確認：1. VRChat で OSC を有効化  2. マイクを選択  3. VRChat 音声ソースを選択  4. ASR と翻訳サービスを選択  5. チャットボックス送信をテスト",
+        "open_settings": "適用して設定へ",
+        "apply": "おすすめを適用",
+        "skip": "スキップ",
+    },
+    "ru": {
+        "title": "Первичная настройка Mio",
+        "subtitle": "Выберите ближайший сценарий. Mio сохранит рекомендуемые переключатели; API-ключи, устройства и модели можно настроить позже.",
+        "chatbox_title": "Перевод в Chatbox",
+        "chatbox_body": "Речь → распознавание → перевод → VRChat Chatbox.",
+        "listen_title": "Слушать других",
+        "listen_body": "Захват звука VRChat / рабочего стола и перевод речи других игроков.",
+        "tts_title": "Озвучивание / TTS",
+        "tts_body": "Автоматически читать перевод и направлять звук в VRChat через виртуальное устройство.",
+        "manual_title": "Ручной ввод",
+        "manual_body": "Введите текст вручную, переведите его и отправьте в Chatbox.",
+        "overlay_title": "VR-субтитры",
+        "overlay_body": "Показывать живые субтитры в плавающем окне и будущем VR Overlay.",
+        "steps": "Проверьте далее: 1. Включите OSC в VRChat  2. Выберите микрофон  3. Выберите источник звука VRChat  4. Выберите ASR и переводчик  5. Проверьте отправку в Chatbox.",
+        "open_settings": "Применить и открыть настройки",
+        "apply": "Применить рекомендацию",
+        "skip": "Пропустить",
+    },
+    "ko": {
+        "title": "Mio 첫 설정 가이드",
+        "subtitle": "가장 가까운 사용 방식을 선택하세요. Mio가 추천 스위치를 저장합니다. API 키, 장치, 모델은 설정에서 나중에 조정할 수 있습니다.",
+        "chatbox_title": "채팅박스 번역",
+        "chatbox_body": "말하기 → 음성 인식 → 번역 → VRChat 채팅박스로 전송합니다.",
+        "listen_title": "다른 사람 말 듣기",
+        "listen_body": "VRChat / 데스크톱 오디오를 캡처해 다른 사람의 말을 번역합니다.",
+        "tts_title": "Mio가 대신 읽기",
+        "tts_body": "번역문을 자동으로 읽고 가상 장치를 통해 VRChat으로 보낼 수 있습니다.",
+        "manual_title": "수동 입력",
+        "manual_body": "텍스트를 직접 입력해 번역하고 채팅박스로 보낼 수 있습니다.",
+        "overlay_title": "VR 자막",
+        "overlay_body": "플로팅 창과 향후 VR 오버레이에 실시간 자막을 표시합니다.",
+        "steps": "다음 확인: 1. VRChat에서 OSC 켜기  2. 마이크 선택  3. VRChat 오디오 소스 선택  4. ASR과 번역 서비스 선택  5. 채팅박스 전송 테스트.",
+        "open_settings": "적용하고 설정 열기",
+        "apply": "추천 적용",
+        "skip": "건너뛰기",
+    },
 }
 
 _MODE_ORDER = ("chatbox", "listen", "tts", "manual", "overlay")
 
 
 def _lang(ui_language: str) -> str:
-    return "zh-CN" if str(ui_language or "").lower().startswith("zh") else "en"
+    normalized = str(ui_language or "").strip()
+    if normalized in _COPY:
+        return normalized
+    lowered = normalized.lower()
+    if lowered.startswith("zh"):
+        return "zh-CN"
+    if lowered.startswith("ja") or lowered.startswith("jp"):
+        return "ja"
+    if lowered.startswith("ru"):
+        return "ru"
+    if lowered.startswith("ko"):
+        return "ko"
+    return "en"
 
 
 class ModeWizardDialog(QDialog):

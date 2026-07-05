@@ -564,6 +564,71 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "model_hint": "Enter the local model name exposed by your OpenAI-compatible server.",
         "api_key_hint": "Leave blank unless your local server requires an API key.",
     },
+    "google_web": {
+        "label": "Google Web",
+        "base_url": "https://translate.googleapis.com/translate_a/single",
+        "model": "google-web",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "api_key_required": False,
+        "api_key_input": "hidden",
+        "model_hint": (
+            "No API key required. Uses Google's public web translation endpoint; "
+            "quality is strong where Google services are reachable, but mainland "
+            "China access may be unreliable."
+        ),
+    },
+    "mymemory": {
+        "label": "MyMemory",
+        "base_url": "https://api.mymemory.translated.net/get",
+        "model": "mymemory",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "api_key_required": False,
+        "api_key_input": "hidden",
+        "model_hint": (
+            "No API key required. Good as a zero-setup fallback, with public "
+            "quota and translation-memory quality that can vary by language pair."
+        ),
+    },
+    "deepl": {
+        "label": "DeepL Free",
+        "base_url": "https://api-free.deepl.com/v2",
+        "model": "deepl-api",
+        "timeout_s": 10.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "base_url_input": "entry",
+        "api_key_hint": (
+            "Use a DeepL API Free key. The default endpoint is api-free.deepl.com; "
+            "paid DeepL API keys should use https://api.deepl.com/v2."
+        ),
+        "model_hint": "Dedicated DeepL translation API. The model field is informational.",
+    },
+    "libretranslate": {
+        "label": "LibreTranslate",
+        "base_url": "http://127.0.0.1:5000",
+        "model": "libretranslate",
+        "timeout_s": 10.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "base_url_input": "entry",
+        "api_key_required": False,
+        "api_key_hint": (
+            "Optional. Leave blank for a local/self-hosted LibreTranslate server "
+            "that does not require an API key."
+        ),
+        "model_hint": (
+            "Use a local LibreTranslate server for no provider-side quota. Public "
+            "instances may require an API key or rate-limit requests."
+        ),
+    },
     "qianwen": {
         "label": "Qwen",
         "base_url": QWEN_TRANSLATION_BASE_URL_MAINLAND,
@@ -574,6 +639,25 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "model_input": "select",
         "base_url_input": "entry",
         "api_key_hint": "Mainland China should use the mainland DashScope endpoint. Overseas users should prefer the international endpoint or a nearby proxy.",
+    },
+    "hunyuan": {
+        "label": "Tencent Hunyuan",
+        "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+        "model": "hunyuan-turbos-latest",
+        "extra_body": {"enable_enhancement": True},
+        "timeout_s": 20.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "base_url_input": "entry",
+        "api_key_hint": (
+            "Use a Tencent Hunyuan API Key. This OpenAI-compatible endpoint is "
+            "a strong mainland China option when no-key public services are not reliable."
+        ),
+        "model_hint": (
+            "hunyuan-turbos-latest is the recommended low-latency Hunyuan default "
+            "for live translation."
+        ),
     },
     "xiaomi": {
         "label": "Xiaomi AI",
@@ -724,6 +808,10 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "gpt-5.4-mini",
         "gpt-5.4-nano",
     ),
+    "google_web": ("google-web",),
+    "mymemory": ("mymemory",),
+    "deepl": ("deepl-api",),
+    "libretranslate": ("libretranslate",),
     "deepseek": (
         "deepseek-v4-flash",
         "deepseek-v4-pro",
@@ -743,6 +831,11 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "qwen3.7-max",
         "qwen-mt-turbo",
         "qwen-mt-lite",
+    ),
+    "hunyuan": (
+        "hunyuan-turbos-latest",
+        "hunyuan-turbo-latest",
+        "hunyuan-lite",
     ),
     "xiaomi": (
         "mimo-v2.5-pro",
@@ -880,6 +973,38 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "openai_compatible": {},
+    "google_web": {
+        "google-web": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "no_key_simple",
+        },
+    },
+    "mymemory": {
+        "mymemory": {
+            "speed": "fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "no_key_fallback",
+        },
+    },
+    "deepl": {
+        "deepl-api": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "mt_quality",
+        },
+    },
+    "libretranslate": {
+        "libretranslate": {
+            "speed": "fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "self_hosted_free",
+        },
+    },
     "deepseek": {
         "deepseek-v4-flash": {
             "speed": "fast",
@@ -1016,6 +1141,26 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "recommended",
             "note": "general_high_quality",
+        },
+    },
+    "hunyuan": {
+        "hunyuan-turbos-latest": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "hunyuan-turbo-latest": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "hunyuan-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
         },
     },
     "xiaomi": {
@@ -1356,6 +1501,18 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "gpt-4.1-nano": "6.2",
     },
     "openai_compatible": {},
+    "google_web": {
+        "google-web": "8.6",
+    },
+    "mymemory": {
+        "mymemory": "7.2",
+    },
+    "deepl": {
+        "deepl-api": "9.1",
+    },
+    "libretranslate": {
+        "libretranslate": "8.0",
+    },
     "deepseek": {
         "deepseek-v4-flash": "9.1",
         "deepseek-v4-pro": "8.7",
@@ -1383,6 +1540,11 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "qwen-flash": "8.1",
         "qwen-turbo": "7.6",
         "qwen3-max": "8.5",
+    },
+    "hunyuan": {
+        "hunyuan-turbos-latest": "8.9",
+        "hunyuan-turbo-latest": "8.4",
+        "hunyuan-lite": "7.4",
     },
     "xiaomi": {
         "mimo-v2.5-pro": "9.0",

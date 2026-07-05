@@ -155,6 +155,9 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["style_bert_vits2"]["voice"] is None
         assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
         assert config["tts"]["style_bert_vits2"]["bert_language"] == "jp"
+        assert config["tts"]["xtts"]["device"] == "cpu"
+        assert config["tts"]["xtts"]["language"] == "auto"
+        assert config["tts"]["xtts"]["optimized_inference"] is True
         assert config["tts"]["mimo_tts"]["model"] == "mimo-v2.5-tts"
         assert config["tts"]["mimo_tts"]["voice"] == "mimo_default"
         assert config["tts"]["qwen_tts"]["region"] == "singapore"
@@ -241,6 +244,31 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
+
+    def test_ensure_tts_config_normalizes_xtts_runtime_options(self):
+        config = {
+            "tts": {
+                "xtts": {
+                    "device": "CUDA",
+                    "language": "zh",
+                    "lazy_load": "false",
+                    "optimized_inference": "false",
+                    "enable_text_splitting": "true",
+                    "conditioning_cache_size": "99",
+                }
+            }
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["xtts"]["device"] == "cuda"
+        assert config["xtts_device"] == "cuda"
+        assert config["tts"]["xtts"]["language"] == "zh-cn"
+        assert config["tts"]["xtts"]["lazy_load"] is False
+        assert config["tts"]["xtts"]["optimized_inference"] is False
+        assert config["tts"]["xtts"]["enable_text_splitting"] is True
+        assert config["tts"]["xtts"]["conditioning_cache_size"] == 16
 
     def test_ensure_mode_config_adds_simul_mode_defaults(self):
         """Mode config should default to translation with simultaneous presets."""
@@ -489,6 +517,9 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["device"] == "cpu"
         assert config["asr"]["fallback_engine"] == "sensevoice-small"
         assert config["asr"]["webspeech"]["language"] == "ja-JP"
+        assert config["asr"]["webspeech"]["embedded_browser"] is True
+        assert config["asr"]["webspeech"]["stale_connection_seconds"] == 8.0
+        assert config["asr"]["webspeech"]["auto_fallback"] is False
         assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash-2026-02-10"
         assert config["asr"]["qwen3_asr"]["base_url"] == (
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -966,6 +997,7 @@ class TestConfigValidation(unittest.TestCase):
             "zhipu": ("glm-5.1", "glm-5-turbo"),
             "gemini": ("gemini-3.5-flash", "gemini-2.5-flash"),
             "kimi": ("kimi-k2.6", "kimi-k2.5"),
+            "hunyuan": ("hunyuan-turbos-latest", "hunyuan-turbo-latest"),
             "xai": ("grok-4.3",),
             "mistral": ("mistral-medium-3-5", "mistral-small-latest"),
             "nvidia": (
@@ -991,6 +1023,7 @@ class TestConfigValidation(unittest.TestCase):
         assert (
             TRANSLATION_BACKENDS["anthropic_compatible"]["model"] == "claude-sonnet-4-6"
         )
+        assert TRANSLATION_BACKENDS["hunyuan"]["model"] == "hunyuan-turbos-latest"
         assert "gpt-5.5" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.4-mini" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "claude-sonnet-4-6" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
@@ -1226,6 +1259,27 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert config["translation"]["openai"]["model"] == "gpt-4.1-mini"
+
+
+class TestPerformanceConfig(unittest.TestCase):
+    """Test performance defaults and low-power normalization."""
+
+    def test_settings_preload_defaults_off_and_low_power_forces_off(self):
+        config = {"performance": {"profile": "low_power", "preload_settings_window": True}}
+
+        changed = config_manager._ensure_performance_config(config)
+
+        assert changed is True
+        assert config["performance"]["preload_settings_window"] is False
+        assert config["performance"]["tts_cache_max_mb"] <= 12
+        assert config["performance"]["tts_cache_max_items"] <= 32
+
+    def test_settings_preload_can_be_opted_in_for_balanced_profile(self):
+        config = {"performance": {"profile": "balanced", "preload_settings_window": True}}
+
+        config_manager._ensure_performance_config(config)
+
+        assert config["performance"]["preload_settings_window"] is True
 
 
 class TestConfigSave(unittest.TestCase):

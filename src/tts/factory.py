@@ -17,6 +17,7 @@ from .gtts_engine import GoogleTTS
 from .pyttsx3_engine import Pyttsx3TTS
 from .style_bert_vits2_engine import StyleBertVits2TTS
 from .voicevox_engine import VoicevoxTTS
+from .xtts_engine import XTTS_DEFAULT_MODEL_NAME, XTTSTS
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,32 @@ def _normalize_engine_name(name: str) -> str:
     name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
     name = re.sub(r"\s*（[^）]*）\s*$", "", name).strip()
     return name
+
+
+def _config_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _optional_config_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
 
 
 def create_tts_engine(
@@ -111,6 +138,45 @@ def create_tts_engine(
             )
             return engine
         logger.warning("Style-Bert-VITS2 not available")
+        return None
+
+    if engine_name in {"xtts", "xtts_v2", "xtts-v2", "xttsts"}:
+        xtts_cfg = config if isinstance(config, dict) else {}
+        xtts_device = str(xtts_cfg.get("device") or device or "cpu").strip().lower()
+        xtts_language = str(xtts_cfg.get("language") or "auto").strip().lower() or "auto"
+        xtts_model = str(
+            xtts_cfg.get("model_name")
+            or xtts_cfg.get("model")
+            or XTTS_DEFAULT_MODEL_NAME
+        )
+        try:
+            xtts_cache_size = int(xtts_cfg.get("conditioning_cache_size", 4) or 4)
+        except (TypeError, ValueError):
+            xtts_cache_size = 4
+        engine = XTTSTS(
+            device=xtts_device,
+            model_name=xtts_model,
+            language=xtts_language,
+            lazy_load=_config_bool(xtts_cfg.get("lazy_load"), True),
+            optimized_inference=_config_bool(xtts_cfg.get("optimized_inference"), True),
+            conditioning_cache_size=xtts_cache_size,
+            enable_text_splitting=_config_bool(xtts_cfg.get("enable_text_splitting"), True),
+            temperature=xtts_cfg.get("temperature"),
+            length_penalty=xtts_cfg.get("length_penalty"),
+            repetition_penalty=xtts_cfg.get("repetition_penalty"),
+            top_k=xtts_cfg.get("top_k"),
+            top_p=xtts_cfg.get("top_p"),
+            do_sample=_optional_config_bool(xtts_cfg.get("do_sample")),
+            num_beams=xtts_cfg.get("num_beams"),
+        )
+        if engine.is_available():
+            actual_device = getattr(engine, "_device", device)
+            logger.info(
+                "Created XTTS-v2 TTS engine (device=%s)",
+                actual_device,
+            )
+            return engine
+        logger.warning("XTTS-v2 not available. Install the coqui-tts runtime and download the XTTS-v2 model.")
         return None
 
     logger.error("Unknown TTS engine: %s", engine_name)

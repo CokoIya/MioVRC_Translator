@@ -39,6 +39,7 @@ _http_lock = threading.Lock()
 # Prevent concurrent update-check workers from causing SSL crashes.
 _update_check_in_progress = False
 _update_check_lock = threading.Lock()
+_unsigned_manifest_notice_logged = False
 _MANIFEST_HEADERS = {
     "Accept": "application/json",
     "Cache-Control": "no-cache, no-store, max-age=0",
@@ -182,6 +183,7 @@ def _manifest_request_url(url: str, *, timestamp_ms: int | None = None) -> str:
 
 
 def _verify_update_manifest(data: dict) -> bool:
+    global _unsigned_manifest_notice_logged
     try:
         verified = verify_manifest_signature(
             data,
@@ -201,7 +203,12 @@ def _verify_update_manifest(data: dict) -> bool:
         return True
     if REQUIRE_UPDATE_MANIFEST_SIGNATURE:
         raise ManifestSignatureError("Update manifest signature is required")
-    logger.warning("Update manifest signature is not configured; relying on HTTPS and SHA256 only")
+    message = "Update manifest is unsigned; relying on HTTPS and SHA256 verification"
+    if not _unsigned_manifest_notice_logged:
+        logger.info(message)
+        _unsigned_manifest_notice_logged = True
+    else:
+        logger.debug(message)
     return False
 
 

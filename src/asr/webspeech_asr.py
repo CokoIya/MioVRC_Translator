@@ -26,6 +26,7 @@ DEFAULT_FINAL_TIMEOUT_SECONDS = 4.0
 DEFAULT_PARTIAL_TIMEOUT_SECONDS = 0.2
 DEFAULT_CONNECTION_TIMEOUT_SECONDS = 3.0
 DEFAULT_SILENCE_TIMEOUT_MS = 800
+DEFAULT_STALE_CONNECTION_SECONDS = 8.0
 _LANGUAGE_ALIASES = {
     "ja": "ja-JP",
     "jp": "ja-JP",
@@ -65,6 +66,7 @@ class _BridgeState:
         self._last_final_text = ""
         self.final_results: deque[str] = deque(maxlen=max_results)
         self.last_event_at = 0.0
+        self.last_heartbeat_at = 0.0
 
     def reset(self) -> None:
         with self.condition:
@@ -75,12 +77,16 @@ class _BridgeState:
             self._last_final_text = ""
             self.final_results.clear()
             self.last_event_at = 0.0
+            self.last_heartbeat_at = 0.0
             self.condition.notify_all()
 
     def set_connected(self) -> None:
         with self.condition:
             self.connected = True
             self.error = ""
+            now = time.monotonic()
+            self.last_event_at = now
+            self.last_heartbeat_at = now
             self.condition.notify_all()
 
     def set_disconnected(self) -> None:
@@ -88,6 +94,26 @@ class _BridgeState:
             self.connected = False
             self.partial_text = ""
             self.condition.notify_all()
+
+    def set_heartbeat(self) -> None:
+        with self.condition:
+            self.last_heartbeat_at = time.monotonic()
+            self.condition.notify_all()
+
+    def mark_stale_if_needed(self, stale_after_s: float) -> bool:
+        if stale_after_s <= 0:
+            return False
+        now = time.monotonic()
+        with self.condition:
+            if not self.connected:
+                return False
+            heartbeat = self.last_heartbeat_at or self.last_event_at
+            if heartbeat and (now - heartbeat) <= stale_after_s:
+                return False
+            self.connected = False
+            self.partial_text = ""
+            self.condition.notify_all()
+            return True
 
     def set_result(self, text: str, is_final: bool) -> None:
         cleaned = clean_asr_text(text)
@@ -174,8 +200,15 @@ def _page(
 <script>
 const statusEl = document.getElementById('status');
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-function post(path, payload) {{
+  function post(path, payload) {{
   return fetch(path, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload)}}).catch(() => {{}});
+}}
+function beacon(path, payload) {{
+  const body = JSON.stringify(payload || {{}});
+  if (navigator.sendBeacon) {{
+    try {{ navigator.sendBeacon(path, new Blob([body], {{type: 'application/json'}})); return; }} catch (e) {{}}
+  }}
+  post(path, payload || {{}});
 }}
 if (!SpeechRecognition) {{
   statusEl.textContent = 'This browser does not support Web Speech API.';
@@ -191,6 +224,8 @@ if (!SpeechRecognition) {{
   let silenceTimer = null;
   let lastPartial = '';
   let lastFinal = '';
+  let restartAttempts = 0;
+  const heartbeatTimer = setInterval(() => post('/heartbeat', {{ts: Date.now()}}), 2000);
   function clearSilenceTimer() {{
     if (silenceTimer !== null) {{
       clearTimeout(silenceTimer);
@@ -219,6 +254,7 @@ if (!SpeechRecognition) {{
     }}
   }}
   rec.onstart = () => {{
+    restartAttempts = 0;
     statusEl.textContent = 'Connected. Listening with browser microphone...';
     post('/ready', {{language: rec.lang}});
   }};
@@ -232,7 +268,16 @@ if (!SpeechRecognition) {{
     if (lastPartial) postResult(lastPartial, true);
     clearSilenceTimer();
     post('/disconnected', {{}});
-    if (!stopped && options.restartOnEnd) setTimeout(() => {{ try {{ rec.start(); }} catch (e) {{}} }}, 400);
+    if (!stopped && options.restartOnEnd) {{
+      const delay = Math.min(400 + restartAttempts * 250, 2500);
+      restartAttempts += 1;
+      setTimeout(() => {{
+        try {{ rec.start(); }}
+        catch (e) {{
+          if (restartAttempts >= 8) post('/error', {{message: String(e)}});
+        }}
+      }}, delay);
+    }}
   }};
   rec.onresult = (event) => {{
     for (let i = event.resultIndex; i < event.results.length; i++) {{
@@ -242,7 +287,12 @@ if (!SpeechRecognition) {{
     }}
   }};
   try {{ rec.start(); }} catch (e) {{ post('/error', {{message: String(e)}}); }}
-  window.addEventListener('beforeunload', () => {{ stopped = true; try {{ rec.stop(); }} catch (e) {{}} }});
+  window.addEventListener('beforeunload', () => {{
+    stopped = true;
+    clearInterval(heartbeatTimer);
+    beacon('/disconnected', {{}});
+    try {{ rec.stop(); }} catch (e) {{}}
+  }});
 }}
 </script>
 </body>
@@ -293,6 +343,13 @@ class WebSpeechASRProvider(ASRProvider):
             60000,
         )
         self.auto_open_browser = bool(provider_cfg.get("auto_open_browser", True))
+        self.embedded_browser = _bool_value(provider_cfg.get("embedded_browser"), True)
+        self.stale_connection_seconds = _float_range(
+            provider_cfg.get("stale_connection_seconds"),
+            DEFAULT_STALE_CONNECTION_SECONDS,
+            minimum=2.0,
+            maximum=60.0,
+        )
         self.port = _int_value(provider_cfg.get("bridge_port"), 0)
         self._corrector = corrector
         self._state = _BridgeState()
@@ -300,16 +357,26 @@ class WebSpeechASRProvider(ASRProvider):
         self._thread: threading.Thread | None = None
         self._url = ""
         self._browser_opened = False
+        self._browser_opener = None
+        self._browser_handle = None
         self._warned_audio_ignored = False
         self._lock = threading.RLock()
+
+    def set_browser_opener(self, opener) -> None:
+        """Install an app-owned browser opener.
+
+        The Qt main window uses this to create an embedded WebEngine view on
+        the UI thread. Tests and non-Qt hosts can leave it unset, in which case
+        the provider falls back to the system browser.
+        """
+        self._browser_opener = opener
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
             if self._server is None:
                 self._start_server()
             if self.auto_open_browser and not self._browser_opened:
-                webbrowser.open_new_tab(self._url)
-                self._browser_opened = True
+                self._open_bridge_page()
             if progress_callback is not None:
                 progress_callback({"stage": "ready", "message": f"WebSpeech bridge ready: {self._url}"})
 
@@ -326,6 +393,7 @@ class WebSpeechASRProvider(ASRProvider):
             self._warned_audio_ignored = True
         if self._server is None:
             self.load()
+        self._state.mark_stale_if_needed(self.stale_connection_seconds)
         if not self._state.connected and not self._state.wait_connected(self.connection_timeout_seconds):
             raise ASRProviderError("WebSpeech bridge is not connected; keep the browser bridge page open")
         if self._state.error:
@@ -336,15 +404,26 @@ class WebSpeechASRProvider(ASRProvider):
             else self._state.latest_partial(self.partial_timeout_seconds)
         )
         text = clean_asr_text(text)
+        if self._state.error:
+            raise ASRProviderError(f"WebSpeech bridge error: {self._state.error}")
         if text and self._corrector is not None:
             text = self._corrector.apply(text, language=_language_code(language) or self.language)
         return text
 
     def close(self) -> None:
         server = self._server
+        handle = self._browser_handle
         self._server = None
         self._browser_opened = False
+        self._browser_handle = None
         self._state.reset()
+        if handle is not None:
+            try:
+                close = getattr(handle, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                logger.debug("Failed to close embedded WebSpeech bridge", exc_info=True)
         if server is not None:
             server.shutdown()
             server.server_close()
@@ -401,6 +480,9 @@ class WebSpeechASRProvider(ASRProvider):
                     ).encode("utf-8")
                     self._send_text(HTTPStatus.OK, payload, "application/json")
                     return
+                if parsed.path == "/ping":
+                    self._send_text(HTTPStatus.OK, b"{}", "application/json")
+                    return
                 self._send_text(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
             def do_POST(self):
@@ -408,6 +490,10 @@ class WebSpeechASRProvider(ASRProvider):
                 payload = self._json_body()
                 if parsed.path == "/ready":
                     state.set_connected()
+                    self._send_text(HTTPStatus.OK, b"{}", "application/json")
+                    return
+                if parsed.path == "/heartbeat":
+                    state.set_heartbeat()
                     self._send_text(HTTPStatus.OK, b"{}", "application/json")
                     return
                 if parsed.path == "/result":
@@ -435,6 +521,19 @@ class WebSpeechASRProvider(ASRProvider):
         self._thread.start()
         logger.info("WebSpeech bridge listening at %s", self._url)
 
+    def _open_bridge_page(self) -> None:
+        opener = self._browser_opener if self.embedded_browser else None
+        if opener is not None:
+            try:
+                self._browser_handle = opener(self._url)
+                self._browser_opened = True
+                return
+            except Exception:
+                logger.debug("Embedded WebSpeech bridge opener failed", exc_info=True)
+                self._browser_handle = None
+        webbrowser.open_new_tab(self._url)
+        self._browser_opened = True
+
 
 def _float_value(value: object, default: float, *, milliseconds: bool = False) -> float:
     try:
@@ -444,6 +543,17 @@ def _float_value(value: object, default: float, *, milliseconds: bool = False) -
     if parsed <= 0:
         return default
     return parsed / 1000.0 if milliseconds else parsed
+
+
+def _float_range(
+    value: object,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    parsed = _float_value(value, default)
+    return max(minimum, min(parsed, maximum))
 
 
 def _int_value(value: object, default: int) -> int:

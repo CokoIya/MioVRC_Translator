@@ -10,6 +10,7 @@ from src.ui_qt.settings_window import (
     SettingsWindow,
     TTS_TEST_TIMEOUT_MS,
     TTS_TEST_TEXT_BY_LANGUAGE,
+    XTTS_TEST_TEXT_BY_LANGUAGE,
 )
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
@@ -201,16 +202,8 @@ def test_settings_window_nav_labels_are_player_friendly(qtbot, config, monkeypat
     qtbot.addWidget(dialog)
 
     assert [dialog._nav_list.item(i).text() for i in range(dialog._nav_list.count())] == [
-        "基础外观设置",
-        "麦克风设置",
-        "逆向翻译设置",
-        "总翻译设置",
-        "同声传译设置",
-        "VRChat 联动设置",
-        "快捷键设置",
-        "下载和更新",
-        "翻译风格设置",
-        "高级",
+        dialog._nav_item_label(page_id)
+        for page_id, _label in NAV_ITEMS
     ]
 
     dialog.reject()
@@ -244,8 +237,11 @@ def test_settings_window_advanced_can_open_logs_folder(qtbot, config, monkeypatc
 
     _select_settings_page(qtbot, dialog, "advanced")
     labels = [label.text() for label in dialog._pages["advanced"].findChildren(QLabel)]
-    assert "问题日志" in labels
     assert any("mio.log" in text for text in labels)
+    assert any(
+        button.text() == dialog._copy("open_logs_folder")
+        for button in dialog._pages["advanced"].findChildren(QPushButton)
+    )
 
     dialog._open_logs_folder()
 
@@ -265,8 +261,8 @@ def test_updates_page_lists_models_and_marks_downloaded_green(qtbot, config, mon
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
 
-    _select_settings_page(qtbot, dialog, "model")
-    page = dialog._pages["model"]
+    _select_settings_page(qtbot, dialog, "advanced")
+    page = dialog._pages["advanced"]
     labels = page.findChildren(QLabel)
     label_text = "\n".join(label.text() for label in labels)
 
@@ -316,8 +312,7 @@ def test_settings_theme_toggle_uses_lightweight_fade(qtbot, config, monkeypatch)
 def test_settings_window_nav_uses_function_domain_pages():
     page_ids = [page_id for page_id, _label in NAV_ITEMS]
 
-    assert page_ids[:4] == ["common", "voice", "vrc_listen", "translation"]
-    assert {"tts", "vr_integration", "hotkeys", "model", "advanced"}.issubset(page_ids)
+    assert page_ids == ["common", "api_config", "translation", "voice", "vrc_listen", "tts", "advanced"]
 
 
 def test_settings_window_can_request_mode_wizard(qtbot, config, monkeypatch):
@@ -444,7 +439,7 @@ def test_qwen_translation_region_controls_base_url(qtbot, config, monkeypatch):
 
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
-    _select_settings_page(qtbot, dialog, "translation")
+    _select_settings_page(qtbot, dialog, "api_config")
 
     mainland_label = next(
         label for label, code in dialog._qwen_translation_region_codes.items()
@@ -474,7 +469,7 @@ def test_deepseek_translation_region_controls_base_url_and_saves(qtbot, config, 
 
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
-    _select_settings_page(qtbot, dialog, "translation")
+    _select_settings_page(qtbot, dialog, "api_config")
 
     custom_label = next(
         label for label, code in dialog._qwen_translation_region_codes.items()
@@ -527,7 +522,7 @@ def test_xiaomi_translation_region_controls_base_url_and_saves(qtbot, config, mo
 
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
-    _select_settings_page(qtbot, dialog, "translation")
+    _select_settings_page(qtbot, dialog, "api_config")
 
     singapore_label = next(
         label for label, code in dialog._qwen_translation_region_codes.items()
@@ -648,10 +643,9 @@ def test_style_bert_saved_voice_id_selects_display_and_tests_with_id(qtbot, conf
     assert config["tts"]["style_bert_vits2"]["voice"] == voice_id
 
 
-def test_style_bert_gpu_device_option_resets_when_cuda_missing(qtbot, config, monkeypatch):
+def test_style_bert_gpu_device_option_keeps_cuda_and_prompts_when_cuda_missing(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
-    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
     shown: list[bool] = []
     monkeypatch.setattr(
         "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
@@ -676,19 +670,18 @@ def test_style_bert_gpu_device_option_resets_when_cuda_missing(qtbot, config, mo
     qtbot.wait(30)
 
     gpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cuda")
-    cpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cpu")
     assert "GPU" in gpu_label
 
     dialog._tts_device_combo.setCurrentText(gpu_label)
 
     assert shown == [True]
-    assert dialog._tts_device_var.value() == cpu_label
-    assert dialog._tts_device_combo.currentText() == cpu_label
+    assert dialog._tts_device_var.value() == gpu_label
+    assert dialog._tts_device_combo.currentText() == gpu_label
 
 
 def test_style_bert_gpu_device_saves_when_cuda_available(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: True)
     monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
     config["tts"] = {
         "enabled": True,
@@ -715,10 +708,9 @@ def test_style_bert_gpu_device_saves_when_cuda_available(qtbot, config, monkeypa
     assert config["tts"]["style_bert_vits2"]["device"] == "cuda"
 
 
-def test_style_bert_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot, config, monkeypatch):
+def test_style_bert_gpu_device_prompts_when_cuda_pytorch_installed_but_not_active(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
-    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
     shown: list[bool] = []
     monkeypatch.setattr(
         "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
@@ -745,14 +737,13 @@ def test_style_bert_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot
     gpu_label = next(label for label, code in dialog._tts_device_codes.items() if code == "cuda")
     dialog._tts_device_combo.setCurrentText(gpu_label)
 
-    assert shown == []
+    assert shown == [True]
     assert dialog._tts_device_codes[dialog._tts_device_var.value()] == "cuda"
 
 
-def test_local_asr_gpu_device_option_resets_when_cuda_missing(qtbot, config, monkeypatch):
+def test_local_asr_gpu_device_option_keeps_cuda_and_prompts_when_cuda_missing(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
-    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
     shown: list[bool] = []
     monkeypatch.setattr(
         "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
@@ -768,19 +759,18 @@ def test_local_asr_gpu_device_option_resets_when_cuda_missing(qtbot, config, mon
     _select_settings_page(qtbot, dialog, "voice")
 
     gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
-    cpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cpu")
     assert "GPU" in gpu_label
 
     dialog._asr_device_combo.setCurrentText(gpu_label)
 
     assert shown == [True]
-    assert dialog._asr_device_var.value() == cpu_label
-    assert dialog._asr_device_combo.currentText() == cpu_label
+    assert dialog._asr_device_var.value() == gpu_label
+    assert dialog._asr_device_combo.currentText() == gpu_label
 
 
 def test_local_asr_gpu_device_saves_when_cuda_available(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: True)
     monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
     config["asr"] = {
         "engine": "sensevoice-small",
@@ -798,10 +788,9 @@ def test_local_asr_gpu_device_saves_when_cuda_available(qtbot, config, monkeypat
     assert config["asr"]["device"] == "cuda"
 
 
-def test_local_asr_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot, config, monkeypatch):
+def test_local_asr_gpu_device_prompts_when_cuda_pytorch_installed_but_not_active(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
-    monkeypatch.setattr("src.ui_qt.settings_window.cuda_pytorch_installed", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
     shown: list[bool] = []
     monkeypatch.setattr(
         "src.ui_qt.settings_window.SettingsWindow._show_tts_gpu_unavailable_dialog",
@@ -819,13 +808,13 @@ def test_local_asr_gpu_device_does_not_prompt_when_cuda_pytorch_installed(qtbot,
     gpu_label = next(label for label, code in dialog._asr_device_codes.items() if code == "cuda")
     dialog._asr_device_combo.setCurrentText(gpu_label)
 
-    assert shown == []
+    assert shown == [True]
     assert dialog._asr_device_codes[dialog._asr_device_var.value()] == "cuda"
 
 
 def test_online_asr_hides_local_inference_device_and_saves_cpu(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.gpu_runtime_available", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
     monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
     shown: list[bool] = []
     monkeypatch.setattr(
@@ -1579,3 +1568,297 @@ def test_settings_check_update_reports_no_update(qtbot, config, monkeypatch):
     assert dialog._update_checking is False
 
     dialog.reject()
+
+
+def test_xtts_settings_pass_device_language_and_voice_to_test_and_save(qtbot, config, monkeypatch):
+    captured_kwargs: list[dict[str, object]] = []
+    spoken: list[tuple[str, str]] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class FakeCustomVoice:
+        id = "custom"
+        name = "Custom Cloned Voice"
+
+    class FakeTTSManager:
+        def __init__(self, *args, **kwargs):
+            captured_kwargs.append(kwargs)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            pass
+
+        def speak(self, text, voice, rate=1.0, volume=1.0, callback=None):
+            del rate, volume
+            spoken.append((text, voice))
+            if callback is not None:
+                callback(True, "")
+            return True
+
+        def stop_playback(self):
+            pass
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.validate_xtts_reference_audio_file",
+        lambda _path: (True, "", None),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.list_xtts_reference_voices",
+        lambda: [FakeCustomVoice(), FakeVoice()],
+    )
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FakeTTSManager)
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "custom", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._xtts_language_combo.setCurrentIndex(3)
+    dialog._on_tts_test()
+    qtbot.waitUntil(lambda: bool(spoken), timeout=2000)
+
+    engine_config = captured_kwargs[0]["engine_config"]
+    assert engine_config["voice"] == "sample"
+    assert engine_config["device"] == "cpu"
+    assert engine_config["language"] == "ja"
+    assert spoken[0][0] == XTTS_TEST_TEXT_BY_LANGUAGE["ja"]
+    assert spoken[0][1] == "sample"
+
+    dialog._save()
+
+    assert config["tts"]["xtts"]["voice"] == "sample"
+    assert config["tts"]["xtts"]["device"] == "cpu"
+    assert config["tts"]["xtts"]["language"] == "ja"
+
+
+def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class FailingTTSManager:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("XTTS runtime preflight should block before TTSManager creation")
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "sample", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._on_tts_test()
+
+    assert dialog._tts_testing is False
+    assert warnings == [(dialog._copy("tts_test"), dialog._copy("xtts_runtime_missing"))]
+
+
+def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class FailingTTSManager:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("XTTS model preflight should block before TTSManager creation")
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: False)
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "sample", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._on_tts_test()
+
+    assert dialog._tts_testing is False
+    assert warnings == [(dialog._copy("tts_test"), dialog._copy("xtts_model_missing"))]
+
+
+def test_xtts_test_reports_missing_reference_before_creating_manager(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+
+    class FailingTTSManager:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("XTTS reference preflight should block before TTSManager creation")
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: None)
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "custom", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.wait(30)
+
+    dialog._on_tts_test()
+
+    assert dialog._tts_testing is False
+    assert warnings == [(dialog._copy("tts_test"), dialog._copy("xtts_reference_missing"))]
+
+
+def test_xtts_test_reports_unusable_reference_before_creating_manager(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+
+    class FailingTTSManager:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("XTTS reference quality preflight should block before TTSManager creation")
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: None)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.validate_xtts_reference_audio_file",
+        lambda _path: (False, "Reference audio is too quiet or mostly silent.", None),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.repair_xtts_reference_audio_file",
+        lambda _path: (False, "", None),
+    )
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "custom", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.wait(30)
+
+    dialog._on_tts_test()
+
+    assert dialog._tts_testing is False
+    assert warnings
+    assert warnings[0][0] == dialog._copy("tts_test")
+    assert dialog._copy("xtts_reference_invalid") in warnings[0][1]
+    assert "too quiet" in warnings[0][1]
+
+
+def test_xtts_cuda_dropdown_prompts_and_keeps_cuda_when_runtime_unavailable(qtbot, config, monkeypatch):
+    prompts: list[str] = []
+    messages: list[tuple[str, str]] = []
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: False)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.information",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "custom", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(dialog, "_show_tts_gpu_unavailable_dialog", lambda: prompts.append("prompt"))
+    _select_settings_page(qtbot, dialog, "tts")
+
+    cuda_label = next(label for label, code in dialog._xtts_device_codes.items() if code == "cuda")
+    dialog._xtts_device_combo.setCurrentText(cuda_label)
+
+    assert prompts == ["prompt"]
+    assert dialog._selected_xtts_device() == "cuda"
+    assert dialog._xtts_device_combo.currentText() == cuda_label
+    assert config["tts"]["xtts"]["device"] == "cuda"
+    assert config["xtts_device"] == "cuda"
+    assert messages == [(dialog._copy("notice"), dialog._copy("xtts_device_change_notice"))]
+
+
+def test_xtts_cuda_dropdown_keeps_cuda_when_runtime_available(qtbot, config, monkeypatch):
+    messages: list[tuple[str, str]] = []
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.torch_cuda_available", lambda: True)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.information",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "custom", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+
+    cuda_label = next(label for label, code in dialog._xtts_device_codes.items() if code == "cuda")
+    dialog._xtts_device_combo.setCurrentText(cuda_label)
+
+    assert dialog._selected_xtts_device() == "cuda"
+    assert config["tts"]["xtts"]["device"] == "cuda"
+    assert config["xtts_device"] == "cuda"
+    assert messages == [(dialog._copy("notice"), dialog._copy("xtts_device_change_notice"))]

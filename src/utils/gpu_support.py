@@ -148,6 +148,8 @@ def cuda_pytorch_installed() -> bool:
 def _packaged_cuda_runtime_available(timeout: float = 20.0) -> bool:
     if not _is_packaged_runtime():
         return False
+    if not packaged_cuda_pytorch_installed():
+        return False
     executable = python_executable_for_cuda_install()
     if not executable:
         return False

@@ -279,7 +279,7 @@ def test_tts_without_vrchat_output_does_not_suppress_desktop_listen():
     assert window._listen_tts_echo_suppress_active() is False
 
 
-def test_reset_tts_manager_stops_current_playback_only():
+def test_reset_tts_manager_stops_manager_worker():
     class FakeManager:
         def __init__(self):
             self.stopped = False
@@ -294,12 +294,14 @@ def test_reset_tts_manager_stops_current_playback_only():
     window = MainWindow.__new__(MainWindow)
     manager = FakeManager()
     window._tts_manager = manager
+    window._tts_manager_signature = ("xtts",)
 
     window._reset_tts_manager()
 
-    assert manager.stopped is False
-    assert manager.playback_stopped is True
+    assert manager.stopped is True
+    assert manager.playback_stopped is False
     assert window._tts_manager is None
+    assert window._tts_manager_signature is None
 
 
 class _FakeAsr:

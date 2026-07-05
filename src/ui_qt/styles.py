@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 from src.ui_qt.icon_utils import ui_icon_url
+from src.ui_qt.style_cache import cached_stylesheet, get_style_cache
 from src.ui_qt.theme import normalize_theme, theme_tokens
 
 
-_FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+_DEFAULT_FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+_cjk_latin_font_family: str | None = None
+
+
+def set_cjk_latin_font_family(family: str | None) -> None:
+    global _cjk_latin_font_family
+    _cjk_latin_font_family = str(family or "").strip() or None
+    get_style_cache().invalidate()
+
+
+def _font_stack() -> str:
+    if not _cjk_latin_font_family:
+        return _DEFAULT_FONT_STACK
+    escaped = _cjk_latin_font_family.replace('"', '\\"')
+    return f'"{escaped}", {_DEFAULT_FONT_STACK}'
 
 
 def _base(theme: object) -> str:
@@ -17,7 +32,7 @@ def _base(theme: object) -> str:
     return f"""
     QWidget {{
         color: {c["TEXT_PRIMARY"]};
-        font-family: {_FONT_STACK};
+        font-family: {_font_stack()};
         font-size: 14px;
     }}
     QDialog, QMainWindow {{
@@ -163,16 +178,20 @@ def _base(theme: object) -> str:
         background: {c["PANEL_RAISED"]};
     }}
     QPushButton#headerButton {{
-        min-height: {c["CONTROL_H"]}px;
-        padding: 0 16px;
+        min-width: 104px;
+        max-width: 104px;
+        min-height: 34px;
+        max-height: 34px;
+        padding: 0 12px;
         font-weight: 600;
     }}
     QPushButton#sponsorButton {{
         background: #c99a2d;
         border-color: #c99a2d;
         color: white;
-        min-height: {c["CONTROL_H"]}px;
-        padding: 0 16px;
+        min-height: 36px;
+        max-height: 36px;
+        padding: 0 14px;
         font-weight: 700;
     }}
     QLabel#sectionTitle {{
@@ -248,12 +267,16 @@ def _base(theme: object) -> str:
     """
 
 
-def build_app_stylesheet(theme: object) -> str:
+def _build_app_stylesheet_uncached(theme: str) -> str:
     return _base(theme)
 
 
+def build_app_stylesheet(theme: object) -> str:
+    return cached_stylesheet("app", normalize_theme(theme), _build_app_stylesheet_uncached)
 
-def build_main_window_styles(theme: object) -> str:
+
+
+def _build_main_window_styles_uncached(theme: str) -> str:
     c = theme_tokens(theme)
     is_dark = normalize_theme(theme) == "dark"
     shell_bg = "rgba(7, 9, 14, 0.18)" if is_dark else "rgba(247, 250, 255, 0.20)"
@@ -286,13 +309,20 @@ def build_main_window_styles(theme: object) -> str:
         border: 1px solid {glass_border};
         border-radius: {c["RADIUS_L"]}px;
     }}
-    #translationPanel, #editorPanel, #actionStrip, #modeBox, #sidePanel, #controlGroup, #statusModule, #langFlowPanel {{
+    #translationPanel, #editorPanel, #actionStrip, #controlGroup, #statusModule {{
         background: {glass_alt_bg};
         border: 1px solid {glass_border};
         border-radius: {c["RADIUS_L"]}px;
     }}
+    #modeBox, #langFlowPanel {{
+        background: {glass_alt_bg};
+        border: none;
+        border-radius: {c["RADIUS_L"]}px;
+    }}
     #actionStrip {{
-        background: {glass_raised_bg};
+        background: transparent;
+        border: 0;
+        border-radius: 0;
     }}
     #langFlowPanel {{
         background: {glass_raised_bg};
@@ -301,7 +331,7 @@ def build_main_window_styles(theme: object) -> str:
         background: {glass_bg};
         border: 1px solid {glass_border};
         border-radius: {c["RADIUS_L"]}px;
-        padding: 16px;
+        padding: 0px;
     }}
     #controlGroup {{
         background: {glass_alt_bg};
@@ -366,6 +396,23 @@ def build_main_window_styles(theme: object) -> str:
         border: 1px solid {glass_border};
         color: {c["TEXT_PRIMARY"]};
         text-align: center;
+        min-height: 32px;
+        max-height: 32px;
+        padding: 0 12px;
+    }}
+    QPushButton#secondaryButton {{
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid {glass_border};
+        color: {c["TEXT_PRIMARY"]};
+        text-align: center;
+        min-height: 32px;
+        max-height: 32px;
+        padding: 0 12px;
+    }}
+    QPushButton#primaryButton, QPushButton#dangerButton {{
+        min-height: 32px;
+        max-height: 32px;
+        padding: 0 12px;
     }}
     QPushButton#activeButton[active="true"] {{
         background: {c["ACCENT_SOFT"]};
@@ -376,6 +423,9 @@ def build_main_window_styles(theme: object) -> str:
         border: 1px solid transparent;
         font-weight: 700;
         color: {c["TEXT_SECONDARY"]};
+        min-height: 32px;
+        max-height: 32px;
+        padding: 0 12px;
     }}
     QPushButton#modeButton[modeActive="true"], QPushButton#modeButton:checked {{
         background: {c["ACCENT"]};
@@ -400,7 +450,7 @@ def build_main_window_styles(theme: object) -> str:
         background: transparent;
         border: 0;
         color: {c["EDITOR_TEXT"]};
-        font-size: 16px;
+        font-size: 14px;
         padding: 4px 2px;
     }}
     QPlainTextEdit#textPane:focus {{
@@ -429,12 +479,12 @@ def build_main_window_styles(theme: object) -> str:
         padding: 4px 12px;
     }}
     QPushButton#socialButton {{
-        min-width: {c["CONTROL_H"]}px;
-        min-height: {c["CONTROL_H"]}px;
-        max-width: {c["CONTROL_H"]}px;
-        max-height: {c["CONTROL_H"]}px;
+        min-width: 36px;
+        min-height: 36px;
+        max-width: 36px;
+        max-height: 36px;
         padding: 0;
-        border-radius: {int(c['CONTROL_H']) // 2}px;
+        border-radius: 18px;
         background: rgba(255, 255, 255, 0.04);
     }}
     QPushButton#deviceButton, QComboBox#deviceCombo {{
@@ -443,8 +493,8 @@ def build_main_window_styles(theme: object) -> str:
         color: {c["TEXT_PRIMARY"]};
         text-align: left;
         padding: 6px 34px 6px 12px;
-        min-height: 24px;
-        max-height: 24px;
+        min-height: 28px;
+        max-height: 30px;
     }}
     QPushButton#deviceButton:hover, QComboBox#deviceCombo:hover {{
         background: {c["FIELD_HOVER"]};
@@ -452,6 +502,9 @@ def build_main_window_styles(theme: object) -> str:
     }}
     """
 
+
+def build_main_window_styles(theme: object) -> str:
+    return cached_stylesheet("main_window", normalize_theme(theme), _build_main_window_styles_uncached)
 
 
 def build_settings_window_styles(theme: object) -> str:

@@ -6,6 +6,10 @@ import logging
 
 from .anthropic_translator import AnthropicTranslator
 from .base import BaseTranslator
+from .deepl_translator import DeepLTranslator
+from .google_web_translator import GoogleWebTranslator
+from .libretranslate_translator import LibreTranslateTranslator
+from .mymemory_translator import MyMemoryTranslator
 from .openai_translator import OpenAITranslator
 from src.utils.config_manager import is_protected_secret_blob
 from src.utils.ui_config import (
@@ -28,6 +32,7 @@ OPENAI_COMPATIBLE_BACKENDS = {
     "xiaomi",
     "gemini",
     "kimi",
+    "hunyuan",
     "xai",
     "mistral",
     "doubao",
@@ -249,6 +254,87 @@ def _create_translator_for_backend(
     trans_cfg: Mapping[str, object],
     backend: str,
 ) -> BaseTranslator:
+    if backend == "deepl":
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        return DeepLTranslator(
+            api_key=_require_text(
+                backend_cfg.get("api_key", ""), f"{get_backend_label(backend)} API Key"
+            ),
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 10.0),
+                minimum=3.0,
+                maximum=120.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 1),
+                minimum=0,
+                maximum=3,
+            ),
+        )
+
+    if backend == "libretranslate":
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        return LibreTranslateTranslator(
+            api_key=str(backend_cfg.get("api_key", "") or "").strip(),
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 10.0),
+                minimum=3.0,
+                maximum=120.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 1),
+                minimum=0,
+                maximum=3,
+            ),
+        )
+
+    if backend == "google_web":
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        return GoogleWebTranslator(
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 8.0),
+                minimum=2.0,
+                maximum=60.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 1),
+                minimum=0,
+                maximum=3,
+            ),
+        )
+
+    if backend == "mymemory":
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        return MyMemoryTranslator(
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            contact_email=str(backend_cfg.get("contact_email", "") or "").strip(),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 8.0),
+                minimum=2.0,
+                maximum=60.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 1),
+                minimum=0,
+                maximum=3,
+            ),
+        )
+
     if backend in OPENAI_COMPATIBLE_BACKENDS:
         return _create_openai_compatible_translator(trans_cfg, backend)
 

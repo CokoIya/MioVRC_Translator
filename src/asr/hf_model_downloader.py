@@ -146,6 +146,17 @@ _HF_MODEL_FILES: dict[str, list[str]] = {
         "configuration.json",
         "small.en.pb",
     ],
+    "coqui/XTTS-v2": [
+        "model.pth",
+        "config.json",
+        "vocab.json",
+        "dvae.pth",
+        "mel_stats.pth",
+    ],
+    "coqui/xtts_speaker_encoder": [
+        "model.pth",
+        "config.json",
+    ],
     "ku-nlp/deberta-v2-large-japanese-char-wwm": [
         "config.json",
         "special_tokens_map.json",

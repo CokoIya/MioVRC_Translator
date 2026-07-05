@@ -141,6 +141,9 @@ class AudioRecorder:
             else None
         )
 
+    def set_denoise_strength(self, strength: float) -> None:
+        self._denoiser.set_strength(strength)
+
     def start(self):
         if self._running:
             return

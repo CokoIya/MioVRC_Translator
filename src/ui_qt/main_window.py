@@ -55,9 +55,12 @@ from src.utils.ui_config import (
     LANGUAGE_DISPLAY_NAMES,
     OUTPUT_FORMAT_OPTIONS,
     UI_LANGUAGE_OPTIONS,
+    get_backend_value,
     get_manual_source_language_options,
     get_target_language_options,
     get_ui_language,
+    normalize_backend,
+    normalize_output_format,
     target_language_osc_value,
 )
 
@@ -77,9 +80,29 @@ PARTIAL_TASK_QUEUE_MAXSIZE = 1
 FINAL_TASK_QUEUE_MAXSIZE = 1
 DESKTOP_FINAL_TASK_QUEUE_MAXSIZE = 1
 CONFIG_SAVE_DEBOUNCE_MS = 280
-MAIN_WINDOW_DEFAULT_SIZE = (1180, 720)
-MAIN_WINDOW_MIN_SIZE = (1040, 640)
-HEADER_ACTION_WIDTH = 148
+MAIN_WINDOW_DEFAULT_SIZE = (940, 440)
+MAIN_WINDOW_MIN_SIZE = (900, 430)
+HEADER_ACTION_WIDTH = 104
+CHATBOX_CHAR_LIMIT = 144
+HEADER_HEIGHT = 74
+LANG_COMBO_SOURCE_WIDTH = 128
+LANG_COMBO_TARGET_WIDTH = 128
+LANG_ROW_BUTTON_SIZE = 28
+LANG_FLOW_MAX_HEIGHT = 50
+TEXT_PANE_MIN_HEIGHT = 88
+TEXT_PANEL_MAX_HEIGHT = 144
+ACTION_STRIP_MAX_HEIGHT = 80
+ACTION_BUTTON_HEIGHT = 32
+SIDE_PRIMARY_BUTTON_HEIGHT = 32
+SIDE_CONTROL_BUTTON_HEIGHT = 32
+FOOTER_HEIGHT = 48
+FOOTER_BUTTON_SIZE = 36
+FOOTER_SPONSOR_BUTTON_WIDTH = 140
+FOOTER_ICON_SIZE = 20
+FOOTER_SPONSOR_ICON_SIZE = 15
+BASE_DPI = 96.0
+MIN_MAIN_UI_SCALE = 0.9
+MAX_MAIN_UI_SCALE = 1.35
 UI_CALLBACK_DRAIN_MS = 25
 UI_CALLBACK_DRAIN_LIMIT = 128
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
@@ -158,6 +181,13 @@ TRANSLATION_COPY = {
 }
 
 MAIN_COPY = {
+    "creator_banner_compact": {
+        "zh-CN": "天川 澪 | free build | GPL",
+        "en": "天川 澪 | free build | GPL",
+        "ja": "天川 澪 | free build | GPL",
+        "ru": "天川 澪 | free build | GPL",
+        "ko": "天川 澪 | free build | GPL",
+    },
     "settings_short": {
         "zh-CN": "设置",
         "en": "Settings",
@@ -388,6 +418,34 @@ MAIN_COPY = {
         "ja": "更新",
         "ru": "Обновление",
         "ko": "업데이트",
+    },
+    "mode_translation": {
+        "zh-CN": "Text",
+        "en": "Text",
+        "ja": "Text",
+        "ru": "Text",
+        "ko": "Text",
+    },
+    "source_lang_short": {
+        "zh-CN": "Src",
+        "en": "Src",
+        "ja": "Src",
+        "ru": "Src",
+        "ko": "Src",
+    },
+    "translation_lang_1_short": {
+        "zh-CN": "TL 1",
+        "en": "TL 1",
+        "ja": "TL 1",
+        "ru": "TL 1",
+        "ko": "TL 1",
+    },
+    "translation_lang_2_short": {
+        "zh-CN": "TL 2",
+        "en": "TL 2",
+        "ja": "TL 2",
+        "ru": "TL 2",
+        "ko": "TL 2",
     },
 }
 
@@ -732,6 +790,7 @@ class MainWindow(QMainWindow):
         self._ui_lang_combo: QComboBox | None = None
         self._src_lang_combo: QComboBox | None = None
         self._tgt_lang_combo: QComboBox | None = None
+        self._tgt_lang2_combo: QComboBox | None = None
         self._brand_title_label: QLabel | None = None
         self._creator_banner_label: QLabel | None = None
         self._update_badge_btn: QPushButton | None = None
@@ -769,11 +828,38 @@ class MainWindow(QMainWindow):
         self._update_win = None
         self._pending_update = None
         self._settings_theme_sync_generation = 0
+        self._header_frame = None
+        self._header_layout = None
+        self._brand_layout = None
+        self._brand_text_layout = None
+        self._app_icon_label = None
+        self._content_layout = None
+        self._translation_card_layout = None
+        self._flow_panel = None
+        self._flow_layout = None
+        self._flow_source_row = None
+        self._flow_target_row = None
+        self._panes_layout = None
+        self._left_panel_layout = None
+        self._right_panel_layout = None
+        self._action_strip = None
+        self._action_layout = None
+        self._action_top_layout = None
+        self._action_bottom_layout = None
+        self._side_panel = None
+        self._side_layout = None
+        self._side_title_layout = None
+        self._mode_layout = None
+        self._mic_layout = None
+        self._mic_actions_layout = None
+        self._assist_layout = None
 
         self.setWindowTitle(self._t("window_title"))
         self.resize(*MAIN_WINDOW_DEFAULT_SIZE)
         self.setMinimumSize(*MAIN_WINDOW_MIN_SIZE)
         self._build_ui()
+        self._disable_native_status_bar()
+        self._apply_adaptive_layout(force=True)
         self._register_hotkeys()
         self._start_ui_callback_drain()
         self._refresh_static_texts()
@@ -804,6 +890,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._apply_adaptive_layout()
         if getattr(self, "_device_combo", None) is not None:
             QTimer.singleShot(0, self._refresh_device_combo)
 
@@ -811,24 +898,42 @@ class MainWindow(QMainWindow):
     # Public
     # ----------------------------------------------------------------
     def _create_settings_window(self, *, preload: bool = False, defer_initial_page: bool = False):
-        from src.ui_qt.settings_window import SettingsWindow
+        # Feature flag: Use new tabbed settings window (currently disabled)
+        use_new_settings = False  # Set to True to enable new settings UI
 
-        win = SettingsWindow(
-            self,
-            self._config,
-            on_save=self._on_config_saved,
-            on_close=lambda: setattr(self, "_settings_window", None),
-            on_listen_state_changed=self._on_settings_listen_state_changed,
-            on_theme_changed=self._on_settings_theme_changed,
-            on_audio_diagnostics_requested=self._open_audio_diagnostics_window,
-            on_vad_calibration_requested=self._open_vad_calibration_window,
-            on_mode_wizard_requested=self.open_mode_wizard,
-            preload=preload,
-            defer_initial_page=defer_initial_page,
-        )
-        self._settings_window = win
-        self._sync_settings_window_vrc_listen_state()
-        return win
+        if use_new_settings:
+            from src.ui_qt.settings import SettingsWindowTabbed
+
+            win = SettingsWindowTabbed(
+                self._config,
+                ui_language=self._ui_lang,
+                parent=self,
+            )
+            win.config_changed.connect(lambda cfg: self._on_config_saved())
+            self._settings_window = win
+            return win
+        else:
+            # Original settings window
+            from src.ui_qt.settings_window import SettingsWindow
+
+            win = SettingsWindow(
+                self,
+                self._config,
+                on_save=self._on_config_saved,
+                on_close=lambda: setattr(self, "_settings_window", None),
+                on_listen_state_changed=self._on_settings_listen_state_changed,
+                on_theme_changed=self._on_settings_theme_changed,
+                on_audio_diagnostics_requested=self._open_audio_diagnostics_window,
+                on_vad_calibration_requested=self._open_vad_calibration_window,
+                on_mode_wizard_requested=self.open_mode_wizard,
+                preload=preload,
+                defer_initial_page=defer_initial_page,
+            )
+            # Connect language change signal for immediate UI refresh
+            win.language_changed.connect(self._on_language_changed)
+            self._settings_window = win
+            self._sync_settings_window_vrc_listen_state()
+            return win
 
     def _preload_settings_window(self) -> None:
         if self._destroying or self._settings_window is not None:
@@ -1048,9 +1153,9 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self._settings_btn)
 
         # 实时调整按钮
-        self._tweaks_btn = QPushButton("实时")
+        self._tweaks_btn = QPushButton(self._t("realtime_button"))
         self._tweaks_btn.setObjectName("headerButton")
-        self._tweaks_btn.setToolTip("实时调整参数（麦克风、VAD、TTS等）")
+        self._tweaks_btn.setToolTip(self._t("realtime_tooltip"))
         self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
         self._tweaks_btn.clicked.connect(self._toggle_tweaks_panel)
         self._refresh_tweaks_button()
@@ -1154,12 +1259,6 @@ class MainWindow(QMainWindow):
         action_layout.setContentsMargins(10, 10, 10, 10)
         action_layout.setSpacing(8)
 
-        self._manual_input_btn = QPushButton(self._t("manual_input"))
-        self._manual_input_btn.setObjectName("secondaryButton")
-        self._fit_button_to_text(self._manual_input_btn, min_width=104, height=38)
-        self._manual_input_btn.clicked.connect(self._open_text_input_popup)
-        action_layout.addWidget(self._manual_input_btn)
-
         self._translate_btn = QPushButton(self._t("translate"))
         self._translate_btn.setObjectName("primaryButton")
         self._fit_button_to_text(self._translate_btn, min_width=88, height=38)
@@ -1260,18 +1359,18 @@ class MainWindow(QMainWindow):
         self._refresh_device_combo()
         self._device_dropdown_btn = None
 
-        mic_actions = QHBoxLayout()
+        mic_actions = QVBoxLayout()
         mic_actions.setSpacing(8)
         self._mute_btn = QPushButton("")
         self._mute_btn.setObjectName("activeButton")
         self._mute_btn.setFixedHeight(38)
         self._mute_btn.clicked.connect(self._toggle_mic_mute)
-        mic_actions.addWidget(self._mute_btn, 1)
+        mic_actions.addWidget(self._mute_btn)
         self._desktop_btn = QPushButton("")
         self._desktop_btn.setObjectName("activeButton")
         self._desktop_btn.setFixedHeight(38)
         self._desktop_btn.clicked.connect(self._toggle_listen)
-        mic_actions.addWidget(self._desktop_btn, 1)
+        mic_actions.addWidget(self._desktop_btn)
         mic_layout.addLayout(mic_actions)
         layout.addWidget(mic_group)
 
@@ -1301,9 +1400,10 @@ class MainWindow(QMainWindow):
     def _build_footer(self) -> QFrame:
         footer = QFrame()
         footer.setObjectName("footerPanel")
-        footer.setFixedHeight(58)
+        footer.setFixedHeight(FOOTER_HEIGHT)
         layout = QHBoxLayout(footer)
-        layout.setContentsMargins(14, 9, 14, 9)
+        vertical_margin = max(0, (FOOTER_HEIGHT - FOOTER_BUTTON_SIZE) // 2)
+        layout.setContentsMargins(14, vertical_margin, 14, vertical_margin)
         layout.setSpacing(10)
 
         left = QVBoxLayout()
@@ -1327,9 +1427,9 @@ class MainWindow(QMainWindow):
         right.setSpacing(8)
         self._sponsors_btn = QPushButton(self._copy("sponsors_btn"))
         self._sponsors_btn.setObjectName("sponsorButton")
-        self._sponsors_btn.setFixedHeight(42)
-        self._sponsors_btn.setIconSize(QSize(18, 18))
-        self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 18, "#ffffff"))
+        self._sponsors_btn.setFixedSize(FOOTER_SPONSOR_BUTTON_WIDTH, FOOTER_BUTTON_SIZE)
+        self._sponsors_btn.setIconSize(QSize(FOOTER_SPONSOR_ICON_SIZE, FOOTER_SPONSOR_ICON_SIZE))
+        self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, FOOTER_SPONSOR_ICON_SIZE, "#ffffff"))
         self._sponsors_btn.clicked.connect(self._open_sponsor_window)
         right.addWidget(self._sponsors_btn)
         right.addWidget(self._social_button(ICON_GITHUB_FILE, "Git", GITHUB_REPO_URL))
@@ -1380,11 +1480,8 @@ class MainWindow(QMainWindow):
             self._guide_btn_secondary.setText(self._copy("guide_short"))
         if self._sponsors_btn:
             self._sponsors_btn.setText(self._copy("sponsors_btn"))
-            self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 18, "#ffffff"))
+            self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 16, "#ffffff"))
         self._refresh_update_badge()
-        if self._manual_input_btn:
-            self._manual_input_btn.setText(self._t("manual_input"))
-            self._fit_button_to_text(self._manual_input_btn, min_width=104, height=38)
         if self._translate_btn:
             self._translate_btn.setText(self._t("translating") if not self._translate_btn.isEnabled() else self._t("translate"))
             self._fit_button_to_text(self._translate_btn, min_width=88, height=38)
@@ -1723,6 +1820,7 @@ class MainWindow(QMainWindow):
     def _refresh_desktop_capture_button(self) -> None:
         if self._desktop_btn is None:
             return
+        self._desktop_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
         self._desktop_btn.setText(self._copy("desktop_audio_on" if self._desktop_capture_enabled else "desktop_audio_off"))
         self._desktop_btn.setProperty("active", self._desktop_capture_enabled)
         self._desktop_btn.style().unpolish(self._desktop_btn)
@@ -1766,6 +1864,7 @@ class MainWindow(QMainWindow):
     def _refresh_listen_overlay_button(self) -> None:
         if self._listen_overlay_btn is None:
             return
+        self._listen_overlay_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
         self._listen_overlay_btn.setText(self._copy("listen_overlay_on" if self._listen_overlay_enabled else "listen_overlay_off"))
         self._listen_overlay_btn.setProperty("active", self._listen_overlay_enabled)
         self._listen_overlay_btn.style().unpolish(self._listen_overlay_btn)
@@ -2225,8 +2324,8 @@ class MainWindow(QMainWindow):
     def _social_button(self, icon_name: str, fallback_text: str, url: str) -> QPushButton:
         btn = QPushButton(fallback_text)
         btn.setObjectName("socialButton")
-        btn.setFixedSize(42, 42)
-        btn.setIconSize(QSize(26, 26))
+        btn.setFixedSize(FOOTER_BUTTON_SIZE, FOOTER_BUTTON_SIZE)
+        btn.setIconSize(QSize(FOOTER_ICON_SIZE, FOOTER_ICON_SIZE))
         btn.setProperty("iconFile", icon_name)
         btn.setProperty("fallbackText", fallback_text)
         self._social_buttons.append((btn, icon_name))
@@ -2244,7 +2343,7 @@ class MainWindow(QMainWindow):
             color = "#4ade80" if self._main_theme == "dark" else "#06c755"
         else:
             color = palette["TEXT_PRIMARY"]
-        icon = ui_icon(icon_name, 26, color)
+        icon = ui_icon(icon_name, FOOTER_ICON_SIZE, color)
         btn.setIcon(icon)
         btn.setText("" if not icon.isNull() else str(btn.property("fallbackText") or ""))
 
@@ -3996,9 +4095,9 @@ class MainWindow(QMainWindow):
             return
         self._tts_manager = None
         try:
-            stop_playback = getattr(manager, "stop_playback", None)
-            if callable(stop_playback):
-                stop_playback()
+            stop = getattr(manager, "stop", None)
+            if callable(stop):
+                stop()
         except Exception:
             logger.debug("Failed to stop TTS manager", exc_info=True)
 
@@ -4455,6 +4554,7 @@ class MainWindow(QMainWindow):
                 self._start_btn.setIcon(start_icon)
                 self._start_btn.setIconSize(QSize(15, 15))
             self._start_btn.setObjectName("dangerButton" if self._running else "primaryButton")
+            self._start_btn.setFixedHeight(SIDE_PRIMARY_BUTTON_HEIGHT)
             self._start_btn.style().unpolish(self._start_btn)
             self._start_btn.style().polish(self._start_btn)
         if getattr(self, "_quick_controls_hint", None):
@@ -4462,6 +4562,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_mic_mute_button(self) -> None:
         if self._mute_btn:
+            self._mute_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
             self._mute_btn.setText(self._copy("mic_mute_on" if self._mic_muted else "mic_mute_off"))
             self._mute_btn.setProperty("active", self._mic_muted)
             self._mute_btn.style().unpolish(self._mute_btn)
@@ -4470,8 +4571,8 @@ class MainWindow(QMainWindow):
     def _refresh_tweaks_button(self) -> None:
         if not self._tweaks_btn:
             return
-        self._tweaks_btn.setText("实时")
-        self._tweaks_btn.setToolTip("实时调整参数（麦克风、VAD、TTS等）")
+        self._tweaks_btn.setText(self._t("realtime_button"))
+        self._tweaks_btn.setToolTip(self._t("realtime_tooltip"))
         self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
         icon = ui_icon("activity.svg", 18, icon_tint(self._main_theme, strong=True))
         self._tweaks_btn.setIcon(icon)
@@ -5083,6 +5184,872 @@ class MainWindow(QMainWindow):
         shadow.setOffset(0, y_offset)
         shadow.setColor(QColor(0, 0, 0, alpha))
         widget.setGraphicsEffect(shadow)
+
+    # ----------------------------------------------------------------
+    # Compact restored main UI
+    # ----------------------------------------------------------------
+    def _disable_native_status_bar(self) -> None:
+        bar = self.statusBar()
+        bar.hide()
+        bar.setMaximumHeight(0)
+        bar.setSizeGripEnabled(False)
+
+    def _ui_scale(self) -> float:
+        app = QApplication.instance()
+        screen = self.screen() if hasattr(self, "screen") else None
+        if screen is None and app is not None:
+            screen = app.primaryScreen()
+        try:
+            dpi = float(screen.logicalDotsPerInch()) if screen is not None else BASE_DPI
+        except Exception:
+            dpi = BASE_DPI
+        scale = dpi / BASE_DPI if dpi > 0 else 1.0
+        return max(MIN_MAIN_UI_SCALE, min(MAX_MAIN_UI_SCALE, scale))
+
+    def _scaled(self, value: int | float) -> int:
+        return max(1, int(round(float(value) * self._ui_scale())))
+
+    def _main_scale_styles(self) -> str:
+        return ""
+
+    def _configure_language_combo(self, combo: QComboBox | None, base_width: int) -> None:
+        if combo is None:
+            return
+        combo.setMinimumWidth(self._scaled(max(92, base_width - 28)))
+        combo.setMaximumWidth(10000)
+        combo.setFixedHeight(self._scaled(30))
+        combo.setMinimumContentsLength(8)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    @staticmethod
+    def _fit_button_to_text(
+        btn: QPushButton | None,
+        *,
+        min_width: int,
+        height: int,
+        padding: int = 24,
+        icon_gap: int = 0,
+    ) -> None:
+        if btn is None:
+            return
+        text_width = btn.fontMetrics().horizontalAdvance(btn.text())
+        btn.setMinimumWidth(max(min_width, text_width + padding + icon_gap))
+        btn.setFixedHeight(height)
+
+    def _apply_adaptive_layout(self, *, force: bool = False) -> None:
+        if getattr(self, "_src_lang_combo", None) is None:
+            return
+        width = max(1, self.width())
+        side = getattr(self, "_side_panel", None)
+        if side is not None:
+            side_min = max(240, self._scaled(240))
+            side_max = max(260, self._scaled(260))
+            side.setMinimumWidth(side_min)
+            side.setMaximumWidth(side_max)
+        for combo, base in (
+            (getattr(self, "_src_lang_combo", None), LANG_COMBO_SOURCE_WIDTH),
+            (getattr(self, "_tgt_lang_combo", None), LANG_COMBO_TARGET_WIDTH),
+            (getattr(self, "_tgt_lang2_combo", None), LANG_COMBO_TARGET_WIDTH),
+        ):
+            self._configure_language_combo(combo, base)
+        for btn in (
+            getattr(self, "_manual_input_btn", None),
+            getattr(self, "_translate_btn", None),
+            getattr(self, "_clear_btn", None),
+            getattr(self, "_copy_source_btn", None),
+            getattr(self, "_copy_result_btn", None),
+            getattr(self, "_send_to_vrc_btn", None),
+            getattr(self, "_listen_overlay_btn", None),
+            getattr(self, "_guide_btn_secondary", None),
+        ):
+            if btn is not None:
+                btn.setMaximumWidth(10000)
+        if getattr(self, "_header_frame", None) is not None:
+            self._header_frame.setFixedHeight(self._scaled(HEADER_HEIGHT))
+        if getattr(self, "_flow_panel", None) is not None:
+            self._flow_panel.setMaximumHeight(self._scaled(LANG_FLOW_MAX_HEIGHT))
+        for panel in (getattr(self, "_left_panel", None), getattr(self, "_right_panel", None)):
+            if panel is not None:
+                panel.setMaximumHeight(self._scaled(TEXT_PANEL_MAX_HEIGHT))
+        for pane in (getattr(self, "_src_text_widget", None), getattr(self, "_tgt_text_widget", None)):
+            if pane is not None:
+                pane.setMinimumHeight(self._scaled(TEXT_PANE_MIN_HEIGHT))
+                pane.setMaximumHeight(self._scaled(TEXT_PANEL_MAX_HEIGHT))
+        if getattr(self, "_action_strip", None) is not None:
+            self._action_strip.setMaximumHeight(self._scaled(ACTION_STRIP_MAX_HEIGHT))
+        if width < 910:
+            for label in (getattr(self, "_status_label", None), getattr(self, "_assist_label", None)):
+                if label is not None:
+                    label.setVisible(False)
+        else:
+            for label in (getattr(self, "_status_label", None), getattr(self, "_assist_label", None)):
+                if label is not None:
+                    label.setVisible(True)
+
+    def _build_ui(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_app_stylesheet(self._main_theme))
+        self.setStyleSheet(build_main_window_styles(self._main_theme))
+        apply_window_chrome_theme(self, self._main_theme)
+
+        background = BackgroundWidget(self._background_image_path(), self)
+        background.set_theme(self._main_theme)
+        self.setCentralWidget(background)
+
+        outer_layout = QVBoxLayout(background)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        shell = QFrame(background)
+        shell.setObjectName("appChrome")
+        shell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._apply_shadow(shell, blur=30, alpha=18 if self._main_theme == "light" else 64, y_offset=10)
+        outer_layout.addWidget(shell)
+
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(6)
+        shell_layout.addWidget(self._build_header())
+        shell_layout.addWidget(self._build_content(), 1)
+        shell_layout.addWidget(self._build_footer())
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("headerPanel")
+        header.setFixedHeight(HEADER_HEIGHT)
+        self._header_frame = header
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(14, 9, 14, 9)
+        layout.setSpacing(10)
+        self._header_layout = layout
+
+        brand = QHBoxLayout()
+        brand.setSpacing(10)
+        self._brand_layout = brand
+        icon_label = QLabel()
+        icon = self._load_icon_pixmap(APP_ICON_PNG_FILE, 40)
+        if icon is not None:
+            icon_label.setPixmap(icon)
+        icon_label.setFixedSize(40, 40)
+        self._app_icon_label = icon_label
+        brand.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(1)
+        self._brand_text_layout = brand_text
+        self._brand_title_label = QLabel(self._t("window_title"))
+        self._brand_title_label.setObjectName("brandTitle")
+        self._brand_title_label.setWordWrap(False)
+        self._brand_title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._creator_banner_label = QLabel(self._copy("creator_banner_compact"))
+        self._creator_banner_label.setObjectName("brandSubtitle")
+        self._creator_banner_label.setWordWrap(False)
+        brand_text.addWidget(self._brand_title_label)
+        brand_text.addWidget(self._creator_banner_label)
+        brand.addLayout(brand_text)
+        layout.addLayout(brand, 1)
+
+        self._status_label = QLabel(self._t("status_ready"))
+        self._status_label.setObjectName("statusPill")
+        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_label.setFixedHeight(28)
+        self._status_label.setMinimumWidth(88)
+        self._status_label.setMaximumWidth(150)
+        self._status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._update_badge_btn = QPushButton(self._t("update_badge"))
+        self._update_badge_btn.setObjectName("updateBadge")
+        self._update_badge_btn.setFixedHeight(28)
+        self._update_badge_btn.clicked.connect(self._open_update_window)
+        self._update_badge_btn.hide()
+        layout.addWidget(self._update_badge_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        self._ui_lang_combo = NoWheelComboBox()
+        self._ui_lang_combo.setObjectName("headerCombo")
+        self._ui_lang_combo.setFixedSize(HEADER_ACTION_WIDTH, 34)
+        self._ui_lang_combo.addItems([label for label, _ in UI_LANGUAGE_OPTIONS])
+        self._ui_lang_combo.currentTextChanged.connect(self._on_ui_lang_selected)
+        action_row.addWidget(self._ui_lang_combo)
+
+        self._settings_btn = QPushButton(self._copy("settings_short"))
+        self._settings_btn.setObjectName("headerButton")
+        self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 34)
+        self._settings_btn.clicked.connect(self.show_settings)
+        action_row.addWidget(self._settings_btn)
+
+        self._tweaks_btn = QPushButton("")
+        self._tweaks_btn.setObjectName("headerButton")
+        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 34)
+        self._tweaks_btn.clicked.connect(self._toggle_tweaks_panel)
+        action_row.addWidget(self._tweaks_btn)
+
+        self._theme_btn = QPushButton("")
+        self._theme_btn.setObjectName("themeIconButton")
+        self._theme_btn.setFixedSize(34, 34)
+        self._theme_btn.setIconSize(QSize(17, 17))
+        self._theme_btn.clicked.connect(self._on_theme_toggle)
+        action_row.addWidget(self._theme_btn)
+
+        layout.addLayout(action_row)
+        return header
+
+    def _build_content(self) -> QWidget:
+        content = QFrame()
+        content.setObjectName("workspacePanel")
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self._content_layout = layout
+        layout.addWidget(self._build_translation_card(), 1)
+        layout.addWidget(self._build_side_card(), 0)
+        return content
+
+    def _build_translation_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("translationCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        self._translation_card_layout = layout
+
+        flow_panel = QFrame()
+        flow_panel.setObjectName("langFlowPanel")
+        flow_panel.setMaximumHeight(LANG_FLOW_MAX_HEIGHT)
+        self._flow_panel = flow_panel
+        flow_layout = QHBoxLayout(flow_panel)
+        flow_layout.setContentsMargins(10, 7, 10, 7)
+        flow_layout.setSpacing(7)
+        self._flow_layout = flow_layout
+        self._flow_source_row = flow_layout
+        self._flow_target_row = flow_layout
+
+        self._src_header_label = QLabel(self._copy("source_lang_short"))
+        self._src_header_label.setObjectName("sectionTitleMain")
+        flow_layout.addWidget(self._src_header_label)
+        self._src_lang_combo = NoWheelComboBox()
+        self._src_lang_combo.setObjectName("langCombo")
+        self._configure_language_combo(self._src_lang_combo, LANG_COMBO_SOURCE_WIDTH)
+        self._src_lang_combo.currentTextChanged.connect(self._on_src_lang_change)
+        flow_layout.addWidget(self._src_lang_combo, 2)
+        self._swap_lang_btn = QPushButton("")
+        self._swap_lang_btn.setObjectName("swapIconButton")
+        self._swap_lang_btn.setFixedSize(LANG_ROW_BUTTON_SIZE, LANG_ROW_BUTTON_SIZE)
+        self._swap_lang_btn.setIconSize(QSize(15, 15))
+        self._swap_lang_btn.clicked.connect(self._swap_langs)
+        flow_layout.addWidget(self._swap_lang_btn)
+        self._char_label = None
+
+        self._tgt_header_label = QLabel(self._copy("translation_lang_1_short"))
+        self._tgt_header_label.setObjectName("sectionTitleMain")
+        flow_layout.addWidget(self._tgt_header_label)
+        self._tgt_lang_combo = NoWheelComboBox()
+        self._tgt_lang_combo.setObjectName("langCombo")
+        self._configure_language_combo(self._tgt_lang_combo, LANG_COMBO_TARGET_WIDTH)
+        self._tgt_lang_combo.currentTextChanged.connect(self._on_tgt_lang_change)
+        flow_layout.addWidget(self._tgt_lang_combo, 2)
+
+        self._tgt2_header_label = QLabel(self._copy("translation_lang_2_short"))
+        self._tgt2_header_label.setObjectName("sectionTitleMain")
+        flow_layout.addWidget(self._tgt2_header_label)
+        self._tgt_lang2_combo = NoWheelComboBox()
+        self._tgt_lang2_combo.setObjectName("langCombo")
+        self._configure_language_combo(self._tgt_lang2_combo, LANG_COMBO_TARGET_WIDTH)
+        self._tgt_lang2_combo.currentTextChanged.connect(self._on_tgt_lang2_change)
+        flow_layout.addWidget(self._tgt_lang2_combo, 2)
+        layout.addWidget(flow_panel)
+
+        panes = QHBoxLayout()
+        panes.setContentsMargins(0, 0, 0, 0)
+        panes.setSpacing(8)
+        self._panes_layout = panes
+
+        self._left_panel = self._panel()
+        self._left_panel.setObjectName("editorPanel")
+        self._left_panel.setProperty("role", "source")
+        self._left_panel.setMaximumHeight(TEXT_PANEL_MAX_HEIGHT)
+        left_layout = QVBoxLayout(self._left_panel)
+        left_layout.setContentsMargins(10, 9, 10, 9)
+        left_layout.setSpacing(6)
+        self._left_panel_layout = left_layout
+        self._src_text_widget = QPlainTextEdit()
+        self._src_text_widget.setObjectName("textPane")
+        self._src_text_widget.setPlaceholderText(self._src_placeholder)
+        self._src_text_widget.setReadOnly(True)
+        self._src_text_widget.setMinimumHeight(TEXT_PANE_MIN_HEIGHT)
+        self._src_text_widget.setMaximumHeight(TEXT_PANEL_MAX_HEIGHT)
+        left_layout.addWidget(self._src_text_widget, 1)
+        panes.addWidget(self._left_panel, 1)
+
+        self._right_panel = self._panel()
+        self._right_panel.setObjectName("editorPanel")
+        self._right_panel.setProperty("role", "target")
+        self._right_panel.setMaximumHeight(TEXT_PANEL_MAX_HEIGHT)
+        right_layout = QVBoxLayout(self._right_panel)
+        right_layout.setContentsMargins(10, 9, 10, 9)
+        right_layout.setSpacing(6)
+        self._right_panel_layout = right_layout
+        self._tgt_text_widget = QPlainTextEdit()
+        self._tgt_text_widget.setObjectName("textPane")
+        self._tgt_text_widget.setReadOnly(True)
+        self._tgt_text_widget.setMinimumHeight(TEXT_PANE_MIN_HEIGHT)
+        self._tgt_text_widget.setMaximumHeight(TEXT_PANEL_MAX_HEIGHT)
+        right_layout.addWidget(self._tgt_text_widget, 1)
+        panes.addWidget(self._right_panel, 1)
+        layout.addLayout(panes, 1)
+
+        action_strip = QFrame()
+        action_strip.setObjectName("actionStrip")
+        action_strip.setMaximumHeight(ACTION_STRIP_MAX_HEIGHT)
+        self._action_strip = action_strip
+        action_layout = QVBoxLayout(action_strip)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(5)
+        self._action_layout = action_layout
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
+        self._action_top_layout = top_row
+        self._manual_input_btn = QPushButton(self._t("manual_input"))
+        self._manual_input_btn.setObjectName("secondaryButton")
+        self._fit_button_to_text(self._manual_input_btn, min_width=86, height=ACTION_BUTTON_HEIGHT)
+        self._manual_input_btn.clicked.connect(self._open_text_input_popup)
+        top_row.addWidget(self._manual_input_btn)
+        self._translate_btn = QPushButton(self._t("translate"))
+        self._translate_btn.setObjectName("primaryButton")
+        self._fit_button_to_text(self._translate_btn, min_width=82, height=ACTION_BUTTON_HEIGHT)
+        self._translate_btn.clicked.connect(self._on_translate_clicked)
+        top_row.addWidget(self._translate_btn)
+        self._clear_btn = QPushButton(self._t("clear"))
+        self._clear_btn.setObjectName("secondaryButton")
+        self._fit_button_to_text(self._clear_btn, min_width=64, height=ACTION_BUTTON_HEIGHT)
+        self._clear_btn.clicked.connect(self._clear_input)
+        top_row.addWidget(self._clear_btn)
+        top_row.addStretch(1)
+        self._send_to_vrc_btn = QPushButton(self._t("send_to_vrc"))
+        self._send_to_vrc_btn.setObjectName("primaryButton")
+        send_icon = ui_icon("send.svg", 15, "#ffffff")
+        if not send_icon.isNull():
+            self._send_to_vrc_btn.setIcon(send_icon)
+            self._send_to_vrc_btn.setIconSize(QSize(15, 15))
+        self._fit_button_to_text(self._send_to_vrc_btn, min_width=116, height=ACTION_BUTTON_HEIGHT, icon_gap=18)
+        self._send_to_vrc_btn.clicked.connect(self._on_send_clicked)
+        top_row.addWidget(self._send_to_vrc_btn)
+        action_layout.addLayout(top_row)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(6)
+        self._action_bottom_layout = bottom_row
+        bottom_row.addStretch(1)
+        self._copy_source_btn = QPushButton(self._t("copy_source"))
+        self._copy_source_btn.setObjectName("secondaryButton")
+        self._fit_button_to_text(self._copy_source_btn, min_width=94, height=ACTION_BUTTON_HEIGHT)
+        self._copy_source_btn.clicked.connect(self._copy_source)
+        bottom_row.addWidget(self._copy_source_btn)
+        self._copy_result_btn = QPushButton(self._t("copy"))
+        self._copy_result_btn.setObjectName("secondaryButton")
+        self._fit_button_to_text(self._copy_result_btn, min_width=90, height=ACTION_BUTTON_HEIGHT)
+        self._copy_result_btn.clicked.connect(self._copy_result)
+        bottom_row.addWidget(self._copy_result_btn)
+        action_layout.addLayout(bottom_row)
+        layout.addWidget(action_strip)
+        return card
+
+    def _build_side_card(self) -> QFrame:
+        tokens = _main_theme_palette(self._main_theme)
+        card = QFrame()
+        card.setObjectName("sidePanel")
+        card.setMinimumWidth(max(240, int(tokens["SIDE_WIDTH"]) - 64))
+        card.setMaximumWidth(max(260, int(tokens["SIDE_WIDTH"]) - 44))
+        self._side_panel = card
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        self._side_layout = layout
+
+        title_row = QVBoxLayout()
+        title_row.setSpacing(2)
+        self._side_title_layout = title_row
+        self._quick_controls_label = QLabel(self._copy("quick_controls"))
+        self._quick_controls_label.setObjectName("controlSectionTitle")
+        title_row.addWidget(self._quick_controls_label)
+        self._quick_controls_hint = None
+        layout.addLayout(title_row)
+
+        self._start_btn = QPushButton(self._t("start_listening"))
+        self._start_btn.setObjectName("primaryButton")
+        self._start_btn.setFixedHeight(SIDE_PRIMARY_BUTTON_HEIGHT)
+        self._start_btn.clicked.connect(self._toggle_listening)
+        layout.addWidget(self._start_btn)
+
+        mode_box = QFrame()
+        mode_box.setObjectName("modeBox")
+        mode_layout = QHBoxLayout(mode_box)
+        mode_layout.setContentsMargins(3, 3, 3, 3)
+        mode_layout.setSpacing(4)
+        self._mode_layout = mode_layout
+        self._mode_translation_button = QPushButton(self._copy("mode_translation"))
+        self._mode_translation_button.setObjectName("modeButton")
+        self._mode_translation_button.setCheckable(True)
+        self._mode_translation_button.setProperty("modeActive", "false")
+        self._mode_translation_button.clicked.connect(lambda: self._set_app_mode(AppMode.TRANSLATION, persist=True))
+        self._mode_translation_button.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        mode_layout.addWidget(self._mode_translation_button, 1)
+        self._mode_simultaneous_button = QPushButton(self._copy("mode_simultaneous"))
+        self._mode_simultaneous_button.setObjectName("modeButton")
+        self._mode_simultaneous_button.setCheckable(True)
+        self._mode_simultaneous_button.setProperty("modeActive", "false")
+        self._mode_simultaneous_button.clicked.connect(lambda: self._set_app_mode(AppMode.SIMULTANEOUS, persist=True))
+        self._mode_simultaneous_button.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        mode_layout.addWidget(self._mode_simultaneous_button, 1)
+        layout.addWidget(mode_box)
+
+        mic_group = QWidget()
+        mic_group.setObjectName("micPanel")
+        mic_layout = QVBoxLayout(mic_group)
+        mic_layout.setContentsMargins(0, 2, 0, 0)
+        mic_layout.setSpacing(6)
+        self._mic_layout = mic_layout
+        self._microphone_label = QLabel(self._t("microphone"))
+        self._microphone_label.setObjectName("controlLabel")
+        mic_layout.addWidget(self._microphone_label)
+        self._device_combo = NoWheelComboBox()
+        self._device_combo.setObjectName("deviceCombo")
+        self._device_combo.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._device_combo.setMinimumWidth(0)
+        self._device_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._device_combo.currentTextChanged.connect(self._on_device_combo_changed)
+        mic_layout.addWidget(self._device_combo)
+        self._refresh_device_combo()
+        self._device_dropdown_btn = None
+
+        mic_actions = QHBoxLayout()
+        mic_actions.setSpacing(6)
+        self._mic_actions_layout = mic_actions
+        self._mute_btn = QPushButton("")
+        self._mute_btn.setObjectName("activeButton")
+        self._mute_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._mute_btn.clicked.connect(self._toggle_mic_mute)
+        mic_actions.addWidget(self._mute_btn, 1)
+        self._desktop_btn = QPushButton("")
+        self._desktop_btn.setObjectName("activeButton")
+        self._desktop_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._desktop_btn.clicked.connect(self._toggle_listen)
+        mic_actions.addWidget(self._desktop_btn, 1)
+        mic_layout.addLayout(mic_actions)
+        layout.addWidget(mic_group)
+
+        assist_actions = QHBoxLayout()
+        assist_actions.setSpacing(6)
+        self._assist_layout = assist_actions
+        self._listen_overlay_btn = QPushButton("")
+        self._listen_overlay_btn.setObjectName("activeButton")
+        self._listen_overlay_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._listen_overlay_btn.setMinimumWidth(0)
+        self._listen_overlay_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._listen_overlay_btn.clicked.connect(self._toggle_listen_overlay)
+        assist_actions.addWidget(self._listen_overlay_btn, 1)
+        self._guide_btn_secondary = QPushButton(self._copy("guide_short"))
+        self._guide_btn_secondary.setObjectName("secondaryButton")
+        self._guide_btn_secondary.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._guide_btn_secondary.setMinimumWidth(0)
+        self._guide_btn_secondary.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._guide_btn_secondary.clicked.connect(self._open_osc_guide)
+        assist_actions.addWidget(self._guide_btn_secondary, 1)
+        layout.addLayout(assist_actions)
+
+        layout.addStretch(1)
+        return card
+
+    def _refresh_static_texts(self) -> None:
+        self.setWindowTitle(self._t("window_title"))
+        self._src_placeholder = self._t("source_placeholder")
+        if self._brand_title_label:
+            self._brand_title_label.setText(self._t("window_title"))
+        if self._creator_banner_label:
+            self._creator_banner_label.setText(self._copy("creator_banner_compact"))
+        if self._ui_lang_combo:
+            label = self._ui_lang_reverse.get(self._ui_lang)
+            if label:
+                self._set_combo_text(self._ui_lang_combo, label)
+        if self._settings_btn:
+            self._settings_btn.setText(self._copy("settings_short"))
+            self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 34)
+        self._refresh_tweaks_button()
+        if self._guide_btn:
+            self._guide_btn.setText(self._copy("guide_short"))
+        if self._guide_btn_secondary:
+            self._guide_btn_secondary.setText(self._copy("guide_short"))
+            self._guide_btn_secondary.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+            self._guide_btn_secondary.style().unpolish(self._guide_btn_secondary)
+            self._guide_btn_secondary.style().polish(self._guide_btn_secondary)
+        if self._sponsors_btn:
+            self._sponsors_btn.setText(self._copy("sponsors_btn"))
+            self._sponsors_btn.setFixedSize(FOOTER_SPONSOR_BUTTON_WIDTH, FOOTER_BUTTON_SIZE)
+            self._sponsors_btn.setIconSize(QSize(FOOTER_SPONSOR_ICON_SIZE, FOOTER_SPONSOR_ICON_SIZE))
+            self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, FOOTER_SPONSOR_ICON_SIZE, "#ffffff"))
+        self._refresh_update_badge()
+        if self._manual_input_btn:
+            self._manual_input_btn.setText(self._t("manual_input"))
+            self._fit_button_to_text(self._manual_input_btn, min_width=86, height=ACTION_BUTTON_HEIGHT)
+        if self._translate_btn:
+            self._translate_btn.setText(self._t("translating") if not self._translate_btn.isEnabled() else self._t("translate"))
+            self._fit_button_to_text(self._translate_btn, min_width=82, height=ACTION_BUTTON_HEIGHT)
+        if self._clear_btn:
+            self._clear_btn.setText(self._t("clear"))
+            self._fit_button_to_text(self._clear_btn, min_width=64, height=ACTION_BUTTON_HEIGHT)
+        if self._copy_source_btn:
+            self._copy_source_btn.setText(self._t("copy_source"))
+            self._fit_button_to_text(self._copy_source_btn, min_width=94, height=ACTION_BUTTON_HEIGHT)
+        if self._copy_result_btn:
+            self._copy_result_btn.setText(self._t("copy"))
+            self._fit_button_to_text(self._copy_result_btn, min_width=90, height=ACTION_BUTTON_HEIGHT)
+        if self._send_to_vrc_btn:
+            self._send_to_vrc_btn.setText(self._t("send_to_vrc"))
+            self._fit_button_to_text(self._send_to_vrc_btn, min_width=116, height=ACTION_BUTTON_HEIGHT, icon_gap=18)
+        if getattr(self, "_quick_controls_label", None):
+            self._quick_controls_label.setText(self._copy("quick_controls"))
+        if getattr(self, "_src_header_label", None):
+            self._src_header_label.setText(self._copy("source_lang_short"))
+        if getattr(self, "_tgt_header_label", None):
+            self._tgt_header_label.setText(self._copy("translation_lang_1_short"))
+        if getattr(self, "_tgt2_header_label", None):
+            self._tgt2_header_label.setText(self._copy("translation_lang_2_short"))
+        if getattr(self, "_microphone_label", None):
+            self._microphone_label.setText(self._t("microphone"))
+        self._refresh_device_combo()
+        if getattr(self, "_assist_label", None):
+            self._assist_label.setText(self._copy("guide_short"))
+        if self._status_label is not None and getattr(self, "_status_key", None):
+            self._set_status(self._t(self._status_key), self._status_color, key=self._status_key)
+        if self._bottom_bar is not None and getattr(self, "_bottom_key", None):
+            self._set_bottom(self._t(self._bottom_key), self._bottom_color, key=self._bottom_key)
+        self._refresh_language_combos()
+        self._set_source_text(self._src_text)
+        self._refresh_start_button()
+        self._refresh_mic_mute_button()
+        self._refresh_mode_buttons()
+        self._refresh_desktop_capture_button()
+        self._refresh_listen_overlay_button()
+        if self._listen_overlay_btn:
+            self._listen_overlay_btn.setFixedHeight(SIDE_CONTROL_BUTTON_HEIGHT)
+        self._refresh_theme_button()
+        self._apply_adaptive_layout(force=True)
+
+    def _refresh_language_combos(self) -> None:
+        if getattr(self, "_refreshing_language_combos", False):
+            return
+        self._refreshing_language_combos = True
+        try:
+            self._all_target_lang_options = list(get_target_language_options(ui_language=self._ui_lang))
+            self._target_lang_codes = {label: code for label, code in self._all_target_lang_options}
+            target_reverse = {code: label for label, code in self._all_target_lang_options}
+            trans_cfg = self._config.setdefault("translation", {})
+            tgt_code = str(trans_cfg.get("target_language", self._current_tgt_lang) or "ja")
+            tgt2_code = str(trans_cfg.get("target_language_2", self._current_tgt_lang_2) or "en")
+            self._current_tgt_lang = tgt_code
+            self._current_tgt_lang_2 = tgt2_code
+
+            self._all_manual_lang_options = list(get_manual_source_language_options({tgt_code}, ui_language=self._ui_lang))
+            self._src_lang_codes = {label: code for label, code in self._all_manual_lang_options}
+            src_reverse = {code: label for label, code in self._all_manual_lang_options}
+            src_code = str(trans_cfg.get("source_language", "auto") or "auto")
+            self._current_src_lang = None if src_code == "auto" else src_code
+            self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
+
+            if self._src_lang_combo:
+                blocked = self._src_lang_combo.blockSignals(True)
+                self._src_lang_combo.clear()
+                self._src_lang_combo.addItems([label for label, _ in self._all_manual_lang_options])
+                self._src_lang_combo.setCurrentText(src_reverse.get(src_code, self._src_lang_combo.itemText(0)))
+                self._src_lang_combo.blockSignals(blocked)
+            if self._tgt_lang_combo:
+                blocked = self._tgt_lang_combo.blockSignals(True)
+                self._tgt_lang_combo.clear()
+                self._tgt_lang_combo.addItems([label for label, _ in self._all_target_lang_options])
+                self._tgt_lang_combo.setCurrentText(target_reverse.get(tgt_code, self._tgt_lang_combo.itemText(0)))
+                self._tgt_lang_combo.blockSignals(blocked)
+            if self._tgt_lang2_combo:
+                blocked = self._tgt_lang2_combo.blockSignals(True)
+                self._tgt_lang2_combo.clear()
+                self._tgt_lang2_combo.addItems([label for label, _ in self._all_target_lang_options])
+                self._tgt_lang2_combo.setCurrentText(target_reverse.get(tgt2_code, self._tgt_lang2_combo.itemText(0)))
+                self._tgt_lang2_combo.blockSignals(blocked)
+        finally:
+            self._refreshing_language_combos = False
+
+    def _on_tgt_lang2_change(self, selected_label: str | None = None) -> None:
+        if selected_label is None and self._tgt_lang2_combo:
+            selected_label = self._tgt_lang2_combo.currentText()
+        code = self._target_lang_codes.get(str(selected_label or ""), self._current_tgt_lang_2 or "en")
+        self._current_tgt_lang_2 = code
+        self._config.setdefault("translation", {})["target_language_2"] = code
+        if not getattr(self, "_refreshing_language_combos", False):
+            self._schedule_config_save()
+
+    def _set_source_text(self, text: str, text_color: str | None = None) -> None:
+        safe = (text or "").strip()
+        if len(safe) > CHATBOX_CHAR_LIMIT:
+            safe = safe[:CHATBOX_CHAR_LIMIT]
+        self._src_text = safe
+        shown = safe or getattr(self, "_src_placeholder", "")
+        if shown == getattr(self, "_src_rendered_text", "") and len(safe) == getattr(self, "_src_rendered_count", -1):
+            return
+        self._src_rendered_text = shown
+        self._src_rendered_count = len(safe)
+        src_text_widget = getattr(self, "_src_text_widget", None)
+        if src_text_widget:
+            palette = _main_theme_palette(getattr(self, "_main_theme", "dark"))
+            src_text_widget.setPlainText(shown)
+            src_text_widget.setStyleSheet(
+                "QPlainTextEdit#textPane { color: %s; }" % (text_color or (palette["TEXT_PRIMARY"] if safe else palette["EDITOR_MUTED"]))
+            )
+
+    def _refresh_tweaks_button(self) -> None:
+        if not self._tweaks_btn:
+            return
+        self._tweaks_btn.setText(self._t("quick_switch_button"))
+        self._tweaks_btn.setToolTip(self._t("quick_switch_tooltip"))
+        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 34)
+        icon = ui_icon("activity.svg", 18, icon_tint(self._main_theme, strong=True))
+        self._tweaks_btn.setIcon(icon)
+        self._tweaks_btn.setIconSize(QSize(18, 18))
+        self._tweaks_btn.style().unpolish(self._tweaks_btn)
+        self._tweaks_btn.style().polish(self._tweaks_btn)
+
+    def _toggle_tweaks_panel(self) -> None:
+        if self._tweaks_panel is None:
+            self._tweaks_panel = RealtimeTweaksPanel(
+                parent=self,
+                config=self._config,
+                ui_language=self._ui_lang,
+                theme=self._main_theme,
+                on_change=self._on_quick_switch_changed,
+            )
+            self._tweaks_panel.finished.connect(self._on_tweaks_panel_closed)
+        if self._tweaks_panel.isVisible():
+            self._tweaks_panel.hide()
+            return
+        self._tweaks_panel.show()
+        self._tweaks_panel.raise_()
+        self._tweaks_panel.activateWindow()
+
+    def _clear_cached_translator(self) -> None:
+        self._translator = None
+        controller = getattr(self, "_manual_translation_controller", None)
+        if controller is not None and hasattr(controller, "translator"):
+            controller.translator = None
+
+    def _set_quick_translation_provider(self, provider: object) -> None:
+        backend = normalize_backend(str(provider or ""))
+        trans_cfg = self._config.setdefault("translation", {})
+        trans_cfg["backend"] = backend
+        trans_cfg["backend_source"] = "manual"
+        backend_cfg = trans_cfg.setdefault(backend, {})
+        if not isinstance(backend_cfg, dict):
+            backend_cfg = {}
+            trans_cfg[backend] = backend_cfg
+        for key in ("base_url", "model", "timeout_s", "max_retries"):
+            default = get_backend_value(backend, key)
+            if default != "" and not backend_cfg.get(key):
+                backend_cfg[key] = default
+        self._clear_cached_translator()
+
+    def _set_quick_translation_model(self, model: object) -> None:
+        trans_cfg = self._config.setdefault("translation", {})
+        backend = normalize_backend(str(trans_cfg.get("backend", "")))
+        trans_cfg["backend"] = backend
+        trans_cfg["backend_source"] = "manual"
+        backend_cfg = trans_cfg.setdefault(backend, {})
+        if not isinstance(backend_cfg, dict):
+            backend_cfg = {}
+            trans_cfg[backend] = backend_cfg
+        backend_cfg["model"] = str(model or "").strip()
+        self._clear_cached_translator()
+
+    def _set_quick_output_format(self, value: object) -> None:
+        self._config.setdefault("translation", {})["output_format"] = normalize_output_format(str(value or ""))
+
+    def _set_quick_tts_language(self, value: object) -> None:
+        tts_cfg = self._config.setdefault("tts", {})
+        engine = str(tts_cfg.get("engine", "edge") or "edge").strip() or "edge"
+        engine_cfg = tts_cfg.setdefault(engine, {})
+        if not isinstance(engine_cfg, dict):
+            engine_cfg = {}
+            tts_cfg[engine] = engine_cfg
+        if engine == "style_bert_vits2":
+            style_cfg = tts_cfg.setdefault("style_bert_vits2", {})
+            if isinstance(style_cfg, dict):
+                style_cfg["bert_language"] = str(value or "").strip()
+        else:
+            engine_cfg["language"] = str(value or "").strip()
+        self._reset_tts_manager_if_runtime_changed()
+
+    def _set_quick_tts_voice(self, value: object) -> None:
+        tts_cfg = self._config.setdefault("tts", {})
+        engine = str(tts_cfg.get("engine", "edge") or "edge").strip() or "edge"
+        engine_cfg = tts_cfg.setdefault(engine, {})
+        if not isinstance(engine_cfg, dict):
+            engine_cfg = {}
+            tts_cfg[engine] = engine_cfg
+        engine_cfg["voice"] = str(value or "").strip()
+
+    def _set_quick_roleplay_profile(self, value: object) -> None:
+        selected = str(value or "standard").strip()
+        social_cfg = self._config.setdefault("translation", {}).setdefault("social", {})
+        if not isinstance(social_cfg, dict):
+            social_cfg = {}
+            self._config["translation"]["social"] = social_cfg
+        if selected.startswith("roleplay:"):
+            preset_id = selected.split(":", 1)[1] or "custom"
+            try:
+                from src.ui_qt.settings_window import ROLEPLAY_PRESETS
+
+                preset = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS.get("custom", {}))
+            except Exception:
+                preset = {}
+            social_cfg["mode"] = "roleplay"
+            social_cfg["persona_preset"] = preset_id
+            social_cfg["persona_name"] = str(preset.get("persona_name", ""))
+            social_cfg["persona_prompt"] = str(preset.get("persona_prompt", ""))
+        elif selected == "language_exchange":
+            social_cfg["mode"] = "language_exchange"
+        else:
+            social_cfg["mode"] = "standard"
+        self._clear_cached_translator()
+        self._reset_tts_manager_if_runtime_changed()
+
+    def _set_quick_noise_reduction(self, value: object) -> None:
+        try:
+            strength = max(0.0, min(float(value), 1.0))
+        except (TypeError, ValueError):
+            strength = 0.0
+        self._config.setdefault("audio", {})["denoise_strength"] = strength
+        recorder = getattr(self, "_recorder", None)
+        setter = getattr(recorder, "set_denoise_strength", None)
+        if callable(setter):
+            setter(strength)
+
+    def _on_quick_switch_changed(self, key: str, value: object) -> None:
+        handlers = {
+            "translation_provider": self._set_quick_translation_provider,
+            "translation_model": self._set_quick_translation_model,
+            "output_format": self._set_quick_output_format,
+            "tts_language": self._set_quick_tts_language,
+            "tts_voice": self._set_quick_tts_voice,
+            "roleplay_profile": self._set_quick_roleplay_profile,
+            "noise_reduction": self._set_quick_noise_reduction,
+        }
+        handler = handlers.get(str(key))
+        if handler is None:
+            return
+        handler(value)
+        self._schedule_config_save()
+        self._set_bottom(self._t("quick_switch_updated"))
+
+    def _tts_runtime_signature(self) -> tuple:
+        tts_cfg = self._tts_config()
+        engine = self._current_tts_engine()
+        engine_cfg = tts_cfg.get(engine, {})
+        engine_cfg = engine_cfg if isinstance(engine_cfg, dict) else {}
+        if engine == "xtts":
+            return (
+                engine,
+                str(engine_cfg.get("device", "cpu")),
+                str(engine_cfg.get("language", "auto")),
+                bool(tts_cfg.get("allow_fallback", True)),
+                str(tts_cfg.get("output_device_name", "")),
+                bool(tts_cfg.get("output_to_vrchat", False)),
+                bool(tts_cfg.get("monitor_enabled", False)),
+            )
+        if engine == "style_bert_vits2":
+            style_cfg = tts_cfg.get("style_bert_vits2", {})
+            style_cfg = style_cfg if isinstance(style_cfg, dict) else {}
+            return (
+                engine,
+                str(style_cfg.get("device", "cpu")),
+                str(style_cfg.get("bert_language", "jp")),
+                bool(tts_cfg.get("allow_fallback", True)),
+                str(tts_cfg.get("output_device_name", "")),
+            )
+        return (
+            engine,
+            bool(tts_cfg.get("allow_fallback", True)),
+            str(tts_cfg.get("output_device_name", "")),
+            bool(tts_cfg.get("output_to_vrchat", False)),
+            bool(tts_cfg.get("monitor_enabled", False)),
+        )
+
+    def _ensure_tts_manager(self):
+        signature = self._tts_runtime_signature()
+        if self._tts_manager is not None:
+            if getattr(self, "_tts_manager_signature", None) != signature:
+                self._reset_tts_manager()
+            else:
+                return self._tts_manager
+        from src.tts.manager import TTSManager
+
+        tts_cfg = self._tts_config()
+        perf_cfg = self._performance_config()
+        manager = TTSManager(
+            engine_name=self._current_tts_engine(),
+            cache_enabled=True,
+            allow_fallback=bool(tts_cfg.get("allow_fallback", True)),
+            output_device=tts_cfg.get("output_device"),
+            output_device_name=str(tts_cfg.get("output_device_name") or ""),
+            prefer_virtual_output=bool(tts_cfg.get("output_to_vrchat", False)),
+            monitor_output=bool(tts_cfg.get("monitor_enabled", False)),
+            sbv2_device=str(tts_cfg.get("style_bert_vits2", {}).get("device", "cpu")),
+            sbv2_bert_language=str(tts_cfg.get("style_bert_vits2", {}).get("bert_language", "jp")),
+            engine_config=self._current_tts_engine_config(),
+            max_cache_size_mb=int(perf_cfg.get("tts_cache_max_mb", 24)),
+            max_cache_items=int(perf_cfg.get("tts_cache_max_items", 60)),
+        )
+        if not manager.is_available():
+            return None
+        manager.start()
+        self._tts_manager = manager
+        self._tts_manager_signature = signature
+        return manager
+
+    def _reset_tts_manager(self) -> None:
+        manager = getattr(self, "_tts_manager", None)
+        self._tts_manager = None
+        self._tts_manager_signature = None
+        if manager is None:
+            return
+        try:
+            stop = getattr(manager, "stop", None)
+            if callable(stop):
+                stop()
+        except Exception:
+            logger.debug("Failed to stop TTS manager", exc_info=True)
+
+    def _reset_tts_manager_if_runtime_changed(self) -> None:
+        if getattr(self, "_tts_manager", None) is None:
+            return
+        if getattr(self, "_tts_manager_signature", None) != self._tts_runtime_signature():
+            self._reset_tts_manager()
+
+    def _settings_preload_enabled(self) -> bool:
+        perf_cfg = self._performance_config()
+        if not bool(perf_cfg.get("preload_settings_window", False)):
+            return False
+        if self._performance_profile() == "low_power":
+            return False
+        return self._current_tts_engine() not in {"style_bert_vits2", "xtts"}
+
+    def _on_language_changed(self, language_code: str) -> None:
+        code = str(language_code or "").strip()
+        if code in self._ui_lang_reverse:
+            self._ui_lang = code
+            self._config.setdefault("ui", {})["language"] = code
+            self._refresh_static_texts()
+            self._schedule_config_save()
 
 class _StartupCancelled(Exception):
     pass

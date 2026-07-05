@@ -34,6 +34,14 @@ class TtsService(QObject):
 
         try:
             from src.tts.manager import TTSManager
+            engine_config = tts_cfg.get(engine, {})
+            if isinstance(engine_config, dict):
+                engine_config = dict(engine_config)
+            else:
+                engine_config = {}
+            if engine == "xtts":
+                engine_config.setdefault("device", self._config.get("xtts_device", "cpu"))
+                engine_config.setdefault("language", "auto")
             self._manager = TTSManager(
                 engine_name=engine,
                 cache_enabled=True,
@@ -44,7 +52,7 @@ class TtsService(QObject):
                 monitor_output=monitor_output,
                 sbv2_device=str(tts_cfg.get("style_bert_vits2", {}).get("device", "cpu")),
                 sbv2_bert_language=str(tts_cfg.get("style_bert_vits2", {}).get("bert_language", "jp")),
-                engine_config=tts_cfg.get(engine, {}),
+                engine_config=engine_config,
                 max_cache_size_mb=int(perf_cfg.get("tts_cache_max_mb", 24)),
                 max_cache_items=int(perf_cfg.get("tts_cache_max_items", 60)),
             )

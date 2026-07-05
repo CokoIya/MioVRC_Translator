@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PyInstaller.building.datastruct import TOC
 from PyInstaller.utils.hooks import collect_all
+from tools.pyinstaller_runtime_filter import filter_hiddenimports, filter_runtime_entries
 
 _APPLOCAL_RUNTIME_OVERRIDES = {
     "msvcp140.dll",
@@ -87,10 +88,12 @@ datas = [
     ("config.example.json", "."),
     ("LICENSE", "."),
     ("NOTICE", "."),
-    ("BRANDING.md", "."),
-    ("THIRD_PARTY_LICENSES.md", "."),
     ("assets", "assets"),
 ]
+
+for optional_data in ("BRANDING.md", "THIRD_PARTY_LICENSES.md"):
+    if Path(optional_data).is_file():
+        datas.append((optional_data, "."))
 
 if Path("src/audio/models/silero_vad.jit").is_file():
     datas.append(("src/audio/models/silero_vad.jit", "src/audio/models"))
@@ -140,6 +143,18 @@ for package_name in (
     "yarl",
     "propcache",
     "av",
+    "TTS",
+    "cutlet",
+    "fugashi",
+    "unidic_lite",
+    "mojimoji",
+    "coqpit",
+    "trainer",
+    "anyascii",
+    "einops",
+    "pysbd",
+    "ko_speech_tools",
+    "monotonic_alignment_search",
     "style_bert_vits2",
     "pyopenjtalk",
     "transformers",
@@ -188,6 +203,17 @@ hiddenimports += [
     "google.protobuf.internal",
     "inflect",
     "typeguard",
+    "TTS.api",
+    "cutlet",
+    "fugashi",
+    "unidic_lite",
+    "mojimoji",
+    "TTS.tts.configs.xtts_config",
+    "TTS.tts.models.xtts",
+    "TTS.tts.layers.xtts.gpt",
+    "coqpit",
+    "trainer",
+    "transformers.pytorch_utils",
     "jieba",
     "jieba.posseg",
     "pypinyin",
@@ -199,8 +225,11 @@ hiddenimports += [
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
     "src.ui_qt.app",
     "src.ui_qt.main_window",
+    "src.ui_qt.webspeech_bridge_window",
     "src.ui_qt.settings_window",
     "src.ui_qt.floating_window",
     "src.ui_qt.sponsor_window",
@@ -208,6 +237,7 @@ hiddenimports += [
     "src.ui_qt.model_download_dialog",
     "src.ui_qt.text_input_window",
 ]
+hiddenimports = filter_hiddenimports(hiddenimports)
 
 excludes = [
     "torchvision",
@@ -216,6 +246,12 @@ excludes = [
     "sklearn",
     "scikit_learn",
     "matplotlib",
+    "pytest",
+    "_pytest",
+    "pluggy",
+    "iniconfig",
+    "Cython",
+    "Pythonwin",
     "IPython",
     "ipykernel",
     "ipywidgets",
@@ -243,7 +279,8 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-a.binaries = _sanitize_analysis_binaries(a.binaries)
+a.binaries = TOC(filter_runtime_entries(_sanitize_analysis_binaries(a.binaries)))
+a.datas = TOC(filter_runtime_entries(a.datas))
 pyz = PYZ(a.pure)
 
 exe = EXE(

@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import faulthandler
+import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -56,6 +57,12 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
     global _LOG_INITIALIZED, _LOG_PATH, _FAULT_HANDLER_FILE
     if _LOG_INITIALIZED:
         return log_path()
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*",
+        category=FutureWarning,
+    )
 
     target = log_path()
     formatter = _build_formatter()

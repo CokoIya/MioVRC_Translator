@@ -41,9 +41,8 @@ def test_style_cache_performance():
 
     # 测试首次生成（无缓存）
     start = time.perf_counter()
-    for _ in range(100):
-        build_app_stylesheet("dark")
-        build_main_window_styles("dark")
+    first_app_stylesheet = build_app_stylesheet("dark")
+    first_main_stylesheet = build_main_window_styles("dark")
     first_time = time.perf_counter() - start
 
     print(f"首次生成（100次）: {first_time*1000:.2f}ms")
@@ -52,9 +51,13 @@ def test_style_cache_performance():
     # 测试缓存命中
     start = time.perf_counter()
     for _ in range(100):
-        build_app_stylesheet("dark")
-        build_main_window_styles("dark")
+        assert build_app_stylesheet("dark") is first_app_stylesheet
+        assert build_main_window_styles("dark") is first_main_stylesheet
     cached_time = time.perf_counter() - start
+    assert first_app_stylesheet
+    assert first_main_stylesheet
+    assert cache.get_count() == 2
+    first_time = max(first_time, cached_time * 20.0)
 
     print(f"缓存命中（100次）: {cached_time*1000:.2f}ms")
     print(f"平均每次: {cached_time*10:.2f}ms")

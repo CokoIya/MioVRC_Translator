@@ -4,6 +4,7 @@
     "profile": "balanced",
     "check_updates_on_start": true,
     "update_check_delay_ms": 3500,
+    "preload_settings_window": false,
     "tts_cache_max_mb": 24,
     "tts_cache_max_items": 60,
     "download_parallel_max_parts": 3,
@@ -66,6 +67,9 @@
       "final_timeout_seconds": 4.0,
       "partial_timeout_seconds": 0.2,
       "connection_timeout_seconds": 3.0,
+      "stale_connection_seconds": 8.0,
+      "embedded_browser": true,
+      "auto_fallback": false,
       "auto_open_browser": true,
       "bridge_port": 0
     },
@@ -147,6 +151,32 @@
       "timeout_s": 30.0,
       "max_retries": 0
     },
+    "google_web": {
+      "base_url": "https://translate.googleapis.com/translate_a/single",
+      "model": "google-web",
+      "timeout_s": 8.0,
+      "max_retries": 1
+    },
+    "mymemory": {
+      "base_url": "https://api.mymemory.translated.net/get",
+      "model": "mymemory",
+      "timeout_s": 8.0,
+      "max_retries": 1
+    },
+    "deepl": {
+      "api_key": "",
+      "base_url": "https://api-free.deepl.com/v2",
+      "model": "deepl-api",
+      "timeout_s": 10.0,
+      "max_retries": 1
+    },
+    "libretranslate": {
+      "api_key": "",
+      "base_url": "http://127.0.0.1:5000",
+      "model": "libretranslate",
+      "timeout_s": 10.0,
+      "max_retries": 1
+    },
     "deepseek": {
       "api_key": "",
       "region": "official",
@@ -167,6 +197,13 @@
       "region": "china_mainland",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "model": "qwen-mt-plus",
+      "timeout_s": 20.0,
+      "max_retries": 0
+    },
+    "hunyuan": {
+      "api_key": "",
+      "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+      "model": "hunyuan-turbos-latest",
       "timeout_s": 20.0,
       "max_retries": 0
     },
@@ -344,6 +381,17 @@
       "volume": 0.8,
       "device": "cpu",
       "bert_language": "jp"
+    },
+    "xtts": {
+      "voice": "custom",
+      "rate": 1.0,
+      "volume": 0.8,
+      "device": "cpu",
+      "language": "auto",
+      "lazy_load": true,
+      "optimized_inference": true,
+      "conditioning_cache_size": 4,
+      "enable_text_splitting": true
     }
   },
   "ui": {

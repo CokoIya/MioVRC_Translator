@@ -1191,6 +1191,12 @@ class DesktopAudioRecorder(AudioRecorder):
         sd_default = _default_output_device_name_from_sounddevice()
         if sd_default and sd_default not in preferred_names:
             preferred_names.append(sd_default)
+
+        # Also add the actual default device from the device list
+        default_from_list = next((d.get("name") for d in output_devices if d.get("is_default")), None)
+        if default_from_list and default_from_list not in preferred_names:
+            preferred_names.append(default_from_list)
+
         logger.info(
             "Resolving loopback device (requested_output=%s preferred_names=%s)",
             self._output_device_name or None,
@@ -1200,14 +1206,25 @@ class DesktopAudioRecorder(AudioRecorder):
         # Use _fuzzy_match_loopback for all matching so that exact full-name
         # matches (Pass 0) take priority over generic prefix collisions.
         for pref in preferred_names:
+            if not pref:
+                continue
             matched = _fuzzy_match_loopback(pref, output_devices)
             if matched is not None:
                 logger.info("Matched loopback device: %s", matched.get("name"))
                 return matched
 
-        default_device = next((device for device in output_devices if device.get("is_default")), output_devices[0])
-        logger.info("Falling back to default loopback device: %s", default_device.get("name"))
-        return default_device
+        # Better fallback: Try to find default device first, then any device
+        default_device = next((device for device in output_devices if device.get("is_default")), None)
+        if default_device:
+            logger.info("Using default loopback device: %s", default_device.get("name"))
+            return default_device
+
+        if output_devices:
+            logger.warning("No default device found, using first available: %s", output_devices[0].get("name"))
+            return output_devices[0]
+
+        logger.error("No loopback devices available at all!")
+        return None
 
 
 # ---------------------------------------------------------------------------

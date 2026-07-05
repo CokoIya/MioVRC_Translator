@@ -39,9 +39,8 @@
 ## 下载
 
 - 官方下载站：[https://78hejiu.top/](https://78hejiu.top/)
-- 正式版提供 `MioTranslator-Setup-vX-full.exe` 与 `MioTranslator-Setup-vX-lite.exe` 两个安装包
-- 新玩家建议下载 `full` 完整包，已内置 `SenseVoice Small` 模型
-- 老玩家和在线更新使用 `lite` 轻量包即可；已有模型会保留，不会重复下载
+- 正式版提供单一安装包 `MioTranslator-Setup-vX.exe`
+- 首次使用时，所需模型会由应用内下载器准备；已有模型会保留，不会重复下载
 - GitHub 仓库主要用于源代码、问题反馈和开发记录
 
 ## 功能亮点

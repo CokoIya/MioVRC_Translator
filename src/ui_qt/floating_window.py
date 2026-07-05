@@ -9,9 +9,10 @@ from collections import deque
 from collections.abc import Callable
 import logging
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -39,9 +40,13 @@ MIN_SIZE = (360, 220)
 DEFAULT_OPACITY = 0.88
 MIN_OPACITY = 0.45
 MAX_OPACITY = 1.0
-BUBBLE_MIN_WRAP = 160
-BUBBLE_MAX_WRAP = 440
-BUBBLE_WRAP_RATIO = 0.72
+BUBBLE_MIN_WRAP = 180
+BUBBLE_MAX_WRAP = 980
+BUBBLE_WRAP_RATIO = 0.9
+BASE_DPI = 96.0
+RESIZE_MARGIN = 14
+MIN_UI_SCALE = 0.9
+MAX_UI_SCALE = 1.55
 
 class FloatingWindow(QDialog):
     def __init__(
@@ -68,6 +73,7 @@ class FloatingWindow(QDialog):
         self._theme = str(theme or "dark")
         self._history_widgets: dict[int, dict[str, object]] = {}
         self._last_layout_width = 0
+        self._last_ui_scale = 0.0
         self._status_key = "floating_status_waiting"
         self._layout_refresh_timer = QTimer(self)
         self._layout_refresh_timer.setSingleShot(True)
@@ -79,6 +85,8 @@ class FloatingWindow(QDialog):
         self.setWindowTitle(tr(self._ui_lang, "floating_window_title"))
         self.resize(*DEFAULT_SIZE)
         self.setMinimumSize(*MIN_SIZE)
+        # Enable resizing - no maximum size restriction
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.move(24, 96)
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -88,36 +96,41 @@ class FloatingWindow(QDialog):
         self.setWindowFlags(flags)
         self.setWindowOpacity(self._opacity)
 
+        self.setMouseTracking(True)
+        # Resize tracking for the frameless overlay. Mouse events often land on
+        # child widgets, so the event filter handles hit-testing as well.
+        self._resize_mode: str | None = None
+        self._resize_start_pos: QPoint | None = None
+        self._resize_start_geometry: QRect | None = None
+
         self._build_ui()
         self._refresh_history()
         self.hide()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(0)
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(10, 10, 10, 10)
+        self._root_layout.setSpacing(0)
 
         self._shell = QFrame()
         self._shell.setObjectName("textInputShell")
-        self._shell.installEventFilter(self)
         shell_shadow = QGraphicsDropShadowEffect(self._shell)
         shell_shadow.setBlurRadius(28)
         shell_shadow.setOffset(0, 12)
         shell_shadow.setColor(self._shadow_color())
         self._shell.setGraphicsEffect(shell_shadow)
-        root.addWidget(self._shell, 1)
+        self._root_layout.addWidget(self._shell, 1)
 
-        shell_layout = QVBoxLayout(self._shell)
-        shell_layout.setContentsMargins(10, 10, 10, 10)
-        shell_layout.setSpacing(8)
+        self._shell_layout = QVBoxLayout(self._shell)
+        self._shell_layout.setContentsMargins(10, 10, 10, 10)
+        self._shell_layout.setSpacing(8)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(6)
+        self._top_row = QHBoxLayout()
+        self._top_row.setSpacing(6)
 
         self._opacity_label = QLabel(self._opacity_label_text())
         self._opacity_label.setObjectName("opacityLabel")
-        self._opacity_label.installEventFilter(self)
-        top_row.addWidget(self._opacity_label)
+        self._top_row.addWidget(self._opacity_label)
 
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(int(MIN_OPACITY * 100), int(MAX_OPACITY * 100))
@@ -125,8 +138,8 @@ class FloatingWindow(QDialog):
         self._opacity_slider.setFixedWidth(86)
         self._opacity_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._opacity_slider.valueChanged.connect(self._on_opacity_change)
-        top_row.addWidget(self._opacity_slider)
-        top_row.addStretch(1)
+        self._top_row.addWidget(self._opacity_slider)
+        self._top_row.addStretch(1)
 
         self._pin_button = QPushButton("")
         self._pin_button.setObjectName("pinButton")
@@ -134,7 +147,7 @@ class FloatingWindow(QDialog):
         self._pin_button.setIconSize(QSize(15, 15))
         self._pin_button.clicked.connect(self.toggle_topmost)
         self._refresh_pin_button()
-        top_row.addWidget(self._pin_button)
+        self._top_row.addWidget(self._pin_button)
 
         self._close_button = QPushButton("")
         self._close_button.setObjectName("iconButton")
@@ -142,8 +155,8 @@ class FloatingWindow(QDialog):
         self._close_button.setIconSize(QSize(15, 15))
         self._close_button.clicked.connect(self.close)
         self._refresh_close_button()
-        top_row.addWidget(self._close_button)
-        shell_layout.addLayout(top_row)
+        self._top_row.addWidget(self._close_button)
+        self._shell_layout.addLayout(self._top_row)
 
         self._scroll_area = QScrollArea()
         self._scroll_area.setObjectName("inputTextEdit")
@@ -157,42 +170,49 @@ class FloatingWindow(QDialog):
         self._scroll_layout.setSpacing(8)
         self._scroll_layout.addStretch(1)
         self._scroll_area.setWidget(self._scroll_content)
-        shell_layout.addWidget(self._scroll_area, 1)
+        self._shell_layout.addWidget(self._scroll_area, 1)
 
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
+        self._footer_layout = QHBoxLayout()
+        self._footer_layout.setSpacing(8)
 
         self._status_label = QLabel(self._status_text())
         self._status_label.setObjectName("textInputCounter")
         self._status_label.setToolTip(self._status_label.text())
-        self._status_label.installEventFilter(self)
-        footer.addWidget(self._status_label, 1)
+        self._footer_layout.addWidget(self._status_label, 1)
 
         self._send_selected_button = QPushButton(tr(self._ui_lang, "send_to_vrc"))
         self._send_selected_button.setObjectName("primaryButton")
         send_icon = ui_icon("send.svg", 15, "#ffffff")
         if not send_icon.isNull():
             self._send_selected_button.setIcon(send_icon)
-            self._send_selected_button.setIconSize(QSize(15, 15))
+        self._send_selected_button.setIconSize(QSize(15, 15))
         self._send_selected_button.clicked.connect(self._send_selected_history)
-        footer.addWidget(self._send_selected_button)
-        shell_layout.addLayout(footer)
+        self._footer_layout.addWidget(self._send_selected_button)
+        self._shell_layout.addLayout(self._footer_layout)
 
         self._apply_style()
+        self._install_interaction_filter(self)
+        self._apply_scaled_layout(force=True)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
-        width = event.size().width()
-        if abs(width - self._last_layout_width) < 24:
-            return
-        self._last_layout_width = width
-        self._update_wraplengths()
-        self._layout_refresh_timer.stop()
-        self._layout_refresh_timer.start(60)
         super().resizeEvent(event)
+        width = event.size().width()
+        scale_changed = self._apply_scaled_layout()
+        if abs(width - self._last_layout_width) >= 12 or scale_changed:
+            self._last_layout_width = width
+            self._update_wraplengths()
+            self._layout_refresh_timer.stop()
+            self._layout_refresh_timer.start(40)
 
     def _bubble_wraplength(self) -> int:
-        width = self.width()
-        return max(BUBBLE_MIN_WRAP, min(int(width * BUBBLE_WRAP_RATIO), BUBBLE_MAX_WRAP))
+        viewport = getattr(self, "_scroll_area", None)
+        width = viewport.viewport().width() if viewport is not None else self.width()
+        horizontal_padding = self._scaled(32)
+        available = max(BUBBLE_MIN_WRAP, width - horizontal_padding)
+        return max(
+            self._scaled(BUBBLE_MIN_WRAP),
+            min(int(available * BUBBLE_WRAP_RATIO), self._scaled(BUBBLE_MAX_WRAP)),
+        )
 
     def _update_wraplengths(self) -> None:
         wraplength = self._bubble_wraplength()
@@ -203,6 +223,91 @@ class FloatingWindow(QDialog):
 
     def _apply_layout_update(self) -> None:
         self._update_wraplengths()
+        for entry_id in list(self._history_widgets):
+            self._style_history_entry(entry_id)
+
+    def _screen(self):
+        handle = self.windowHandle()
+        if handle is not None and handle.screen() is not None:
+            return handle.screen()
+        app = QApplication.instance()
+        if app is not None:
+            return app.primaryScreen()
+        return None
+
+    def _ui_scale(self) -> float:
+        screen = self._screen()
+        if screen is None:
+            return 1.0
+        geometry = screen.availableGeometry()
+        dpi_scale = max(0.8, float(screen.logicalDotsPerInch()) / BASE_DPI)
+        resolution_scale = max(
+            0.9,
+            min(1.12, min(geometry.width() / 1366.0, geometry.height() / 768.0)),
+        )
+        return max(MIN_UI_SCALE, min(MAX_UI_SCALE, dpi_scale * resolution_scale))
+
+    def _scaled(self, value: int | float) -> int:
+        return max(1, int(round(float(value) * self._ui_scale())))
+
+    def _history_font_px(self) -> int:
+        width_bonus = max(0, min(3, (self.width() - DEFAULT_SIZE[0]) // 220))
+        return max(12, min(22, self._scaled(13) + int(width_bonus)))
+
+    def _floating_scale_styles(self) -> str:
+        return f"""
+        QLabel#opacityLabel, QLabel#textInputCounter {{
+            font-size: {self._scaled(11)}px;
+        }}
+        QPushButton#primaryButton {{
+            font-size: {self._scaled(14)}px;
+            min-height: {self._scaled(34)}px;
+            padding: 0 {self._scaled(14)}px;
+        }}
+        QScrollArea#inputTextEdit {{
+            padding: {self._scaled(10)}px;
+            font-size: {self._history_font_px()}px;
+        }}
+        """
+
+    def _apply_scaled_layout(self, *, force: bool = False) -> bool:
+        scale = self._ui_scale()
+        if not force and abs(scale - self._last_ui_scale) < 0.03:
+            return False
+        self._last_ui_scale = scale
+        self.setMinimumSize(self._scaled(MIN_SIZE[0]), self._scaled(MIN_SIZE[1]))
+        self._root_layout.setContentsMargins(
+            self._scaled(10),
+            self._scaled(10),
+            self._scaled(10),
+            self._scaled(10),
+        )
+        self._shell_layout.setContentsMargins(
+            self._scaled(10),
+            self._scaled(10),
+            self._scaled(10),
+            self._scaled(10),
+        )
+        self._shell_layout.setSpacing(self._scaled(8))
+        self._top_row.setSpacing(self._scaled(6))
+        self._footer_layout.setSpacing(self._scaled(8))
+        self._scroll_layout.setContentsMargins(
+            self._scaled(6),
+            self._scaled(6),
+            self._scaled(6),
+            self._scaled(5),
+        )
+        self._scroll_layout.setSpacing(self._scaled(8))
+        self._opacity_slider.setFixedWidth(self._scaled(86))
+        control_size = self._scaled(30)
+        icon_size = self._scaled(15)
+        for button in (self._pin_button, self._close_button):
+            button.setFixedSize(control_size, control_size)
+            button.setIconSize(QSize(icon_size, icon_size))
+        self._send_selected_button.setIconSize(QSize(icon_size, icon_size))
+        self._apply_style()
+        self._update_wraplengths()
+        return True
 
     def _is_near_bottom(self) -> bool:
         bar = self._scroll_area.verticalScrollBar()
@@ -229,6 +334,17 @@ class FloatingWindow(QDialog):
         self._status_label.setText(text)
         self._status_label.setToolTip(text)
 
+    def _install_interaction_filter(self, widget: QWidget) -> None:
+        widget.installEventFilter(self)
+        widget.setMouseTracking(True)
+        for child in widget.findChildren(QWidget):
+            child.installEventFilter(self)
+            child.setMouseTracking(True)
+        viewport = getattr(self, "_scroll_area", None)
+        if viewport is not None:
+            self._scroll_area.viewport().installEventFilter(self)
+            self._scroll_area.viewport().setMouseTracking(True)
+
     def _pin_text(self) -> str:
         return tr(self._ui_lang, "text_input_pin_on" if self._topmost else "text_input_pin_off")
 
@@ -247,7 +363,7 @@ class FloatingWindow(QDialog):
             if isinstance(effect, QGraphicsDropShadowEffect):
                 effect.setColor(self._shadow_color())
 
-        self.setStyleSheet(build_floating_window_styles(self._theme))
+        self.setStyleSheet(build_floating_window_styles(self._theme) + self._floating_scale_styles())
         self._refresh_pin_button()
         self._refresh_close_button()
         for entry_id in self._history_widgets:
@@ -257,7 +373,7 @@ class FloatingWindow(QDialog):
         tokens = theme_tokens(self._theme)
         icon = ui_icon(
             "pin.svg" if self._topmost else "pin-off.svg",
-            16,
+            self._scaled(16),
             str(tokens["ACCENT"]) if self._topmost else icon_tint(self._theme),
         )
         self._pin_button.setIcon(icon)
@@ -265,7 +381,7 @@ class FloatingWindow(QDialog):
         self._pin_button.setToolTip(self._pin_text())
 
     def _refresh_close_button(self) -> None:
-        icon = ui_icon("x.svg", 15, icon_tint(self._theme, strong=True))
+        icon = ui_icon("x.svg", self._scaled(15), icon_tint(self._theme, strong=True))
         self._close_button.setIcon(icon)
         close_text = tr(self._ui_lang, "text_input_close")
         self._close_button.setText(close_text if icon.isNull() else "")
@@ -411,7 +527,12 @@ class FloatingWindow(QDialog):
         bubble.setObjectName("historyBubble")
         bubble.setFixedWidth(wraplength)
         bubble_layout = QVBoxLayout(bubble)
-        bubble_layout.setContentsMargins(12, 10, 12, 10)
+        bubble_layout.setContentsMargins(
+            self._scaled(12),
+            self._scaled(10),
+            self._scaled(12),
+            self._scaled(10),
+        )
 
         label = QLabel(str(entry.get("text", "")))
         label.setWordWrap(True)
@@ -436,6 +557,7 @@ class FloatingWindow(QDialog):
             "source": source,
             "can_resend": can_resend,
         }
+        self._install_interaction_filter(lane)
         self._style_history_entry(entry_id)
 
     def _style_history_entry(self, entry_id: int) -> None:
@@ -456,7 +578,7 @@ class FloatingWindow(QDialog):
                 }}
                 #historyBubble QLabel {{
                     color: {text};
-                    font-size: 13px;
+                    font-size: {self._history_font_px()}px;
                     line-height: 1.5;
                 }}
             """)
@@ -604,39 +726,218 @@ class FloatingWindow(QDialog):
         event.accept()
         return True
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+    def _event_window_pos(self, obj, event) -> QPoint | None:
+        if not hasattr(event, "position"):
+            return None
+        pos = event.position().toPoint()
+        if obj is self:
+            return pos
+        if isinstance(obj, QWidget):
+            return obj.mapTo(self, pos)
+        return None
+
+    @staticmethod
+    def _event_global_pos(event) -> QPoint | None:
+        if hasattr(event, "globalPosition"):
+            return event.globalPosition().toPoint()
+        if hasattr(event, "globalPos"):
+            return event.globalPos()
+        return None
+
+    def _begin_resize(self, event, mode: str) -> bool:
+        if not mode or event.button() != Qt.MouseButton.LeftButton:
+            return False
+        global_pos = self._event_global_pos(event)
+        if global_pos is None:
+            return False
+        self._resize_mode = mode
+        self._resize_start_pos = global_pos
+        self._resize_start_geometry = self.geometry()
+        self._drag_position = None
+        event.accept()
+        return True
+
+    def _continue_resize(self, event) -> bool:
+        if not (
+            self._resize_mode
+            and self._resize_start_pos is not None
+            and self._resize_start_geometry is not None
+        ):
+            return False
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return False
+        global_pos = self._event_global_pos(event)
+        if global_pos is None:
+            return False
+        delta = global_pos - self._resize_start_pos
+        self.setGeometry(
+            self._geometry_for_resize_delta(
+                self._resize_mode,
+                self._resize_start_geometry,
+                delta,
+            )
+        )
+        event.accept()
+        return True
+
+    def _finish_resize_or_drag(self, event) -> bool:
+        was_resizing = self._resize_mode is not None
+        self._drag_position = None
+        self._resize_mode = None
+        self._resize_start_pos = None
+        self._resize_start_geometry = None
+        self.unsetCursor()
+        if was_resizing:
+            event.accept()
+        return was_resizing
+
+    def _geometry_for_resize_delta(
+        self,
+        mode: str,
+        start_geometry: QRect,
+        delta: QPoint,
+    ) -> QRect:
+        min_width = self.minimumWidth()
+        min_height = self.minimumHeight()
+        left = start_geometry.left()
+        top = start_geometry.top()
+        right = start_geometry.right()
+        bottom = start_geometry.bottom()
+
+        if "e" in mode:
+            right = max(left + min_width - 1, right + delta.x())
+        if "s" in mode:
+            bottom = max(top + min_height - 1, bottom + delta.y())
+        if "w" in mode:
+            left = min(right - min_width + 1, left + delta.x())
+        if "n" in mode:
+            top = min(bottom - min_height + 1, top + delta.y())
+
+        return QRect(QPoint(left, top), QPoint(right, bottom))
+
+    def _cursor_for_resize_mode(self, mode: str) -> Qt.CursorShape | None:
+        if mode in {"se", "nw"}:
+            return Qt.CursorShape.SizeFDiagCursor
+        if mode in {"ne", "sw"}:
+            return Qt.CursorShape.SizeBDiagCursor
+        if mode in {"e", "w"}:
+            return Qt.CursorShape.SizeHorCursor
+        if mode in {"n", "s"}:
+            return Qt.CursorShape.SizeVerCursor
+        return None
+
+    def _update_resize_cursor(self, pos: QPoint) -> None:
+        mode = self._get_resize_mode(pos)
+        cursor = self._cursor_for_resize_mode(mode)
+        if cursor is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(cursor)
+
+    def _is_drag_region(self, obj, pos: QPoint) -> bool:
         if obj in {
             getattr(self, "_shell", None),
             getattr(self, "_opacity_label", None),
             getattr(self, "_status_label", None),
         }:
-            event_type = event.type()
-            if event_type == QEvent.Type.MouseButtonPress:
-                return self._begin_drag(event)
-            if event_type == QEvent.Type.MouseMove:
-                return self._continue_drag(event)
-            if event_type == QEvent.Type.MouseButtonRelease:
-                self._drag_position = None
+            return True
+        if obj is self:
+            drag_top = self._shell.mapTo(self, self._shell.rect().topLeft()).y()
+            return pos.y() <= drag_top + self._scaled(46)
+        return False
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        event_type = event.type()
+        if event_type in {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonRelease,
+        }:
+            pos = self._event_window_pos(obj, event)
+            if pos is not None:
+                if event_type == QEvent.Type.MouseButtonPress:
+                    mode = self._get_resize_mode(pos)
+                    if mode and self._begin_resize(event, mode):
+                        return True
+                    if self._is_drag_region(obj, pos):
+                        return self._begin_drag(event)
+                if event_type == QEvent.Type.MouseMove:
+                    if self._continue_resize(event):
+                        return True
+                    self._update_resize_cursor(pos)
+                    if self._continue_drag(event):
+                        return True
+                if event_type == QEvent.Type.MouseButtonRelease:
+                    if self._finish_resize_or_drag(event):
+                        return True
         return super().eventFilter(obj, event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
+
+            mode = self._get_resize_mode(pos)
+            if mode and self._begin_resize(event, mode):
+                return
+
+            # Check if clicking in title bar for dragging
             drag_top = self._shell.mapTo(self, self._shell.rect().topLeft()).y()
-            drag_bottom = drag_top + 46
+            drag_bottom = drag_top + self._scaled(46)
             if pos.y() <= drag_bottom:
                 if self._begin_drag(event):
                     return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        # Update cursor based on position
+        pos = event.position().toPoint()
+        self._update_resize_cursor(pos)
+
+        # Handle resize
+        if self._continue_resize(event):
+            return
+
+        # Handle drag move
         if self._continue_drag(event):
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        self._drag_position = None
+        self._finish_resize_or_drag(event)
         super().mouseReleaseEvent(event)
+
+    def _is_in_resize_area(self, pos: QPoint) -> bool:
+        """Check if position is near any window edge/corner."""
+        return bool(self._get_resize_mode(pos))
+
+    def _get_resize_mode(self, pos: QPoint) -> str:
+        """Get resize mode based on position."""
+        w = self.width()
+        h = self.height()
+        margin = self._scaled(RESIZE_MARGIN)
+
+        near_left = pos.x() <= margin
+        near_right = pos.x() >= w - margin
+        near_top = pos.y() <= margin
+        near_bottom = pos.y() >= h - margin
+
+        if near_top and near_left:
+            return "nw"
+        if near_top and near_right:
+            return "ne"
+        if near_bottom and near_left:
+            return "sw"
+        if near_bottom and near_right:
+            return "se"
+        if near_left:
+            return "w"
+        if near_right:
+            return "e"
+        if near_top:
+            return "n"
+        if near_bottom:
+            return "s"
+        return ""
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.hide()

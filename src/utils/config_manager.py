@@ -98,6 +98,7 @@ _PERFORMANCE_DEFAULTS = {
     "profile": "balanced",
     "check_updates_on_start": True,
     "update_check_delay_ms": 3500,
+    "preload_settings_window": False,
     "tts_cache_max_mb": 24,
     "tts_cache_max_items": 60,
     "download_parallel_max_parts": 3,
@@ -539,9 +540,22 @@ def _backup_invalid_config(path: Path) -> Path | None:
     return backup_path
 
 
+def _coerce_bool_value(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(default)
+
+
 def _coerce_bool_config(mapping: dict, key: str, default: bool) -> bool:
-    if key not in mapping or not isinstance(mapping.get(key), bool):
-        mapping[key] = bool(default)
+    value = _coerce_bool_value(mapping.get(key), default)
+    if mapping.get(key) is not value:
+        mapping[key] = value
         return True
     return False
 
@@ -1535,6 +1549,9 @@ def _ensure_asr_config(config: dict) -> bool:
         "final_timeout_seconds": 4.0,
         "partial_timeout_seconds": 0.2,
         "connection_timeout_seconds": 3.0,
+        "stale_connection_seconds": 8.0,
+        "embedded_browser": True,
+        "auto_fallback": False,
         "auto_open_browser": True,
         "bridge_port": 0,
     }
@@ -1734,6 +1751,17 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             "device": "cpu",
             "bert_language": "jp",
         },
+        "xtts": {
+            "voice": "custom",
+            "rate": 1.0,
+            "volume": 0.8,
+            "device": "cpu",
+            "language": "auto",
+            "lazy_load": True,
+            "optimized_inference": True,
+            "conditioning_cache_size": 4,
+            "enable_text_splitting": True,
+        },
     }
     for engine in TTS_API_ENGINE_IDS:
         engine_defaults[engine] = get_tts_api_default_config(engine)
@@ -1765,6 +1793,66 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
         normalized_language = _normalize_style_bert_bert_language(current_language)
         if current_language != normalized_language:
             style_bert_cfg["bert_language"] = normalized_language
+            changed = True
+
+    xtts_cfg = tts_cfg.get("xtts")
+    if isinstance(xtts_cfg, dict):
+        current_device = str(
+            xtts_cfg.get("device") or config.get("xtts_device") or "cpu"
+        ).strip().lower()
+        if current_device not in {"cpu", "cuda"}:
+            current_device = "cpu"
+        if xtts_cfg.get("device") != current_device:
+            xtts_cfg["device"] = current_device
+            changed = True
+        config["xtts_device"] = current_device
+
+        current_language = str(xtts_cfg.get("language") or "auto").strip().lower().replace("_", "-")
+        if current_language == "zh":
+            current_language = "zh-cn"
+        valid_xtts_languages = {
+            "auto",
+            "en",
+            "es",
+            "fr",
+            "de",
+            "it",
+            "pt",
+            "pl",
+            "tr",
+            "ru",
+            "nl",
+            "cs",
+            "ar",
+            "zh-cn",
+            "ja",
+            "hu",
+            "ko",
+            "hi",
+        }
+        if current_language not in valid_xtts_languages:
+            current_language = "auto"
+        if xtts_cfg.get("language") != current_language:
+            xtts_cfg["language"] = current_language
+            changed = True
+
+        for key, default in (
+            ("lazy_load", True),
+            ("optimized_inference", True),
+            ("enable_text_splitting", True),
+        ):
+            value = _coerce_bool_value(xtts_cfg.get(key), default)
+            if xtts_cfg.get(key) is not value:
+                xtts_cfg[key] = value
+                changed = True
+
+        try:
+            cache_size = int(xtts_cfg.get("conditioning_cache_size", 4))
+        except (TypeError, ValueError):
+            cache_size = 4
+        cache_size = max(0, min(cache_size, 16))
+        if xtts_cfg.get("conditioning_cache_size") != cache_size:
+            xtts_cfg["conditioning_cache_size"] = cache_size
             changed = True
 
     for engine in TTS_API_ENGINE_IDS:
@@ -1877,8 +1965,8 @@ def _ensure_performance_config(config: dict) -> bool:
             perf_cfg[key] = value
             changed = True
 
-    for key in ("check_updates_on_start",):
-        value = bool(perf_cfg.get(key, _PERFORMANCE_DEFAULTS[key]))
+    for key in ("check_updates_on_start", "preload_settings_window"):
+        value = _coerce_bool_value(perf_cfg.get(key), _PERFORMANCE_DEFAULTS[key])
         if perf_cfg.get(key) is not value:
             perf_cfg[key] = value
             changed = True
@@ -1901,6 +1989,9 @@ def _ensure_performance_config(config: dict) -> bool:
             if int(perf_cfg.get(key, value)) > value:
                 perf_cfg[key] = value
                 changed = True
+        if perf_cfg.get("preload_settings_window") is not False:
+            perf_cfg["preload_settings_window"] = False
+            changed = True
 
     return changed
 

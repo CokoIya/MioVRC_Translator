@@ -5,9 +5,16 @@ import numpy as np
 
 class AdaptiveDenoiser:
     def __init__(self, strength: float = 0.0):
+        self._strength = 0.0
+        self._quiet_frames_required = 2
+        self.set_strength(strength, reset=False)
+        self.reset()
+
+    def set_strength(self, strength: float, *, reset: bool = True) -> None:
         self._strength = min(max(float(strength), 0.0), 1.0)
         self._quiet_frames_required = 2 + int(round(self._strength * 2.0))
-        self.reset()
+        if reset:
+            self.reset()
 
     def reset(self) -> None:
         self._noise_magnitude: np.ndarray | None = None

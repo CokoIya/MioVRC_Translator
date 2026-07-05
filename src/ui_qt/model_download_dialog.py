@@ -167,8 +167,82 @@ _STRINGS["zh-cn"] = _STRINGS["zh"]
 _STRINGS["zh-tw"] = _STRINGS["zh"]
 _STRINGS["zh-hk"] = _STRINGS["zh"]
 _STRINGS["yue"] = _STRINGS["zh"]
-_STRINGS["ko"] = _STRINGS.get("zh", _STRINGS["en"])
-_STRINGS["ru"] = _STRINGS.get("zh", _STRINGS["en"])
+_STRINGS["ru"] = {
+    "dlg_title": "Модель не найдена",
+    "dlg_header": "Модель распознавания речи не найдена",
+    "engine_fmt": "Движок: {label} ({size})",
+    "body": "Файл модели не найден. Распознавание речи и перевод не будут работать.\nРекомендуется скачать сейчас. Текстовый ввод останется доступен.",
+    "privacy": "Полностью локально — ваш голос никуда не загружается",
+    "onetime": "Модель нужно скачать только один раз. После обновлений повторная загрузка обычно не нужна.",
+    "btn_download": "Скачать сейчас",
+    "btn_downloading": "Загрузка",
+    "btn_skip": "Пропустить",
+    "btn_pause": "Пауза",
+    "btn_resume": "Продолжить",
+    "btn_cancel": "Отмена",
+    "btn_retry": "Скачать заново",
+    "btn_skip2": "Пропустить, скачать позже",
+    "st_paused": "Пауза",
+    "st_done": "Загрузка завершена",
+    "st_cancelled": "Отменено",
+    "st_error_pfx": "Ошибка: ",
+    "hint_paused": "Загрузка приостановлена. Нажмите Продолжить.",
+    "hint_error": "Ошибка загрузки: ",
+    "hint_ready": "Окно закроется автоматически после загрузки",
+    "hint_done": "Установка завершена. Закрываем…",
+    "hint_existed": "Модель готова. Закрываем…",
+    "hint_model_setup": "Загружается модель {label}. Окно закроется автоматически после завершения.",
+    "hint_retry": "Загрузка не удалась. Проверьте сеть и повторите. Кэш будет сохранён, загрузка продолжится по возможности.",
+    "btn_close": "Закрыть",
+    "setup_title": "Mio RealTime Translator — настройка",
+    "setup_header": "Подготовка модели распознавания речи",
+    "engine_desc": {
+        "sensevoice-small": "Высокоточная офлайн-модель распознавания для китайского и кантонского.",
+        "whisper-large-v3-turbo": "Быстрая локальная модель Whisper Small для английского аудио.",
+    },
+    "engine_size": {
+        "sensevoice-small": "около 950 MB",
+        "whisper-large-v3-turbo": "около 461 MB",
+    },
+}
+_STRINGS["ko"] = {
+    "dlg_title": "모델을 찾을 수 없음",
+    "dlg_header": "음성 인식 모델을 찾을 수 없음",
+    "engine_fmt": "엔진: {label} ({size})",
+    "body": "모델 파일이 없습니다. 음성 인식과 번역이 작동하지 않습니다.\n지금 다운로드하는 것을 권장합니다. 다운로드 중에도 텍스트 입력은 사용할 수 있습니다.",
+    "privacy": "완전 로컬 처리 — 음성은 어디에도 업로드되지 않습니다",
+    "onetime": "모델은 한 번만 다운로드하면 됩니다. 업데이트 후에도 보통 다시 받을 필요가 없습니다.",
+    "btn_download": "지금 다운로드",
+    "btn_downloading": "다운로드 중",
+    "btn_skip": "지금은 건너뛰기",
+    "btn_pause": "일시정지",
+    "btn_resume": "계속",
+    "btn_cancel": "취소",
+    "btn_retry": "다시 다운로드",
+    "btn_skip2": "건너뛰고 나중에 다운로드",
+    "st_paused": "일시정지됨",
+    "st_done": "다운로드 완료",
+    "st_cancelled": "취소됨",
+    "st_error_pfx": "오류: ",
+    "hint_paused": "다운로드가 일시정지되었습니다. 계속을 눌러 재개하세요.",
+    "hint_error": "다운로드 실패: ",
+    "hint_ready": "다운로드가 완료되면 창이 자동으로 닫힙니다",
+    "hint_done": "설치 완료. 곧 닫습니다…",
+    "hint_existed": "모델이 준비되었습니다. 곧 닫습니다…",
+    "hint_model_setup": "{label} 모델을 다운로드 중입니다. 완료되면 창이 자동으로 닫힙니다.",
+    "hint_retry": "다운로드에 실패했습니다. 네트워크를 확인하고 다시 시도하세요. 기존 캐시는 유지되며 가능한 경우 이어받습니다.",
+    "btn_close": "닫기",
+    "setup_title": "Mio RealTime Translator — 설정",
+    "setup_header": "음성 인식 모델 준비 중",
+    "engine_desc": {
+        "sensevoice-small": "중국어와 광둥어에 적합한 고정확도 오프라인 음성 인식 모델입니다.",
+        "whisper-large-v3-turbo": "영어 듣기에 적합한 빠른 로컬 Whisper Small ASR 모델입니다.",
+    },
+    "engine_size": {
+        "sensevoice-small": "약 950 MB",
+        "whisper-large-v3-turbo": "약 461 MB",
+    },
+}
 
 
 _dialog_lang: str = ""

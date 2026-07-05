@@ -1,9 +1,12 @@
 """Tests for text-to-speech runtime helpers."""
 from __future__ import annotations
 
+import io
+import struct
 import threading
 import queue
 import logging
+import wave
 from pathlib import Path
 import sys
 
@@ -55,6 +58,40 @@ class FakeTTS(BaseTTS):
     ) -> bytes:
         self.requests.append((text, voice, rate, volume))
         return b"RIFF-fake"
+
+
+def _pcm_wav_bytes(sample_width: int, frames: bytes, *, channels: int = 1, sample_rate: int = 8000) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(sample_width)
+        wav.setframerate(sample_rate)
+        wav.writeframes(frames)
+    return output.getvalue()
+
+
+def _raw_wav_bytes(
+    *,
+    format_tag: int,
+    bits_per_sample: int,
+    frames: bytes,
+    channels: int = 1,
+    sample_rate: int = 8000,
+) -> bytes:
+    block_align = channels * (bits_per_sample // 8)
+    byte_rate = sample_rate * block_align
+    fmt = struct.pack(
+        "<HHIIHH",
+        format_tag,
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+    )
+    chunks = b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    chunks += b"data" + struct.pack("<I", len(frames)) + frames
+    return b"RIFF" + struct.pack("<I", len(chunks) + 4) + b"WAVE" + chunks
 
 
 def test_tts_manager_queues_and_invokes_playback(monkeypatch):
@@ -121,6 +158,66 @@ def test_tts_manager_cache_returns_audio_bytes(monkeypatch):
     assert fake_engine.requests == [("hello", "fake-voice", 1.0, 0.8)]
 
 
+def test_tts_manager_cache_key_includes_runtime_engine_config(monkeypatch):
+    fake_engine = FakeTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: fake_engine,
+    )
+
+    manager = TTSManager(
+        engine_name="xtts",
+        cache_enabled=True,
+        allow_fallback=False,
+        engine_config={"language": "en", "api_key": "first"},
+    )
+
+    key_en = manager._generate_cache_key("hello", "voice", 1.0, 0.8)
+    manager._engine_config["api_key"] = "second"
+    key_secret_changed = manager._generate_cache_key("hello", "voice", 1.0, 0.8)
+    manager._engine_config["language"] = "ja"
+    key_ja = manager._generate_cache_key("hello", "voice", 1.0, 0.8)
+
+    assert key_secret_changed == key_en
+    assert key_ja != key_en
+
+
+def test_decode_wav_handles_unsigned_8_bit_pcm():
+    audio, sample_rate = TTSManager._decode_wav(_pcm_wav_bytes(1, bytes([0, 128, 255])))
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-1.0, 0.0, 127.0 / 128.0], rtol=0, atol=1e-6)
+
+
+def test_decode_wav_handles_signed_24_bit_pcm():
+    frames = b"\x00\x00\x80" + b"\x00\x00\x00" + b"\xff\xff\x7f"
+
+    audio, sample_rate = TTSManager._decode_wav(_pcm_wav_bytes(3, frames))
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-1.0, 0.0, 8388607.0 / 8388608.0], rtol=0, atol=1e-6)
+
+
+def test_decode_wav_handles_signed_32_bit_pcm_without_clipping_to_noise():
+    frames = struct.pack("<iii", -2147483648, 0, 2147483647)
+
+    audio, sample_rate = TTSManager._decode_wav(_pcm_wav_bytes(4, frames))
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-1.0, 0.0, 2147483647.0 / 2147483648.0], rtol=0, atol=1e-6)
+
+
+def test_decode_wav_handles_ieee_float_wav():
+    frames = struct.pack("<fff", -0.5, 0.0, 0.5)
+
+    audio, sample_rate = TTSManager._decode_wav(
+        _raw_wav_bytes(format_tag=3, bits_per_sample=32, frames=frames)
+    )
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-0.5, 0.0, 0.5], rtol=0, atol=1e-6)
+
+
 def test_tts_manager_rejects_non_byte_audio(monkeypatch):
     class FloatTTS(FakeTTS):
         def synthesize(self, *args, **kwargs):
@@ -179,8 +276,6 @@ def test_tts_manager_passes_sbv2_device_to_engine_factory(monkeypatch):
         return fake_engine
 
     monkeypatch.setattr("src.tts.manager.create_tts_engine", fake_create_engine)
-    monkeypatch.setattr("src.tts.manager._style_bert_cuda_available", lambda: True)
-
     manager = TTSManager(
         engine_name="style_bert_vits2",
         cache_enabled=False,
@@ -221,7 +316,7 @@ def test_tts_manager_passes_api_engine_config_to_factory(monkeypatch):
     assert captured[0]["config"]["model"] == "mimo-v2.5-tts"
 
 
-def test_tts_manager_falls_back_to_cpu_when_sbv2_cuda_is_unavailable(monkeypatch):
+def test_tts_manager_keeps_requested_cuda_for_engine_factory(monkeypatch):
     fake_engine = FakeTTS()
     captured: list[tuple[str, str, str]] = []
 
@@ -236,8 +331,6 @@ def test_tts_manager_falls_back_to_cpu_when_sbv2_cuda_is_unavailable(monkeypatch
         return fake_engine
 
     monkeypatch.setattr("src.tts.manager.create_tts_engine", fake_create_engine)
-    monkeypatch.setattr("src.tts.manager._style_bert_cuda_available", lambda: False)
-
     manager = TTSManager(
         engine_name="style_bert_vits2",
         cache_enabled=False,
@@ -247,7 +340,7 @@ def test_tts_manager_falls_back_to_cpu_when_sbv2_cuda_is_unavailable(monkeypatch
     )
 
     assert manager.is_available() is True
-    assert captured == [("style_bert_vits2", "cpu", "en")]
+    assert captured == [("style_bert_vits2", "cuda", "en")]
 
 
 def test_tts_manager_pauses_after_repeated_failures(monkeypatch):

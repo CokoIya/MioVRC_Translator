@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import logging
 import queue
 import shutil
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -78,6 +80,19 @@ from src.tts.style_bert_vits2_engine import (
     normalize_style_bert_bert_language,
     style_bert_bert_model_id,
 )
+from src.tts.xtts_engine import (
+    XTTS_REFERENCE_AUDIO_NAME_FILTER,
+    XTTS_SUPPORTED_LANGUAGES,
+    first_usable_xtts_reference_audio_path,
+    first_xtts_reference_audio_path,
+    is_xtts_runtime_available,
+    list_xtts_reference_voices,
+    normalize_xtts_reference_audio_file,
+    repair_xtts_reference_audio_file,
+    safe_xtts_voice_name,
+    validate_xtts_reference_audio_file,
+    xtts_reference_audio_dir,
+)
 from src.tts.style_bert_vits2_models import (
     StyleBertVits2ModelError,
     import_style_bert_model_path,
@@ -94,13 +109,14 @@ from src.utils import config_manager
 from src.utils.app_paths import backgrounds_dir
 from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
-from src.utils.gpu_support import cuda_pytorch_installed, detect_nvidia_driver, gpu_runtime_available
+from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
 from src.utils.i18n import tr
 from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
     OUTPUT_FORMAT_OPTIONS,
     UI_LANGUAGE_OPTIONS,
+    backend_api_key_is_required,
     backend_base_url_is_editable,
     backend_has_service_regions,
     backend_model_is_selectable,
@@ -129,6 +145,30 @@ from src.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
+XTTS_LANGUAGE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("Auto-detect", "auto"),
+    ("English", "en"),
+    ("Chinese (zh-cn)", "zh-cn"),
+    ("Japanese", "ja"),
+    ("Korean", "ko"),
+    ("Spanish", "es"),
+    ("French", "fr"),
+    ("German", "de"),
+    ("Italian", "it"),
+    ("Portuguese", "pt"),
+    ("Polish", "pl"),
+    ("Turkish", "tr"),
+    ("Russian", "ru"),
+    ("Dutch", "nl"),
+    ("Czech", "cs"),
+    ("Arabic", "ar"),
+    ("Hungarian", "hu"),
+    ("Hindi", "hi"),
+)
+XTTS_LANGUAGE_LABEL_TO_CODE = dict(XTTS_LANGUAGE_OPTIONS)
+XTTS_LANGUAGE_CODE_TO_LABEL = {code: label for label, code in XTTS_LANGUAGE_OPTIONS}
+XTTS_LANGUAGE_SUPPORTED_CODES = {"auto", *XTTS_SUPPORTED_LANGUAGES}
+
 SETTINGS_WINDOW_WIDTH = 1180
 SETTINGS_WINDOW_HEIGHT = 740
 SETTINGS_NAV_WIDTH = 250
@@ -142,6 +182,12 @@ TTS_TEST_TEXT_BY_LANGUAGE = {
     "ja": "こんにちは、これは読み上げテストです。",
     "en": "Hello, this is a speech test.",
     "zh": "你好，这是中文朗读测试。",
+}
+XTTS_TEST_TEXT_BY_LANGUAGE = {
+    "jp": "こんにちは。これはXTTSの音声合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
+    "ja": "こんにちは。これはXTTSの音声合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
+    "en": "Hello, this is a Voice Cloning synthesis test. The result should sound like a clear human voice, not a short burst of noise.",
+    "zh": "你好，这是XTTS语音合成测试。请确认它听起来像清晰的人声，而不是短促的噪声。",
 }
 
 THEME_LABELS = {
@@ -205,6 +251,7 @@ DENOISE_LABELS = {
 TTS_ENGINE_IDS = (
     "edge",
     "gtts",
+    "xtts",
     "pyttsx3",
     "voicevox",
     "aivis_speech",
@@ -236,6 +283,7 @@ TTS_DEFAULT_VOICES = {
         "en-US-MichelleNeural",
     ),
     "gtts": ("zh-CN", "en", "ja", "ko", "ru"),
+    "xtts": (),  # Voice Cloning uses custom reference audio.
     "pyttsx3": (),
     "voicevox": (),
     "aivis_speech": (),
@@ -247,6 +295,7 @@ TTS_DEFAULT_VOICES = {
 TTS_ENGINE_LABELS = {
     "edge": "Edge TTS（推荐）",
     "gtts": "Google TTS（需要外网）",
+    "xtts": "Voice Cloning",
     "pyttsx3": "pyttsx3（离线）",
     "voicevox": "VOICEVOX（本地）",
     "aivis_speech": "AivisSpeech（本地）",
@@ -258,6 +307,7 @@ TTS_ENGINE_LABELS = {
 TTS_ENGINE_I18N_KEYS = {
     "edge": "tts_engine_edge",
     "gtts": "tts_engine_gtts",
+    "xtts": "tts_engine_xtts",
     "pyttsx3": "tts_engine_pyttsx3",
     "voicevox": "tts_engine_voicevox",
     "aivis_speech": "tts_engine_aivis_speech",
@@ -396,8 +446,55 @@ QT_SETTINGS_COPY = {
         "en": "Tune translation, speech, VRC listen, TTS, and roleplay settings.",
         "ja": "翻訳、音声、VRC リスン、TTS、ロールプレイ設定を調整します。",
     },
-    "appearance_section": {"zh-CN": "基础外观设置", "en": "Appearance / Quick Setup", "ja": "外観 / クイック設定"},
-    "recognition_section": {"zh-CN": "麦克风设置", "en": "Recognition", "ja": "認識"},
+    "appearance_section": {
+        "zh-CN": "快速设置",
+        "en": "Quick Setup",
+        "ja": "クイック設定",
+        "ru": "Быстрая настройка",
+        "ko": "빠른 설정"
+    },
+    "api_config_section": {
+        "zh-CN": "API配置",
+        "en": "API Configuration",
+        "ja": "API 設定",
+        "ru": "Настройка API",
+        "ko": "API 설정"
+    },
+    "translation_settings_section": {
+        "zh-CN": "翻译设置",
+        "en": "Translation Settings",
+        "ja": "翻訳設定",
+        "ru": "Настройки перевода",
+        "ko": "번역 설정"
+    },
+    "voice_input_section": {
+        "zh-CN": "我的语音输入",
+        "en": "My Voice Input",
+        "ja": "自分の音声入力",
+        "ru": "Мой голосовой ввод",
+        "ko": "내 음성 입력"
+    },
+    "listen_others_section": {
+        "zh-CN": "听别人说话",
+        "en": "Listen to Others",
+        "ja": "他者の音声を聴く",
+        "ru": "Слушать других",
+        "ko": "타인의 음성 듣기"
+    },
+    "vrchat_advanced_section": {
+        "zh-CN": "VRChat与高级设置",
+        "en": "VRChat & Advanced",
+        "ja": "VRChat と詳細設定",
+        "ru": "VRChat и дополнительно",
+        "ko": "VRChat 및 고급 설정"
+    },
+    "recognition_section": {
+        "zh-CN": "语音识别引擎",
+        "en": "Speech Recognition Engine",
+        "ja": "音声認識エンジン",
+        "ru": "Движок распознавания речи",
+        "ko": "음성 인식 엔진"
+    },
     "translation_domain_section": {"zh-CN": "总翻译设置", "en": "Translation", "ja": "翻訳"},
     "vr_integration_section": {"zh-CN": "VRChat 联动设置", "en": "VR Integration", "ja": "VR 連携"},
     "hotkey_voice_section": {"zh-CN": "快捷键设置", "en": "Hotkeys / Voice Control", "ja": "ホットキー / 音声制御"},
@@ -878,6 +975,21 @@ QT_SETTINGS_COPY.update({
         "en": "Quality translation model. Strong speed and natural wording, a good default for live translation.",
         "ja": "翻訳特化の品質寄りモデルです。速度と自然さのバランスが良く、既定に向きます。",
     },
+    "self_hosted_free": {
+        "zh-CN": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
+        "en": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
+        "ja": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
+    },
+    "no_key_simple": {
+        "zh-CN": "No API key required. Fast and simple when this web service is reachable in the player's region.",
+        "en": "No API key required. Fast and simple when this web service is reachable in the player's region.",
+        "ja": "No API key required. Fast and simple when this web service is reachable in the player's region.",
+    },
+    "no_key_fallback": {
+        "zh-CN": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
+        "en": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
+        "ja": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
+    },
     "legacy_mt": {
         "zh-CN": "旧兼容档：能用但不是首选，新用户建议直接选 plus 或 flash。",
         "en": "Legacy option. Usable, but new users should usually pick plus or flash instead.",
@@ -942,6 +1054,29 @@ QT_SETTINGS_COPY.update({
         "zh-CN": "已检测到 {engine}，可以读取音色并让 Mio 朗读。",
         "en": "{engine} local service is detected. Voices can be loaded for interpretation.",
         "ja": "{engine} のローカルサービスを検出しました。ボイスを読み込んで同時通訳に使えます。",
+    },
+    "xtts_runtime_missing": {
+        "zh-CN": "XTTS-v2 需要可选的 Coqui TTS 运行库。当前环境没有安装它，所以只能管理参考音频，不能合成或测试朗读。",
+        "en": "XTTS-v2 needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
+        "ja": "XTTS-v2 には任意の Coqui TTS ランタイムが必要です。未インストールのため、参照音声の管理のみ可能で、合成とテストは無効です。",
+    },
+    "xtts_model_missing": {
+        "zh-CN": "XTTS-v2 运行库已检测到，但本地模型文件还没准备好。请先下载模型。",
+        "en": "XTTS-v2 runtime is detected, but local model files are not ready. Download the model first.",
+        "ja": "XTTS-v2 ランタイムは検出されましたが、ローカルモデルが未準備です。先にモデルをダウンロードしてください。",
+    },
+    "xtts_ready": {
+        "zh-CN": "XTTS-v2 模型文件已准备好。录制或导入参考音频后即可测试声音克隆。",
+        "en": "XTTS-v2 model files are ready. Record or import reference audio, then test voice cloning.",
+        "ja": "XTTS-v2 モデルは準備済みです。参照音声を録音またはインポートして、音声クローンをテストできます。",
+    },
+    "xtts_reference_missing": {
+        "zh-CN": "XTTS-v2 需要一段参考音频。请先录制或导入一个声音样本。",
+        "en": "XTTS-v2 needs reference audio. Record or import one voice sample first.",
+        "ja": "XTTS-v2 には参照音声が必要です。先に音声サンプルを録音またはインポートしてください。",
+    },
+    "xtts_reference_invalid": {
+        "en": "XTTS-v2 cannot use the selected reference audio.",
     },
     "tts_custom_voice_picker": {
         "zh-CN": "自定义音色包",
@@ -1089,6 +1224,175 @@ QT_SETTINGS_COPY.update({
         "ru": "В Китае выберите материковый регион; за рубежом лучше международный. Custom подходит для прокси или частного совместимого адреса.",
         "ko": "중국 본토에서는 중국 본토를, 해외에서는 국제 서비스를 권장합니다. 프록시나 사설 호환 주소는 사용자 지정을 선택하세요.",
     },
+    # Section titles for new ultra-simplified structure
+    "translation_provider_section": {
+        "zh-CN": "翻译服务提供商",
+        "en": "Translation Provider",
+        "ja": "翻訳プロバイダー",
+        "ru": "Провайдер перевода",
+        "ko": "번역 제공자",
+    },
+    "fallback_backends_section": {
+        "zh-CN": "备用翻译服务",
+        "en": "Fallback Services",
+        "ja": "フォールバック サービス",
+        "ru": "Резервные сервисы",
+        "ko": "대체 서비스",
+    },
+    "asr_api_config_section": {
+        "zh-CN": "语音识别 API 配置",
+        "en": "Speech Recognition API",
+        "ja": "音声認識 API",
+        "ru": "API распознавания речи",
+        "ko": "음성 인식 API",
+    },
+    "tts_api_config_section": {
+        "zh-CN": "语音合成 API 配置",
+        "en": "Text-to-Speech API",
+        "ja": "音声合成 API",
+        "ru": "API синтеза речи",
+        "ko": "음성 합성 API",
+    },
+    "audio_device_asr_section": {
+        "zh-CN": "音频设备与识别引擎",
+        "en": "Audio Device & Recognition",
+        "ja": "オーディオデバイスと認識",
+        "ru": "Аудиоустройство и распознавание",
+        "ko": "오디오 장치 및 인식",
+    },
+    "language_settings_section": {
+        "zh-CN": "语言设置",
+        "en": "Language Settings",
+        "ja": "言語設定",
+        "ru": "Настройки языка",
+        "ko": "언어 설정",
+    },
+    "timing_vad_settings_section": {
+        "zh-CN": "时间与VAD设置",
+        "en": "Timing & VAD Settings",
+        "ja": "タイミングと VAD 設定",
+        "ru": "Настройки времени и VAD",
+        "ko": "타이밍 및 VAD 설정",
+    },
+    "output_settings_section": {
+        "zh-CN": "输出设置",
+        "en": "Output Settings",
+        "ja": "出力設定",
+        "ru": "Настройки вывода",
+        "ko": "출력 설정",
+    },
+    "vrchat_integration_section": {
+        "zh-CN": "VRChat 集成",
+        "en": "VRChat Integration",
+        "ja": "VRChat 統合",
+        "ru": "Интеграция VRChat",
+        "ko": "VRChat 통합",
+    },
+    "osc_listener_section": {
+        "zh-CN": "OSC 监听器",
+        "en": "OSC Listener",
+        "ja": "OSC リスナー",
+        "ru": "OSC-слушатель",
+        "ko": "OSC 리스너",
+    },
+    "global_hotkeys_section": {
+        "zh-CN": "全局快捷键",
+        "en": "Global Hotkeys",
+        "ja": "グローバル ホットキー",
+        "ru": "Глобальные горячие клавиши",
+        "ko": "전역 단축키",
+    },
+    "roleplay_persona_section": {
+        "zh-CN": "角色扮演与人格",
+        "en": "Roleplay & Persona",
+        "ja": "ロールプレイと人格",
+        "ru": "Ролевая игра и персона",
+        "ko": "롤플레이 및 페르소나",
+    },
+    "model_downloads_section": {
+        "zh-CN": "模型下载",
+        "en": "Model Downloads",
+        "ja": "モデル ダウンロード",
+        "ru": "Загрузка моделей",
+        "ko": "모델 다운로드",
+    },
+    "other_advanced_section": {
+        "zh-CN": "其他高级设置",
+        "en": "Other Advanced Settings",
+        "ja": "その他の詳細設定",
+        "ru": "Прочие дополнительные настройки",
+        "ko": "기타 고급 설정",
+    },
+    "qwen_asr_label": {
+        "zh-CN": "Qwen3-ASR (在线语音识别)",
+        "en": "Qwen3-ASR (Online Speech Recognition)",
+        "ja": "Qwen3-ASR (オンライン音声認識)",
+        "ru": "Qwen3-ASR (онлайн-распознавание речи)",
+        "ko": "Qwen3-ASR (온라인 음성 인식)",
+    },
+    "gemini_asr_label": {
+        "zh-CN": "Gemini Live (在线语音识别)",
+        "en": "Gemini Live (Online Speech Recognition)",
+        "ja": "Gemini Live (オンライン音声認識)",
+        "ru": "Gemini Live (онлайн-распознавание речи)",
+        "ko": "Gemini Live (온라인 음성 인식)",
+    },
+    "tts_online_services_label": {
+        "zh-CN": "MiMo/Qwen TTS等在线语音合成服务",
+        "en": "MiMo/Qwen TTS and other online TTS services",
+        "ja": "MiMo/Qwen TTS などのオンライン音声合成サービス",
+        "ru": "MiMo/Qwen TTS и другие онлайн-сервисы TTS",
+        "ko": "MiMo/Qwen TTS 및 기타 온라인 TTS 서비스",
+    },
+    "api_key_in_api_config_hint": {
+        "zh-CN": "API密钥和服务区域请在\"API配置\"页面设置",
+        "en": "Please set API key and service region in the API Configuration page",
+        "ja": "API キーとサービス地域は API 設定ページで設定してください",
+        "ru": "Установите API-ключ и регион сервиса на странице настройки API",
+        "ko": "API 키와 서비스 지역은 API 설정 페이지에서 설정하세요",
+    },
+    "api_tts_model_only_hint": {
+        "zh-CN": "API密钥和服务区域请在\"API配置\"页面设置。这里只需选择TTS模型。",
+        "en": "Please set API key and service region in the API Configuration page. Only select TTS model here.",
+        "ja": "API キーとサービス地域は API 設定ページで設定してください。ここでは TTS モデルのみを選択します。",
+        "ru": "Установите API-ключ и регион в настройке API. Здесь только выбор модели TTS.",
+        "ko": "API 키와 서비스 지역은 API 설정 페이지에서 설정하세요. 여기서는 TTS 모델만 선택합니다.",
+    },
+    "xtts_device_label": {
+        "zh-CN": "计算设备",
+        "en": "Compute Device",
+        "ja": "計算デバイス",
+    },
+    "xtts_device_cpu": {
+        "zh-CN": "CPU (兼容性最佳)",
+        "en": "CPU (Best Compatibility)",
+        "ja": "CPU (互換性が最高)",
+    },
+    "xtts_device_cuda": {
+        "zh-CN": "CUDA GPU (需要NVIDIA显卡)",
+        "en": "CUDA GPU (Requires NVIDIA GPU)",
+        "ja": "CUDA GPU (NVIDIA GPUが必要)",
+    },
+    "xtts_device_cpu_info": {
+        "zh-CN": "ℹ CPU模式适用于所有电脑，无需额外配置",
+        "en": "ℹ CPU mode works on all computers, no additional setup needed",
+        "ja": "ℹ CPUモードはすべてのコンピューターで動作し、追加設定は不要です",
+    },
+    "xtts_device_cuda_info": {
+        "zh-CN": "ℹ GPU模式需要NVIDIA显卡和CUDA支持，速度比CPU快3-5倍",
+        "en": "ℹ GPU mode requires NVIDIA GPU with CUDA support, 3-5x faster than CPU",
+        "ja": "ℹ GPUモードはCUDAサポート付きのNVIDIA GPUが必要で、CPUより3～5倍高速です",
+    },
+    "xtts_cuda_not_available": {
+        "zh-CN": "未检测到CUDA支持。请确保已安装NVIDIA显卡驱动和CUDA。",
+        "en": "CUDA support not detected. Please ensure NVIDIA GPU drivers and CUDA are installed.",
+        "ja": "CUDAサポートが検出されませんでした。NVIDIA GPUドライバーとCUDAがインストールされていることを確認してください。",
+    },
+    "xtts_device_change_notice": {
+        "zh-CN": "设备更改将在下次使用XTTS时生效。",
+        "en": "Device change will take effect the next time XTTS is used.",
+        "ja": "デバイスの変更は、次回XTTSを使用するときに有効になります。",
+    },
 })
 
 _SETTINGS_RU_KO_COPY = {
@@ -1096,6 +1400,34 @@ _SETTINGS_RU_KO_COPY = {
     "header_subtitle": {
         "ru": "Настройте перевод, речь, обратный перевод, синхронный перевод и ролевые параметры.",
         "ko": "번역, 음성, 역번역, 동시통역, 롤플레이 설정을 조정합니다.",
+    },
+    "xtts_device_label": {
+        "ru": "Вычислительное устройство",
+        "ko": "컴퓨팅 장치",
+    },
+    "xtts_device_cpu": {
+        "ru": "CPU (лучшая совместимость)",
+        "ko": "CPU (최고의 호환성)",
+    },
+    "xtts_device_cuda": {
+        "ru": "CUDA GPU (требуется NVIDIA GPU)",
+        "ko": "CUDA GPU (NVIDIA GPU 필요)",
+    },
+    "xtts_device_cpu_info": {
+        "ru": "ℹ Режим CPU работает на всех компьютерах без дополнительной настройки",
+        "ko": "ℹ CPU 모드는 모든 컴퓨터에서 작동하며 추가 설정이 필요 없습니다",
+    },
+    "xtts_device_cuda_info": {
+        "ru": "ℹ Режим GPU требует NVIDIA GPU с поддержкой CUDA, в 3-5 раз быстрее CPU",
+        "ko": "ℹ GPU 모드는 CUDA 지원이 있는 NVIDIA GPU가 필요하며 CPU보다 3-5배 빠릅니다",
+    },
+    "xtts_cuda_not_available": {
+        "ru": "Поддержка CUDA не обнаружена. Убедитесь, что установлены драйверы NVIDIA GPU и CUDA.",
+        "ko": "CUDA 지원이 감지되지 않았습니다. NVIDIA GPU 드라이버와 CUDA가 설치되어 있는지 확인하세요.",
+    },
+    "xtts_device_change_notice": {
+        "ru": "Изменение устройства вступит в силу при следующем использовании XTTS.",
+        "ko": "장치 변경은 다음에 XTTS를 사용할 때 적용됩니다.",
     },
     "translation_section": {"ru": "Общее / Перевод", "ko": "일반 / 번역"},
     "voice_section": {"ru": "Настройки речи", "ko": "음성 설정"},
@@ -1200,6 +1532,142 @@ for _key, _values in _SETTINGS_RU_KO_COPY.items():
 
 _SETTINGS_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
 
+_VOICE_CLONING_SETTINGS_COPY = {
+    "xtts_runtime_missing": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
+    "xtts_model_missing": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
+    "xtts_ready": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
+    "xtts_reference_missing": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
+    "xtts_reference_invalid": "Voice Cloning cannot use the selected reference audio.",
+    "xtts_device_change_notice": "Device change will take effect the next time Voice Cloning is used.",
+    "xtts_voice_cloning_hint": "Voice Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want.",
+}
+for _key, _text in _VOICE_CLONING_SETTINGS_COPY.items():
+    QT_SETTINGS_COPY.setdefault(_key, {}).update(
+        {language: _text for language in _SETTINGS_LANGUAGES}
+    )
+
+QT_SETTINGS_COPY.update({
+    "success": {
+        "zh-CN": "成功",
+        "en": "Success",
+        "ja": "成功",
+        "ru": "Готово",
+        "ko": "성공",
+    },
+    "error": {
+        "zh-CN": "错误",
+        "en": "Error",
+        "ja": "エラー",
+        "ru": "Ошибка",
+        "ko": "오류",
+    },
+    "voice_record_open_failed": {
+        "zh-CN": "无法打开录音窗口：{error}",
+        "en": "Failed to open voice recording dialog: {error}",
+        "ja": "録音ダイアログを開けませんでした：{error}",
+        "ru": "Не удалось открыть окно записи голоса: {error}",
+        "ko": "음성 녹음 창을 열 수 없습니다: {error}",
+    },
+    "xtts_voice_saved_message": {
+        "zh-CN": "音色“{voice}”已保存。\n\n声音克隆会使用这个音色进行语音合成。",
+        "en": "Voice '{voice}' saved successfully.\n\nVoice Cloning will use this voice for speech synthesis.",
+        "ja": "音色「{voice}」を保存しました。\n\n音声クローンはこの音色を使って音声合成します。",
+        "ru": "Голос «{voice}» сохранён.\n\nVoice Cloning будет использовать его для синтеза речи.",
+        "ko": "음색 '{voice}'이 저장되었습니다.\n\n음성 클로닝에서 이 음색을 합성에 사용합니다.",
+    },
+    "xtts_voice_save_failed": {
+        "zh-CN": "保存音色失败：{error}",
+        "en": "Failed to save voice: {error}",
+        "ja": "音色の保存に失敗しました：{error}",
+        "ru": "Не удалось сохранить голос: {error}",
+        "ko": "음색 저장 실패: {error}",
+    },
+    "xtts_voice_imported_message": {
+        "zh-CN": "音色“{voice}”已导入。\n\n声音克隆会使用这个音色进行语音合成。",
+        "en": "Voice '{voice}' imported successfully.\n\nVoice Cloning will use this voice for speech synthesis.",
+        "ja": "音色「{voice}」をインポートしました。\n\n音声クローンはこの音色を使って音声合成します。",
+        "ru": "Голос «{voice}» импортирован.\n\nVoice Cloning будет использовать его для синтеза речи.",
+        "ko": "음색 '{voice}'을 가져왔습니다.\n\n음성 클로닝에서 이 음색을 합성에 사용합니다.",
+    },
+    "xtts_voice_import_failed": {
+        "zh-CN": "导入音色失败：{error}",
+        "en": "Failed to import voice: {error}",
+        "ja": "音色のインポートに失敗しました：{error}",
+        "ru": "Не удалось импортировать голос: {error}",
+        "ko": "음색 가져오기 실패: {error}",
+    },
+    "xtts_download_open_failed": {
+        "zh-CN": "无法打开下载窗口：{error}",
+        "en": "Failed to open download dialog: {error}",
+        "ja": "ダウンロードダイアログを開けませんでした：{error}",
+        "ru": "Не удалось открыть окно загрузки: {error}",
+        "ko": "다운로드 창을 열 수 없습니다: {error}",
+    },
+    "tts_test_not_accepted": {
+        "zh-CN": "TTS 测试请求未被接受",
+        "en": "TTS test request was not accepted",
+        "ja": "TTS テスト要求が受け付けられませんでした",
+        "ru": "Запрос теста TTS не принят",
+        "ko": "TTS 테스트 요청이 수락되지 않았습니다",
+    },
+    "tts_test_stopped": {
+        "zh-CN": "TTS 测试已停止",
+        "en": "TTS test stopped",
+        "ja": "TTS テストを停止しました",
+        "ru": "Тест TTS остановлен",
+        "ko": "TTS 테스트가 중지되었습니다",
+    },
+    "tts_test_timed_out": {
+        "zh-CN": "TTS 测试超时",
+        "en": "TTS test timed out",
+        "ja": "TTS テストがタイムアウトしました",
+        "ru": "Тест TTS превысил время ожидания",
+        "ko": "TTS 테스트 시간이 초과되었습니다",
+    },
+    "xtts_runtime_missing": {
+        "zh-CN": "声音克隆需要可选的 Coqui TTS 运行环境。当前尚未安装，因此可以管理参考音频，但暂时不能合成和测试。",
+        "en": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
+        "ja": "音声クローンには任意の Coqui TTS ランタイムが必要です。未インストールのため、参照音声の管理はできますが、合成とテストは無効です。",
+        "ru": "Voice Cloning требует дополнительную среду Coqui TTS. Она не установлена: можно управлять эталонными голосами, но синтез и тесты отключены.",
+        "ko": "음성 클로닝에는 선택 항목인 Coqui TTS 런타임이 필요합니다. 아직 설치되지 않아 참조 음성 관리는 가능하지만 합성과 테스트는 비활성화됩니다.",
+    },
+    "xtts_model_missing": {
+        "zh-CN": "已检测到声音克隆运行环境，但本地模型文件尚未准备好。请先下载模型。",
+        "en": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
+        "ja": "音声クローンのランタイムは検出されましたが、ローカルモデルファイルが未準備です。先にモデルをダウンロードしてください。",
+        "ru": "Среда Voice Cloning обнаружена, но локальные файлы модели не готовы. Сначала скачайте модель.",
+        "ko": "음성 클로닝 런타임은 감지되었지만 로컬 모델 파일이 준비되지 않았습니다. 먼저 모델을 다운로드하세요.",
+    },
+    "xtts_ready": {
+        "zh-CN": "声音克隆模型文件已准备好。录制或导入参考音频后即可测试声音克隆。",
+        "en": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
+        "ja": "音声クローンモデルは準備済みです。参照音声を録音またはインポートしてからテストできます。",
+        "ru": "Файлы модели Voice Cloning готовы. Запишите или импортируйте эталонный звук и протестируйте клонирование.",
+        "ko": "음성 클로닝 모델 파일이 준비되었습니다. 참조 음성을 녹음하거나 가져온 뒤 테스트하세요.",
+    },
+    "xtts_reference_missing": {
+        "zh-CN": "声音克隆需要参考音频。请先录制或导入一段清晰、有表现力的声音样本。",
+        "en": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
+        "ja": "音声クローンには参照音声が必要です。先に明瞭で表情のある音声サンプルを録音またはインポートしてください。",
+        "ru": "Voice Cloning нужен эталонный звук. Сначала запишите или импортируйте выразительный образец голоса.",
+        "ko": "음성 클로닝에는 참조 음성이 필요합니다. 먼저 표현이 잘 담긴 음성 샘플을 녹음하거나 가져오세요.",
+    },
+    "xtts_reference_invalid": {
+        "zh-CN": "声音克隆无法使用当前选择的参考音频。",
+        "en": "Voice Cloning cannot use the selected reference audio.",
+        "ja": "選択した参照音声は音声クローンで使用できません。",
+        "ru": "Voice Cloning не может использовать выбранный эталонный звук.",
+        "ko": "선택한 참조 음성을 음성 클로닝에 사용할 수 없습니다.",
+    },
+    "xtts_voice_cloning_hint": {
+        "zh-CN": "声音克隆会使用参考样本的音色和说话方式。想要更有情绪，请使用清晰且带有目标情绪的样本。",
+        "en": "Voice Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want.",
+        "ja": "音声クローンは参照サンプルの声質と話し方を使います。感情を出したい場合は、欲しい雰囲気の明瞭で表情のあるサンプルを使ってください。",
+        "ru": "Voice Cloning использует тембр и подачу эталонного образца. Для эмоций используйте чистый выразительный образец с нужным настроением.",
+        "ko": "음성 클로닝은 참조 샘플의 음색과 말투를 사용합니다. 감정을 더 넣고 싶다면 원하는 느낌이 담긴 깨끗하고 표현력 있는 샘플을 사용하세요.",
+    },
+})
+
 
 def _complete_localized_table(table: dict[str, dict[str, str]]) -> None:
     for values in table.values():
@@ -1211,16 +1679,13 @@ def _complete_localized_table(table: dict[str, dict[str, str]]) -> None:
 _complete_localized_table(QT_SETTINGS_COPY)
 
 NAV_ITEMS = [
-    ("common", QT_SETTINGS_COPY["appearance_section"]["zh-CN"]),
-    ("voice", QT_SETTINGS_COPY["recognition_section"]["zh-CN"]),
-    ("vrc_listen", QT_SETTINGS_COPY["vrc_listen_section"]["zh-CN"]),
-    ("translation", QT_SETTINGS_COPY["translation_domain_section"]["zh-CN"]),
-    ("tts", QT_SETTINGS_COPY["tts_section"]["zh-CN"]),
-    ("vr_integration", QT_SETTINGS_COPY["vr_integration_section"]["zh-CN"]),
-    ("hotkeys", QT_SETTINGS_COPY["hotkey_voice_section"]["zh-CN"]),
-    ("model", QT_SETTINGS_COPY["updates_models_section"]["zh-CN"]),
-    ("roleplay", QT_SETTINGS_COPY["roleplay_section"]["zh-CN"]),
-    ("advanced", QT_SETTINGS_COPY["advanced_section"]["zh-CN"]),
+    ("common", QT_SETTINGS_COPY["appearance_section"]),
+    ("api_config", QT_SETTINGS_COPY["api_config_section"]),
+    ("translation", QT_SETTINGS_COPY["translation_settings_section"]),
+    ("voice", QT_SETTINGS_COPY["voice_input_section"]),
+    ("vrc_listen", QT_SETTINGS_COPY["listen_others_section"]),
+    ("tts", QT_SETTINGS_COPY["tts_section"]),
+    ("advanced", QT_SETTINGS_COPY["vrchat_advanced_section"]),
 ]
 
 FIELD_HINTS: dict[str, dict[str, str]] = {
@@ -1530,6 +1995,7 @@ class SettingsBackgroundWidget(QWidget):
 class SettingsWindow(QDialog):
     saved = Signal()
     saving_started = Signal()  # emitted when save begins (before async write)
+    language_changed = Signal(str)  # emitted when UI language changes
     bert_refresh_requested = Signal()
     dictionary_update_finished = Signal(dict)
     dictionary_update_failed = Signal(str)
@@ -1651,6 +2117,10 @@ class SettingsWindow(QDialog):
         self._tts_rate_var = _FloatVar(1.0)
         self._tts_volume_var = _FloatVar(0.8)
         self._vrc_listen_enabled_var = _BoolVar(False)
+
+        # XTTS variables
+        self._xtts_language_var = _StrVar("Auto-detect")
+        self._xtts_device_var = _StrVar()
         self._vrc_listen_overlay_var = _BoolVar(False)
         self._vrc_listen_send_var = _BoolVar(True)
         self._vrc_listen_src_var = _StrVar()
@@ -1702,6 +2172,7 @@ class SettingsWindow(QDialog):
         self._qwen_model_codes: dict[str, str] = {}
         self._tts_engine_codes: dict[str, str] = {}
         self._tts_device_codes: dict[str, str] = {}
+        self._xtts_device_codes: dict[str, str] = {}
         self._tts_bert_language_codes: dict[str, str] = {}
         self._tts_api_region_codes: dict[str, str] = {}
         self._roleplay_preset_codes: dict[str, str] = {}
@@ -1733,6 +2204,7 @@ class SettingsWindow(QDialog):
         self._tts_api_base_url_entry: QLineEdit | None = None
         self._tts_api_model_entry: QComboBox | None = None
         self._tts_device_combo: QComboBox | None = None
+        self._xtts_device_combo: QComboBox | None = None
         self._asr_device_combo: QComboBox | None = None
         self._dictionary_status_label: QLabel | None = None
         self._dictionary_update_button: QPushButton | None = None
@@ -1926,6 +2398,34 @@ class SettingsWindow(QDialog):
         self._init_tts_device_vars(tts_cfg)
         self._init_tts_api_vars(tts_cfg, tts_engine)
 
+        # Load XTTS config
+        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
+        self._init_xtts_device_vars(tts_cfg)
+        xtts_lang_code = str(xtts_cfg.get("language", "auto") or "auto").strip().lower()
+        # Map language code to display name
+        lang_code_to_display = {
+            "auto": "Auto-detect",
+            "en": "English",
+            "zh-cn": "中文 (Chinese)",
+            "ja": "日本語 (Japanese)",
+            "ko": "한국어 (Korean)",
+            "es": "Español (Spanish)",
+            "fr": "Français (French)",
+            "de": "Deutsch (German)",
+            "it": "Italiano (Italian)",
+            "pt": "Português (Portuguese)",
+            "pl": "Polski (Polish)",
+            "tr": "Türkçe (Turkish)",
+            "ru": "Русский (Russian)",
+            "nl": "Nederlands (Dutch)",
+            "cs": "Čeština (Czech)",
+            "ar": "العربية (Arabic)",
+            "hu": "Magyar (Hungarian)",
+            "hi": "Hindi",
+        }
+        xtts_lang_display = lang_code_to_display.get(xtts_lang_code, "Auto-detect")
+        self._xtts_language_var.set(xtts_lang_display)
+
         self._vrc_listen_enabled_var.set(bool(vrc_cfg.get("enabled", False)))
         self._vrc_listen_overlay_var.set(bool(vrc_cfg.get("show_overlay", False)))
         self._vrc_listen_send_var.set(bool(vrc_cfg.get("send_to_chatbox", True)))
@@ -2035,17 +2535,18 @@ class SettingsWindow(QDialog):
     def _nav_item_label(self, page_id: str) -> str:
         copy_keys = {
             "common": "appearance_section",
-            "voice": "recognition_section",
-            "vrc_listen": "vrc_listen_section",
-            "translation": "translation_domain_section",
+            "api_config": "api_config_section",
+            "translation": "translation_settings_section",
+            "voice": "voice_input_section",
+            "vrc_listen": "listen_others_section",
             "tts": "tts_section",
+            "advanced": "vrchat_advanced_section",
             "vr_integration": "vr_integration_section",
             "roleplay": "roleplay_section",
             "avatar": "vr_integration_section",
             "hotkeys": "hotkey_voice_section",
             "model": "updates_models_section",
             "dictionary": "settings_dictionary",
-            "advanced": "advanced_section",
         }
         return self._copy(copy_keys.get(page_id, page_id))
 
@@ -2340,6 +2841,17 @@ class SettingsWindow(QDialog):
         current_bert = normalize_style_bert_bert_language(style_cfg.get("bert_language", "jp"))
         self._tts_bert_language_var.set(next((label for label, code in bert_options if code == current_bert), bert_options[0][0]))
 
+    def _init_xtts_device_vars(self, tts_cfg: dict) -> None:
+        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
+        device_options = self._xtts_device_options()
+        self._xtts_device_codes = {label: code for label, code in device_options}
+        current_device = str(
+            xtts_cfg.get("device") or self._config.get("xtts_device") or "cpu"
+        ).strip().lower()
+        self._xtts_device_var.set(
+            next((label for label, code in device_options if code == current_device), device_options[0][0])
+        )
+
     def _init_tts_api_vars(self, tts_cfg: dict, engine: str) -> None:
         self._tts_api_region_codes = {}
         if engine not in TTS_API_ENGINE_IDS:
@@ -2435,6 +2947,12 @@ class SettingsWindow(QDialog):
 
     def _tts_device_options(self) -> list[tuple[str, str]]:
         return self._device_options()
+
+    def _xtts_device_options(self) -> list[tuple[str, str]]:
+        return [
+            (self._copy("xtts_device_cpu"), "cpu"),
+            (self._copy("xtts_device_cuda"), "cuda"),
+        ]
 
     def _device_options(self) -> list[tuple[str, str]]:
         return [
@@ -2739,26 +3257,18 @@ class SettingsWindow(QDialog):
 
         if page_id == "common":
             self._build_common_page(surface_layout)
+        elif page_id == "api_config":
+            self._build_api_config_page(surface_layout)
+        elif page_id == "translation":
+            self._build_translation_page(surface_layout)
         elif page_id == "voice":
             self._build_voice_page(surface_layout)
         elif page_id == "vrc_listen":
             self._build_vrc_listen_page(surface_layout)
-        elif page_id == "translation":
-            self._build_translation_page(surface_layout)
         elif page_id == "tts":
             self._build_tts_page(surface_layout)
-        elif page_id == "vr_integration":
-            self._build_avatar_page(surface_layout)
-        elif page_id == "roleplay":
-            self._build_roleplay_page(surface_layout)
-        elif page_id == "avatar":
-            self._build_avatar_page(surface_layout)
-        elif page_id == "hotkeys":
-            self._build_hotkey_page(surface_layout)
-        elif page_id == "model":
-            self._build_updates_models_page(surface_layout)
         elif page_id == "advanced":
-            self._build_advanced_page(surface_layout)
+            self._build_advanced_consolidated_page(surface_layout)
 
         surface_layout.addStretch(1)
         content_layout.addWidget(surface)
@@ -2798,6 +3308,19 @@ class SettingsWindow(QDialog):
         text = self._field_hint_text(key)
         if not text:
             return None
+        hint = QLabel(text)
+        hint.setObjectName("fieldHint")
+        hint.setWordWrap(True)
+        parent.addWidget(hint)
+        return hint
+
+    def _section(self, parent: QVBoxLayout, title: str) -> QVBoxLayout:
+        """Create a section with a title and return a layout for adding widgets."""
+        self._section_title(parent, title)
+        return parent
+
+    def _hint(self, parent: QVBoxLayout, text: str) -> QLabel:
+        """Add a hint text label to the layout."""
         hint = QLabel(text)
         hint.setObjectName("fieldHint")
         hint.setWordWrap(True)
@@ -2952,20 +3475,102 @@ class SettingsWindow(QDialog):
         if callable(self._on_mode_wizard_requested):
             self._on_mode_wizard_requested()
 
+    def _build_api_config_page(self, layout: QVBoxLayout) -> None:
+        """API Configuration Page - ONLY API keys, backends, and service configuration"""
+        # Translation Provider Section
+        self._section_title(layout, self._copy("translation_provider_section"))
+        backend_combo = self._combo("backend", self._backend_var, list(self._backend_codes.keys()), self._on_backend_changed)
+        self._row_layout(layout, self._copy("translation_provider"), backend_combo)
+        self._field_hint(layout, "translation_provider")
+
+        # Backend-specific fields (API keys, models, etc.)
+        self._backend_fields_frame = QFrame()
+        self._backend_fields_frame.setObjectName("subCard")
+        self._backend_fields_layout = QVBoxLayout(self._backend_fields_frame)
+        self._backend_fields_layout.setContentsMargins(16, 14, 16, 14)
+        self._backend_fields_layout.setSpacing(8)
+        layout.addWidget(self._backend_fields_frame)
+        self._render_backend_fields()
+
+        # Fallback backends
+        self._section_title(layout, self._copy("fallback_backends_section"))
+        self._row_layout(layout, self._copy("fallback_backends"), self._line_edit("fallback_backends", self._fallback_backends_var, 420))
+        self._field_hint(layout, "fallback_backends")
+
+        # ASR (Speech Recognition) API Configuration
+        self._section_title(layout, self._copy("asr_api_config_section"))
+
+        # Qwen3-ASR Configuration
+        qwen_asr_hint = QLabel(self._copy("qwen_asr_label"))
+        qwen_asr_hint.setObjectName("fieldLabel")
+        layout.addWidget(qwen_asr_hint)
+
+        api = self._line_edit("qwen_api_key", self._qwen_api_key_var)
+        api.setEchoMode(QLineEdit.EchoMode.Password)
+        self._row_layout(layout, self._copy("asr_api_key"), api)
+        self._row_layout(layout, self._copy("asr_region"), self._combo("qwen_region", self._qwen_region_var, list(self._qwen_region_codes.keys()), self._on_qwen_region_changed))
+        base = self._line_edit("qwen_base", self._qwen_base_url_var)
+        base.setReadOnly(self._selected_qwen_region() != "custom")
+        self._qwen_base_url_entry = base
+        self._row_layout(layout, self._copy("base_url"), base)
+
+        # Gemini ASR Configuration
+        layout.addSpacing(10)
+        gemini_asr_hint = QLabel(self._copy("gemini_asr_label"))
+        gemini_asr_hint.setObjectName("fieldLabel")
+        layout.addWidget(gemini_asr_hint)
+
+        api_gemini = self._line_edit("gemini_api_key", self._gemini_api_key_var)
+        api_gemini.setEchoMode(QLineEdit.EchoMode.Password)
+        self._row_layout(layout, self._copy("asr_api_key"), api_gemini)
+
+        # TTS API Configuration
+        self._section_title(layout, self._copy("tts_api_config_section"))
+
+        tts_hint = QLabel(self._copy("tts_online_services_label"))
+        tts_hint.setObjectName("hintLabel")
+        tts_hint.setWordWrap(True)
+        layout.addWidget(tts_hint)
+
+        api_tts = self._line_edit("tts_api_key", self._tts_api_key_var)
+        api_tts.setEchoMode(QLineEdit.EchoMode.Password)
+        self._tts_api_key_entry = api_tts
+        self._row_layout(layout, self._copy("api_key"), api_tts)
+
+        region_items = list(self._tts_api_region_codes.keys()) or [""]
+        region_combo = self._combo(
+            "tts_api_region",
+            self._tts_api_region_var,
+            region_items,
+            self._on_tts_api_region_changed,
+        )
+        self._tts_api_region_combo = region_combo
+        self._row_layout(layout, self._copy("tts_service_region"), region_combo)
+
+        base_tts = self._line_edit("tts_api_base_url", self._tts_api_base_url_var)
+        base_tts.setReadOnly(self._selected_tts_api_region() != "custom")
+        self._tts_api_base_url_entry = base_tts
+        self._row_layout(layout, self._copy("base_url"), base_tts)
+
     def _build_voice_page(self, layout: QVBoxLayout) -> None:
+        # ASR Engine Section
+        self._section_title(layout, self._copy("recognition_section"))
         self._build_asr_recognition_fields(layout)
 
+        # Microphone Device Section
         self._section_title(layout, self._copy("input_device_mode"))
         self._row_layout(layout, self._copy("input_device_mode"), self._combo("input_mode", self._input_device_mode_var, list(self._input_mode_codes.keys()), self._on_input_device_mode_changed))
         self._field_hint(layout, "input_device_mode")
         self._row_layout(layout, self._copy("input_device"), self._combo("input_device", self._input_device_var, self._input_device_choices(), self._on_input_device_changed))
         self._field_hint(layout, "input_device")
 
+        # Streaming Settings Section
         self._section_title(layout, self._copy("streaming"))
         self._row_layout(layout, self._copy("partial_interval"), self._line_edit("chunk_interval", self._chunk_interval_var, 160))
         self._row_layout(layout, self._copy("recognition_window"), self._line_edit("chunk_window", self._chunk_window_var, 160))
         self._row_layout(layout, self._copy("partial_hits"), self._line_edit("partial_hits", self._partial_hits_var, 160))
 
+        # VAD Settings Section
         self._section_title(layout, self._copy("vad"))
         self._row_layout(layout, self._copy("vad_seconds"), self._line_edit("vad", self._vad_var, 160))
         self._row_layout(layout, self._copy("vad_sensitivity"), self._line_edit("vad_sensitivity", self._vad_sensitivity_var, 160))
@@ -2975,6 +3580,8 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("min_segment"), self._line_edit("min_segment", self._min_segment_var, 160))
         self._row_layout(layout, self._copy("max_segment"), self._line_edit("max_segment", self._max_segment_var, 160))
         self._row_layout(layout, self._copy("partial_min_speech"), self._line_edit("partial_min_speech", self._partial_min_speech_var, 160))
+
+        # Audio Diagnostics Tools
         diag_row = QHBoxLayout()
         diag_row.setSpacing(8)
         diag_row.addWidget(self._icon_button(self._copy("open_mic_diagnostics"), "activity.svg", lambda: self._request_audio_diagnostics("mic"), width=168))
@@ -2982,6 +3589,7 @@ class SettingsWindow(QDialog):
         diag_row.addStretch(1)
         layout.addLayout(diag_row)
 
+        # Noise Reduction Section
         denoise_labels = DENOISE_LABELS.get(self._ui_lang) or DENOISE_LABELS.get(self._ui_lang.split("-", 1)[0]) or DENOISE_LABELS["en"]
         self._section_title(layout, denoise_labels["title"])
         self._row_layout(layout, denoise_labels["title"], self._combo("denoise", self._denoise_var, list(self._denoise_codes.keys())))
@@ -2994,6 +3602,7 @@ class SettingsWindow(QDialog):
         self._build_dictionary_page(layout)
 
     def _build_vrc_listen_page(self, layout: QVBoxLayout) -> None:
+        # Enable/Disable Section
         self._section_title(layout, self._copy("vrc_listen_section"))
 
         enabled_row = QHBoxLayout()
@@ -3015,18 +3624,27 @@ class SettingsWindow(QDialog):
         self._vrc_listen_send_check.toggled.connect(lambda value: self._emit_listen_state(send_to_chatbox=value))
         self._row_layout(layout, self._copy("vrc_listen_send"), self._vrc_listen_send_check)
 
-        self._row_layout(layout, self._copy("asr_listen"), self._combo("listen_asr", self._listen_asr_engine_var, list(self._listen_asr_engine_codes.keys())))
-        self._field_hint(layout, "asr_listen")
+        # Desktop Audio & ASR Section
+        self._section_title(layout, self._copy("audio_device_asr_section"))
         self._row_layout(layout, self._copy("vrc_listen_device"), self._combo("loopback_device", self._loopback_device_var, self._loopback_device_choices()))
         self._field_hint(layout, "vrc_listen_device")
+        self._row_layout(layout, self._copy("asr_listen"), self._combo("listen_asr", self._listen_asr_engine_var, list(self._listen_asr_engine_codes.keys())))
+        self._field_hint(layout, "asr_listen")
 
+        # Language Settings Section
+        self._section_title(layout, self._copy("language_settings_section"))
         self._row_layout(layout, self._copy("source_language"), self._combo("vrc_src", self._vrc_listen_src_var, list(self._listen_src_codes.keys())))
         self._row_layout(layout, tr(self._ui_lang, "target_language"), self._combo("vrc_tgt", self._vrc_listen_tgt_var, list(self._listen_lang_codes.keys())))
+
+        # Timing & VAD Settings Section
+        self._section_title(layout, self._copy("timing_vad_settings_section"))
         self._build_switch_row(layout, self._copy("self_suppress"), self._listen_self_suppress_var)
         self._row_layout(layout, self._copy("self_suppress_seconds"), self._line_edit("listen_self_suppress_seconds", self._listen_self_suppress_seconds_var, 160))
         self._row_layout(layout, self._copy("segment_duration"), self._line_edit("listen_segment_duration", self._listen_segment_duration_var, 160))
         self._row_layout(layout, self._copy("tail_silence"), self._line_edit("listen_tail_silence", self._listen_tail_silence_var, 160))
         self._row_layout(layout, self._copy("listen_vad_min_rms"), self._line_edit("listen_vad_min_rms", self._listen_vad_min_rms_var, 160))
+
+        # Audio Diagnostics Tools
         diag_row = QHBoxLayout()
         diag_row.setSpacing(8)
         diag_row.addWidget(self._icon_button(self._copy("open_listen_diagnostics"), "activity.svg", lambda: self._request_audio_diagnostics("vrc_listen"), width=168))
@@ -3035,21 +3653,9 @@ class SettingsWindow(QDialog):
         layout.addLayout(diag_row)
 
     def _build_translation_page(self, layout: QVBoxLayout) -> None:
-        self._section_title(layout, self._copy("translation_provider"))
-        backend_combo = self._combo("backend", self._backend_var, list(self._backend_codes.keys()), self._on_backend_changed)
-        self._row_layout(layout, self._copy("translation_provider"), backend_combo)
-        self._field_hint(layout, "translation_provider")
-        self._backend_fields_frame = QFrame()
-        self._backend_fields_frame.setObjectName("subCard")
-        self._backend_fields_layout = QVBoxLayout(self._backend_fields_frame)
-        self._backend_fields_layout.setContentsMargins(16, 14, 16, 14)
-        self._backend_fields_layout.setSpacing(8)
-        layout.addWidget(self._backend_fields_frame)
-        self._render_backend_fields()
-        self._row_layout(layout, self._copy("fallback_backends"), self._line_edit("fallback_backends", self._fallback_backends_var, 420))
-        self._field_hint(layout, "fallback_backends")
-
-        self._section_title(layout, self._copy("translation_domain_section"))
+        """Translation Settings Page - ONLY languages and output format (NO API config)"""
+        # Language Settings Section
+        self._section_title(layout, self._copy("language_settings_section"))
         self._row_layout(layout, self._copy("source_language"), self._combo("src_lang", self._src_lang_var, list(self._src_codes.keys())))
         self._field_hint(layout, "source_language")
         self._row_layout(layout, tr(self._ui_lang, "target_language"), self._combo("target_lang", self._target_lang_var, list(self._lang_codes.keys())))
@@ -3058,12 +3664,16 @@ class SettingsWindow(QDialog):
         self._field_hint(layout, "target_language_2")
         self._row_layout(layout, self._copy("target_language_3"), self._combo("target_lang3", self._target_lang3_var, list(self._lang3_codes.keys())))
         self._field_hint(layout, "target_language_3")
+
+        # Output Settings Section
+        self._section_title(layout, self._copy("output_settings_section"))
         self._row_layout(layout, self._copy("output_format"), self._combo("output_fmt", self._output_format_var, list(self._fmt_codes.keys()), self._on_output_format_changed))
         self._row_layout(layout, self._copy("chatbox_template"), self._line_edit("chatbox_template", self._chatbox_template_var, 420))
         self._field_hint(layout, "chatbox_template")
         self._build_switch_row(layout, self._copy("send_to_chatbox"), self._mic_send_to_chatbox_var)
         self._field_hint(layout, "send_to_chatbox")
 
+        # Dictionary Section
         self._build_dictionary_page(layout)
 
     def _build_tts_page(self, layout: QVBoxLayout) -> None:
@@ -3084,6 +3694,95 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, tr(self._ui_lang, "tts_voice"), self._tts_voice_combo)
         if not self._preloaded:
             QTimer.singleShot(0, self._load_tts_voices_async)
+
+        # Voice Cloning options
+        self._xtts_options_frame = QFrame()
+        self._xtts_options_frame.setObjectName("xttsOptionsFrame")
+        xtts_layout = QVBoxLayout(self._xtts_options_frame)
+        xtts_layout.setContentsMargins(0, 0, 0, 0)
+        xtts_layout.setSpacing(8)
+
+        xtts_hint_text = (
+            self._copy("xtts_voice_cloning_hint")
+            or "Voice Cloning: record or import a clean, expressive reference sample."
+        )
+        xtts_hint = QLabel(xtts_hint_text)
+        xtts_hint.setObjectName("hintLabel")
+        xtts_hint.setWordWrap(True)
+        xtts_layout.addWidget(xtts_hint)
+
+        # Speaking language selection
+        xtts_lang_layout = QHBoxLayout()
+        xtts_lang_layout.setSpacing(10)
+        xtts_lang_label = QLabel(tr(self._ui_lang, "xtts_language") or "Speaking Language:")
+        xtts_lang_layout.addWidget(xtts_lang_label)
+
+        self._xtts_language_combo = self._combo(
+            "xtts_language",
+            self._xtts_language_var,
+            [label for label, _code in XTTS_LANGUAGE_OPTIONS],
+            self._on_xtts_language_changed,
+        )
+        xtts_lang_layout.addWidget(self._xtts_language_combo, 1)
+        xtts_layout.addLayout(xtts_lang_layout)
+
+        xtts_lang_hint = QLabel(
+            tr(self._ui_lang, "xtts_language_hint") or
+            "Auto-detect: Automatically detects language from text | Manual: Always use selected language"
+        )
+        xtts_lang_hint.setObjectName("hintLabel")
+        xtts_lang_hint.setWordWrap(True)
+        xtts_layout.addWidget(xtts_lang_hint)
+
+        # Device selection (CPU/CUDA)
+        self._xtts_device_combo = self._combo(
+            "xtts_device",
+            self._xtts_device_var,
+            list(self._xtts_device_codes.keys()),
+            self._on_xtts_device_changed,
+        )
+        self._row_layout(
+            xtts_layout,
+            self._copy("xtts_device_label") or "Compute Device",
+            self._xtts_device_combo,
+        )
+
+        # Device info hints
+        cpu_info = QLabel(tr(self._ui_lang, "xtts_device_cpu_info") or "ℹ CPU mode works on all computers")
+        cpu_info.setObjectName("hintLabel")
+        cpu_info.setWordWrap(True)
+        xtts_layout.addWidget(cpu_info)
+
+        cuda_info = QLabel(tr(self._ui_lang, "xtts_device_cuda_info") or "ℹ GPU mode requires NVIDIA GPU, 3-5x faster")
+        cuda_info.setObjectName("hintLabel")
+        cuda_info.setWordWrap(True)
+        xtts_layout.addWidget(cuda_info)
+
+        voice_btn_row = QHBoxLayout()
+        voice_btn_row.setSpacing(10)
+
+        record_voice_btn = QPushButton(tr(self._ui_lang, "record_voice") or "Record Voice")
+        record_voice_btn.clicked.connect(self._on_record_voice_for_xtts)
+        voice_btn_row.addWidget(record_voice_btn)
+
+        import_voice_btn = QPushButton(tr(self._ui_lang, "import_voice") or "Import Voice")
+        import_voice_btn.clicked.connect(self._on_import_voice_for_xtts)
+        voice_btn_row.addWidget(import_voice_btn)
+
+        voice_btn_row.addStretch(1)
+        xtts_layout.addLayout(voice_btn_row)
+
+        model_btn_row = QHBoxLayout()
+        model_btn_row.setSpacing(10)
+        self._download_xtts_btn = QPushButton(tr(self._ui_lang, "download_xtts_models") or "Download Voice Cloning Model")
+        self._download_xtts_btn.clicked.connect(self._on_download_xtts_models)
+        model_btn_row.addWidget(self._download_xtts_btn)
+
+        model_btn_row.addStretch(1)
+        xtts_layout.addLayout(model_btn_row)
+
+        layout.addWidget(self._xtts_options_frame)
+        self._refresh_xtts_options_visibility()
 
         self._sbv2_options_frame = QFrame()
         self._sbv2_options_frame.setObjectName("sbv2OptionsFrame")
@@ -3439,13 +4138,90 @@ class SettingsWindow(QDialog):
         layout.addWidget(self._dictionary_custom_status_label)
 
     def _build_advanced_page(self, layout: QVBoxLayout) -> None:
-        self._section_title(layout, self._copy("advanced_section"))
-        hint = QLabel(self._copy("advanced_runtime_hint"))
+        """Original advanced page - kept for backward compatibility"""
+        self._build_advanced_consolidated_page(layout)
+
+    def _build_advanced_consolidated_page(self, layout: QVBoxLayout) -> None:
+        """Consolidated Advanced Page - merges VRChat, Hotkeys, Models, Roleplay, and Advanced"""
+
+        # VRChat Integration Section
+        self._section_title(layout, "VRChat 集成")
+
+        # Avatar OSC Sync
+        subtitle = QLabel(self._copy("avatar_subtitle"))
+        subtitle.setObjectName("hintLabel")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        self._build_switch_row(layout, self._copy("avatar_sync_enabled"), self._avatar_sync_enabled_var)
+        hint = QLabel(self._copy("avatar_sync_hint"))
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self._row_layout(layout, self._copy("avatar_param_translating"), self._line_edit("avatar_translating", self._avatar_translating_var, 260))
+        self._row_layout(layout, self._copy("avatar_param_speaking"), self._line_edit("avatar_speaking", self._avatar_speaking_var, 260))
+        self._row_layout(layout, self._copy("avatar_param_muted"), self._line_edit("avatar_muted", self._avatar_muted_var, 260))
+        self._row_layout(layout, self._copy("avatar_param_error"), self._line_edit("avatar_error", self._avatar_error_var, 260))
+        self._row_layout(layout, self._copy("avatar_param_target_language"), self._line_edit("avatar_target_language", self._avatar_target_language_var, 260))
+
+        # OSC Listener
+        self._section_title(layout, "OSC 监听器")
+        self._build_switch_row(layout, self._copy("osc_listener_enabled"), self._osc_listener_enabled_var)
+        self._row_layout(layout, self._copy("osc_receive_host"), self._line_edit("osc_receive_host", self._osc_receive_host_var, 180))
+        self._row_layout(layout, self._copy("osc_receive_port"), self._line_edit("osc_receive_port", self._osc_receive_port_var, 120))
+        self._build_switch_row(layout, self._copy("osc_sync_mute_self"), self._osc_sync_mute_self_var)
+        self._build_switch_row(layout, self._copy("osc_allow_avatar_control"), self._osc_allow_avatar_control_var)
+        self._row_layout(layout, self._copy("osc_control_prefix"), self._line_edit("osc_control_prefix", self._osc_control_prefix_var, 180))
+        self._row_layout(layout, self._copy("osc_param_toggle_mic"), self._line_edit("osc_toggle_mic", self._osc_toggle_mic_var, 260))
+        self._row_layout(layout, self._copy("osc_param_toggle_listen"), self._line_edit("osc_toggle_listen", self._osc_toggle_listen_var, 260))
+        self._row_layout(layout, self._copy("osc_param_toggle_tts"), self._line_edit("osc_toggle_tts", self._osc_toggle_tts_var, 260))
+        self._row_layout(layout, self._copy("osc_param_toggle_overlay"), self._line_edit("osc_toggle_overlay", self._osc_toggle_overlay_var, 260))
+
+        # Hotkeys Section
+        self._section_title(layout, "全局快捷键")
+        self._row_layout(layout, self._copy("text_input_hotkey"), self._line_edit("text_input_hk", self._text_input_hotkey_var, 220))
+        self._row_layout(layout, self._copy("mic_mute_hotkey"), self._line_edit("mic_mute_hk", self._mic_mute_hotkey_var, 220))
+        hint = QLabel(self._copy("voice_control_placeholder"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self._section_title(layout, self._copy("mode_wizard_section"))
+        # Roleplay / Persona Section
+        self._section_title(layout, "角色扮演与人格")
+        self._build_switch_row(layout, self._copy("roleplay_enabled"), self._roleplay_enabled_var)
+        self._row_layout(layout, self._copy("roleplay_preset"), self._combo("roleplay_preset", self._roleplay_preset_var, list(self._roleplay_preset_codes.keys()), self._on_roleplay_preset_changed))
+        self._row_layout(layout, self._copy("persona_name"), self._line_edit("persona_name", self._persona_name_var, 260))
+
+        prompt_label = QLabel(self._copy("persona_prompt"))
+        prompt_label.setObjectName("fieldLabel")
+        layout.addWidget(prompt_label)
+        self._roleplay_prompt_edit = QTextEdit()
+        self._roleplay_prompt_edit.setPlainText(self._roleplay_prompt_var.value())
+        self._roleplay_prompt_edit.textChanged.connect(
+            lambda: self._roleplay_prompt_var.set(self._roleplay_prompt_edit.toPlainText())
+        )
+        self._roleplay_prompt_edit.setMinimumHeight(140)
+        layout.addWidget(self._roleplay_prompt_edit)
+
+        glossary_label = QLabel(self._copy("persona_glossary"))
+        glossary_label.setObjectName("fieldLabel")
+        layout.addWidget(glossary_label)
+        self._roleplay_glossary_edit = QTextEdit()
+        self._roleplay_glossary_edit.setPlainText(self._roleplay_glossary_var.value())
+        self._roleplay_glossary_edit.textChanged.connect(
+            lambda: self._roleplay_glossary_var.set(self._roleplay_glossary_edit.toPlainText())
+        )
+        self._roleplay_glossary_edit.setMinimumHeight(100)
+        layout.addWidget(self._roleplay_glossary_edit)
+
+        # Model Downloads Section
+        self._section_title(layout, "模型下载")
+        self._build_model_page(layout, show_all=True)
+
+        # Other Advanced Settings
+        self._section_title(layout, "其他高级设置")
+
+        # Mode wizard
         wizard_hint = QLabel(self._copy("mode_wizard_hint"))
         wizard_hint.setObjectName("hintLabel")
         wizard_hint.setWordWrap(True)
@@ -3455,11 +4231,7 @@ class SettingsWindow(QDialog):
         wizard_row.addStretch(1)
         layout.addLayout(wizard_row)
 
-        self._section_title(layout, self._copy("hotkey_section"))
-        self._row_layout(layout, self._copy("text_input_hotkey"), self._line_edit("text_input_hk_advanced", self._text_input_hotkey_var, 220))
-        self._row_layout(layout, self._copy("mic_mute_hotkey"), self._line_edit("mic_mute_hk_advanced", self._mic_mute_hotkey_var, 220))
-
-        self._section_title(layout, self._copy("logs_section"))
+        # Logs folder
         logs_hint = QLabel(self._copy("logs_folder_hint"))
         logs_hint.setObjectName("hintLabel")
         logs_hint.setWordWrap(True)
@@ -3556,15 +4328,24 @@ class SettingsWindow(QDialog):
         self._clear_layout(self._backend_fields_layout)
         self._backend_base_url_entry = None
 
-        hint = get_backend_api_key_hint(backend)
-        api = self._line_edit("backend_api_key", self._backend_api_key_var)
-        api.setEchoMode(QLineEdit.EchoMode.Password)
-        self._row_layout(self._backend_fields_layout, self._copy("api_key"), api)
-        if hint:
-            hint_label = QLabel(hint)
-            hint_label.setObjectName("hintLabel")
-            hint_label.setWordWrap(True)
-            self._backend_fields_layout.addWidget(hint_label)
+        spec = get_backend_spec(backend)
+        api_key_input = str(spec.get("api_key_input", "entry")).strip().lower()
+        existing_api_key = self._backend_api_key_var.value().strip()
+        show_api_key = (
+            api_key_input != "hidden"
+            or backend_api_key_is_required(backend)
+            or bool(existing_api_key)
+        )
+        if show_api_key:
+            hint = get_backend_api_key_hint(backend)
+            api = self._line_edit("backend_api_key", self._backend_api_key_var)
+            api.setEchoMode(QLineEdit.EchoMode.Password)
+            self._row_layout(self._backend_fields_layout, self._copy("api_key"), api)
+            if hint:
+                hint_label = QLabel(hint)
+                hint_label.setObjectName("hintLabel")
+                hint_label.setWordWrap(True)
+                self._backend_fields_layout.addWidget(hint_label)
 
         if backend_has_service_regions(backend):
             self._row_layout(
@@ -3751,6 +4532,7 @@ class SettingsWindow(QDialog):
         self._maybe_prompt_missing_model_download()
 
     def _render_asr_provider_fields(self, engine: str) -> None:
+        """Render ASR provider fields - API keys moved to API Configuration page, only show model selection"""
         self._clear_layout(self._asr_provider_layout)
         self._qwen_model_hint_label = None
         if engine in {"sensevoice-small", "whisper-large-v3-turbo"}:
@@ -3760,15 +4542,15 @@ class SettingsWindow(QDialog):
         title = QLabel(self._copy("asr_provider_config"))
         title.setObjectName("fieldLabel")
         self._asr_provider_layout.addWidget(title)
+
         if engine == "qwen3-asr":
-            api = self._line_edit("qwen_api_key", self._qwen_api_key_var)
-            api.setEchoMode(QLineEdit.EchoMode.Password)
-            self._row_layout(self._asr_provider_layout, self._copy("asr_api_key"), api)
-            self._row_layout(self._asr_provider_layout, self._copy("asr_region"), self._combo("qwen_region", self._qwen_region_var, list(self._qwen_region_codes.keys()), self._on_qwen_region_changed))
-            base = self._line_edit("qwen_base", self._qwen_base_url_var)
-            base.setReadOnly(self._selected_qwen_region() != "custom")
-            self._qwen_base_url_entry = base
-            self._row_layout(self._asr_provider_layout, self._copy("base_url"), base)
+            # API key, region, base URL are now in API Configuration page
+            # Only show model selection here
+            hint = QLabel(self._copy("api_key_in_api_config_hint"))
+            hint.setObjectName("hintLabel")
+            hint.setWordWrap(True)
+            self._asr_provider_layout.addWidget(hint)
+
             self._row_layout(
                 self._asr_provider_layout,
                 tr(self._ui_lang, "model"),
@@ -3780,16 +4562,22 @@ class SettingsWindow(QDialog):
             self._asr_provider_layout.addWidget(self._qwen_model_hint_label)
             self._refresh_qwen_model_hint()
             return
+
         if engine == "gemini-live":
-            api = self._line_edit("gemini_api_key", self._gemini_api_key_var)
-            api.setEchoMode(QLineEdit.EchoMode.Password)
-            self._row_layout(self._asr_provider_layout, self._copy("asr_api_key"), api)
+            # API key is now in API Configuration page
+            # Only show model selection here
+            hint = QLabel(self._copy("api_key_in_api_config_hint"))
+            hint.setObjectName("hintLabel")
+            hint.setWordWrap(True)
+            self._asr_provider_layout.addWidget(hint)
+
             self._row_layout(self._asr_provider_layout, tr(self._ui_lang, "model"), self._line_edit("gemini_model", self._gemini_model_var))
             gemini_hint = QLabel(self._copy("gemini_model_recommendation"))
             gemini_hint.setObjectName("hintLabel")
             gemini_hint.setWordWrap(True)
             self._asr_provider_layout.addWidget(gemini_hint)
             return
+
         note = QLabel(tr(self._ui_lang, "asr_hint_webspeech"))
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
@@ -3886,12 +4674,24 @@ class SettingsWindow(QDialog):
             finally:
                 combo.blockSignals(False)
 
+    def _set_xtts_device_code(self, device: str) -> None:
+        label = next((label for label, code in self._xtts_device_codes.items() if code == device), "")
+        if not label:
+            return
+        self._xtts_device_var.set(label)
+        combo = getattr(self, "_xtts_device_combo", None)
+        if combo is not None and combo.currentText() != label:
+            combo.blockSignals(True)
+            try:
+                combo.setCurrentText(label)
+            finally:
+                combo.blockSignals(False)
+
     def _on_tts_device_changed(self, _label: str) -> None:
         if self._tts_device_codes.get(self._tts_device_var.value(), "cpu") != "cuda":
             return
-        if gpu_runtime_available() or cuda_pytorch_installed():
+        if torch_cuda_available():
             return
-        self._set_tts_device_code("cpu")
         self._show_tts_gpu_unavailable_dialog()
 
     def _on_asr_device_changed(self, _label: str) -> None:
@@ -3900,9 +4700,8 @@ class SettingsWindow(QDialog):
         if not self._is_local_asr_engine(self._selected_asr_engine()):
             self._set_asr_device_code("cpu")
             return
-        if gpu_runtime_available() or cuda_pytorch_installed():
+        if torch_cuda_available():
             return
-        self._set_asr_device_code("cpu")
         self._show_tts_gpu_unavailable_dialog()
 
     def _show_tts_gpu_unavailable_dialog(self) -> None:
@@ -3942,6 +4741,61 @@ class SettingsWindow(QDialog):
         if hasattr(self, "_tts_vol_label"):
             self._tts_vol_label.setText(f"{int(self._tts_volume_var.value() * 100)}%")
 
+    def _on_xtts_language_changed(self, text: str) -> None:
+        """Handle XTTS language selection change."""
+        # Map display name to language code
+        lang_map = {
+            "Auto-detect": "auto",
+            "English": "en",
+            "中文 (Chinese)": "zh-cn",
+            "日本語 (Japanese)": "ja",
+            "한국어 (Korean)": "ko",
+            "Español (Spanish)": "es",
+            "Français (French)": "fr",
+            "Deutsch (German)": "de",
+            "Italiano (Italian)": "it",
+            "Português (Portuguese)": "pt",
+            "Polski (Polish)": "pl",
+            "Türkçe (Turkish)": "tr",
+            "Русский (Russian)": "ru",
+            "Nederlands (Dutch)": "nl",
+            "Čeština (Czech)": "cs",
+            "العربية (Arabic)": "ar",
+            "Magyar (Hungarian)": "hu",
+            "Hindi": "hi",
+        }
+        lang_code = lang_map.get(text, "auto")
+        self._xtts_language_var.set(text)
+        logger.info("XTTS language changed to: %s (%s)", text, lang_code)
+
+    def _on_xtts_device_changed(self, _label: str) -> None:
+        """Handle XTTS device selection change."""
+        device = self._xtts_device_codes.get(self._xtts_device_var.value(), "cpu")
+
+        if device == "cuda" and not torch_cuda_available():
+            self._show_tts_gpu_unavailable_dialog()
+
+        # Save device preference
+        tts_cfg = self._config.setdefault("tts", {})
+        if not isinstance(tts_cfg, dict):
+            tts_cfg = {}
+            self._config["tts"] = tts_cfg
+        xtts_cfg = tts_cfg.setdefault("xtts", {})
+        if not isinstance(xtts_cfg, dict):
+            xtts_cfg = {}
+            tts_cfg["xtts"] = xtts_cfg
+        xtts_cfg["device"] = device
+        self._config["xtts_device"] = device
+        logger.info(f"XTTS device changed to: {device}")
+
+        # Show notice
+        QMessageBox.information(
+            self,
+            self._copy("notice") or "Notice",
+            self._copy("xtts_device_change_notice") or
+            "Device change will take effect the next time XTTS is used."
+        )
+
     def _tts_output_device_status_text(self) -> str:
         virtual = find_best_virtual_output_device()
         if virtual:
@@ -3958,6 +4812,29 @@ class SettingsWindow(QDialog):
         engine = self._selected_tts_engine()
         if engine == "style_bert_vits2":
             return self._selected_tts_bert_language()
+        if engine == "xtts":
+            xtts_language = self._selected_xtts_language_code()
+            if xtts_language == "auto":
+                target = str(self._config.get("translation", {}).get("target_language", "") or "").strip().lower()
+                if target in {"ja", "jp"}:
+                    return "ja"
+                if target in {"zh", "zh-cn", "cn", "chinese"}:
+                    return "zh"
+                if target in {"ko", "kr", "korean"}:
+                    return "ko"
+                if target in {"en", "en-us", "en-gb", "english"}:
+                    return "en"
+                ui_language = str(self._ui_lang or "").lower()
+                if ui_language.startswith(("ja", "jp")):
+                    return "ja"
+                if ui_language.startswith("zh"):
+                    return "zh"
+                if ui_language.startswith("ko"):
+                    return "ko"
+                return "en"
+            if xtts_language == "zh-cn":
+                return "zh"
+            return xtts_language
         if engine in {"voicevox", "aivis_speech"}:
             return "jp"
         if engine == "qwen_tts":
@@ -4007,6 +4884,8 @@ class SettingsWindow(QDialog):
 
     def _selected_tts_test_text(self) -> str:
         language = self._selected_tts_test_language()
+        if self._selected_tts_engine() == "xtts":
+            return XTTS_TEST_TEXT_BY_LANGUAGE.get(language, XTTS_TEST_TEXT_BY_LANGUAGE["en"])
         return TTS_TEST_TEXT_BY_LANGUAGE.get(language, self._copy("tts_test_text"))
 
     def _current_tts_test_timeout_ms(self, engine: str) -> int:
@@ -4042,6 +4921,66 @@ class SettingsWindow(QDialog):
         display = self._tts_voice_var.value()
         return self._tts_voice_display_to_id.get(display, display) if hasattr(self, "_tts_voice_display_to_id") else display
 
+    def _selected_xtts_language_code(self) -> str:
+        codes = [
+            "auto",
+            "en",
+            "zh-cn",
+            "ja",
+            "ko",
+            "es",
+            "fr",
+            "de",
+            "it",
+            "pt",
+            "pl",
+            "tr",
+            "ru",
+            "nl",
+            "cs",
+            "ar",
+            "hu",
+            "hi",
+        ]
+        combo = getattr(self, "_xtts_language_combo", None)
+        if combo is not None:
+            index = combo.currentIndex()
+            if 0 <= index < len(codes):
+                return codes[index]
+        text = str(self._xtts_language_var.value() or "").strip().lower()
+        keyword_map = {
+            "english": "en",
+            "chinese": "zh-cn",
+            "japanese": "ja",
+            "korean": "ko",
+            "spanish": "es",
+            "french": "fr",
+            "german": "de",
+            "italian": "it",
+            "portuguese": "pt",
+            "polish": "pl",
+            "turkish": "tr",
+            "russian": "ru",
+            "dutch": "nl",
+            "czech": "cs",
+            "arabic": "ar",
+            "hungarian": "hu",
+            "hindi": "hi",
+        }
+        for keyword, code in keyword_map.items():
+            if keyword in text:
+                return code
+        return "auto"
+
+    def _selected_xtts_device(self) -> str:
+        if getattr(self, "_xtts_device_codes", None):
+            device = self._xtts_device_codes.get(self._xtts_device_var.value())
+            if device in {"cpu", "cuda"}:
+                return device
+        tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
+        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
+        return str(xtts_cfg.get("device") or self._config.get("xtts_device") or "cpu").lower()
+
     def _current_tts_engine_config(self, engine: str) -> dict[str, object]:
         tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
         source = tts_cfg.get(engine, {}) if isinstance(tts_cfg.get(engine, {}), dict) else {}
@@ -4052,6 +4991,9 @@ class SettingsWindow(QDialog):
         engine_cfg["voice"] = voice or None
         engine_cfg["rate"] = self._safe_tts_rate(self._tts_rate_var.value(), engine=engine)
         engine_cfg["volume"] = self._safe_tts_volume(self._tts_volume_var.value())
+        if engine == "xtts":
+            engine_cfg["device"] = self._selected_xtts_device()
+            engine_cfg["language"] = self._selected_xtts_language_code()
         if engine in TTS_API_ENGINE_IDS:
             region = self._selected_tts_api_region()
             engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
@@ -4273,6 +5215,149 @@ class SettingsWindow(QDialog):
         if visible:
             self._refresh_bert_model_prompt()
 
+    def _refresh_xtts_options_visibility(self) -> None:
+        """Show/hide XTTS-v2 voice cloning options based on selected engine."""
+        frame = getattr(self, "_xtts_options_frame", None)
+        if frame is None:
+            return
+        visible = self._selected_tts_engine() == "xtts"
+        frame.setVisible(visible)
+
+        # Update download button visibility based on model status
+        download_btn = getattr(self, "_download_xtts_btn", None)
+        if download_btn is not None and visible:
+            from src.tts.xtts_downloader import xtts_models_ready
+            runtime_installed = is_xtts_runtime_available()
+            download_btn.setEnabled(runtime_installed)
+            if xtts_models_ready():
+                download_btn.hide()
+            else:
+                download_btn.show()
+
+    def _on_record_voice_for_xtts(self) -> None:
+        """Open voice recording dialog for XTTS-v2."""
+        try:
+            from src.ui_qt.voice_recording_dialog import VoiceRecordingDialog
+
+            audio_cfg = self._config.get("audio", {}) if isinstance(self._config.get("audio"), dict) else {}
+            input_device = audio_cfg.get("input_device")
+            try:
+                input_device = int(input_device) if input_device is not None else None
+            except (TypeError, ValueError):
+                input_device = None
+            dialog = VoiceRecordingDialog(self, input_device=input_device, ui_lang=self._ui_lang)
+            dialog.voice_recorded.connect(self._on_voice_recorded_for_xtts)
+            dialog.exec()
+        except Exception as exc:
+            logger.error("Failed to open voice recording dialog: %s", exc)
+            QMessageBox.critical(
+                self,
+                self._copy("error") or "Error",
+                self._copy("voice_record_open_failed", error=exc)
+            )
+
+    def _on_voice_recorded_for_xtts(self, audio_data: bytes, voice_name: str) -> None:
+        """Handle recorded voice data for XTTS-v2."""
+        try:
+            ref_audio_dir = xtts_reference_audio_dir()
+            ref_audio_dir.mkdir(parents=True, exist_ok=True)
+
+            output_path = ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
+            tmp_path = output_path.with_suffix(".tmp.wav")
+            with open(tmp_path, 'wb') as f:
+                f.write(audio_data)
+            try:
+                normalize_xtts_reference_audio_file(tmp_path, output_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+            logger.info("Saved XTTS reference audio: %s", output_path)
+
+            QMessageBox.information(
+                self,
+                self._copy("success") or "Success",
+                self._copy("xtts_voice_saved_message", voice=voice_name)
+            )
+
+            # Clear cache and reload TTS voices to include the new one
+            self._tts_voices_loaded.pop(self._selected_tts_engine(), None)
+            self._load_tts_voices()
+
+        except Exception as exc:
+            logger.error("Failed to save voice: %s", exc)
+            QMessageBox.critical(
+                self,
+                self._copy("save_failed") or "Save Failed",
+                self._copy("xtts_voice_save_failed", error=exc)
+            )
+
+    def _on_import_voice_for_xtts(self) -> None:
+        """Import voice audio file for XTTS-v2."""
+        file_dialog = QFileDialog(self)
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        file_dialog.setNameFilter(XTTS_REFERENCE_AUDIO_NAME_FILTER)
+
+        if file_dialog.exec():
+            files = file_dialog.selectedFiles()
+            if files:
+                audio_path = files[0]
+                try:
+                    from pathlib import Path
+
+                    # Get filename as voice name
+                    voice_name = Path(audio_path).stem
+
+                    # Convert to reference audio directory
+                    ref_audio_dir = xtts_reference_audio_dir()
+                    ref_audio_dir.mkdir(parents=True, exist_ok=True)
+
+                    output_path = ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
+                    normalize_xtts_reference_audio_file(audio_path, output_path)
+
+                    logger.info("Imported XTTS voice: %s", output_path)
+
+                    QMessageBox.information(
+                        self,
+                        self._copy("success") or "Success",
+                        self._copy("xtts_voice_imported_message", voice=voice_name)
+                    )
+
+                    # Clear cache and reload TTS voices
+                    self._tts_voices_loaded.pop(self._selected_tts_engine(), None)
+                    self._load_tts_voices()
+
+                except Exception as exc:
+                    logger.error("Failed to import voice: %s", exc)
+                    QMessageBox.critical(
+                        self,
+                        self._copy("error") or "Error",
+                        self._copy("xtts_voice_import_failed", error=exc)
+                    )
+
+    def _on_download_xtts_models(self) -> None:
+        """Open XTTS-v2 model download dialog."""
+        try:
+            from src.ui_qt.xtts_download_dialog import XTTSDownloadDialog
+
+            dialog = XTTSDownloadDialog(self, ui_lang=self._ui_lang)
+            dialog.download_complete.connect(self._on_xtts_download_complete)
+            dialog.exec()
+
+        except Exception as exc:
+            logger.error("Failed to open XTTS download dialog: %s", exc)
+            QMessageBox.critical(
+                self,
+                self._copy("error") or "Error",
+                self._copy("xtts_download_open_failed", error=exc)
+            )
+
+    def _on_xtts_download_complete(self) -> None:
+        """Handle XTTS model download completion."""
+        logger.info("XTTS-v2 models download completed")
+        # Refresh TTS engine status if needed
+        self._refresh_tts_runtime_card()
+        self._refresh_xtts_options_visibility()
+
     def _open_asr_model_download(self, engine: str) -> None:
         try:
             from src.ui_qt.model_download_dialog import SetupWindow
@@ -4488,6 +5573,11 @@ class SettingsWindow(QDialog):
         code = self._ui_lang_codes.get(text)
         if not code or code == self._ui_lang:
             return
+
+        # Emit language changed signal for main window
+        self.language_changed.emit(code)
+
+        # Continue with existing logic
         current_codes = self._capture_language_option_codes()
         self._apply_language_option_codes(current_codes, code)
         self._fmt_codes = {l: c for l, c in get_output_format_options(self._ui_lang)}
@@ -4563,6 +5653,7 @@ class SettingsWindow(QDialog):
         self._refresh_tts_runtime_card()
         self._refresh_tts_api_visibility()
         self._refresh_sbv2_options_visibility()
+        self._refresh_xtts_options_visibility()
 
     def _on_tts_voice_changed(self, _text: str) -> None:
         self._refresh_bert_model_prompt()
@@ -4591,6 +5682,7 @@ class SettingsWindow(QDialog):
         self._refresh_tts_runtime_card()
 
     def _build_tts_api_config(self, layout: QVBoxLayout) -> None:
+        """Build TTS API config - API keys moved to API Configuration page, only show model selection"""
         self._tts_api_frame = QFrame()
         self._tts_api_frame.setObjectName("runtimeNotice")
         frame_layout = QVBoxLayout(self._tts_api_frame)
@@ -4601,31 +5693,13 @@ class SettingsWindow(QDialog):
         title.setObjectName("fieldLabel")
         frame_layout.addWidget(title)
 
-        hint = QLabel(self._copy("tts_api_hint"))
+        # API key, region, base URL are now in API Configuration page
+        hint = QLabel(self._copy("api_tts_model_only_hint"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         frame_layout.addWidget(hint)
 
-        api = self._line_edit("tts_api_key", self._tts_api_key_var)
-        api.setEchoMode(QLineEdit.EchoMode.Password)
-        self._tts_api_key_entry = api
-        self._row_layout(frame_layout, self._copy("api_key"), api)
-
-        region_items = list(self._tts_api_region_codes.keys()) or [""]
-        region_combo = self._combo(
-            "tts_api_region",
-            self._tts_api_region_var,
-            region_items,
-            self._on_tts_api_region_changed,
-        )
-        self._tts_api_region_combo = region_combo
-        self._row_layout(frame_layout, self._copy("tts_service_region"), region_combo)
-
-        base = self._line_edit("tts_api_base_url", self._tts_api_base_url_var)
-        base.setReadOnly(self._selected_tts_api_region() != "custom")
-        self._tts_api_base_url_entry = base
-        self._row_layout(frame_layout, self._copy("base_url"), base)
-
+        # Only keep model selection
         model = NoWheelComboBox()
         model.setEditable(True)
         model.addItems(
@@ -4654,14 +5728,27 @@ class SettingsWindow(QDialog):
         if frame is None or label is None or button is None:
             return
         engine = self._selected_tts_engine()
-        if engine not in {"voicevox", "aivis_speech", "style_bert_vits2"}:
+        if engine not in {"voicevox", "aivis_speech", "style_bert_vits2", "xtts"}:
             frame.hide()
             return
         frame.show()
         frame.setObjectName("voiceDropZone" if engine == "style_bert_vits2" else "runtimeNotice")
         frame.style().unpolish(frame)
         frame.style().polish(frame)
-        if engine == "voicevox":
+        if engine == "xtts":
+            from src.tts.xtts_downloader import xtts_models_ready
+
+            button.setVisible(False)
+            if not is_xtts_runtime_available():
+                label.setText(self._copy("xtts_runtime_missing"))
+            elif not xtts_models_ready():
+                label.setText(self._copy("xtts_model_missing"))
+                button.setText(tr(self._ui_lang, "download_xtts_models") or "Download Voice Cloning Model")
+                button.setVisible(True)
+                self._set_tts_runtime_button_action(button, self._on_download_xtts_models)
+            else:
+                label.setText(self._copy("xtts_ready"))
+        elif engine == "voicevox":
             ready = self._local_tts_availability.get(engine)
             if ready is None:
                 label.setText(self._copy("tts_voice_loading"))
@@ -4846,9 +5933,11 @@ class SettingsWindow(QDialog):
         try:
             if engine == "style_bert_vits2":
                 available = list_style_bert_vits2_voices(bert_language)
+            elif engine == "xtts":
+                available = list_xtts_reference_voices()
             else:
                 tts = create_tts_engine(engine)
-                available = tts.get_available_voices() or []
+                available = tts.get_available_voices() if tts is not None else []
             entries = self._tts_voice_entries(available)
         except Exception:
             entries = []
@@ -4880,6 +5969,11 @@ class SettingsWindow(QDialog):
         id_to_display: dict[str, str] = {}
         for d, vid in entries:
             id_to_display.setdefault(str(vid), str(d))
+        if engine == "xtts" and (not preferred or preferred == "custom") and len(entries) > 1:
+            for display, voice_id in entries:
+                if str(voice_id) != "custom":
+                    preferred = str(voice_id)
+                    break
         selected_display = choices[0]
         if preferred in display_to_id:
             selected_display = preferred
@@ -4896,6 +5990,41 @@ class SettingsWindow(QDialog):
         combo.addItems(choices)
         combo.setCurrentText(selected_display)
         combo.blockSignals(False)
+
+    def _xtts_reference_preflight_error(self) -> str | None:
+        first_reference = first_xtts_reference_audio_path()
+        if first_reference is None:
+            return self._copy("xtts_reference_missing")
+
+        voice = self._selected_tts_voice_id()
+        selected_reference: Path | None = None
+        if voice and voice != "custom" and not self._is_tts_placeholder(voice):
+            candidate = xtts_reference_audio_dir() / f"{voice}.wav"
+            if candidate.exists():
+                selected_reference = candidate
+
+        prefix = self._copy("xtts_reference_invalid") or "Voice Cloning cannot use the selected reference audio."
+        if selected_reference is not None:
+            usable, reason, _stats = validate_xtts_reference_audio_file(selected_reference)
+            if not usable:
+                repaired, repair_reason, _repair_stats = repair_xtts_reference_audio_file(selected_reference)
+                if repaired:
+                    return None
+                reason = repair_reason or reason
+                return f"{prefix}\n\n{reason}" if reason else prefix
+            return None
+
+        usable_reference = first_usable_xtts_reference_audio_path()
+        if usable_reference is not None:
+            return None
+
+        repaired, repair_reason, _repair_stats = repair_xtts_reference_audio_file(first_reference)
+        if repaired:
+            return None
+
+        _usable, reason, _stats = validate_xtts_reference_audio_file(first_reference)
+        reason = repair_reason or reason
+        return f"{prefix}\n\n{reason}" if reason else prefix
 
     def _on_tts_test(self) -> None:
         if self._tts_testing:
@@ -4924,6 +6053,30 @@ class SettingsWindow(QDialog):
                         self._selected_tts_voice_id() or "<default>",
                     )
                     self._refresh_bert_model_prompt()
+                    self.tts_test_finished.emit(generation, False, message)
+                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                    return
+            if engine == "xtts":
+                from src.tts.xtts_downloader import xtts_models_ready
+
+                if not is_xtts_runtime_available(require_api=True):
+                    message = self._copy("xtts_runtime_missing")
+                    logger.warning("XTTS test blocked: Coqui TTS runtime is not importable")
+                    self.tts_test_finished.emit(generation, False, message)
+                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                    return
+                if not xtts_models_ready():
+                    message = self._copy("xtts_model_missing")
+                    logger.warning("XTTS test blocked: local XTTS model files are not ready")
+                    self._refresh_xtts_options_visibility()
+                    self._refresh_tts_runtime_card()
+                    self.tts_test_finished.emit(generation, False, message)
+                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                    return
+                reference_error = self._xtts_reference_preflight_error()
+                if reference_error:
+                    message = reference_error
+                    logger.warning("XTTS test blocked: reference audio is not usable: %s", message)
                     self.tts_test_finished.emit(generation, False, message)
                     QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
                     return
@@ -4977,7 +6130,7 @@ class SettingsWindow(QDialog):
                 callback=on_done,
             )
             if not accepted:
-                self.tts_test_finished.emit(generation, False, "TTS test request was not accepted")
+                self.tts_test_finished.emit(generation, False, self._copy("tts_test_not_accepted"))
         except Exception as e:
             logger.warning("TTS test failed: %s", e)
             self.tts_test_finished.emit(generation, False, str(e))
@@ -4986,7 +6139,7 @@ class SettingsWindow(QDialog):
         if self._tts_test_manager:
             self._tts_test_manager.stop_playback()
         if self._tts_testing:
-            self._finish_tts_test(self._tts_test_generation, False, "TTS test stopped")
+            self._finish_tts_test(self._tts_test_generation, False, self._copy("tts_test_stopped"))
 
     def _set_tts_testing(self, testing: bool) -> None:
         self._tts_testing = bool(testing)
@@ -5011,7 +6164,7 @@ class SettingsWindow(QDialog):
                 self._tts_test_manager.stop_playback()
             except Exception:
                 logger.debug("Failed to stop timed-out TTS playback", exc_info=True)
-        self._finish_tts_test(generation, False, "TTS test timed out")
+        self._finish_tts_test(generation, False, self._copy("tts_test_timed_out"))
 
     def _finish_tts_test(self, generation: int, success: bool, message: str) -> None:
         if generation != self._tts_test_generation or not self._tts_testing:
@@ -5416,6 +6569,10 @@ class SettingsWindow(QDialog):
         if isinstance(style_cfg, dict):
             style_cfg["device"] = self._tts_device_codes.get(self._tts_device_var.value(), "cpu")
             style_cfg["bert_language"] = self._selected_tts_bert_language()
+        xtts_cfg = tts_cfg.setdefault("xtts", {})
+        if isinstance(xtts_cfg, dict):
+            xtts_cfg["device"] = self._selected_xtts_device()
+            xtts_cfg["language"] = self._selected_xtts_language_code()
         tts_cfg["output_to_vrchat"] = self._tts_output_to_vrchat_var.value()
         if self._tts_output_to_vrchat_var.value():
             resolved = resolve_output_device(

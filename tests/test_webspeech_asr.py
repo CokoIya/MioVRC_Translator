@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import webbrowser
 from src.asr.webspeech_asr import _BridgeState, _page, WebSpeechASRProvider
 
@@ -58,6 +59,55 @@ def test_webspeech_provider_opens_browser_once(monkeypatch):
 
     assert len(opened) == 1
     assert opened[0].startswith("http://127.0.0.1:")
+
+
+def test_webspeech_provider_uses_embedded_opener_and_closes_handle(monkeypatch):
+    opened: list[str] = []
+    closed: list[bool] = []
+
+    class Handle:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(
+        webbrowser,
+        "open_new_tab",
+        lambda _url: (_ for _ in ()).throw(AssertionError("system browser opened")),
+    )
+
+    provider = WebSpeechASRProvider(
+        {
+            "asr": {
+                "webspeech": {
+                    "bridge_port": 0,
+                    "auto_open_browser": True,
+                    "embedded_browser": True,
+                }
+            }
+        }
+    )
+    provider.set_browser_opener(lambda url: opened.append(url) or Handle())
+    try:
+        provider.load()
+        provider.load()
+    finally:
+        provider.close()
+
+    assert len(opened) == 1
+    assert opened[0].startswith("http://127.0.0.1:")
+    assert closed == [True]
+
+
+def test_webspeech_state_marks_stale_heartbeat_disconnected():
+    state = _BridgeState()
+    state.set_connected()
+
+    with state.condition:
+        state.last_heartbeat_at = time.monotonic() - 30.0
+
+    assert state.mark_stale_if_needed(8.0) is True
+    assert state.connected is False
+    assert state.partial_text == ""
 
 
 def test_webspeech_final_timeout_seconds_is_not_treated_as_milliseconds():

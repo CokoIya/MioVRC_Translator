@@ -1,501 +1,626 @@
-"""
-实时调整面板
-基于 tomari-guruguru 项目的 Tweaks Panel 概念
-参数调整立即生效，无需保存重启
-"""
-# SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2024-2026 ここ_Mio and Mio RealTime Translator contributors
+"""Bounded quick-switch panel for settings that can apply immediately."""
 
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable, Mapping
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QComboBox,
     QDialog,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
-    QPushButton,
 )
 
 from src.ui_qt.icon_utils import ui_icon, ui_icon_url
 from src.ui_qt.theme import icon_tint, theme_tokens
+from src.ui_qt.widgets import NoWheelComboBox
 from src.utils.i18n import tr
+from src.utils.ui_config import (
+    get_backend_config_value,
+    get_backend_label,
+    get_backend_model_options,
+    get_backend_order,
+    get_output_format_options,
+    normalize_backend,
+    normalize_output_format,
+)
 
 logger = logging.getLogger(__name__)
 
 
+QuickSwitchCallback = Callable[[str, object], None]
+
+PANEL_SIZE = (500, 520)
+PANEL_MIN_SIZE = (440, 380)
+PANEL_MAX_SIZE = (560, 620)
+
+TTS_LANGUAGE_OPTION_KEYS = {
+    "xtts": (
+        ("quick_switch_lang_auto", "auto"),
+        ("quick_switch_lang_chinese", "zh"),
+        ("quick_switch_lang_english", "en"),
+        ("quick_switch_lang_japanese", "ja"),
+        ("quick_switch_lang_korean", "ko"),
+    ),
+    "style_bert_vits2": (
+        ("quick_switch_bert_japanese", "jp"),
+        ("quick_switch_bert_english", "en"),
+        ("quick_switch_bert_chinese", "zh"),
+    ),
+}
+
+
+def _dict_section(mapping: Mapping[str, object], key: str) -> dict:
+    value = mapping.get(key, {})
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_strength(value: object) -> float:
+    try:
+        return max(0.0, min(float(value), 1.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tts_engine(config: Mapping[str, object]) -> str:
+    return str(_dict_section(config, "tts").get("engine", "edge") or "edge").strip() or "edge"
+
+
+def _tts_language(config: Mapping[str, object], engine: str) -> str:
+    tts_cfg = _dict_section(config, "tts")
+    engine_cfg = tts_cfg.get(engine, {})
+    engine_cfg = engine_cfg if isinstance(engine_cfg, dict) else {}
+    if engine == "style_bert_vits2":
+        style_cfg = tts_cfg.get("style_bert_vits2", {})
+        style_cfg = style_cfg if isinstance(style_cfg, dict) else {}
+        return str(style_cfg.get("bert_language", "jp") or "jp")
+    if engine == "xtts":
+        return str(engine_cfg.get("language", "auto") or "auto")
+    return ""
+
+
+def _tts_language_entries(ui_language: str, engine: str) -> list[tuple[str, str]]:
+    return [(tr(ui_language, key), code) for key, code in TTS_LANGUAGE_OPTION_KEYS.get(engine, ())]
+
+
+def _voice_entries_for_engine(config: Mapping[str, object], engine: str) -> list[tuple[str, str]]:
+    try:
+        if engine == "edge":
+            from src.tts.edge_tts_engine import EDGE_FALLBACK_VOICES
+
+            return [(voice.name, voice.id) for voice in EDGE_FALLBACK_VOICES]
+        if engine == "gtts":
+            from src.tts.gtts_engine import GTTS_LANGUAGE_MAP
+
+            return [(f"Google {lang.upper()}", voice_id) for lang, voice_id in GTTS_LANGUAGE_MAP.items()]
+        if engine in {"mimo_tts", "qwen_tts"}:
+            from src.tts.api_tts_config import get_tts_api_voice_options
+
+            return [(label, voice_id) for voice_id, label, *_rest in get_tts_api_voice_options(engine)]
+        if engine == "style_bert_vits2":
+            from src.tts.style_bert_vits2_engine import list_style_bert_vits2_voices
+
+            return _voice_entries(list_style_bert_vits2_voices(_tts_language(config, engine)))
+        if engine == "xtts":
+            from src.tts.xtts_engine import list_xtts_reference_voices
+
+            return _voice_entries(list_xtts_reference_voices())
+    except Exception:
+        logger.debug("Failed to load quick-switch TTS voices for %s", engine, exc_info=True)
+    return []
+
+
+def _voice_entries(voices: object) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for index, voice in enumerate(voices or []):
+        voice_id = getattr(voice, "id", None) or str(index)
+        display = getattr(voice, "name", None) or voice_id
+        entries.append((str(display), str(voice_id)))
+    return entries
+
+
+def _roleplay_entries(ui_language: str) -> list[tuple[str, str]]:
+    entries = [
+        (tr(ui_language, "quick_switch_roleplay_off"), "standard"),
+        (tr(ui_language, "quick_switch_roleplay_language_exchange"), "language_exchange"),
+    ]
+    try:
+        from src.ui_qt.settings_window import ROLEPLAY_PRESETS, _roleplay_preset_label
+
+        for preset_id in ROLEPLAY_PRESETS:
+            if preset_id == "custom":
+                continue
+            entries.append((_roleplay_preset_label(preset_id, ui_language), f"roleplay:{preset_id}"))
+    except Exception:
+        logger.debug("Failed to load roleplay presets for quick switch", exc_info=True)
+    return entries
+
+
+def _current_roleplay_value(config: Mapping[str, object]) -> str:
+    trans_cfg = _dict_section(config, "translation")
+    social_cfg = trans_cfg.get("social", {})
+    social_cfg = social_cfg if isinstance(social_cfg, dict) else {}
+    mode = str(social_cfg.get("mode", "standard") or "standard").strip()
+    if mode == "roleplay":
+        return f"roleplay:{str(social_cfg.get('persona_preset', 'custom') or 'custom')}"
+    if mode == "language_exchange":
+        return "language_exchange"
+    return "standard"
+
+
 class RealtimeTweaksPanel(QDialog):
-    """
-    实时调整面板
-
-    特点：
-    - 参数立即生效，无需保存按钮
-    - 浮动窗口，可拖动
-    - 分组展示
-    - 显示当前数值
-
-    使用示例：
-        panel = RealtimeTweaksPanel(parent, state_manager, ui_language, theme)
-        panel.show()
-    """
+    """Small floating quick-switch panel with bounded size and scrolling."""
 
     def __init__(
         self,
         parent: QWidget | None,
-        state_manager,
+        config: Mapping[str, object],
         ui_language: str = "zh-CN",
         theme: str = "dark",
-    ):
-        # Keep this as a normal floating window. Using a parented Tool window
-        # can make Windows keep it above the main app even without explicit
-        # topmost flags.
+        on_change: QuickSwitchCallback | None = None,
+    ) -> None:
         super().__init__(None)
         self._owner = parent
-        self._state = state_manager
+        self._config = config
         self._ui_lang = ui_language
         self._theme = theme
-        self._icon_labels: list[tuple[QLabel, str, bool]] = []
-        self._manual_close_only = bool(self._state.get("tweaks_manual_close", True))
-
-        # 窗口属性
-        self.setWindowTitle("实时调整")
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.FramelessWindowHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(336, 620)
-
-        # 拖动相关
+        self._on_change = on_change
         self._drag_position = None
+        self._icon_labels: list[tuple[QLabel, str, bool]] = []
+        self._combos: dict[str, QComboBox] = {}
+        self._combo_labels: dict[str, QLabel] = {}
+        self._combo_label_keys: dict[str, str] = {}
+        self._combo_codes: dict[str, dict[str, str]] = {}
+        self._combo_reverse: dict[str, dict[str, str]] = {}
+        self._section_frames: list[QFrame] = []
+        self._section_labels: dict[str, QLabel] = {}
+        self._noise_slider: QSlider | None = None
+        self._noise_value_label: QLabel | None = None
+        self._noise_label: QLabel | None = None
+        self._refreshing_controls = False
+
+        self.setWindowTitle(tr(self._ui_lang, "quick_switch_title"))
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(*PANEL_MIN_SIZE)
+        self.setMaximumSize(*PANEL_MAX_SIZE)
+        self.resize(*PANEL_SIZE)
 
         self._build_ui()
+        self._refresh_controls()
         self._apply_styles()
 
-    def _build_ui(self):
-        """构建UI"""
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+    def _build_ui(self) -> None:
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        # 容器（用于应用圆角和背景）
-        container = QWidget()
-        container.setObjectName("tweaksContainer")
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(16, 12, 16, 16)
-        container_layout.setSpacing(12)
+        self._container = QWidget()
+        self._container.setObjectName("quickSwitchContainer")
+        container_layout = QVBoxLayout(self._container)
+        container_layout.setContentsMargins(14, 12, 14, 12)
+        container_layout.setSpacing(8)
 
-        # ---- 标题栏 ----
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
-
-        header_layout.addWidget(self._icon_label("sliders.svg", strong=True))
-
-        title_label = QLabel("实时调整")
-        title_label.setObjectName("tweaksTitle")
-        header_layout.addWidget(title_label)
-
-        header_layout.addStretch()
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(self._icon_label("sliders.svg", strong=True))
+        self._title_label = QLabel(tr(self._ui_lang, "quick_switch_title"))
+        self._title_label.setObjectName("quickSwitchTitle")
+        header.addWidget(self._title_label)
+        header.addStretch()
 
         self._close_btn = QPushButton("")
-        self._close_btn.setObjectName("tweaksCloseBtn")
+        self._close_btn.setObjectName("quickSwitchCloseBtn")
         self._close_btn.setFixedSize(30, 30)
         self._close_btn.setIconSize(QSize(16, 16))
         self._close_btn.clicked.connect(self.close)
-        header_layout.addWidget(self._close_btn)
+        header.addWidget(self._close_btn)
+        container_layout.addLayout(header)
 
-        container_layout.addLayout(header_layout)
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("quickSwitchScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._scroll.viewport().setObjectName("quickSwitchViewport")
+        self._scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        # ---- 麦克风部分 ----
-        self._add_section(container_layout, "mic.svg", "麦克风")
+        scroll_body = QWidget()
+        scroll_body.setObjectName("quickSwitchBody")
+        scroll_body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._body_layout = QVBoxLayout(scroll_body)
+        self._body_layout.setContentsMargins(0, 0, 6, 0)
+        self._body_layout.setSpacing(8)
+        self._scroll.setWidget(scroll_body)
+        container_layout.addWidget(self._scroll, 1)
 
-        self.mic_gain_slider = self._add_slider(
-            container_layout,
-            "增益",
-            30,
-            500,
-            160,
-            lambda v: self._state.set("mic_gain", v / 100),
-            suffix="x",
-            decimals=2,
-        )
+        self._translation_section = self._section("languages.svg", "quick_switch_section_translation")
+        self._add_combo(self._translation_section, "translation_provider", "quick_switch_translation_provider")
+        self._add_combo(self._translation_section, "translation_model", "quick_switch_translation_model")
+        self._add_combo(self._translation_section, "output_format", "quick_switch_output_format")
 
-        # ---- VAD 部分 ----
-        self._add_section(container_layout, "radio.svg", "语音检测 (VAD)")
+        self._audio_section = self._section("mic.svg", "quick_switch_section_audio")
+        self._add_noise_slider(self._audio_section, "quick_switch_noise_reduction")
 
-        self.vad_threshold_slider = self._add_slider(
-            container_layout,
-            "灵敏度",
-            10,
-            100,
-            50,
-            lambda v: self._state.set("vad_threshold", v / 100),
-            suffix="%",
-        )
+        self._tts_section = self._section("volume.svg", "quick_switch_section_tts")
+        self._tts_engine_label = QLabel("")
+        self._tts_engine_label.setObjectName("quickSwitchMeta")
+        self._tts_section.layout().addWidget(self._tts_engine_label)
+        self._add_combo(self._tts_section, "tts_language", "quick_switch_tts_language")
+        self._add_combo(self._tts_section, "tts_voice", "quick_switch_tts_voice")
 
-        # ---- TTS 部分 ----
-        self._add_section(container_layout, "volume.svg", "语音合成 (TTS)")
+        self._persona_section = self._section("message.svg", "quick_switch_section_persona")
+        self._add_combo(self._persona_section, "roleplay_profile", "quick_switch_roleplay_profile")
 
-        self.tts_speed_slider = self._add_slider(
-            container_layout,
-            "语速",
-            50,
-            200,
-            100,
-            lambda v: self._state.set("tts_speed", v / 100),
-            suffix="x",
-            decimals=2,
-        )
+        self._body_layout.addStretch(1)
+        root_layout.addWidget(self._container)
 
-        self.tts_volume_slider = self._add_slider(
-            container_layout,
-            "音量",
-            0,
-            100,
-            80,
-            lambda v: self._state.set("tts_volume", v / 100),
-            suffix="%",
-        )
+    def _section(self, icon_name: str, title_key: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("quickSwitchSection")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(7)
 
-        # ---- 悬浮窗部分 ----
-        self._add_section(container_layout, "eye.svg", "悬浮窗")
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        heading.addWidget(self._icon_label(icon_name))
+        label = QLabel(tr(self._ui_lang, title_key))
+        label.setObjectName("quickSwitchSectionTitle")
+        heading.addWidget(label)
+        heading.addStretch()
+        layout.addLayout(heading)
 
-        self.overlay_opacity_slider = self._add_slider(
-            container_layout,
-            "透明度",
-            45,
-            100,
-            88,
-            lambda v: self._state.set("overlay_opacity", v / 100),
-            suffix="%",
-        )
+        self._section_labels[title_key] = label
+        self._section_frames.append(frame)
+        self._body_layout.addWidget(frame)
+        return frame
 
-        # ---- 高级设置 ----
-        self._add_section(container_layout, "cpu.svg", "高级")
+    def _add_combo(self, section: QFrame, key: str, label_key: str) -> None:
+        layout = section.layout()
+        label = QLabel(tr(self._ui_lang, label_key))
+        label.setObjectName("quickSwitchLabel")
+        layout.addWidget(label)
+        self._combo_labels[key] = label
+        self._combo_label_keys[key] = label_key
 
-        self.translation_delay_slider = self._add_slider(
-            container_layout,
-            "翻译延迟缓冲",
-            0,
-            2000,
-            500,
-            lambda v: self._state.set("translation_delay_ms", v),
-            suffix="ms",
-        )
+        combo = NoWheelComboBox()
+        combo.setObjectName("quickSwitchCombo")
+        combo.setFixedHeight(34)
+        combo.setMinimumWidth(0)
+        combo.setMinimumContentsLength(10)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        combo.currentTextChanged.connect(lambda text, combo_key=key: self._on_combo_changed(combo_key, text))
+        layout.addWidget(combo)
+        self._combos[key] = combo
 
-        self.manual_close_toggle = self._add_toggle(
-            container_layout,
-            "手动关闭",
-            self._manual_close_only,
-            self._set_manual_close_only,
-        )
+    def _add_noise_slider(self, section: QFrame, label_key: str) -> None:
+        layout = section.layout()
+        row = QGridLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setHorizontalSpacing(10)
+        row.setVerticalSpacing(6)
 
-        container_layout.addStretch()
+        label = QLabel(tr(self._ui_lang, label_key))
+        label.setObjectName("quickSwitchLabel")
+        self._noise_label = label
+        row.addWidget(label, 0, 0)
 
-        # ---- 底部信息 ----
-        info_label = QLabel("拖动标题栏移动 • 调整立即生效")
-        info_label.setObjectName("tweaksInfo")
-        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        container_layout.addWidget(info_label)
+        self._noise_value_label = QLabel("0%")
+        self._noise_value_label.setObjectName("quickSwitchValue")
+        self._noise_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self._noise_value_label, 0, 1)
 
-        main_layout.addWidget(container)
+        self._noise_slider = QSlider(Qt.Orientation.Horizontal)
+        self._noise_slider.setObjectName("quickSwitchSlider")
+        self._noise_slider.setRange(0, 100)
+        self._noise_slider.setSingleStep(5)
+        self._noise_slider.setPageStep(10)
+        self._noise_slider.valueChanged.connect(self._on_noise_slider_changed)
+        row.addWidget(self._noise_slider, 1, 0, 1, 2)
+        layout.addLayout(row)
 
     def _icon_label(self, filename: str, *, strong: bool = False) -> QLabel:
         label = QLabel()
-        label.setObjectName("tweaksIcon")
+        label.setObjectName("quickSwitchIcon")
         label.setFixedSize(18, 18)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._icon_labels.append((label, filename, strong))
         return label
 
+    def _refresh_controls(self) -> None:
+        self._refreshing_controls = True
+        try:
+            self._refresh_combo_controls()
+            self._refresh_noise_control()
+        finally:
+            self._refreshing_controls = False
+
+    def _refresh_combo_controls(self) -> None:
+        trans_cfg = _dict_section(self._config, "translation")
+        backend = normalize_backend(str(trans_cfg.get("backend", "")))
+        backend_options = [(get_backend_label(code), code) for code in get_backend_order()]
+        self._set_combo_options("translation_provider", backend_options, backend)
+
+        current_model = get_backend_config_value(trans_cfg, backend, "model")
+        model_options = [(model, model) for model in get_backend_model_options(backend, current_model)]
+        self._set_combo_options("translation_model", model_options, str(current_model or ""))
+
+        output_format = normalize_output_format(str(trans_cfg.get("output_format", "")))
+        self._set_combo_options("output_format", list(get_output_format_options(self._ui_lang)), output_format)
+
+        engine = _tts_engine(self._config)
+        self._tts_engine_label.setText(tr(self._ui_lang, "quick_switch_current_tts_engine", engine=engine))
+        language_options = _tts_language_entries(self._ui_lang, engine)
+        self._set_combo_visible("tts_language", bool(language_options))
+        if language_options:
+            self._set_combo_options("tts_language", language_options, _tts_language(self._config, engine))
+
+        tts_cfg = _dict_section(self._config, "tts")
+        engine_cfg = tts_cfg.get(engine, {})
+        engine_cfg = engine_cfg if isinstance(engine_cfg, dict) else {}
+        voice_options = _voice_entries_for_engine(self._config, engine)
+        self._set_combo_options("tts_voice", voice_options, str(engine_cfg.get("voice", "") or ""))
+
+        self._set_combo_options("roleplay_profile", _roleplay_entries(self._ui_lang), _current_roleplay_value(self._config))
+
+    def _refresh_noise_control(self) -> None:
+        if self._noise_slider is None:
+            return
+        audio_cfg = _dict_section(self._config, "audio")
+        value = int(round(_safe_strength(audio_cfg.get("denoise_strength", 0.0)) * 100))
+        self._noise_slider.blockSignals(True)
+        try:
+            self._noise_slider.setValue(value)
+        finally:
+            self._noise_slider.blockSignals(False)
+        self._update_noise_value_label(value)
+
+    def _update_noise_value_label(self, value: int) -> None:
+        if self._noise_value_label is not None:
+            self._noise_value_label.setText(f"{int(value)}%")
+
+    def _set_combo_visible(self, key: str, visible: bool) -> None:
+        combo = self._combos.get(key)
+        if combo is None:
+            return
+        label = self._combo_labels.get(key)
+        if label is not None:
+            label.setVisible(visible)
+        combo.setVisible(visible)
+
+    def _set_combo_options(self, key: str, entries: list[tuple[str, str]], current_code: str) -> None:
+        combo = self._combos[key]
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            self._combo_codes[key] = {}
+            self._combo_reverse[key] = {}
+            for label, code in entries:
+                label_text = str(label)
+                code_text = str(code)
+                combo.addItem(label_text)
+                self._combo_codes[key][label_text] = code_text
+                self._combo_reverse[key].setdefault(code_text, label_text)
+            if not entries:
+                combo.addItem(tr(self._ui_lang, "quick_switch_no_option"))
+                combo.setEnabled(False)
+                return
+            combo.setEnabled(True)
+            selected_label = self._combo_reverse[key].get(str(current_code), entries[0][0])
+            combo.setCurrentText(str(selected_label))
+        finally:
+            combo.blockSignals(False)
+
+    def _on_combo_changed(self, key: str, text: str) -> None:
+        if self._refreshing_controls:
+            return
+        code = self._combo_codes.get(key, {}).get(text)
+        if code is None:
+            return
+        if self._on_change is not None:
+            self._on_change(key, code)
+        if key in {"translation_provider", "tts_language"}:
+            self._refresh_controls()
+
+    def _on_noise_slider_changed(self, value: int) -> None:
+        self._update_noise_value_label(value)
+        if self._refreshing_controls or self._on_change is None:
+            return
+        self._on_change("noise_reduction", round(value / 100.0, 2))
+
     def _refresh_icons(self) -> None:
+        tokens = theme_tokens(self._theme)
         for label, filename, strong in self._icon_labels:
-            color = str(theme_tokens(self._theme)["ACCENT"]) if strong else icon_tint(self._theme)
+            color = str(tokens["ACCENT"]) if strong else icon_tint(self._theme)
             icon = ui_icon(filename, 16, color)
             if icon.isNull():
                 label.clear()
             else:
                 label.setPixmap(icon.pixmap(16, 16))
-        if hasattr(self, "_close_btn"):
-            icon = ui_icon("x.svg", 16, icon_tint(self._theme, strong=True))
-            close_text = tr(self._ui_lang, "text_input_close")
-            self._close_btn.setIcon(icon)
-            self._close_btn.setText(close_text if icon.isNull() else "")
-            self._close_btn.setToolTip(close_text)
+        icon = ui_icon("x.svg", 16, icon_tint(self._theme, strong=True))
+        close_text = tr(self._ui_lang, "text_input_close")
+        self._close_btn.setIcon(icon)
+        self._close_btn.setText(close_text if icon.isNull() else "")
+        self._close_btn.setToolTip(close_text)
 
-    def _add_section(self, layout: QVBoxLayout, icon_name: str, title: str):
-        """添加分组标题"""
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(self._icon_label(icon_name))
-        label = QLabel(title)
-        label.setObjectName("tweaksSection")
-        row.addWidget(label)
-        row.addStretch()
-        layout.addLayout(row)
-
-    def _add_slider(
-        self,
-        layout: QVBoxLayout,
-        label: str,
-        min_val: int,
-        max_val: int,
-        default_val: int,
-        on_change: Callable[[int], None],
-        suffix: str = "",
-        decimals: int = 0,
-    ) -> QSlider:
-        """添加滑块控件"""
-        row_layout = QVBoxLayout()
-        row_layout.setSpacing(6)
-
-        # 标签和数值
-        label_layout = QHBoxLayout()
-        label_widget = QLabel(label)
-        label_widget.setObjectName("tweaksLabel")
-        label_layout.addWidget(label_widget)
-
-        label_layout.addStretch()
-
-        value_label = QLabel(self._format_value(default_val, suffix, decimals))
-        value_label.setObjectName("tweaksValue")
-        label_layout.addWidget(value_label)
-
-        row_layout.addLayout(label_layout)
-
-        # 滑块
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setObjectName("tweaksSlider")
-        slider.setMinimum(min_val)
-        slider.setMaximum(max_val)
-        slider.setValue(default_val)
-        slider.setTickPosition(QSlider.TickPosition.NoTicks)
-
-        def on_value_changed(v):
-            value_label.setText(self._format_value(v, suffix, decimals))
-            on_change(v)
-
-        slider.valueChanged.connect(on_value_changed)
-        row_layout.addWidget(slider)
-
-        layout.addLayout(row_layout)
-        return slider
-
-    def _add_toggle(
-        self,
-        layout: QVBoxLayout,
-        label: str,
-        default_val: bool,
-        on_change: Callable[[bool], None],
-    ) -> QCheckBox:
-        """添加开关控件"""
-        row_layout = QHBoxLayout()
-
-        label_widget = QLabel(label)
-        label_widget.setObjectName("tweaksLabel")
-        row_layout.addWidget(label_widget)
-
-        row_layout.addStretch()
-
-        toggle = QCheckBox()
-        toggle.setObjectName("tweaksToggle")
-        toggle.setChecked(default_val)
-        toggle.stateChanged.connect(
-            lambda state: on_change(Qt.CheckState(state) == Qt.CheckState.Checked)
-        )
-        row_layout.addWidget(toggle)
-
-        layout.addLayout(row_layout)
-        return toggle
-
-    def _format_value(self, value: int, suffix: str, decimals: int) -> str:
-        """格式化数值显示"""
-        if decimals > 0:
-            formatted = f"{value / (10 ** decimals):.{decimals}f}"
-        else:
-            formatted = str(value)
-        return f"{formatted}{suffix}"
-
-    def _set_manual_close_only(self, enabled: bool) -> None:
-        self._manual_close_only = bool(enabled)
-        self._state.set("tweaks_manual_close", self._manual_close_only)
-
-    def _apply_styles(self):
-        """应用样式"""
+    def _apply_styles(self) -> None:
         tokens = theme_tokens(self._theme)
+        combo_arrow = ui_icon_url("chevron-down-muted.svg")
         slider_handle = ui_icon_url("slider-thumb.svg")
         self.setStyleSheet(
             f"""
-            #tweaksContainer {{
+            #quickSwitchContainer {{
                 background: {tokens['PANEL_BG']};
                 border: 1px solid {tokens['PANEL_BORDER']};
                 border-radius: {tokens['RADIUS_L']}px;
             }}
-
-            #tweaksTitle {{
-                font-size: 14px;
-                font-weight: 600;
+            #quickSwitchTitle {{
                 color: {tokens['TEXT_PRIMARY']};
-                letter-spacing: 0;
+                font-size: 15px;
+                font-weight: 700;
             }}
-
-            #tweaksIcon {{
-                background: transparent;
+            #quickSwitchSection {{
+                background: {tokens['PANEL_ALT_BG']};
+                border: 1px solid {tokens['PANEL_BORDER']};
+                border-radius: {tokens['RADIUS_M']}px;
             }}
-
-            #tweaksCloseBtn {{
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 10px;
-                color: {tokens['TEXT_SECONDARY']};
-                padding: 0;
-            }}
-
-            #tweaksCloseBtn:hover {{
-                background: {tokens['FIELD_HOVER']};
-                border-color: {tokens['PANEL_BORDER']};
+            #quickSwitchSectionTitle {{
                 color: {tokens['TEXT_PRIMARY']};
-            }}
-
-            #tweaksSection {{
-                font-size: 11px;
-                font-weight: 600;
-                color: {tokens['TEXT_MUTED']};
-                text-transform: uppercase;
-                letter-spacing: 0;
-                margin-top: 8px;
-                margin-bottom: 4px;
-            }}
-
-            #tweaksLabel {{
                 font-size: 13px;
-                font-weight: 500;
-                color: {tokens['TEXT_PRIMARY']};
+                font-weight: 700;
             }}
-
-            #tweaksValue {{
+            #quickSwitchLabel {{
+                color: {tokens['TEXT_SECONDARY']};
                 font-size: 12px;
                 font-weight: 600;
-                color: {tokens['TEXT_SECONDARY']};
+            }}
+            #quickSwitchMeta {{
+                color: {tokens['TEXT_MUTED']};
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            #quickSwitchValue {{
+                color: {tokens['TEXT_MUTED']};
+                font-size: 12px;
+                font-weight: 700;
                 font-variant-numeric: tabular-nums;
             }}
-
-            #tweaksSlider {{
-                height: 20px;
-            }}
-
-            #tweaksSlider::groove:horizontal {{
+            #quickSwitchCombo {{
                 background: {tokens['FIELD_BG']};
-                height: 4px;
-                border-radius: 2px;
+                border: 1px solid {tokens['FIELD_BORDER']};
+                border-radius: {tokens['RADIUS_M']}px;
+                color: {tokens['INPUT_TEXT']};
+                min-height: 32px;
+                padding: 5px 30px 5px 10px;
             }}
-
-            #tweaksSlider::handle:horizontal {{
+            #quickSwitchCombo:hover {{
+                background: {tokens['FIELD_HOVER']};
+                border-color: {tokens['PANEL_BORDER']};
+            }}
+            #quickSwitchCombo::drop-down {{
+                border: 0;
+                width: 26px;
+            }}
+            #quickSwitchCombo::down-arrow {{
+                image: {combo_arrow};
+                width: 13px;
+                height: 13px;
+                margin-right: 8px;
+            }}
+            #quickSwitchCloseBtn {{
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 0;
+            }}
+            #quickSwitchCloseBtn:hover {{
+                background: {tokens['FIELD_HOVER']};
+                border-color: {tokens['PANEL_BORDER']};
+            }}
+            #quickSwitchScroll {{
+                background: transparent;
+                border: 0;
+            }}
+            #quickSwitchViewport,
+            #quickSwitchBody {{
+                background: transparent;
+            }}
+            #quickSwitchSlider {{
+                min-height: 24px;
+            }}
+            #quickSwitchSlider::groove:horizontal {{
+                background: {tokens['FIELD_BG']};
+                border: 1px solid {tokens['FIELD_BORDER']};
+                height: 6px;
+                border-radius: 3px;
+            }}
+            #quickSwitchSlider::sub-page:horizontal {{
+                background: {tokens['ACCENT']};
+                border-radius: 3px;
+            }}
+            #quickSwitchSlider::handle:horizontal {{
                 image: {slider_handle};
                 background: {tokens['PANEL_BG']};
-                width: 22px;
-                height: 22px;
-                margin: -9px 0;
+                width: 18px;
+                height: 18px;
+                margin: -7px 0;
                 border: 1px solid {tokens['ACCENT_BORDER']};
-                border-radius: 11px;
+                border-radius: 9px;
             }}
-
-            #tweaksSlider::handle:horizontal:hover {{
-                image: {slider_handle};
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 2px 0 2px 0;
             }}
-
-            #tweaksToggle {{
-                spacing: 0px;
+            QScrollBar::handle:vertical {{
+                background: {tokens['PANEL_BORDER']};
+                border-radius: 4px;
+                min-height: 24px;
             }}
-
-            #tweaksToggle::indicator {{
-                width: 40px;
-                height: 22px;
-                border-radius: 11px;
-                background: {tokens['FIELD_BG']};
-                border: 1px solid {tokens['PANEL_BORDER']};
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical,
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {{
+                border: 0;
+                background: transparent;
+                height: 0;
             }}
-
-            #tweaksToggle::indicator:checked {{
-                background: {tokens['ACCENT']};
-            }}
-
-            #tweaksInfo {{
-                font-size: 11px;
-                color: {tokens['TEXT_MUTED']};
-                margin-top: 8px;
-            }}
-        """
+            """
         )
         self._refresh_icons()
 
-    # ---- 窗口拖动 ----
-    def mousePressEvent(self, event):
-        """鼠标按下事件"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            # 只在标题栏区域允许拖动（顶部 40px）
-            if event.position().y() < 40:
-                self._drag_position = (
-                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                )
-                event.accept()
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < 44:
+            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
 
-    def mouseMoveEvent(self, event):
-        """鼠标移动事件"""
-        if (
-            event.buttons() == Qt.MouseButton.LeftButton
-            and self._drag_position is not None
-        ):
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() == Qt.MouseButton.LeftButton and self._drag_position is not None:
             self.move(event.globalPosition().toPoint() - self._drag_position)
             event.accept()
 
-    def mouseReleaseEvent(self, event):
-        """鼠标释放事件"""
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self._drag_position = None
+        super().mouseReleaseEvent(event)
 
-    def changeEvent(self, event):  # noqa: N802
-        if (
-            event.type() == QEvent.Type.ActivationChange
-            and not self._manual_close_only
-            and not self.isActiveWindow()
-        ):
-            QTimer.singleShot(0, self.hide)
+    def changeEvent(self, event) -> None:  # noqa: N802
+        if event.type() == QEvent.Type.ActivationChange:
+            QTimer.singleShot(0, self._refresh_controls)
         super().changeEvent(event)
 
-    def refresh_theme(self, theme: str):
-        """刷新主题"""
+    def refresh_theme(self, theme: str) -> None:
         self._theme = theme
         self._apply_styles()
 
     def update_language(self, ui_language: str) -> None:
         self._ui_lang = ui_language
+        self._refresh_static_texts()
+        self._refresh_controls()
         self._refresh_icons()
 
-
-# ---- 快速测试 ----
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication
-
-    # 模拟状态管理器
-    class MockStateManager:
-        def set(self, key, value):
-            print(f"状态更新: {key} = {value}")
-
-        def update(self, updates):
-            for key, value in updates.items():
-                self.set(key, value)
-
-    app = QApplication(sys.argv)
-
-    state = MockStateManager()
-    panel = RealtimeTweaksPanel(None, state, "zh-CN", "dark")
-    panel.show()
-
-    sys.exit(app.exec())
+    def _refresh_static_texts(self) -> None:
+        title = tr(self._ui_lang, "quick_switch_title")
+        self.setWindowTitle(title)
+        if hasattr(self, "_title_label"):
+            self._title_label.setText(title)
+        for key, label in self._section_labels.items():
+            label.setText(tr(self._ui_lang, key))
+        for combo_key, label in self._combo_labels.items():
+            label_key = self._combo_label_keys.get(combo_key)
+            if label_key:
+                label.setText(tr(self._ui_lang, label_key))
+        if self._noise_label is not None:
+            self._noise_label.setText(tr(self._ui_lang, "quick_switch_noise_reduction"))

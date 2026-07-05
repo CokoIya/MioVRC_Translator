@@ -163,6 +163,28 @@ class UpdateCheckerTests(unittest.TestCase):
             update_checker.UPDATE_MANIFEST_PUBLIC_KEY_ID = original_key_id
             update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = original_required
 
+    def test_optional_unsigned_manifest_logs_info_once(self):
+        original_required = update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE
+        original_notice_logged = update_checker._unsigned_manifest_notice_logged
+        try:
+            update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = False
+            update_checker._unsigned_manifest_notice_logged = False
+            manifest = {
+                "version": "v9.9.9",
+                "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v9.9.9/app.exe",
+                "sha256": "a" * 64,
+            }
+            with self.assertLogs("src.updater.update_checker", level="INFO") as captured:
+                self.assertFalse(update_checker._verify_update_manifest(manifest))
+                self.assertFalse(update_checker._verify_update_manifest(manifest))
+
+            self.assertEqual(len(captured.records), 1)
+            self.assertEqual(captured.records[0].levelname, "INFO")
+            self.assertIn("unsigned", captured.records[0].getMessage())
+        finally:
+            update_checker.REQUIRE_UPDATE_MANIFEST_SIGNATURE = original_required
+            update_checker._unsigned_manifest_notice_logged = original_notice_logged
+
     def test_select_newest_update_info_uses_highest_version(self):
         newest = _select_newest_update_info(
             [

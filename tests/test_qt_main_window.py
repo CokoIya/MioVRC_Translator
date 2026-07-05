@@ -3,8 +3,24 @@ import threading
 from PySide6.QtWidgets import QDialog
 
 from src.core.mode_manager import AppMode
-from src.ui_qt.main_window import MIC_SOURCE, MainWindow, UI_CALLBACK_DRAIN_MS
+from src.ui_qt.main_window import (
+    CHATBOX_CHAR_LIMIT,
+    FOOTER_BUTTON_SIZE,
+    FOOTER_SPONSOR_BUTTON_WIDTH,
+    MIC_SOURCE,
+    MainWindow,
+    UI_CALLBACK_DRAIN_MS,
+)
 from src.utils.i18n import tr
+
+
+def _has_ancestor(widget, ancestor) -> bool:
+    current = widget
+    while current is not None:
+        if current is ancestor:
+            return True
+        current = current.parentWidget()
+    return False
 
 
 def test_drain_ui_callback_queue_reschedules_callbacks(qtbot):
@@ -84,14 +100,21 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     qtbot.addWidget(window)
 
     assert window.windowTitle()
-    assert window.minimumSize().width() == 1040
-    assert window.minimumSize().height() == 640
-    assert window.width() == 1180
-    assert window.height() == 720
+    assert window.minimumSize().width() == 900
+    assert window.minimumSize().height() == 430
+    assert window.width() == 940
+    assert window.height() == 440
     assert window.maximumSize().width() > window.width()
     assert window.maximumSize().height() > window.height()
+    assert window.statusBar().isHidden()
+    assert window.statusBar().maximumHeight() == 0
+    assert not window.statusBar().isSizeGripEnabled()
     assert window._start_btn is not None
     assert window._mute_btn is not None
+    assert window._tgt_lang2_combo is not None
+    assert window._flow_source_row is window._flow_target_row
+    assert window._src_text_widget.minimumHeight() <= 130
+    assert window._left_panel.maximumHeight() <= 170
     assert window._mode_translation_button.isCheckable()
     assert window._mode_simultaneous_button.isCheckable()
     assert window._mode_translation_button.isChecked()
@@ -100,7 +123,17 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert window._mode_simultaneous_button.property("modeActive") == "false"
     assert window._tweaks_btn is not None
     assert not window._tweaks_btn.icon().isNull()
-    assert window._tweaks_btn.iconSize().width() == 18
+    assert window._tweaks_btn.iconSize().width() >= 18
+    assert window._side_panel.minimumWidth() >= 240
+    assert window._listen_overlay_btn is not None
+    assert window._guide_btn_secondary is not None
+    assert _has_ancestor(window._listen_overlay_btn, window._side_panel)
+    assert _has_ancestor(window._guide_btn_secondary, window._side_panel)
+    assert window._listen_overlay_btn.height() == window._desktop_btn.height()
+    assert window._guide_btn_secondary.height() == window._desktop_btn.height()
+    assert window._sponsors_btn.height() == FOOTER_BUTTON_SIZE
+    assert window._sponsors_btn.width() == FOOTER_SPONSOR_BUTTON_WIDTH
+    assert all(btn.width() == FOOTER_BUTTON_SIZE and btn.height() == FOOTER_BUTTON_SIZE for btn, _ in window._social_buttons)
 
     window._set_app_mode(AppMode.SIMULTANEOUS, persist=True)
 
@@ -113,10 +146,14 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
 
     assert window._src_header_label.text()
     assert window._tgt_header_label.text()
+    assert window._tgt2_header_label.text()
+    window._set_source_text("x" * (CHATBOX_CHAR_LIMIT + 20))
+    assert len(window._src_text) == CHATBOX_CHAR_LIMIT
+    assert window._char_label is None
     window._on_theme_toggle()
     assert window._config["ui"]["main_window_theme"] == "light"
     assert not window._tweaks_btn.icon().isNull()
-    assert window._tweaks_btn.iconSize().width() == 18
+    assert window._tweaks_btn.iconSize().width() >= 18
     window.destroy()
 
 
@@ -209,12 +246,245 @@ def test_ui_language_switch_refreshes_dynamic_buttons(qtbot, monkeypatch):
     assert window._translate_btn.text() == tr("en", "translate")
     assert window._start_btn.text() == "Start"
     assert window._mute_btn.text() == "Mute"
-    assert window._mode_translation_button.text() == "Translate"
+    assert window._mode_translation_button.text() == "Text"
     assert window._mode_simultaneous_button.text() == "Simul"
     assert window._desktop_btn.text() == "Reverse TL"
     assert window._listen_overlay_btn.text() == "Overlay"
     assert window._config["ui"]["language"] == "en"
     window.destroy()
+
+
+def test_main_window_target_language_2_selector_updates_config(qtbot, monkeypatch):
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
+    saved: list[bool] = []
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: saved.append(True))
+
+    config = {
+        "ui": {"language": "en", "main_window_theme": "dark", "osc_guide_seen": True},
+        "translation": {"target_language": "ja", "target_language_2": "en"},
+    }
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+
+    assert window._tgt_lang2_combo is not None
+    assert window._current_tgt_lang_2 == "en"
+
+    korean_label = next(label for label, code in window._all_target_lang_options if code == "ko")
+    window._tgt_lang2_combo.setCurrentText(korean_label)
+
+    assert window._current_tgt_lang_2 == "ko"
+    assert config["translation"]["target_language_2"] == "ko"
+    assert saved
+
+    window.destroy()
+
+
+def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch):
+    created = []
+    stopped = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(self)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            stopped.append(self)
+
+    monkeypatch.setattr("src.tts.manager.TTSManager", FakeManager)
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "tts": {
+            "enabled": True,
+            "engine": "xtts",
+            "allow_fallback": False,
+            "output_device": None,
+            "output_device_name": "",
+            "output_to_vrchat": False,
+            "monitor_enabled": False,
+            "xtts": {
+                "device": "cpu",
+                "language": "auto",
+                "voice": "sample",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+        "performance": {
+            "tts_cache_max_mb": 24,
+            "tts_cache_max_items": 60,
+        },
+    }
+    window._tts_manager = None
+    window._tts_manager_signature = None
+
+    first = MainWindow._ensure_tts_manager(window)
+    second = MainWindow._ensure_tts_manager(window)
+    window._config["tts"]["xtts"]["volume"] = 0.3
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert first is second
+    assert window._tts_manager is first
+    assert created == [first]
+    assert stopped == []
+
+    window._config["tts"]["xtts"]["language"] = "ja"
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert stopped == [first]
+    assert window._tts_manager is None
+
+
+def _quick_switch_window(config: dict):
+    window = MainWindow.__new__(MainWindow)
+    window._config = config
+    window._ui_lang = "en"
+    window._settings_window = None
+    window._translator = object()
+    window._manual_translation_controller = None
+    window._tts_manager = None
+    window._tts_manager_signature = None
+    saved: list[bool] = []
+    bottom: list[str] = []
+    window._schedule_config_save = lambda: saved.append(True)
+    window._set_bottom = lambda message, *args, **kwargs: bottom.append(message)
+    return window, saved, bottom
+
+
+def test_quick_switch_output_format_persists_without_settings_window():
+    config = {"translation": {"output_format": "translated_with_original"}}
+    window, saved, bottom = _quick_switch_window(config)
+
+    MainWindow._on_quick_switch_changed(window, "output_format", "translated_only")
+
+    assert config["translation"]["output_format"] == "translated_only"
+    assert saved == [True]
+    assert bottom == ["Quick switch updated"]
+
+
+def test_quick_switch_translation_model_resets_cached_translator():
+    config = {
+        "translation": {
+            "backend": "qianwen",
+            "backend_source": "auto",
+            "qianwen": {"model": "old-model"},
+        }
+    }
+    window, saved, _bottom = _quick_switch_window(config)
+    controller = type("_Controller", (), {})()
+    controller.translator = object()
+    window._manual_translation_controller = controller
+
+    MainWindow._on_quick_switch_changed(window, "translation_model", "new-model")
+
+    assert config["translation"]["backend_source"] == "manual"
+    assert config["translation"]["qianwen"]["model"] == "new-model"
+    assert window._translator is None
+    assert controller.translator is None
+    assert saved == [True]
+
+
+def test_quick_switch_translation_provider_resets_cached_translator_and_initializes_backend():
+    config = {
+        "translation": {
+            "backend": "qianwen",
+            "backend_source": "auto",
+            "qianwen": {"model": "qwen-mt-plus"},
+        }
+    }
+    window, saved, _bottom = _quick_switch_window(config)
+    controller = type("_Controller", (), {})()
+    controller.translator = object()
+    window._manual_translation_controller = controller
+
+    MainWindow._on_quick_switch_changed(window, "translation_provider", "openai")
+
+    assert config["translation"]["backend"] == "openai"
+    assert config["translation"]["backend_source"] == "manual"
+    assert config["translation"]["openai"]["base_url"] == "https://api.openai.com/v1"
+    assert config["translation"]["openai"]["model"]
+    assert "api_key" not in config["translation"]["openai"]
+    assert window._translator is None
+    assert controller.translator is None
+    assert saved == [True]
+
+
+def test_quick_switch_roleplay_profile_updates_social_config():
+    config = {
+        "translation": {
+            "social": {
+                "mode": "standard",
+                "persona_preset": "custom",
+            }
+        },
+        "tts": {"engine": "edge", "edge": {"voice": "en-US-AriaNeural"}},
+    }
+    window, saved, _bottom = _quick_switch_window(config)
+    resets: list[bool] = []
+    window._reset_tts_manager_if_runtime_changed = lambda: resets.append(True)
+
+    MainWindow._on_quick_switch_changed(window, "roleplay_profile", "roleplay:frieren")
+
+    social = config["translation"]["social"]
+    assert social["mode"] == "roleplay"
+    assert social["persona_preset"] == "frieren"
+    assert social["persona_prompt"]
+    assert window._translator is None
+    assert resets == [True]
+    assert saved == [True]
+
+
+def test_quick_switch_tts_voice_does_not_reset_tts_runtime():
+    config = {"tts": {"engine": "edge", "edge": {"voice": "old-voice"}}}
+    window, saved, _bottom = _quick_switch_window(config)
+    resets: list[bool] = []
+    window._reset_tts_manager_if_runtime_changed = lambda: resets.append(True)
+
+    MainWindow._on_quick_switch_changed(window, "tts_voice", "new-voice")
+
+    assert config["tts"]["edge"]["voice"] == "new-voice"
+    assert resets == []
+    assert saved == [True]
+
+
+def test_quick_switch_noise_reduction_updates_config_and_live_recorder():
+    config = {"audio": {"denoise_strength": 0.0}}
+    window, saved, _bottom = _quick_switch_window(config)
+    applied: list[float] = []
+    window._recorder = type("_Recorder", (), {"set_denoise_strength": lambda self, value: applied.append(value)})()
+
+    MainWindow._on_quick_switch_changed(window, "noise_reduction", 0.65)
+
+    assert config["audio"]["denoise_strength"] == 0.65
+    assert applied == [0.65]
+    assert saved == [True]
+
+
+def test_settings_preload_is_opt_in_and_skips_heavy_tts_engines():
+    window = MainWindow.__new__(MainWindow)
+
+    window._config = {
+        "performance": {"profile": "balanced"},
+        "tts": {"engine": "edge"},
+    }
+    assert MainWindow._settings_preload_enabled(window) is False
+
+    window._config["performance"]["preload_settings_window"] = True
+    assert MainWindow._settings_preload_enabled(window) is True
+
+    window._config["tts"]["engine"] = "xtts"
+    assert MainWindow._settings_preload_enabled(window) is False
+
+    window._config["tts"]["engine"] = "edge"
+    window._config["performance"]["profile"] = "low_power"
+    assert MainWindow._settings_preload_enabled(window) is False
 
 
 def test_listen_overlay_toggle_updates_service_and_avatar_state(monkeypatch):

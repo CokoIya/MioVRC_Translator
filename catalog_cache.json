@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-06-03",
+  "updated": "2026-07-03",
   "translation_backends": {
     "openai": {
       "label": "GPT",
@@ -159,7 +159,7 @@
     "anthropic_compatible": {
       "label": "Claude Compatible",
       "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-6",
+      "model": "claude-sonnet-5",
       "timeout_s": 15.0,
       "max_output_tokens": 192,
       "max_retries": 0,
@@ -247,6 +247,7 @@
       "nvidia/llama-3.1-nemotron-nano-8b-v1"
     ],
     "anthropic": [
+      "claude-sonnet-5",
       "claude-opus-4-8",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001",
@@ -257,6 +258,7 @@
       "claude-3-5-haiku-20241022"
     ],
     "anthropic_compatible": [
+      "claude-sonnet-5",
       "claude-opus-4-8",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001",
@@ -698,6 +700,12 @@
       }
     },
     "anthropic": {
+      "claude-sonnet-5": {
+        "speed": "balanced",
+        "quality": "high",
+        "fit": "very_recommended",
+        "note": "live_default"
+      },
       "claude-opus-4-8": {
         "speed": "slow",
         "quality": "high",

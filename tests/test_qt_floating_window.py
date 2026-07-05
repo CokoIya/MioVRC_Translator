@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QPoint, QRect
 
 from src.ui_qt.floating_window import FloatingWindow
 from src.ui_qt.styles import build_floating_window_styles, build_text_input_styles
@@ -157,3 +158,41 @@ def test_floating_window_header_event_filter_starts_drag(qtbot):
 
     assert event.isAccepted() is True
     assert window._drag_position is not None
+
+
+def test_floating_window_resize_geometry_supports_all_edges(qtbot):
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+    window.setMinimumSize(360, 220)
+
+    start = QRect(100, 100, 520, 320)
+
+    east = window._geometry_for_resize_delta("e", start, QPoint(80, 0))
+    assert east.width() == 600
+    assert east.left() == 100
+
+    west = window._geometry_for_resize_delta("w", start, QPoint(-60, 0))
+    assert west.width() == 580
+    assert west.left() == 40
+
+    north_west = window._geometry_for_resize_delta("nw", start, QPoint(-40, -30))
+    assert north_west.left() == 60
+    assert north_west.top() == 70
+    assert north_west.width() == 560
+    assert north_west.height() == 350
+
+    south = window._geometry_for_resize_delta("s", start, QPoint(0, 70))
+    assert south.height() == 390
+
+
+def test_floating_window_wrap_uses_viewport_width(qtbot):
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+    window.resize(900, 420)
+    window.show()
+    qtbot.waitExposed(window)
+
+    wrap = window._bubble_wraplength()
+
+    assert wrap > 520
+    assert wrap <= window._scroll_area.viewport().width()

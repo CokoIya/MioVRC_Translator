@@ -1,8 +1,8 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "v1.3.7.6"
-#define AppNumericVersion "1.3.7.6"
+#define AppVersion "v1.3.7.7"
+#define AppNumericVersion "1.3.7.7"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
@@ -221,4 +221,48 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := (PageID = wpSelectDir) and (ExistingInstallDir <> '');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ConfigPath: String;
+  ConfigContent: AnsiString;
+  LanguageCode: String;
+  JsonTemplate: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    // Map installer language to app language codes
+    case ActiveLanguage of
+      'zhcn': LanguageCode := 'zh-CN';
+      'japanese': LanguageCode := 'ja';
+      'russian': LanguageCode := 'ru';
+      'korean': LanguageCode := 'ko';
+    else
+      LanguageCode := 'en';  // Default to English
+    end;
+
+    Log('Installer language detected: ' + ActiveLanguage + ', mapping to: ' + LanguageCode);
+
+    // Check if config.json already exists
+    ConfigPath := ExpandConstant('{app}\config.json');
+    if not FileExists(ConfigPath) then
+    begin
+      // Create minimal config with selected language
+      JsonTemplate := '{' + #13#10 +
+                     '  "ui": {' + #13#10 +
+                     '    "language": "' + LanguageCode + '",' + #13#10 +
+                     '    "language_source": "manual",' + #13#10 +
+                     '    "theme": "dark"' + #13#10 +
+                     '  }' + #13#10 +
+                     '}';
+
+      if SaveStringToFile(ConfigPath, JsonTemplate, False) then
+        Log('Created config.json with language: ' + LanguageCode)
+      else
+        Log('Failed to create config.json');
+    end
+    else
+      Log('config.json already exists, preserving user settings');
+  end;
 end;
