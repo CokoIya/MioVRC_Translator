@@ -31,6 +31,7 @@ from src.tts.xtts_engine import (
     XTTS_REFERENCE_AUDIO_NAME_FILTER,
     normalize_xtts_reference_audio_file,
     safe_xtts_voice_name,
+    xtts_reference_import_error_message,
     xtts_reference_audio_dir,
 )
 
@@ -406,7 +407,10 @@ class TTSVoiceTab(QWidget):
     def _on_download_models(self) -> None:
         """Open model download dialog."""
         logger.info("Opening model download...")
-        # TODO: Implement download
+        from src.ui_qt.xtts_download_dialog import XTTSDownloadDialog
+
+        dialog = XTTSDownloadDialog(self, ui_lang=self._ui_language)
+        dialog.exec()
 
     def _on_import_voice(self) -> None:
         """Import custom voice."""
@@ -446,7 +450,7 @@ class TTSVoiceTab(QWidget):
                     QMessageBox.critical(
                         self,
                         self._t("voice_import_error_title"),
-                        self._t("voice_import_failed", error=e),
+                        self._t("voice_import_failed", error=xtts_reference_import_error_message(e)),
                     )
 
     def _on_manage_voices(self) -> None:

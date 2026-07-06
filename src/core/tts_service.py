@@ -42,6 +42,20 @@ class TtsService(QObject):
             if engine == "xtts":
                 engine_config.setdefault("device", self._config.get("xtts_device", "cpu"))
                 engine_config.setdefault("language", "auto")
+                from src.tts.xtts_engine import normalize_xtts_language_code, xtts_language_from_target_language
+
+                configured_language = normalize_xtts_language_code(engine_config.get("language"))
+                if configured_language == "auto":
+                    translation_cfg = self._config.get("translation", {})
+                    target_language = (
+                        translation_cfg.get("target_language")
+                        if isinstance(translation_cfg, dict)
+                        else None
+                    )
+                    target_xtts_language = xtts_language_from_target_language(target_language)
+                    if target_xtts_language != "auto":
+                        configured_language = target_xtts_language
+                engine_config["language"] = configured_language
             self._manager = TTSManager(
                 engine_name=engine,
                 cache_enabled=True,

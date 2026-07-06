@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import warnings
 from pathlib import Path
@@ -26,14 +27,22 @@ from src.utils.i18n import tr
 logger = logging.getLogger(__name__)
 
 
-def _safe_disconnect(signal: QObject, slot: QObject) -> None:
+def _safe_disconnect(signal: QObject, slot: QObject | None = None) -> None:
     """Disconnect a Qt signal without warning if it was already disconnected."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            signal.disconnect(slot)
+            if slot is None:
+                signal.disconnect()
+            else:
+                signal.disconnect(slot)
     except (RuntimeError, TypeError):
         pass
+
+
+def _set_button_action(button: QPushButton, action) -> None:
+    _safe_disconnect(button.clicked)
+    button.clicked.connect(action)
 
 _CHUNK = 65_536
 _DOWNLOAD_TIMEOUT = (8, 60)
@@ -124,16 +133,99 @@ def _sha256_file(path: Path) -> str:
     return hasher.hexdigest().lower()
 
 
+def _ps_literal(value: Path | str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _restart_executable() -> Path | None:
+    executable = Path(sys.executable or "")
+    if not executable:
+        return None
+    if bool(getattr(sys, "frozen", False)):
+        return executable
+    if executable.name.lower() == "miotranslator.exe":
+        return executable
+    return None
+
+
+def _write_windows_update_helper(installer_path: Path, restart_exe: Path) -> Path:
+    temp_dir = app_temp_dir()
+    helper_path = temp_dir / f"mio-update-install-{os.getpid()}.ps1"
+    log_path = temp_dir / f"mio-update-install-{os.getpid()}.log"
+    install_dir = restart_exe.parent
+    script = f"""$ErrorActionPreference = 'Stop'
+$installer = {_ps_literal(installer_path)}
+$restartExe = {_ps_literal(restart_exe)}
+$installDir = {_ps_literal(install_dir)}
+$installerLog = {_ps_literal(log_path)}
+$waitPid = {os.getpid()}
+
+try {{
+    Wait-Process -Id $waitPid -Timeout 90 -ErrorAction SilentlyContinue
+}} catch {{
+}}
+
+$arguments = @(
+    '/VERYSILENT',
+    '/SUPPRESSMSGBOXES',
+    '/NOCANCEL',
+    '/CLOSEAPPLICATIONS',
+    '/RESTARTAPPLICATIONS',
+    ('/DIR="' + $installDir + '"'),
+    ('/LOG="' + $installerLog + '"')
+) -join ' '
+
+$process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+$exitCode = 0
+if ($null -ne $process) {{
+    $exitCode = [int]$process.ExitCode
+}}
+
+if (($exitCode -eq 0) -or ($exitCode -eq 3010)) {{
+    if (Test-Path -LiteralPath $restartExe) {{
+        Start-Process -FilePath $restartExe -WorkingDirectory (Split-Path -Parent $restartExe)
+    }}
+}}
+
+try {{
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}} catch {{
+}}
+"""
+    helper_path.write_text(script, encoding="utf-8")
+    return helper_path
+
+
 def _launch_installer(path: Path) -> None:
-    args = "/CLOSEAPPLICATIONS /NORESTARTAPPLICATIONS"
-    if os.name == "nt" and hasattr(os, "startfile"):
-        try:
-            os.startfile(str(path), "open", args)  # type: ignore[attr-defined]
+    if os.name == "nt":
+        restart_exe = _restart_executable()
+        if restart_exe is not None and restart_exe.exists():
+            helper_path = _write_windows_update_helper(path, restart_exe)
+            subprocess.Popen(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-File",
+                    str(helper_path),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    | getattr(subprocess, "DETACHED_PROCESS", 0)
+                ),
+            )
             return
-        except TypeError:
-            os.startfile(str(path))  # type: ignore[attr-defined]
-            return
-    subprocess.Popen([str(path), "/CLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS"])
+
+    subprocess.Popen([str(path), "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
 
 
 def _display_version(version: str) -> str:
@@ -256,8 +348,7 @@ class UpdateWindow(QDialog):
         self._sub_label.show()
         self._btn_ignore.hide()
         self._btn_secondary.setText(self._t("update_minimize"))
-        _safe_disconnect(self._btn_secondary.clicked, self._minimize_to_background)
-        self._btn_secondary.clicked.connect(self._minimize_to_background)
+        _set_button_action(self._btn_secondary, self._minimize_to_background)
         self._btn_primary.setText(self._t("update_downloading_btn"))
         self._btn_primary.setEnabled(False)
 
@@ -272,12 +363,10 @@ class UpdateWindow(QDialog):
         self._sub_label.setText(self._t("update_install_note"))
         self._btn_ignore.hide()
         self._btn_secondary.setText(self._t("update_install_later"))
-        _safe_disconnect(self._btn_secondary.clicked, self._on_window_close)
-        self._btn_secondary.clicked.connect(self._on_window_close)
+        _set_button_action(self._btn_secondary, self._on_window_close)
         self._btn_primary.setText(self._t("update_install_now"))
         self._btn_primary.setEnabled(True)
-        _safe_disconnect(self._btn_primary.clicked, self._run_installer)
-        self._btn_primary.clicked.connect(self._run_installer)
+        _set_button_action(self._btn_primary, self._run_installer)
 
     def _switch_to_error(self, message: str) -> None:
         self._progress_label.setText(self._t("update_error"))
@@ -288,12 +377,10 @@ class UpdateWindow(QDialog):
         self._sub_label.setText(message)
         self._btn_ignore.hide()
         self._btn_secondary.setText(self._t("update_close"))
-        _safe_disconnect(self._btn_secondary.clicked, self.close)
-        self._btn_secondary.clicked.connect(self.close)
+        _set_button_action(self._btn_secondary, self.close)
         self._btn_primary.setText(self._t("update_retry"))
         self._btn_primary.setEnabled(True)
-        _safe_disconnect(self._btn_primary.clicked, self._start_download)
-        self._btn_primary.clicked.connect(self._start_download)
+        _set_button_action(self._btn_primary, self._start_download)
 
     def _on_ignore_version(self) -> None:
         master = self.parent()
@@ -414,11 +501,15 @@ class UpdateWindow(QDialog):
 
     def _run_installer(self) -> None:
         if self._installer_path is None or not self._installer_path.exists():
+            self._switch_to_error(self._t("update_installer_missing"))
             return
+        self._btn_primary.setEnabled(False)
+        self._btn_primary.setText(self._t("update_launching_installer"))
+        self._sub_label.setText(self._t("update_launching_note"))
         try:
             _launch_installer(self._installer_path)
         except Exception as exc:
-            self._switch_to_error(str(exc))
+            self._switch_to_error(self._t("update_installer_launch_failed", message=exc))
             return
         self._destroy_master_if_alive()
 

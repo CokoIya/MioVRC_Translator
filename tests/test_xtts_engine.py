@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import struct
+import sys
 import types
 import wave
 from collections import OrderedDict
@@ -13,13 +14,16 @@ from src.tts.factory import create_tts_engine
 from src.tts.wav_utils import decode_wav_bytes
 from src.tts.xtts_engine import (
     XTTS_SUPPORTED_LANGUAGES,
+    XTTSAudioDecoderUnavailableError,
     XTTSTS,
     first_usable_xtts_reference_audio_path,
     first_xtts_reference_audio_path,
     list_xtts_reference_voices,
+    normalize_xtts_language_code,
     normalize_xtts_reference_audio_file,
     repair_xtts_reference_audio_file,
     validate_xtts_reference_audio_file,
+    xtts_language_from_target_language,
 )
 
 
@@ -130,6 +134,17 @@ def test_xtts_engine_accepts_common_audio_reference_import(monkeypatch, tmp_path
     usable, reason, _stats = validate_xtts_reference_audio_file(engine._reference_audio_path)
     assert usable is True
     assert reason == ""
+
+
+def test_xtts_reference_import_reports_missing_audio_decoder(monkeypatch, tmp_path):
+    source = tmp_path / "reference.mp3"
+    source.write_bytes(b"not a wav or mp3 stream")
+    output = tmp_path / "reference.wav"
+
+    monkeypatch.setitem(sys.modules, "av", None)
+
+    with pytest.raises(XTTSAudioDecoderUnavailableError, match="MP3.*reference audio"):
+        normalize_xtts_reference_audio_file(source, output)
 
 
 def test_xtts_reference_audio_rejects_silence_instead_of_saving_bad_voice(tmp_path):
@@ -257,6 +272,8 @@ def test_xtts_language_detection_uses_real_unicode_ranges(monkeypatch):
     assert engine._detect_language("\u4f60\u597d") == "zh-cn"
     assert engine._detect_language("\uc548\ub155") == "ko"
     assert engine._detect_language("\u0928\u092e\u0938\u094d\u0924\u0947") == "hi"
+    assert engine._detect_language("Hola, señor") == "es"
+    assert engine._detect_language("Bonjour, ça va") == "fr"
     assert engine._detect_language("hello") == "en"
 
 
@@ -266,6 +283,15 @@ def test_xtts_supported_languages_include_full_xtts_v2_set(monkeypatch):
 
     assert tuple(engine.get_supported_languages()[1:]) == XTTS_SUPPORTED_LANGUAGES
     assert "hi" in engine.get_supported_languages()
+
+
+def test_xtts_language_normalization_maps_app_target_codes():
+    assert normalize_xtts_language_code("zh") == "zh-cn"
+    assert normalize_xtts_language_code("jp") == "ja"
+    assert normalize_xtts_language_code("English") == "en"
+    assert xtts_language_from_target_language("es") == "es"
+    assert xtts_language_from_target_language("pt") == "pt"
+    assert xtts_language_from_target_language("th") == "auto"
 
 
 def test_xtts_volume_adjustment_handles_32_bit_wav_without_corrupting_audio():
@@ -558,3 +584,40 @@ def test_xtts_optimized_inference_splits_long_text_without_spacy(monkeypatch, tm
     assert len(inference_calls) >= 2
     assert all(call["enable_text_splitting"] is False for call in inference_calls)
     assert all(len(str(call["text"])) <= 70 for call in inference_calls)
+
+
+def test_xtts_coqui_api_fallback_disables_spacy_sentence_splitting(monkeypatch, tmp_path):
+    reference = tmp_path / "voice.wav"
+    reference.write_bytes(_tone_wav_bytes(duration_s=3.0, sample_rate=24000))
+    calls: list[dict[str, object]] = []
+
+    class FakeModel:
+        def tts_to_file(self, **kwargs):
+            if kwargs.get("split_sentences") is not False:
+                raise RuntimeError("enable_text_splitting=True requires Spacy")
+            calls.append(kwargs)
+            output_path = kwargs["file_path"]
+            with open(output_path, "wb") as wav_file:
+                wav_file.write(_tone_wav_bytes(duration_s=0.1, sample_rate=24000))
+
+    monkeypatch.setattr("src.tts.xtts_engine.is_xtts_runtime_available", lambda **_kwargs: True)
+    engine = XTTSTS.__new__(XTTSTS)
+    engine._model = FakeModel()
+    engine._reference_audio_path = str(reference)
+    engine._language = "ja"
+    engine._supported_languages = ["ja"]
+    engine._optimized_inference = False
+    engine._enable_text_splitting = True
+    engine._inference_kwargs = {}
+
+    text = (
+        "これはXTTSの音声合成テストです。"
+        "短いノイズではなく自然な人の声として聞こえるか確認してください。"
+        "長い文章でも内蔵分割で処理できる必要があります。"
+    )
+    audio = engine.synthesize(text, "custom", rate=1.0, volume=1.0)
+
+    assert audio.startswith(b"RIFF")
+    assert len(calls) >= 2
+    assert all(call["split_sentences"] is False for call in calls)
+    assert all(len(str(call["text"])) <= 70 for call in calls)

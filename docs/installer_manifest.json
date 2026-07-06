@@ -1,19 +1,19 @@
 {
-  "version": "v1.3.7.7",
-  "installer_name": "MioTranslator-Setup-v1.3.7.7.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.7/MioTranslator-Setup-v1.3.7.7.exe",
-  "size_bytes": 466294792,
-  "sha256": "80f4ca521fcbc8cfdaab26a1e053a0c8d94f6133fcb07096657f5c0ae0493863",
-  "notes": "v1.3.7.7 adds free translation providers, Voice Cloning with reference audio recording/import, broader Voice Cloning language support, and packaging size optimizations; local ASR/TTS models still download on demand.",
+  "version": "v1.3.7.8",
+  "installer_name": "MioTranslator-Setup-v1.3.7.8.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.8/MioTranslator-Setup-v1.3.7.8.exe",
+  "size_bytes": 467415052,
+  "sha256": "75f002645d17a576d7445371fb709addfd9d294aca7406b6d00d2298c057d046",
+  "notes": "v1.3.7.8 fixes the in-app Install & Restart updater flow and reduces startup/idle resource usage when using only online services or text translation; Voice Cloning, reference audio import, and multilingual support remain available, with local ASR/TTS models still downloaded on demand.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7.7 新增多种免费翻译服务商、Voice Cloning 声音克隆、参考音频录制/导入和更多声音克隆语言支持，并优化打包体积；本地 ASR/TTS 模型仍按需下载，热更新暂未修复，如遇更新问题请加入群聊下载或者在官网下载进行覆盖安装即可。",
-    "en": "v1.3.7.7 adds free translation providers, Voice Cloning with reference audio recording/import, broader Voice Cloning language support, and packaging size optimizations; local ASR/TTS models still download on demand.",
-    "ja": "v1.3.7.7 では、無料翻訳プロバイダー、参照音声の録音/インポートに対応した Voice Cloning、より多くの音声クローン言語、パッケージサイズ最適化を追加しました。ローカル ASR/TTS モデルは引き続き必要時にダウンロードされます。",
-    "ru": "v1.3.7.7 добавляет бесплатные провайдеры перевода, Voice Cloning с записью/импортом эталонного аудио, расширенную языковую поддержку Voice Cloning и оптимизацию размера пакета; локальные модели ASR/TTS по-прежнему загружаются по требованию.",
-    "ko": "v1.3.7.7은 무료 번역 제공자, 기준 음성 녹음/가져오기를 지원하는 Voice Cloning, 더 넓은 Voice Cloning 언어 지원, 패키지 크기 최적화를 추가합니다. 로컬 ASR/TTS 모델은 계속 필요할 때 다운로드됩니다."
+    "zh-CN": "v1.3.7.8 修复应用内更新下载后“安装并重启”无响应的问题，并降低仅使用在线服务/文本翻译时的启动与空闲资源占用；Voice Cloning、参考音频导入和多语言支持继续保留，本地 ASR/TTS 模型仍按需下载。",
+    "en": "v1.3.7.8 fixes the in-app Install & Restart updater flow and reduces startup/idle resource usage when using only online services or text translation; Voice Cloning, reference audio import, and multilingual support remain available, with local ASR/TTS models still downloaded on demand.",
+    "ja": "v1.3.7.8 では、アプリ内更新の「インストールして再起動」が反応しない問題を修正し、オンラインサービスやテキスト翻訳のみを使う場合の起動時/待機時リソース使用量を削減しました。Voice Cloning、参照音声インポート、多言語対応は引き続き利用できます。",
+    "ru": "v1.3.7.8 исправляет кнопку Install & Restart во встроенном обновлении и снижает расход ресурсов при использовании только онлайн-сервисов или текстового перевода; Voice Cloning, импорт эталонного аудио и многоязычная поддержка остаются доступны, локальные модели ASR/TTS загружаются по требованию.",
+    "ko": "v1.3.7.8은 앱 내 업데이트의 Install & Restart가 반응하지 않던 문제를 수정하고, 온라인 서비스나 텍스트 번역만 사용할 때의 시작/대기 리소스 사용량을 줄입니다. Voice Cloning, 기준 음성 가져오기, 다국어 지원은 계속 사용할 수 있으며 로컬 ASR/TTS 모델은 필요할 때 다운로드됩니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-06T00:43:49+09:00"
+  "published_at": "2026-07-06T14:21:05+09:00"
 }

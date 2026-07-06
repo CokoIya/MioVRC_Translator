@@ -47,10 +47,24 @@ XTTS_REFERENCE_TARGET_RMS = 0.08
 XTTS_REFERENCE_MAX_GAIN = 128.0
 XTTS_OPTIMIZED_SPLIT_PAUSE_SECONDS = 0.18
 XTTS_LANGUAGE_TEXT_LIMITS = {
-    "ja": 70,
+    "en": 249,
+    "de": 252,
+    "fr": 272,
+    "es": 238,
+    "it": 212,
+    "pt": 202,
+    "pl": 223,
+    "tr": 225,
+    "ru": 181,
+    "nl": 250,
+    "cs": 185,
+    "ar": 165,
     "zh": 70,
     "zh-cn": 70,
-    "ko": 70,
+    "ja": 70,
+    "hu": 223,
+    "ko": 94,
+    "hi": 149,
 }
 XTTS_REFERENCE_AUDIO_EXTENSIONS = (
     ".wav",
@@ -86,9 +100,64 @@ XTTS_SUPPORTED_LANGUAGES = (
     "ko",
     "hi",
 )
+XTTS_LANGUAGE_ALIASES = {
+    "auto": "auto",
+    "automatic": "auto",
+    "detect": "auto",
+    "english": "en",
+    "eng": "en",
+    "en-us": "en",
+    "en-gb": "en",
+    "chinese": "zh-cn",
+    "zh": "zh-cn",
+    "zh-hans": "zh-cn",
+    "zh-sg": "zh-cn",
+    "zh-tw": "zh-cn",
+    "zh-hant": "zh-cn",
+    "cn": "zh-cn",
+    "japanese": "ja",
+    "jp": "ja",
+    "kor": "ko",
+    "kr": "ko",
+    "korean": "ko",
+    "spanish": "es",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "portuguese": "pt",
+    "pt-br": "pt",
+    "pt-pt": "pt",
+    "polish": "pl",
+    "turkish": "tr",
+    "russian": "ru",
+    "dutch": "nl",
+    "czech": "cs",
+    "arabic": "ar",
+    "hungarian": "hu",
+    "hindi": "hi",
+}
+XTTS_RUNTIME_COMPONENTS = {
+    "TTS": "Coqui TTS runtime",
+    "av": "MP3/audio decoder runtime",
+    "av.audio.resampler": "MP3/audio resampler runtime",
+    "pypinyin": "Chinese text frontend",
+    "ko_speech_tools": "Korean text frontend",
+    "num2words": "multilingual number normalizer",
+    "cutlet": "Japanese text frontend",
+    "fugashi": "Japanese tokenizer",
+    "unidic_lite": "Japanese dictionary",
+    "mojimoji": "Japanese normalizer",
+}
 
 _XTTS_SENTENCE_END_CHARS = {".", "!", "?", "\n", "。", "！", "？"}
 _XTTS_SOFT_BREAK_CHARS = {",", ";", ":", "、", "，", "；", "："}
+
+class XTTSAudioDecoderUnavailableError(RuntimeError):
+    """Raised when bundled PyAV/FFmpeg support is missing for non-WAV imports."""
+
+
+class XTTSAudioDecodeError(RuntimeError):
+    """Raised when a supported-looking reference file cannot be decoded."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +176,44 @@ class XTTSReferenceAudioQuality:
 class _XTTSConditioningCacheEntry:
     gpt_cond_latent: Any
     speaker_embedding: Any
+
+
+@dataclass(frozen=True)
+class XTTSRuntimeStatus:
+    missing_modules: tuple[str, ...]
+    import_error: str | None = None
+
+    @property
+    def coqui_available(self) -> bool:
+        return "TTS" not in self.missing_modules and self.import_error is None
+
+    @property
+    def audio_import_available(self) -> bool:
+        return "av" not in self.missing_modules and "av.audio.resampler" not in self.missing_modules
+
+    @property
+    def language_frontends_available(self) -> bool:
+        language_modules = {
+            "pypinyin",
+            "ko_speech_tools",
+            "num2words",
+            "cutlet",
+            "fugashi",
+            "unidic_lite",
+            "mojimoji",
+        }
+        return not any(module in self.missing_modules for module in language_modules)
+
+    @property
+    def ready(self) -> bool:
+        return self.coqui_available and self.audio_import_available and self.language_frontends_available
+
+    @property
+    def missing_component_names(self) -> tuple[str, ...]:
+        names = [XTTS_RUNTIME_COMPONENTS.get(module, module) for module in self.missing_modules]
+        if self.import_error:
+            names.append(f"Coqui TTS import error: {self.import_error}")
+        return tuple(names)
 
 
 warnings.filterwarnings(
@@ -135,13 +242,33 @@ def _load_xtts_api() -> Any | None:
     return XTTS_API_CLASS
 
 
+def _module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def xtts_runtime_status(*, require_api: bool = False) -> XTTSRuntimeStatus:
+    """Return a lightweight diagnostic for bundled Voice Cloning components."""
+    required_modules = tuple(XTTS_RUNTIME_COMPONENTS)
+    missing = [module for module in required_modules if not _module_available(module)]
+    import_error = None
+    if "TTS" not in missing and require_api and _load_xtts_api() is None:
+        import_error = XTTS_IMPORT_ERROR or "TTS.api could not be imported"
+    return XTTSRuntimeStatus(tuple(missing), import_error)
+
+
+def xtts_runtime_missing_summary(*, require_api: bool = False) -> str:
+    status = xtts_runtime_status(require_api=require_api)
+    components = ", ".join(status.missing_component_names)
+    return components or ""
+
+
 def is_xtts_runtime_available(*, require_api: bool = False) -> bool:
     """Return whether the Coqui TTS runtime needed by XTTS is importable."""
     global XTTS_AVAILABLE
-    try:
-        has_package = importlib.util.find_spec("TTS") is not None
-    except ModuleNotFoundError:
-        has_package = False
+    has_package = _module_available("TTS")
     if not has_package:
         XTTS_AVAILABLE = False
         return False
@@ -149,6 +276,38 @@ def is_xtts_runtime_available(*, require_api: bool = False) -> bool:
         XTTS_AVAILABLE = True
         return True
     return _load_xtts_api() is not None
+
+
+def normalize_xtts_language_code(language: object) -> str:
+    text = str(language or "").strip().lower().replace("_", "-")
+    if not text:
+        return "auto"
+    normalized = XTTS_LANGUAGE_ALIASES.get(text, text)
+    if normalized == "auto" or normalized in XTTS_SUPPORTED_LANGUAGES:
+        return normalized
+    return "auto"
+
+
+def xtts_language_from_target_language(language: object) -> str:
+    """Resolve an app target-language code to an XTTS language, if supported."""
+    return normalize_xtts_language_code(language)
+
+
+def xtts_reference_import_error_message(error: BaseException) -> str:
+    message = str(error).strip()
+    if isinstance(error, XTTSAudioDecoderUnavailableError):
+        return (
+            "This audio format needs the bundled MP3/audio decoder runtime "
+            "(PyAV/FFmpeg). Reinstall the full Mio Translator release, then restart "
+            "the app, or convert the reference sample to WAV and import the WAV file."
+        )
+    if isinstance(error, XTTSAudioDecodeError):
+        detail = f" Details: {message}" if message else ""
+        return (
+            "The selected audio file could not be decoded. Try another common audio "
+            f"file, or convert it to WAV before importing.{detail}"
+        )
+    return message or "Reference audio import failed"
 
 
 def xtts_reference_audio_dir() -> Path:
@@ -371,30 +530,38 @@ def _read_audio_with_av(path: Path, target_sample_rate: int) -> tuple[np.ndarray
         import av
         from av.audio.resampler import AudioResampler
     except Exception as exc:
-        raise RuntimeError("PyAV is required to import non-WAV XTTS reference audio") from exc
+        raise XTTSAudioDecoderUnavailableError(
+            "PyAV/FFmpeg is required to import MP3, M4A, FLAC, OGG, Opus, WebM, AAC, or WMA "
+            "Voice Cloning reference audio."
+        ) from exc
 
     chunks: list[np.ndarray] = []
-    with av.open(str(path)) as container:
-        stream = next((item for item in container.streams if item.type == "audio"), None)
-        if stream is None:
-            raise RuntimeError("The selected file does not contain an audio stream")
-        resampler = AudioResampler(format="s16", layout="mono", rate=target_sample_rate)
+    try:
+        with av.open(str(path)) as container:
+            stream = next((item for item in container.streams if item.type == "audio"), None)
+            if stream is None:
+                raise XTTSAudioDecodeError("The selected file does not contain an audio stream")
+            resampler = AudioResampler(format="s16", layout="mono", rate=target_sample_rate)
 
-        def collect(frames: object) -> None:
-            if frames is None:
-                return
-            frame_list = frames if isinstance(frames, list) else [frames]
-            for frame in frame_list:
-                arr = frame.to_ndarray()
-                if arr.size:
-                    chunks.append(np.asarray(arr).reshape(-1).astype(np.int16))
+            def collect(frames: object) -> None:
+                if frames is None:
+                    return
+                frame_list = frames if isinstance(frames, list) else [frames]
+                for frame in frame_list:
+                    arr = frame.to_ndarray()
+                    if arr.size:
+                        chunks.append(np.asarray(arr).reshape(-1).astype(np.int16))
 
-        for frame in container.decode(stream):
-            collect(resampler.resample(frame))
-        collect(resampler.resample(None))
+            for frame in container.decode(stream):
+                collect(resampler.resample(frame))
+            collect(resampler.resample(None))
+    except XTTSAudioDecodeError:
+        raise
+    except Exception as exc:
+        raise XTTSAudioDecodeError(str(exc) or f"Could not decode {path.name}") from exc
 
     if not chunks:
-        raise RuntimeError("No decodable audio was found in the selected file")
+        raise XTTSAudioDecodeError("No decodable audio was found in the selected file")
     pcm = np.concatenate(chunks).astype(np.float32) / 32768.0
     return pcm, target_sample_rate
 
@@ -539,7 +706,7 @@ class XTTSTS(BaseTTS):
         self._model_name = model_name
         self._model: Any | None = None
         self._reference_audio_path: str | None = None
-        self._language = language
+        self._language = normalize_xtts_language_code(language)
         self._supported_languages = list(XTTS_SUPPORTED_LANGUAGES)
         self._lazy_load = bool(lazy_load)
         self._optimized_inference = bool(optimized_inference)
@@ -831,34 +998,19 @@ class XTTSTS(BaseTTS):
                     exc,
                 )
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-
         try:
-            self._model.tts_to_file(
+            audio_data = self._synthesize_with_coqui_api_no_spacy(
                 text=text,
-                speaker_wav=ref_audio,
+                ref_audio=ref_audio,
                 language=language,
-                file_path=tmp_path,
                 speed=speed,
+                volume=volume,
             )
-
-            with open(tmp_path, "rb") as f:
-                audio_data = f.read()
-
-            if volume != 1.0:
-                audio_data = self._apply_volume(audio_data, volume)
-
             logger.info("XTTS-v2 synthesis successful, audio size: %d bytes", len(audio_data))
             return audio_data
         except Exception as exc:
             logger.error("XTTS-v2 synthesis failed: %s", exc)
             raise RuntimeError(f"XTTS-v2 synthesis failed: {exc}") from exc
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception as exc:
-                logger.debug("Failed to delete temp file %s: %s", tmp_path, exc)
 
     def _xtts_core_model(self) -> Any | None:
         model = getattr(self, "_model", None)
@@ -969,6 +1121,65 @@ class XTTSTS(BaseTTS):
                 len(chunks),
                 chunk_samples.size,
             )
+        samples = np.concatenate(generated) if generated else np.zeros(0, dtype=np.float32)
+        if volume != 1.0:
+            samples = np.clip(samples * max(0.0, float(volume)), -1.0, 1.0)
+        return encode_pcm16_wav(samples, sample_rate)
+
+    def _synthesize_with_coqui_api_no_spacy(
+        self,
+        *,
+        text: str,
+        ref_audio: str,
+        language: str,
+        speed: float,
+        volume: float,
+    ) -> bytes:
+        chunks = self._xtts_text_chunks(text, language, self._xtts_core_model())
+        sample_rate = XTTS_OUTPUT_SAMPLE_RATE
+        generated: list[np.ndarray] = []
+        pause = np.zeros(
+            int(sample_rate * XTTS_OPTIMIZED_SPLIT_PAUSE_SECONDS),
+            dtype=np.float32,
+        )
+        tmp_paths: list[str] = []
+        try:
+            if len(chunks) > 1:
+                logger.info("XTTS Coqui API path split text into %d chunk(s)", len(chunks))
+            for index, chunk in enumerate(chunks or [text]):
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                tmp_paths.append(tmp_path)
+                kwargs = dict(getattr(self, "_inference_kwargs", {}))
+                kwargs["speed"] = speed
+                kwargs["split_sentences"] = False
+                self._model.tts_to_file(
+                    text=chunk,
+                    speaker_wav=ref_audio,
+                    language=language,
+                    file_path=tmp_path,
+                    **kwargs,
+                )
+                chunk_samples, chunk_rate = decode_wav_bytes(Path(tmp_path).read_bytes())
+                if chunk_samples.ndim > 1 and chunk_samples.size:
+                    chunk_samples = chunk_samples.mean(axis=1)
+                if chunk_rate != sample_rate:
+                    chunk_samples = _resample_audio(chunk_samples, chunk_rate, sample_rate)
+                if generated and pause.size:
+                    generated.append(pause)
+                generated.append(np.asarray(chunk_samples, dtype=np.float32).reshape(-1))
+                logger.debug(
+                    "XTTS Coqui API chunk %d/%d generated (%d samples)",
+                    index + 1,
+                    len(chunks),
+                    int(np.asarray(chunk_samples).size),
+                )
+        finally:
+            for tmp_path in tmp_paths:
+                try:
+                    os.unlink(tmp_path)
+                except Exception as exc:
+                    logger.debug("Failed to delete temp file %s: %s", tmp_path, exc)
         samples = np.concatenate(generated) if generated else np.zeros(0, dtype=np.float32)
         if volume != 1.0:
             samples = np.clip(samples * max(0.0, float(volume)), -1.0, 1.0)
@@ -1108,9 +1319,10 @@ class XTTSTS(BaseTTS):
 
     def set_language(self, language: str) -> None:
         """Set the speaking language for XTTS synthesis."""
-        if language == "auto" or language in self._supported_languages:
-            self._language = language
-            logger.info("XTTS language set to: %s", language)
+        normalized_language = normalize_xtts_language_code(language)
+        if normalized_language == "auto" or normalized_language in self._supported_languages:
+            self._language = normalized_language
+            logger.info("XTTS language set to: %s", normalized_language)
         else:
             logger.warning("Unsupported XTTS language '%s', keeping '%s'", language, self._language)
 
@@ -1124,6 +1336,17 @@ class XTTSTS(BaseTTS):
 
     def _detect_language(self, text: str) -> str:
         """Detect language from broad Unicode ranges."""
+        lowered = str(text or "").lower()
+        latin_hints = (
+            ("es", ("ñ", "¿", "¡")),
+            ("fr", ("ç", "œ", "æ")),
+            ("de", ("ß",)),
+            ("pt", ("ã", "õ")),
+            ("tr", ("ğ", "ı", "İ", "ş")),
+            ("cs", ("č", "ď", "ě", "ř", "ť", "ů")),
+            ("pl", ("ą", "ę", "ł", "ń", "ś", "ź", "ż")),
+            ("hu", ("ő", "ű")),
+        )
         for c in text.strip():
             codepoint = ord(c)
             if 0x4E00 <= codepoint <= 0x9FFF:
@@ -1138,6 +1361,9 @@ class XTTSTS(BaseTTS):
                 return "ru"
             if 0x0600 <= codepoint <= 0x06FF:
                 return "ar"
+        for language, markers in latin_hints:
+            if any(marker.lower() in lowered for marker in markers):
+                return language
         return "en"
 
     def _apply_volume(self, audio_data: bytes, volume: float) -> bytes:

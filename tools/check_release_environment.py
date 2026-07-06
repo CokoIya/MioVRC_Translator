@@ -47,6 +47,7 @@ REQUIRED_MODULES = (
     "numba",
     "llvmlite",
     "av",
+    "av.audio.resampler",
     "transformers",
     "sentencepiece",
     "google.protobuf",
@@ -54,6 +55,9 @@ REQUIRED_MODULES = (
     "pypinyin",
     "cn2an",
     "g2p_en",
+    "nltk",
+    "num2words",
+    "ko_speech_tools",
 )
 
 
@@ -87,8 +91,14 @@ def _runtime_import_errors() -> list[str]:
 
     try:
         import av as _av  # noqa: F401
+        from av.audio.resampler import AudioResampler as _AudioResampler  # noqa: F401
     except Exception as exc:
         errors.append(f"TTS audio runtime imports: {exc}")
+    try:
+        import ko_speech_tools as _ko_speech_tools  # noqa: F401
+        import num2words as _num2words  # noqa: F401
+    except Exception as exc:
+        errors.append(f"XTTS multilingual text frontend imports: {exc}")
     return errors
 
 

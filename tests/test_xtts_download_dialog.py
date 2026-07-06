@@ -26,13 +26,18 @@ def test_xtts_download_dialog_uses_shared_progress_widget(qtbot, monkeypatch):
 
     monkeypatch.setattr(xtts_download_dialog, "XTTSDownloader", FakeDownloader)
     monkeypatch.setattr(xtts_download_dialog, "xtts_models_ready", lambda: False)
+    monkeypatch.setattr(
+        xtts_download_dialog,
+        "xtts_runtime_status",
+        lambda: type("Status", (), {"ready": True, "missing_component_names": ()})(),
+    )
     monkeypatch.setattr(xtts_download_dialog.QTimer, "singleShot", lambda _ms, _cb: None)
 
     dialog = xtts_download_dialog.XTTSDownloadDialog()
     qtbot.addWidget(dialog)
 
-    assert dialog.maximumWidth() == 480
-    assert dialog.minimumWidth() == 480
+    assert dialog.maximumWidth() == 500
+    assert dialog.minimumWidth() == 500
     assert dialog._progress_widget._downloader is dialog._downloader
     assert dialog.windowTitle() == "Download Voice Cloning Model"
 
@@ -67,6 +72,11 @@ def test_xtts_download_dialog_surfaces_downloader_errors(qtbot, monkeypatch):
 
     monkeypatch.setattr(xtts_download_dialog, "XTTSDownloader", FakeDownloader)
     monkeypatch.setattr(xtts_download_dialog, "xtts_models_ready", lambda: False)
+    monkeypatch.setattr(
+        xtts_download_dialog,
+        "xtts_runtime_status",
+        lambda: type("Status", (), {"ready": True, "missing_component_names": ()})(),
+    )
     monkeypatch.setattr(xtts_download_dialog.QTimer, "singleShot", lambda _ms, _cb: None)
 
     dialog = xtts_download_dialog.XTTSDownloadDialog()
@@ -76,3 +86,47 @@ def test_xtts_download_dialog_surfaces_downloader_errors(qtbot, monkeypatch):
 
     assert dialog._progress_widget._retry_btn.isHidden() is False
     assert "404 Client Error" in dialog._progress_widget._speed_label.text()
+
+
+def test_xtts_download_dialog_offers_release_page_when_runtime_component_missing(qtbot, monkeypatch):
+    class FakeDownloader:
+        state = DownloadState.IDLE
+        progress = DownloadProgress()
+
+        def add_listener(self, _cb):
+            pass
+
+        def start(self):
+            pass
+
+        def pause(self):
+            pass
+
+        def resume(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(xtts_download_dialog, "XTTSDownloader", FakeDownloader)
+    monkeypatch.setattr(xtts_download_dialog, "xtts_models_ready", lambda: True)
+    monkeypatch.setattr(
+        xtts_download_dialog,
+        "xtts_runtime_status",
+        lambda: type(
+            "Status",
+            (),
+            {
+                "ready": False,
+                "missing_component_names": ("MP3/audio decoder runtime",),
+            },
+        )(),
+    )
+    monkeypatch.setattr(xtts_download_dialog.QTimer, "singleShot", lambda _ms, cb: cb())
+
+    dialog = xtts_download_dialog.XTTSDownloadDialog()
+    qtbot.addWidget(dialog)
+
+    assert not dialog._release_btn.isHidden()
+    assert not dialog._close_btn.isHidden()
+    assert "MP3/audio decoder runtime" in dialog._bottom_label.text()

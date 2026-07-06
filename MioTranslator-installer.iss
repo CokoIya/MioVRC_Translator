@@ -1,8 +1,8 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "v1.3.7.7"
-#define AppNumericVersion "1.3.7.7"
+#define AppVersion "v1.3.7.8"
+#define AppNumericVersion "1.3.7.8"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
@@ -34,7 +34,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 CloseApplications=yes
-RestartApplications=no
+RestartApplications=yes
 AppMutex=MioTranslatorRuntimeMutex
 ; ウィザードの外観設定
 WizardResizable=no

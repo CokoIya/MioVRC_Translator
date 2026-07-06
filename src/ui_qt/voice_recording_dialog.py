@@ -29,6 +29,7 @@ from src.tts.xtts_engine import (
     XTTS_REFERENCE_AUDIO_NAME_FILTER,
     analyze_xtts_reference_audio_bytes,
     normalize_xtts_reference_audio_file,
+    xtts_reference_import_error_message,
     xtts_reference_quality_problem,
 )
 from src.utils.i18n import tr
@@ -418,7 +419,11 @@ class VoiceRecordingDialog(QDialog):
                     self._status_label.setText(self._t("voice_record_import_unusable_status"))
                     self._status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #f44336; padding: 10px;")
                     logger.error("Failed to import audio: %s", e)
-                    QMessageBox.warning(self, self._t("voice_record_import_unusable_title"), str(e))
+                    QMessageBox.warning(
+                        self,
+                        self._t("voice_record_import_unusable_title"),
+                        xtts_reference_import_error_message(e),
+                    )
 
     def _save_voice(self) -> None:
         """Save the recorded voice."""

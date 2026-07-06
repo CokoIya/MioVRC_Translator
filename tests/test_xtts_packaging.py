@@ -24,6 +24,11 @@ def test_release_requirements_include_functional_xtts_runtime() -> None:
     assert "mojimoji==0.0.13" in lock
     assert "transformers==4.57.6" in lock
     assert "torch==2.8.0+cpu" in lock
+    assert "av==17.0.1" in lock
+    assert "num2words==0.5.14" in lock
+    assert "ko-speech-tools==0.1.0" in lock
+    assert "g2p-en==2.1.0" in lock
+    assert "nltk==3.9.4" in lock
 
 
 def test_pyinstaller_spec_collects_coqui_xtts_runtime() -> None:
@@ -35,8 +40,17 @@ def test_pyinstaller_spec_collects_coqui_xtts_runtime() -> None:
     assert '"fugashi"' in spec
     assert '"unidic_lite"' in spec
     assert '"mojimoji"' in spec
+    assert '"av"' in spec
+    assert '"av.audio.resampler"' in spec
     assert '"coqpit"' in spec
     assert '"trainer"' in spec
+    assert '"num2words"' in spec
+    assert '"ko_speech_tools"' in spec
+    assert '"pypinyin"' in spec
+    assert '"g2p_en"' in spec
+    assert '"nltk"' in spec
+    assert '"g2p_en",' not in spec.split("excludes = [", 1)[1]
+    assert '"nltk",' not in spec.split("excludes = [", 1)[1]
 
 
 def test_full_pyinstaller_spec_includes_embedded_webspeech_bridge() -> None:
@@ -65,6 +79,11 @@ def test_release_environment_check_imports_tts_api() -> None:
     assert '"fugashi"' in check
     assert '"unidic_lite"' in check
     assert '"mojimoji"' in check
+    assert '"av.audio.resampler"' in check
+    assert '"num2words"' in check
+    assert '"ko_speech_tools"' in check
+    assert '"pypinyin"' in check
+    assert '"nltk"' in check
     assert "from TTS.api import TTS" in check
 
 

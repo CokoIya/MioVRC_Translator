@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QDialog, QLabel, QMessageBox, QVBoxLayout
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 from src.asr.hf_model_downloader import DownloadState
 from src.tts.xtts_downloader import (
@@ -13,10 +14,12 @@ from src.tts.xtts_downloader import (
     estimate_xtts_download_size,
     xtts_models_ready,
 )
+from src.tts.xtts_engine import xtts_runtime_status
 from src.ui_qt.model_download_dialog import DownloadProgressWidget
 from src.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
+MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
 
 
 class XTTSDownloadDialog(QDialog):
@@ -29,9 +32,10 @@ class XTTSDownloadDialog(QDialog):
         self._ui_lang = ui_lang or self._resolve_ui_lang(parent)
         self._downloader = XTTSDownloader()
         self._close_scheduled = False
+        self._runtime_status = xtts_runtime_status()
 
         self.setWindowTitle(self._t("xtts_download_title"))
-        self.setFixedSize(480, 430)
+        self.setFixedSize(500, 500)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         self._build()
@@ -79,6 +83,11 @@ class XTTSDownloadDialog(QDialog):
         privacy.setWordWrap(True)
         root.addWidget(privacy)
 
+        self._runtime_label = QLabel(self._runtime_status_text())
+        self._runtime_label.setObjectName("successLabel" if self._runtime_status.ready else "warningLabel")
+        self._runtime_label.setWordWrap(True)
+        root.addWidget(self._runtime_label)
+
         self._progress_widget = DownloadProgressWidget(
             self,
             "xtts",
@@ -93,6 +102,18 @@ class XTTSDownloadDialog(QDialog):
         self._bottom_label = QLabel(self._t("xtts_download_preparing"))
         self._bottom_label.setWordWrap(True)
         root.addWidget(self._bottom_label)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self._release_btn = QPushButton(self._t("xtts_download_open_release"))
+        self._release_btn.clicked.connect(self._open_release_page)
+        self._release_btn.hide()
+        button_row.addWidget(self._release_btn)
+        self._close_btn = QPushButton(self._t("xtts_download_close"))
+        self._close_btn.clicked.connect(self.reject)
+        self._close_btn.hide()
+        button_row.addWidget(self._close_btn)
+        root.addLayout(button_row)
 
         self._apply_style()
 
@@ -124,11 +145,22 @@ class XTTSDownloadDialog(QDialog):
         self._progress_widget._pause_btn.setEnabled(False)
         self._progress_widget._stop_btn.setEnabled(False)
         self._progress_widget._retry_btn.hide()
+        if not self._runtime_status.ready:
+            self._bottom_label.setText(self._runtime_missing_text())
+            self._release_btn.show()
+            self._close_btn.show()
+            return
         self._bottom_label.setText(self._t("xtts_download_ready_closing"))
         self._schedule_accept(1200)
 
     def _on_completed(self) -> None:
         if self._close_scheduled:
+            return
+        if not self._runtime_status.ready:
+            self._bottom_label.setText(self._runtime_missing_text())
+            self._release_btn.show()
+            self._close_btn.show()
+            self.download_complete.emit()
             return
         self._bottom_label.setText(self._t("xtts_download_complete_closing"))
         self.download_complete.emit()
@@ -137,8 +169,23 @@ class XTTSDownloadDialog(QDialog):
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._ui_lang, key, **kwargs)
 
+    def _runtime_status_text(self) -> str:
+        if self._runtime_status.ready:
+            return self._t("xtts_download_runtime_ready")
+        return self._runtime_missing_text()
+
+    def _runtime_missing_text(self) -> str:
+        components = ", ".join(self._runtime_status.missing_component_names)
+        if not components:
+            components = "Coqui TTS runtime"
+        return self._t("xtts_download_runtime_missing", components=components)
+
     def _on_cancelled(self) -> None:
         self.reject()
+
+    @staticmethod
+    def _open_release_page() -> None:
+        QDesktopServices.openUrl(QUrl(MIO_RELEASE_DOWNLOAD_URL))
 
     def _schedule_accept(self, delay_ms: int) -> None:
         if self._close_scheduled:
@@ -158,4 +205,5 @@ class XTTSDownloadDialog(QDialog):
         #setupHeader { font-weight: 700; font-size: 16px; }
         #accentLabel { color: #0071e3; font-weight: 700; }
         #successLabel { color: #34c759; font-size: 13px; }
+        #warningLabel { color: #b45309; font-size: 13px; font-weight: 600; }
         """)

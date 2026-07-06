@@ -12,6 +12,7 @@ from src.ui_qt.settings_window import (
     TTS_TEST_TEXT_BY_LANGUAGE,
     XTTS_TEST_TEXT_BY_LANGUAGE,
 )
+from src.tts.xtts_engine import XTTS_SUPPORTED_LANGUAGES
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
 from src.utils.ui_config import (
@@ -47,10 +48,19 @@ def config():
 
 
 def _patch_dialog_deps(monkeypatch):
+    ready_status = type(
+        "ReadyXTTSStatus",
+        (),
+        {
+            "ready": True,
+            "missing_component_names": (),
+        },
+    )()
     monkeypatch.setattr("src.ui_qt.settings_window.AudioRecorder.list_devices", lambda: [])
     monkeypatch.setattr("src.ui_qt.settings_window._list_desktop_output_devices", lambda: [])
     monkeypatch.setattr("src.ui_qt.settings_window.find_best_virtual_output_device", lambda: None)
     monkeypatch.setattr("src.ui_qt.settings_window.create_tts_engine", lambda _engine: _DummyTTS())
+    monkeypatch.setattr("src.ui_qt.settings_window.xtts_runtime_status", lambda **_kwargs: ready_status)
     monkeypatch.setattr("src.ui_qt.settings_window.missing_required_translation_api_key", lambda _cfg: (False, ""))
     monkeypatch.setattr("src.asr.model_manager.model_exists", lambda _spec: True)
     monkeypatch.setattr(
@@ -1647,6 +1657,85 @@ def test_xtts_settings_pass_device_language_and_voice_to_test_and_save(qtbot, co
     assert config["tts"]["xtts"]["language"] == "ja"
 
 
+def test_xtts_test_texts_cover_all_supported_voice_cloning_languages():
+    assert not [
+        language
+        for language in XTTS_SUPPORTED_LANGUAGES
+        if language not in XTTS_TEST_TEXT_BY_LANGUAGE
+    ]
+
+
+def test_xtts_auto_test_language_uses_translation_target(qtbot, config, monkeypatch):
+    captured_kwargs: list[dict[str, object]] = []
+    spoken: list[tuple[str, str]] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class FakeTTSManager:
+        def __init__(self, *args, **kwargs):
+            captured_kwargs.append(kwargs)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            pass
+
+        def speak(self, text, voice, rate=1.0, volume=1.0, callback=None):
+            del rate, volume
+            spoken.append((text, voice))
+            if callback is not None:
+                callback(True, "")
+            return True
+
+        def stop_playback(self):
+            pass
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.xtts_runtime_status",
+        lambda **_kwargs: type(
+            "Status",
+            (),
+            {
+                "ready": True,
+                "missing_component_names": (),
+            },
+        )(),
+    )
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.validate_xtts_reference_audio_file",
+        lambda _path: (True, "", None),
+    )
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FakeTTSManager)
+    config["translation"]["target_language"] = "es"
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "sample", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
+    dialog._nav_list.setCurrentRow(tts_row)
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._xtts_language_combo.setCurrentIndex(0)
+    dialog._on_tts_test()
+    qtbot.waitUntil(lambda: bool(spoken), timeout=2000)
+
+    assert captured_kwargs[0]["engine_config"]["language"] == "es"
+    assert spoken[0][0] == XTTS_TEST_TEXT_BY_LANGUAGE["es"]
+
+
 def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config, monkeypatch):
     warnings: list[tuple[str, str]] = []
 
@@ -1660,6 +1749,17 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
 
     _patch_dialog_deps(monkeypatch)
     monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.xtts_runtime_status",
+        lambda **_kwargs: type(
+            "MissingXTTSStatus",
+            (),
+            {
+                "ready": False,
+                "missing_component_names": ("Coqui TTS runtime",),
+            },
+        )(),
+    )
     monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
     monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
     monkeypatch.setattr(
@@ -1681,7 +1781,9 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
     dialog._on_tts_test()
 
     assert dialog._tts_testing is False
-    assert warnings == [(dialog._copy("tts_test"), dialog._copy("xtts_runtime_missing"))]
+    assert warnings == [
+        (dialog._copy("tts_test"), dialog._copy("xtts_runtime_missing_details", components="Coqui TTS runtime"))
+    ]
 
 
 def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, monkeypatch):

@@ -145,6 +145,10 @@ UI_TEXTS: dict[str, dict[str, str]] = {
         "update_retry": "重试",
         "update_close": "关闭",
         "update_install_later": "稍后安装",
+        "update_launching_installer": "正在启动安装器…",
+        "update_launching_note": "Mio 将在安装器启动后关闭；更新完成后会重新打开。",
+        "update_installer_missing": "已下载的安装器文件不存在。请重新下载更新。",
+        "update_installer_launch_failed": "无法启动安装器：{message}",
         "tts_section": "让 Mio 朗读",
         "tts_enable": "启用朗读",
         "tts_engine": "Mio 用哪个声音",
@@ -350,6 +354,10 @@ UI_TEXTS: dict[str, dict[str, str]] = {
         "update_retry": "Retry",
         "update_close": "Close",
         "update_install_later": "Install Later",
+        "update_launching_installer": "Starting installer...",
+        "update_launching_note": "Mio will close after the installer starts, then reopen when the update finishes.",
+        "update_installer_missing": "The downloaded installer file is missing. Download the update again.",
+        "update_installer_launch_failed": "Could not start the installer: {message}",
         "tts_section": "Text-to-Speech",
         "tts_enable": "Enable TTS",
         "tts_engine": "TTS Engine",
@@ -555,6 +563,10 @@ UI_TEXTS: dict[str, dict[str, str]] = {
         "update_retry": "再試行",
         "update_close": "閉じる",
         "update_install_later": "後でインストール",
+        "update_launching_installer": "インストーラーを起動中…",
+        "update_launching_note": "インストーラー起動後に Mio は終了し、更新完了後に再起動します。",
+        "update_installer_missing": "ダウンロード済みインストーラーが見つかりません。もう一度ダウンロードしてください。",
+        "update_installer_launch_failed": "インストーラーを起動できませんでした: {message}",
         "tts_section": "音声読み上げ",
         "tts_enable": "音声読み上げを有効化",
         "tts_engine": "音声エンジン",
@@ -738,6 +750,10 @@ UI_TEXTS: dict[str, dict[str, str]] = {
         "update_retry": "Повторить",
         "update_close": "Закрыть",
         "update_install_later": "Установить позже",
+        "update_launching_installer": "Запуск установщика...",
+        "update_launching_note": "Mio закроется после запуска установщика и откроется снова после завершения обновления.",
+        "update_installer_missing": "Загруженный установщик не найден. Загрузите обновление заново.",
+        "update_installer_launch_failed": "Не удалось запустить установщик: {message}",
     },
     "ko": {
         "window_title": "Mio Translator",
@@ -876,6 +892,10 @@ UI_TEXTS: dict[str, dict[str, str]] = {
         "update_retry": "다시 시도",
         "update_close": "닫기",
         "update_install_later": "나중에 설치",
+        "update_launching_installer": "설치 프로그램 시작 중...",
+        "update_launching_note": "설치 프로그램이 시작되면 Mio가 종료되고, 업데이트가 끝나면 다시 열립니다.",
+        "update_installer_missing": "다운로드한 설치 파일을 찾을 수 없습니다. 업데이트를 다시 다운로드하세요.",
+        "update_installer_launch_failed": "설치 프로그램을 시작할 수 없습니다: {message}",
     },
 }
 
@@ -2093,6 +2113,42 @@ _QUICK_SWITCH_PANEL_TEXTS = {
 }
 
 for _language, _texts in _QUICK_SWITCH_PANEL_TEXTS.items():
+    UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
+
+_XTTS_DOWNLOAD_RUNTIME_TEXTS = {
+    "zh-CN": {
+        "xtts_download_runtime_ready": "声音克隆运行组件已就绪，MP3/常见音频导入和多语言文本处理可用。",
+        "xtts_download_runtime_missing": "缺少随安装包附带的声音克隆运行组件：{components}。请安装最新完整安装包并重启 Mio Translator；模型下载本身不能补齐这些程序组件。",
+        "xtts_download_open_release": "打开官方下载页",
+        "xtts_download_close": "关闭",
+    },
+    "en": {
+        "xtts_download_runtime_ready": "Voice Cloning runtime components are ready, including common audio import and multilingual text processing.",
+        "xtts_download_runtime_missing": "Missing bundled Voice Cloning runtime components: {components}. Install the latest full release and restart Mio Translator; the model downloader cannot add these program components.",
+        "xtts_download_open_release": "Open Release Page",
+        "xtts_download_close": "Close",
+    },
+    "ja": {
+        "xtts_download_runtime_ready": "Voice Cloning の実行コンポーネントは準備できています。一般的な音声インポートと多言語処理を使用できます。",
+        "xtts_download_runtime_missing": "同梱される Voice Cloning 実行コンポーネントが不足しています: {components}。最新の完全版インストーラーを入れ直して Mio Translator を再起動してください。モデルダウンローダーでは補完できません。",
+        "xtts_download_open_release": "ダウンロードページを開く",
+        "xtts_download_close": "閉じる",
+    },
+    "ru": {
+        "xtts_download_runtime_ready": "Компоненты Voice Cloning готовы, включая импорт обычных аудиоформатов и многоязычную обработку текста.",
+        "xtts_download_runtime_missing": "Отсутствуют компоненты Voice Cloning из установщика: {components}. Установите последнюю полную версию и перезапустите Mio Translator; загрузчик модели не может добавить эти программные компоненты.",
+        "xtts_download_open_release": "Открыть страницу релиза",
+        "xtts_download_close": "Закрыть",
+    },
+    "ko": {
+        "xtts_download_runtime_ready": "음성 클로닝 실행 구성 요소가 준비되었습니다. 일반 오디오 가져오기와 다국어 텍스트 처리를 사용할 수 있습니다.",
+        "xtts_download_runtime_missing": "설치 패키지에 포함되어야 하는 음성 클로닝 실행 구성 요소가 없습니다: {components}. 최신 전체 설치 파일을 다시 설치하고 Mio Translator를 재시작하세요. 모델 다운로드 창으로는 이 프로그램 구성 요소를 추가할 수 없습니다.",
+        "xtts_download_open_release": "릴리스 페이지 열기",
+        "xtts_download_close": "닫기",
+    },
+}
+
+for _language, _texts in _XTTS_DOWNLOAD_RUNTIME_TEXTS.items():
     UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
 
 for _language, _texts in UI_TEXT_COMPLETIONS.items():

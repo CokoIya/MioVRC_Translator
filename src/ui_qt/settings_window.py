@@ -74,12 +74,7 @@ from src.tts.api_tts_config import (
 )
 from src.tts.factory import create_tts_engine
 from src.tts.manager import TTSManager, find_best_virtual_output_device, resolve_output_device
-from src.tts.style_bert_vits2_engine import (
-    STYLE_BERT_LANGUAGE_NAMES,
-    list_style_bert_vits2_voices,
-    normalize_style_bert_bert_language,
-    style_bert_bert_model_id,
-)
+from src.tts.base import TTSVoice
 from src.tts.xtts_engine import (
     XTTS_REFERENCE_AUDIO_NAME_FILTER,
     XTTS_SUPPORTED_LANGUAGES,
@@ -87,16 +82,22 @@ from src.tts.xtts_engine import (
     first_xtts_reference_audio_path,
     is_xtts_runtime_available,
     list_xtts_reference_voices,
+    normalize_xtts_language_code,
     normalize_xtts_reference_audio_file,
     repair_xtts_reference_audio_file,
     safe_xtts_voice_name,
     validate_xtts_reference_audio_file,
+    xtts_language_from_target_language,
+    xtts_reference_import_error_message,
     xtts_reference_audio_dir,
+    xtts_runtime_status,
 )
 from src.tts.style_bert_vits2_models import (
     StyleBertVits2ModelError,
     import_style_bert_model_path,
     list_imported_style_bert_models,
+    style_bert_preset_title,
+    style_bert_voice_id,
 )
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.pytorch_cuda_install_dialog import PytorchCudaInstallDialog
@@ -106,6 +107,7 @@ from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
 from src.updater.update_checker import UpdateInfo, check_for_update
 from src.utils import config_manager
+from src.utils.config_manager import normalize_style_bert_bert_language
 from src.utils.app_paths import backgrounds_dir
 from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
@@ -144,6 +146,55 @@ from src.utils.translation_config_validation import missing_required_translation
 from src.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
+
+STYLE_BERT_JP_BERT_MODEL_ID = "ku-nlp/deberta-v2-large-japanese-char-wwm"
+STYLE_BERT_EN_BERT_MODEL_ID = "microsoft/deberta-v3-large"
+STYLE_BERT_ZH_BERT_MODEL_ID = "hfl/chinese-roberta-wwm-ext-large"
+STYLE_BERT_BERT_MODEL_IDS = {
+    "jp": STYLE_BERT_JP_BERT_MODEL_ID,
+    "en": STYLE_BERT_EN_BERT_MODEL_ID,
+    "zh": STYLE_BERT_ZH_BERT_MODEL_ID,
+}
+STYLE_BERT_LANGUAGE_NAMES = {
+    "jp": "Japanese",
+    "en": "English",
+    "zh": "Chinese",
+}
+_STYLE_BERT_VOICE_LOCALES = {
+    "JP": ("ja", "ja-JP"),
+    "EN": ("en", "en-US"),
+    "ZH": ("zh", "zh-CN"),
+}
+
+
+def style_bert_bert_model_id(language: object) -> str:
+    return STYLE_BERT_BERT_MODEL_IDS[normalize_style_bert_bert_language(language)]
+
+
+def list_style_bert_vits2_voices(bert_language: object = "jp") -> list[TTSVoice]:
+    normalized_language = normalize_style_bert_bert_language(bert_language)
+    language, locale = _STYLE_BERT_VOICE_LOCALES.get(
+        normalized_language.upper(),
+        _STYLE_BERT_VOICE_LOCALES["JP"],
+    )
+    voices: list[TTSVoice] = []
+    for model in list_imported_style_bert_models():
+        for speaker in model.speakers:
+            for style in model.styles:
+                voice_id = style_bert_voice_id(model.name, speaker, style)
+                display_title = style_bert_preset_title(model.name, speaker)
+                display_name = f"{display_title} / {style}" if display_title else voice_id
+                voices.append(
+                    TTSVoice(
+                        id=voice_id,
+                        name=display_name,
+                        language=language,
+                        locale=locale,
+                        gender=None,
+                    )
+                )
+    return voices
+
 
 XTTS_LANGUAGE_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Auto-detect", "auto"),
@@ -189,6 +240,30 @@ XTTS_TEST_TEXT_BY_LANGUAGE = {
     "en": "Hello, this is a Voice Cloning synthesis test. The result should sound like a clear human voice, not a short burst of noise.",
     "zh": "你好，这是XTTS语音合成测试。请确认它听起来像清晰的人声，而不是短促的噪声。",
 }
+
+XTTS_TEST_TEXT_BY_LANGUAGE.update(
+    {
+        "en": "Hello, this is a Voice Cloning synthesis test. The result should sound clear, natural, and human.",
+        "es": "Hola, esta es una prueba de sintesis de voz clonada. La voz debe sonar clara y natural.",
+        "fr": "Bonjour, ceci est un test de synthese vocale clonee. La voix doit sembler claire et naturelle.",
+        "de": "Hallo, dies ist ein Test der geklonten Sprachsynthese. Die Stimme soll klar und naturlich klingen.",
+        "it": "Ciao, questa e una prova di sintesi vocale clonata. La voce dovrebbe suonare chiara e naturale.",
+        "pt": "Ola, este e um teste de sintese de voz clonada. La voz deve soar clara e natural.",
+        "pl": "Czesc, to jest test klonowanej syntezy mowy. Glos powinien brzmiec wyraznie i naturalnie.",
+        "tr": "Merhaba, bu klonlanmis ses sentezi testidir. Ses net ve dogal duyulmalidir.",
+        "ru": "Здравствуйте, это тест клонированного голоса. Голос должен звучать ясно и естественно.",
+        "nl": "Hallo, dit is een test van gekloonde spraaksynthese. De stem moet helder en natuurlijk klinken.",
+        "cs": "Dobry den, toto je test klonovane syntezy reci. Hlas by mel znit ciste a prirozene.",
+        "ar": "مرحبا، هذا اختبار لاستنساخ الصوت. يجب أن يبدو الصوت واضحا وطبيعيا.",
+        "zh": "你好，这是声音克隆合成测试。请确认声音清晰自然，不是短促的噪声。",
+        "zh-cn": "你好，这是声音克隆合成测试。请确认声音清晰自然，不是短促的噪声。",
+        "jp": "こんにちは。これは音声クローンの合成テストです。声が自然で聞き取りやすいか確認してください。",
+        "ja": "こんにちは。これは音声クローンの合成テストです。声が自然で聞き取りやすいか確認してください。",
+        "hu": "Szia, ez egy hangklonozasi szintezis teszt. A hang legyen tiszta es termeszetes.",
+        "ko": "안녕하세요. 이것은 음성 클로닝 합성 테스트입니다. 목소리가 또렷하고 자연스럽게 들려야 합니다.",
+        "hi": "नमस्ते, यह वॉयस क्लोनिंग संश्लेषण परीक्षण है। आवाज साफ और स्वाभाविक सुनाई देनी चाहिए।",
+    }
+)
 
 THEME_LABELS = {
     "zh-CN": {"system": "跟随系统", "dark": "深色", "light": "浅色"},
@@ -264,6 +339,7 @@ MIXLINE_DOWNLOAD_URL = "https://www.logitechg.com/en-us/software/mixline.html"
 VOICEVOX_DOWNLOAD_URL = "https://voicevox.hiroshiba.jp/"
 AIVIS_SPEECH_DOWNLOAD_URL = "https://aivis-project.com/AivisSpeech"
 NVIDIA_DRIVER_DOWNLOAD_URL = "https://www.nvidia.com/Download/index.aspx"
+MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
 
 
 def _api_tts_voice_ids(engine: str) -> tuple[str, ...]:
@@ -1534,6 +1610,8 @@ _SETTINGS_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
 
 _VOICE_CLONING_SETTINGS_COPY = {
     "xtts_runtime_missing": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
+    "xtts_runtime_missing_details": "Voice Cloning is missing bundled runtime components: {components}. Install the latest full release, then restart Mio Translator.",
+    "xtts_runtime_reinstall": "Open Release Page",
     "xtts_model_missing": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
     "xtts_ready": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
     "xtts_reference_missing": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
@@ -1545,6 +1623,24 @@ for _key, _text in _VOICE_CLONING_SETTINGS_COPY.items():
     QT_SETTINGS_COPY.setdefault(_key, {}).update(
         {language: _text for language in _SETTINGS_LANGUAGES}
     )
+QT_SETTINGS_COPY.setdefault("xtts_runtime_missing_details", {}).update(
+    {
+        "zh-CN": "声音克隆缺少随完整安装包附带的运行组件：{components}。请安装最新完整安装包并重启 Mio Translator；模型下载不能补齐这些程序组件。",
+        "en": "Voice Cloning is missing bundled runtime components: {components}. Install the latest full release, then restart Mio Translator.",
+        "ja": "Voice Cloning の同梱実行コンポーネントが不足しています: {components}。最新の完全版をインストールし直して Mio Translator を再起動してください。",
+        "ru": "Voice Cloning не хватает компонентов из установщика: {components}. Установите последнюю полную версию и перезапустите Mio Translator.",
+        "ko": "음성 클로닝 실행 구성 요소가 없습니다: {components}. 최신 전체 설치 파일을 설치한 뒤 Mio Translator를 재시작하세요.",
+    }
+)
+QT_SETTINGS_COPY.setdefault("xtts_runtime_reinstall", {}).update(
+    {
+        "zh-CN": "打开官方下载页",
+        "en": "Open Release Page",
+        "ja": "ダウンロードページを開く",
+        "ru": "Открыть страницу релиза",
+        "ko": "릴리스 페이지 열기",
+    }
+)
 
 QT_SETTINGS_COPY.update({
     "success": {
@@ -4743,28 +4839,7 @@ class SettingsWindow(QDialog):
 
     def _on_xtts_language_changed(self, text: str) -> None:
         """Handle XTTS language selection change."""
-        # Map display name to language code
-        lang_map = {
-            "Auto-detect": "auto",
-            "English": "en",
-            "中文 (Chinese)": "zh-cn",
-            "日本語 (Japanese)": "ja",
-            "한국어 (Korean)": "ko",
-            "Español (Spanish)": "es",
-            "Français (French)": "fr",
-            "Deutsch (German)": "de",
-            "Italiano (Italian)": "it",
-            "Português (Portuguese)": "pt",
-            "Polski (Polish)": "pl",
-            "Türkçe (Turkish)": "tr",
-            "Русский (Russian)": "ru",
-            "Nederlands (Dutch)": "nl",
-            "Čeština (Czech)": "cs",
-            "العربية (Arabic)": "ar",
-            "Magyar (Hungarian)": "hu",
-            "Hindi": "hi",
-        }
-        lang_code = lang_map.get(text, "auto")
+        lang_code = XTTS_LANGUAGE_LABEL_TO_CODE.get(text, normalize_xtts_language_code(text))
         self._xtts_language_var.set(text)
         logger.info("XTTS language changed to: %s (%s)", text, lang_code)
 
@@ -4816,6 +4891,9 @@ class SettingsWindow(QDialog):
             xtts_language = self._selected_xtts_language_code()
             if xtts_language == "auto":
                 target = str(self._config.get("translation", {}).get("target_language", "") or "").strip().lower()
+                resolved = xtts_language_from_target_language(target)
+                if resolved != "auto":
+                    return resolved
                 if target in {"ja", "jp"}:
                     return "ja"
                 if target in {"zh", "zh-cn", "cn", "chinese"}:
@@ -4828,12 +4906,10 @@ class SettingsWindow(QDialog):
                 if ui_language.startswith(("ja", "jp")):
                     return "ja"
                 if ui_language.startswith("zh"):
-                    return "zh"
+                    return "zh-cn"
                 if ui_language.startswith("ko"):
                     return "ko"
                 return "en"
-            if xtts_language == "zh-cn":
-                return "zh"
             return xtts_language
         if engine in {"voicevox", "aivis_speech"}:
             return "jp"
@@ -4922,55 +4998,14 @@ class SettingsWindow(QDialog):
         return self._tts_voice_display_to_id.get(display, display) if hasattr(self, "_tts_voice_display_to_id") else display
 
     def _selected_xtts_language_code(self) -> str:
-        codes = [
-            "auto",
-            "en",
-            "zh-cn",
-            "ja",
-            "ko",
-            "es",
-            "fr",
-            "de",
-            "it",
-            "pt",
-            "pl",
-            "tr",
-            "ru",
-            "nl",
-            "cs",
-            "ar",
-            "hu",
-            "hi",
-        ]
+        option_codes = [code for _label, code in XTTS_LANGUAGE_OPTIONS]
         combo = getattr(self, "_xtts_language_combo", None)
         if combo is not None:
             index = combo.currentIndex()
-            if 0 <= index < len(codes):
-                return codes[index]
+            if 0 <= index < len(option_codes):
+                return option_codes[index]
         text = str(self._xtts_language_var.value() or "").strip().lower()
-        keyword_map = {
-            "english": "en",
-            "chinese": "zh-cn",
-            "japanese": "ja",
-            "korean": "ko",
-            "spanish": "es",
-            "french": "fr",
-            "german": "de",
-            "italian": "it",
-            "portuguese": "pt",
-            "polish": "pl",
-            "turkish": "tr",
-            "russian": "ru",
-            "dutch": "nl",
-            "czech": "cs",
-            "arabic": "ar",
-            "hungarian": "hu",
-            "hindi": "hi",
-        }
-        for keyword, code in keyword_map.items():
-            if keyword in text:
-                return code
-        return "auto"
+        return normalize_xtts_language_code(text)
 
     def _selected_xtts_device(self) -> str:
         if getattr(self, "_xtts_device_codes", None):
@@ -4993,7 +5028,12 @@ class SettingsWindow(QDialog):
         engine_cfg["volume"] = self._safe_tts_volume(self._tts_volume_var.value())
         if engine == "xtts":
             engine_cfg["device"] = self._selected_xtts_device()
-            engine_cfg["language"] = self._selected_xtts_language_code()
+            xtts_language = self._selected_xtts_language_code()
+            engine_cfg["language"] = (
+                self._selected_tts_test_language()
+                if xtts_language == "auto"
+                else xtts_language
+            )
         if engine in TTS_API_ENGINE_IDS:
             region = self._selected_tts_api_region()
             engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
@@ -5227,8 +5267,7 @@ class SettingsWindow(QDialog):
         download_btn = getattr(self, "_download_xtts_btn", None)
         if download_btn is not None and visible:
             from src.tts.xtts_downloader import xtts_models_ready
-            runtime_installed = is_xtts_runtime_available()
-            download_btn.setEnabled(runtime_installed)
+            download_btn.setEnabled(True)
             if xtts_models_ready():
                 download_btn.hide()
             else:
@@ -5331,7 +5370,10 @@ class SettingsWindow(QDialog):
                     QMessageBox.critical(
                         self,
                         self._copy("error") or "Error",
-                        self._copy("xtts_voice_import_failed", error=exc)
+                        self._copy(
+                            "xtts_voice_import_failed",
+                            error=xtts_reference_import_error_message(exc),
+                        )
                     )
 
     def _on_download_xtts_models(self) -> None:
@@ -5721,6 +5763,13 @@ class SettingsWindow(QDialog):
         layout.addWidget(self._tts_api_frame)
         self._refresh_tts_api_visibility()
 
+    def _xtts_runtime_missing_message(self, *, require_api: bool = False) -> str:
+        status = xtts_runtime_status(require_api=require_api)
+        components = ", ".join(status.missing_component_names)
+        if not components:
+            components = "Coqui TTS runtime"
+        return self._copy("xtts_runtime_missing_details", components=components)
+
     def _refresh_tts_runtime_card(self) -> None:
         frame = getattr(self, "_tts_runtime_frame", None)
         label = getattr(self, "_tts_runtime_status_label", None)
@@ -5739,8 +5788,15 @@ class SettingsWindow(QDialog):
             from src.tts.xtts_downloader import xtts_models_ready
 
             button.setVisible(False)
-            if not is_xtts_runtime_available():
-                label.setText(self._copy("xtts_runtime_missing"))
+            status = xtts_runtime_status()
+            if not status.ready:
+                label.setText(self._xtts_runtime_missing_message())
+                button.setText(self._copy("xtts_runtime_reinstall"))
+                button.setVisible(True)
+                self._set_tts_runtime_button_action(
+                    button,
+                    lambda: self._open_external_url(MIO_RELEASE_DOWNLOAD_URL),
+                )
             elif not xtts_models_ready():
                 label.setText(self._copy("xtts_model_missing"))
                 button.setText(tr(self._ui_lang, "download_xtts_models") or "Download Voice Cloning Model")
@@ -6059,8 +6115,9 @@ class SettingsWindow(QDialog):
             if engine == "xtts":
                 from src.tts.xtts_downloader import xtts_models_ready
 
-                if not is_xtts_runtime_available(require_api=True):
-                    message = self._copy("xtts_runtime_missing")
+                runtime_status = xtts_runtime_status(require_api=True)
+                if not runtime_status.ready:
+                    message = self._xtts_runtime_missing_message(require_api=True)
                     logger.warning("XTTS test blocked: Coqui TTS runtime is not importable")
                     self.tts_test_finished.emit(generation, False, message)
                     QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
