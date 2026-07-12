@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import ipaddress
+import json
 import logging
+import socket
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -14,12 +19,23 @@ from .api_tts_config import (
 from .base import BaseTTS, TTSVoice
 from .persona_instructions import qwen_tts_model_supports_instructions
 from src.translators.factory import _float_setting, _int_setting
+from src.utils.secure_http import (
+    open_validated_requests_response,
+    read_bounded_requests_response,
+    validate_api_base_url,
+)
+from src.utils.http_session_pool import ThreadLocalSessionPool
 
 logger = logging.getLogger(__name__)
 
 _PROTECTED_SECRET_PREFIX = "dpapi:v1:"
+_MAX_AUDIO_BYTES = 32 * 1024 * 1024
+_MAX_JSON_AUDIO_RESPONSE_BYTES = 48 * 1024 * 1024
+_MAX_ERROR_RESPONSE_BYTES = 64 * 1024
+_MAX_AUDIO_REDIRECTS = 5
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
-from src.utils.app_paths import writable_app_dir
+from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
 
 _HIDDEN_VOICES: set[str] | None = None
 
@@ -33,9 +49,11 @@ def _load_hidden_voices() -> set[str]:
 
     _HIDDEN_VOICES = set()
     try:
-        path = writable_app_dir() / "seren.json"
+        path = secure_file_path(writable_app_dir() / "seren.json")
         if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(
+                read_secure_text(path, encoding="utf-8", max_bytes=1024 * 1024)
+            )
             voices = data.get("hidden_voices", [])
             if isinstance(voices, list):
                 for v in voices:
@@ -53,6 +71,7 @@ def _load_hidden_voices() -> set[str]:
 
 
 class _APITTSBase(BaseTTS):
+    max_concurrent_synthesis = 2
     ENGINE_ID = ""
     ENGINE_LABEL = "API TTS"
     AUTH_HEADER_NAME = "Authorization"
@@ -62,7 +81,15 @@ class _APITTSBase(BaseTTS):
         resolved = resolve_tts_api_config(self.ENGINE_ID, config)
         self.api_key = str(resolved.get("api_key", "") or "").strip()
         self.region = str(resolved.get("region", "") or "").strip()
-        self.base_url = str(resolved.get("base_url", "") or "").strip().rstrip("/")
+        raw_base_url = str(resolved.get("base_url", "") or "").strip()
+        self.base_url = (
+            validate_api_base_url(
+                raw_base_url,
+                label=f"{self.ENGINE_LABEL} API",
+            )
+            if raw_base_url
+            else ""
+        )
         self.model = str(resolved.get("model", "") or "").strip()
         self.default_voice = str(resolved.get("voice", "") or "").strip()
         self.language_type_hint = str(
@@ -74,10 +101,31 @@ class _APITTSBase(BaseTTS):
             resolved.get("timeout_seconds"), 30.0, minimum=3.0, maximum=120.0
         )
         self.max_retries = _int_setting(resolved.get("max_retries"), 0, minimum=0, maximum=3)
-        self._session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(max_retries=self.max_retries)
-        self._session.mount("https://", adapter)
-        self._session.mount("http://", adapter)
+        self._session_pool = ThreadLocalSessionPool(self._create_session)
+
+    def _create_session(self) -> requests.Session:
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            max_retries=self.max_retries,
+            pool_connections=4,
+            pool_maxsize=4,
+            pool_block=False,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
+
+    @property
+    def _session(self) -> requests.Session:
+        """Compatibility accessor backed by the current thread's session."""
+
+        return self._session_pool.get()
+
+    def close_thread_context(self) -> None:
+        self._session_pool.close_current()
+
+    def close(self) -> None:
+        self._session_pool.close()
 
     def is_available(self) -> bool:
         return bool(self.base_url and self.model)
@@ -109,6 +157,8 @@ class _APITTSBase(BaseTTS):
         return {
             self.AUTH_HEADER_NAME: auth_value,
             "Content-Type": "application/json",
+            "Accept": "audio/*, application/json",
+            "Accept-Encoding": "identity",
         }
 
     def _require_api_key(self) -> None:
@@ -120,30 +170,68 @@ class _APITTSBase(BaseTTS):
             )
 
     def _request_json_audio(self, url: str, payload: Mapping[str, object]) -> bytes:
-        response = self._session.post(
+        if not _is_safe_api_request_url(url):
+            raise RuntimeError(
+                f"{self.ENGINE_LABEL} API URL must use HTTPS or loopback HTTP"
+            )
+        session = self._session_pool.get()
+        response = session.post(
             url,
             headers=self._auth_headers(),
             json=dict(payload),
             timeout=self.timeout_seconds,
+            stream=True,
+            allow_redirects=False,
         )
         try:
-            response.raise_for_status()
-        except Exception as exc:
-            detail = _response_error_detail(response)
-            message = f"{self.ENGINE_LABEL} API request failed"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message) from exc
+            status_code = int(getattr(response, "status_code", 200) or 0)
+            if status_code in _REDIRECT_STATUS_CODES:
+                raise RuntimeError(
+                    f"{self.ENGINE_LABEL} API redirects are not allowed"
+                )
+            content_type = str(
+                response.headers.get("content-type", "") or ""
+            ).lower()
+            if status_code >= 400:
+                content = read_bounded_requests_response(
+                    response,
+                    limit=_MAX_ERROR_RESPONSE_BYTES,
+                    label=f"{self.ENGINE_LABEL} API error response",
+                )
+                try:
+                    response.raise_for_status()
+                except Exception as exc:
+                    detail = _response_error_detail(content, content_type)
+                    message = f"{self.ENGINE_LABEL} API request failed"
+                    if detail:
+                        message = f"{message}: {detail}"
+                    raise RuntimeError(message) from exc
+                raise RuntimeError(f"{self.ENGINE_LABEL} API request failed")
 
-        content = bytes(response.content or b"")
-        content_type = str(response.headers.get("content-type", "") or "").lower()
+            response_limit = (
+                _MAX_AUDIO_BYTES
+                if content_type.startswith("audio/")
+                else _MAX_JSON_AUDIO_RESPONSE_BYTES
+            )
+            content = read_bounded_requests_response(
+                response,
+                limit=response_limit,
+                label=f"{self.ENGINE_LABEL} API response",
+            )
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
+
         if _looks_like_audio(content, content_type):
             return content
 
         try:
-            data = response.json()
-        except ValueError as exc:
+            data = json.loads(content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:
             raise RuntimeError(f"{self.ENGINE_LABEL} API returned non-audio data") from exc
+        if not isinstance(data, Mapping):
+            raise RuntimeError(f"{self.ENGINE_LABEL} API returned invalid JSON data")
         audio = self._extract_audio_from_payload(data)
         if not audio:
             raise RuntimeError(f"{self.ENGINE_LABEL} API returned no audio data")
@@ -162,6 +250,10 @@ class _APITTSBase(BaseTTS):
         )
         audio = _decode_audio_data(data_value)
         if audio:
+            if not _looks_like_audio(audio, ""):
+                raise RuntimeError(
+                    f"{self.ENGINE_LABEL} API returned an unsupported audio format"
+                )
             return audio
 
         url_value = _first_path_value(
@@ -180,19 +272,54 @@ class _APITTSBase(BaseTTS):
         return b""
 
     def _download_audio(self, url: str) -> bytes:
-        response = self._session.get(url, timeout=self.timeout_seconds)
-        try:
-            response.raise_for_status()
-        except Exception as exc:
-            detail = _response_error_detail(response)
-            message = f"{self.ENGINE_LABEL} audio download failed"
-            if detail:
-                message = f"{message}: {detail}"
-            raise RuntimeError(message) from exc
-        audio = bytes(response.content or b"")
+        session = self._session_pool.get()
+        with open_validated_requests_response(
+            url,
+            url_validator=self._is_safe_audio_url,
+            timeout=self.timeout_seconds,
+            label=f"{self.ENGINE_LABEL} audio download",
+            headers={
+                "Accept": "audio/*, application/octet-stream",
+                "Accept-Encoding": "identity",
+            },
+            stream=True,
+            max_redirects=_MAX_AUDIO_REDIRECTS,
+            request_get=session.get,
+        ) as response:
+            status_code = int(getattr(response, "status_code", 200) or 0)
+            content_type = str(
+                response.headers.get("content-type", "") or ""
+            ).lower()
+            if status_code >= 400:
+                content = read_bounded_requests_response(
+                    response,
+                    limit=_MAX_ERROR_RESPONSE_BYTES,
+                    label=f"{self.ENGINE_LABEL} audio download error response",
+                )
+                try:
+                    response.raise_for_status()
+                except Exception as exc:
+                    detail = _response_error_detail(content, content_type)
+                    message = f"{self.ENGINE_LABEL} audio download failed"
+                    if detail:
+                        message = f"{message}: {detail}"
+                    raise RuntimeError(message) from exc
+                raise RuntimeError(f"{self.ENGINE_LABEL} audio download failed")
+            audio = read_bounded_requests_response(
+                response,
+                limit=_MAX_AUDIO_BYTES,
+                label=f"{self.ENGINE_LABEL} audio download",
+            )
         if not audio:
             raise RuntimeError(f"{self.ENGINE_LABEL} audio download returned empty audio")
+        if not _looks_like_audio(audio, content_type):
+            raise RuntimeError(
+                f"{self.ENGINE_LABEL} audio download returned an unsupported format"
+            )
         return audio
+
+    def _is_safe_audio_url(self, url: str) -> bool:
+        return _is_safe_audio_download_url(url, api_base_url=self.base_url)
 
 
 class MimoTTS(_APITTSBase):
@@ -276,10 +403,17 @@ class QwenTTS(_APITTSBase):
 def _looks_like_audio(content: bytes, content_type: str) -> bool:
     if not content:
         return False
-    if content_type.startswith("audio/"):
-        return True
-    return content.startswith(b"RIFF") or content.startswith(b"ID3") or (
+    del content_type
+    return (
+        (content.startswith(b"RIFF") and content[8:12] == b"WAVE")
+        or content.startswith(b"ID3")
+        or content.startswith(b"OggS")
+        or content.startswith(b"fLaC")
+        or content.startswith(b"\x1aE\xdf\xa3")
+        or (len(content) >= 12 and content[4:8] == b"ftyp")
+        or (
         len(content) >= 2 and content[0] == 0xFF and (content[1] & 0xE0) == 0xE0
+        )
     )
 
 
@@ -306,27 +440,39 @@ def _first_path_value(payload: Any, paths: tuple[tuple[object, ...], ...]) -> An
 
 def _decode_audio_data(value: Any) -> bytes:
     if isinstance(value, bytes):
+        if len(value) > _MAX_AUDIO_BYTES:
+            raise RuntimeError("API TTS audio data exceeds the maximum allowed size")
         return value
     if isinstance(value, bytearray):
-        return bytes(value)
+        return _decode_audio_data(bytes(value))
     if isinstance(value, Mapping):
         return _decode_audio_data(value.get("data") or value.get("audio"))
     text = str(value or "").strip()
     if not text or text.startswith(("http://", "https://")):
         return b""
     if text.startswith("data:"):
-        _meta, _sep, text = text.partition(",")
+        metadata, separator, text = text.partition(",")
+        if not separator or ";base64" not in metadata.casefold():
+            return b""
+    max_encoded_chars = ((_MAX_AUDIO_BYTES + 2) // 3) * 4
+    if len(text) > max_encoded_chars:
+        raise RuntimeError("API TTS audio data exceeds the maximum allowed size")
     try:
-        return base64.b64decode(text, validate=True)
-    except Exception:
+        encoded = text.encode("ascii")
+        audio = base64.b64decode(encoded, validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError):
         return b""
+    if len(audio) > _MAX_AUDIO_BYTES:
+        raise RuntimeError("API TTS audio data exceeds the maximum allowed size")
+    return audio
 
 
-def _response_error_detail(response: requests.Response) -> str:
+def _response_error_detail(content: bytes, content_type: str = "") -> str:
+    del content_type
     try:
-        payload = response.json()
-    except ValueError:
-        return str(response.text or "").strip()[:500]
+        payload = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return content.decode("utf-8", "replace").strip()[:500]
     if isinstance(payload, Mapping):
         error = payload.get("error")
         if isinstance(error, Mapping):
@@ -338,6 +484,105 @@ def _response_error_detail(response: requests.Response) -> str:
             if value:
                 return str(value).strip()
     return str(payload).strip()[:500]
+
+
+def _url_origin(url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        host = str(parsed.hostname or "").rstrip(".").casefold()
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    if not host or parsed.username is not None or parsed.password is not None:
+        return None
+    default_port = 443 if parsed.scheme.casefold() == "https" else 80
+    return parsed.scheme.casefold(), host, port or default_port
+
+
+def _resolved_ip_addresses(host: str, port: int) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            records = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return ()
+        addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+        for record in records:
+            try:
+                address = ipaddress.ip_address(record[4][0].split("%", 1)[0])
+            except (IndexError, TypeError, ValueError):
+                return ()
+            if address not in addresses:
+                addresses.append(address)
+        return tuple(addresses)
+    return (literal,)
+
+
+def _is_safe_audio_download_url(url: str, *, api_base_url: str) -> bool:
+    """Reject credentials, insecure public URLs, and SSRF-capable destinations."""
+
+    candidate = str(url or "").strip()
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    origin = _url_origin(candidate)
+    api_origin = _url_origin(api_base_url)
+    if (
+        origin is None
+        or parsed.fragment
+        or parsed.scheme.casefold() not in {"http", "https"}
+    ):
+        return False
+
+    scheme, host, effective_port = origin
+    addresses = _resolved_ip_addresses(host, effective_port)
+    if not addresses:
+        return False
+
+    is_loopback = all(address.is_loopback for address in addresses)
+    api_is_local = False
+    if api_origin is not None:
+        api_addresses = (
+            addresses
+            if api_origin == origin
+            else _resolved_ip_addresses(api_origin[1], api_origin[2])
+        )
+        api_is_local = bool(api_addresses) and all(
+            address.is_loopback for address in api_addresses
+        )
+    if is_loopback:
+        return bool(
+            api_is_local
+            and api_origin is not None
+            and effective_port == api_origin[2]
+        )
+
+    return bool(
+        scheme == "https"
+        and port in (None, 443)
+        and all(address.is_global for address in addresses)
+    )
+
+
+def _is_safe_api_request_url(url: str) -> bool:
+    candidate = str(url or "").strip()
+    try:
+        parsed = urlsplit(candidate)
+    except (TypeError, ValueError):
+        return False
+    origin = _url_origin(candidate)
+    if origin is None or parsed.fragment:
+        return False
+    scheme, host, port = origin
+    if scheme == "https":
+        return True
+    if scheme != "http":
+        return False
+    addresses = _resolved_ip_addresses(host, port)
+    return bool(addresses) and all(address.is_loopback for address in addresses)
 
 
 def _normalize_qwen_language_type_hint(value: object) -> str:

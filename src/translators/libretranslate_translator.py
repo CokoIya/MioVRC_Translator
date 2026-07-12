@@ -5,6 +5,8 @@ import time
 
 import requests
 
+from src.utils.secure_http import validate_api_base_url
+
 from .base import BaseTranslator
 from src.utils.input_validation import ValidationError, validate_translation_text
 
@@ -27,7 +29,11 @@ class LibreTranslateTranslator(BaseTranslator):
     ) -> None:
         super().__init__()
         self._api_key = str(api_key or "").strip()
-        self._base_url = str(base_url or "http://127.0.0.1:5000").strip().rstrip("/")
+        self._base_url = validate_api_base_url(
+            base_url or "http://127.0.0.1:5000",
+            label="LibreTranslate API",
+            allow_private_http=not bool(self._api_key),
+        )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
         self._session = requests.Session()

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import threading
 import time
 from typing import Callable, Optional
@@ -15,7 +16,18 @@ import numpy as np
 import sounddevice as sd
 
 from .recorder import AudioRecorder
-from .vad_detector import SileroVADDetector, VADDetector
+from .device_inventory import (
+    default_output_device_name as inventory_default_output_device_name,
+    device_inventory_diagnostics,
+    list_output_devices as list_sounddevice_output_devices,
+    normalize_device_name,
+    unique_device_name_match,
+)
+from .vad_detector import (
+    SileroVADDetector,
+    VADDetector,
+    silero_vad_model_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +36,10 @@ logger = logging.getLogger(__name__)
 # PyAudio instantiation (enumeration vs capture) therefore crashes.  This lock
 # serialises every PyAudio lifecycle so at most one instance exists at a time.
 _pyaudio_lock = threading.Lock()
+_loopback_cache_lock = threading.RLock()
+_last_loopback_devices: list[dict[str, object]] = []
+_last_loopback_diagnostics: dict[str, object] = {}
+_consecutive_empty_loopback_scans = 0
 
 _MAX_DESKTOP_CAPTURE_CHANNELS = 2
 _COMMON_DESKTOP_CAPTURE_RATES = (
@@ -32,6 +48,10 @@ _COMMON_DESKTOP_CAPTURE_RATES = (
     16000,
 )
 _CAPTURE_START_TIMEOUT_S = 5.0
+
+
+class _SoundCardFallbackRequested(RuntimeError):
+    """Internal signal to retry the same endpoint through PyAudioWPatch."""
 
 
 # ---------------------------------------------------------------------------
@@ -69,13 +89,219 @@ def _display_loopback_name(name: object) -> str:
     return re.sub(r"\s*\[loopback\]\s*$", "", str(name or "").strip(), flags=re.IGNORECASE).strip()
 
 
+def _copy_loopback_devices(devices: list[dict[str, object]]) -> list[dict[str, object]]:
+    # Keep backend handle objects by reference; callers may need them to open a
+    # SoundCard recorder. The dictionaries themselves are isolated from UI code.
+    return [dict(device) for device in devices]
+
+
+def _cache_loopback_devices(
+    devices: list[dict[str, object]],
+    *,
+    backend: str,
+    errors: list[str] | None = None,
+) -> list[dict[str, object]]:
+    global _last_loopback_devices, _last_loopback_diagnostics
+    global _consecutive_empty_loopback_scans
+    snapshot = _copy_loopback_devices(devices)
+    diagnostics = {
+        "backend": backend,
+        "device_count": len(snapshot),
+        "from_cache": False,
+        "errors": list(errors or []),
+        "frozen_runtime": bool(getattr(sys, "frozen", False)),
+        "scanned_at": time.monotonic(),
+        "devices": [
+            {
+                key: value
+                for key, value in device.items()
+                if not str(key).startswith("_")
+            }
+            for device in snapshot
+        ],
+    }
+    with _loopback_cache_lock:
+        _last_loopback_devices = snapshot
+        _last_loopback_diagnostics = diagnostics
+        if snapshot:
+            _consecutive_empty_loopback_scans = 0
+    return _copy_loopback_devices(snapshot)
+
+
+def _cached_loopback_devices(*, reason: str) -> list[dict[str, object]]:
+    global _last_loopback_diagnostics
+    with _loopback_cache_lock:
+        cached = _copy_loopback_devices(_last_loopback_devices)
+        diagnostics = dict(_last_loopback_diagnostics)
+        scanned_at = float(diagnostics.get("scanned_at", 0.0) or 0.0)
+        diagnostics.update(
+            {
+                "from_cache": True,
+                "cache_reason": reason,
+                "cache_age_s": round(max(0.0, time.monotonic() - scanned_at), 3),
+            }
+        )
+        errors = list(diagnostics.get("errors", []))
+        errors.append(reason)
+        diagnostics["errors"] = errors
+        _last_loopback_diagnostics = diagnostics
+    if cached:
+        logger.warning("Using cached desktop output devices: %s", reason)
+    return cached
+
+
+def _refresh_cached_loopbacks_from_sounddevice(
+    cached: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Refresh names/defaults while PyAudioWPatch owns the PortAudio lock."""
+
+    try:
+        active_outputs = list_sounddevice_output_devices(
+            force_refresh=True,
+            sounddevice_module=sd,
+        )
+    except Exception:
+        return cached
+    if not active_outputs:
+        return cached
+
+    cached_names = [str(item.get("name", "") or "").strip() for item in cached]
+    refreshed: list[dict[str, object]] = []
+    used_cached: set[int] = set()
+    for output in active_outputs:
+        output_name = str(output.get("name", "") or "").strip()
+        matched_name = unique_device_name_match(output_name, cached_names)
+        cached_index = next(
+            (
+                index
+                for index, candidate in enumerate(cached_names)
+                if index not in used_cached and candidate == matched_name
+            ),
+            None,
+        )
+        if cached_index is not None:
+            item = dict(cached[cached_index])
+            used_cached.add(cached_index)
+            item["is_default"] = bool(output.get("is_default"))
+            refreshed.append(item)
+            continue
+        refreshed.append(
+            {
+                "index": int(output.get("index", -1)),
+                "name": output_name,
+                "is_default": bool(output.get("is_default")),
+                "backend": "sounddevice_inventory",
+                "enumeration_only": True,
+            }
+        )
+    return refreshed or cached
+
+
+def loopback_device_diagnostics() -> dict[str, object]:
+    with _loopback_cache_lock:
+        result = dict(_last_loopback_diagnostics)
+    try:
+        result["sounddevice_inventory"] = device_inventory_diagnostics()
+    except Exception:
+        logger.debug("Failed to attach sounddevice inventory diagnostics", exc_info=True)
+    return result
+
+
+def _reset_loopback_device_cache_for_tests() -> None:
+    global _last_loopback_devices, _last_loopback_diagnostics
+    global _consecutive_empty_loopback_scans
+    with _loopback_cache_lock:
+        _last_loopback_devices = []
+        _last_loopback_diagnostics = {}
+        _consecutive_empty_loopback_scans = 0
+
+
+def _windows_render_endpoints() -> list[dict[str, object]]:
+    if sys.platform != "win32":
+        return []
+    try:
+        from .windows_audio import list_audio_endpoints
+
+        return [
+            endpoint
+            for endpoint in list_audio_endpoints(include_inactive=True)
+            if str(endpoint.get("flow", "")) == "render"
+        ]
+    except Exception:
+        return []
+
+
+def _windows_endpoint_selectable(
+    device_id: str,
+    name: str,
+    endpoints: list[dict[str, object]] | None = None,
+) -> bool:
+    if sys.platform != "win32":
+        return True
+    if endpoints is None:
+        endpoints = _windows_render_endpoints()
+    if not endpoints:
+        return True
+    if device_id:
+        exact_id = [
+            endpoint
+            for endpoint in endpoints
+            if str(endpoint.get("id", "") or "").strip() == device_id
+        ]
+        if exact_id:
+            return any(bool(endpoint.get("active")) for endpoint in exact_id)
+    normalized = normalize_device_name(name)
+    exact_name = [
+        endpoint
+        for endpoint in endpoints
+        if normalize_device_name(endpoint.get("name")) == normalized
+    ]
+    if exact_name:
+        return any(bool(endpoint.get("active")) for endpoint in exact_name)
+    return True
+
+
+def _select_default_loopback_index(
+    devices: list[dict[str, object]],
+    *,
+    default_name: str = "",
+    default_id: str = "",
+) -> int | None:
+    if default_id:
+        id_matches = [
+            index
+            for index, device in enumerate(devices)
+            if str(device.get("id", "") or "").strip() == default_id
+        ]
+        if len(id_matches) == 1:
+            return id_matches[0]
+
+    names = [str(device.get("name", "") or "").strip() for device in devices]
+    matched_name = unique_device_name_match(default_name, names)
+    if matched_name:
+        matches = [index for index, name in enumerate(names) if name == matched_name]
+        if len(matches) == 1:
+            return matches[0]
+
+    # Prefix candidates such as localized "Speakers" are only safe when they
+    # identify one endpoint. Never mark every speaker as the default.
+    default_candidates = set(_loopback_name_candidates(default_name)) if default_name else set()
+    candidate_matches = [
+        index
+        for index, name in enumerate(names)
+        if default_candidates
+        and default_candidates.intersection(_loopback_name_candidates(name))
+    ]
+    return candidate_matches[0] if len(candidate_matches) == 1 else None
+
+
 def _enumerate_pyaudio_loopback_devices(p, pa) -> list[dict[str, object]]:
     raw_devices = _enumerate_wasapi_loopback_devices(p, pa)
 
     default_name = _default_output_device_name_from_sounddevice()
-    default_candidates = set(_loopback_name_candidates(default_name)) if default_name else set()
     result: list[dict[str, object]] = []
     by_name: dict[str, dict[str, object]] = {}
+    windows_endpoints = _windows_render_endpoints()
 
     for raw in raw_devices:
         try:
@@ -88,24 +314,27 @@ def _enumerate_pyaudio_loopback_devices(p, pa) -> list[dict[str, object]]:
         name = _display_loopback_name(raw_name)
         if not name:
             continue
-        is_default = bool(
-            default_candidates
-            and (default_candidates & set(_loopback_name_candidates(name)))
-        )
+        if not _windows_endpoint_selectable("", name, windows_endpoints):
+            logger.debug("Skipping inactive PyAudio loopback endpoint: %s", name)
+            continue
         item: dict[str, object] = {
             **dict(raw),
             "index": index,
             "name": name,
             "raw_name": raw_name,
-            "is_default": is_default,
+            "is_default": False,
         }
         existing = by_name.get(name)
         if existing is None:
             by_name[name] = item
             result.append(item)
-        elif is_default and not bool(existing.get("is_default")):
-            by_name[name] = item
-            result[result.index(existing)] = item
+
+    default_index = _select_default_loopback_index(
+        result,
+        default_name=default_name,
+    )
+    if default_index is not None:
+        result[default_index]["is_default"] = True
 
     return result
 
@@ -125,9 +354,9 @@ def _enumerate_soundcard_loopback_devices(sc) -> list[dict[str, object]]:
         default_name = ""
         default_id = ""
 
-    default_candidates = set(_loopback_name_candidates(default_name)) if default_name else set()
     result: list[dict[str, object]] = []
     by_name: dict[str, dict[str, object]] = {}
+    windows_endpoints = _windows_render_endpoints()
 
     for index, raw in enumerate(raw_devices):
         if not bool(getattr(raw, "isloopback", False)):
@@ -136,22 +365,22 @@ def _enumerate_soundcard_loopback_devices(sc) -> list[dict[str, object]]:
         if not name:
             continue
         device_id = str(getattr(raw, "id", "") or "").strip()
+        if not _windows_endpoint_selectable(device_id, name, windows_endpoints):
+            logger.debug(
+                "Skipping inactive SoundCard loopback endpoint id=%s name=%s",
+                device_id,
+                name,
+            )
+            continue
         try:
             channels = int(getattr(raw, "channels", 2) or 2)
         except Exception:
             channels = 2
-        is_default = bool(
-            (device_id and default_id and device_id == default_id)
-            or (
-                default_candidates
-                and (default_candidates & set(_loopback_name_candidates(name)))
-            )
-        )
         item: dict[str, object] = {
             "index": index,
             "name": name,
             "id": device_id,
-            "is_default": is_default,
+            "is_default": False,
             "maxInputChannels": max(channels, 1),
             "defaultSampleRate": 48000,
             "_soundcard_device": raw,
@@ -161,9 +390,20 @@ def _enumerate_soundcard_loopback_devices(sc) -> list[dict[str, object]]:
         if existing is None:
             by_name[name] = item
             result.append(item)
-        elif is_default and not bool(existing.get("is_default")):
-            by_name[name] = item
-            result[result.index(existing)] = item
+
+    inventory_default = _default_output_device_name_from_sounddevice()
+    default_index = _select_default_loopback_index(
+        result,
+        default_name=default_name or inventory_default,
+        default_id=default_id,
+    )
+    if default_index is None and inventory_default and inventory_default != default_name:
+        default_index = _select_default_loopback_index(
+            result,
+            default_name=inventory_default,
+        )
+    if default_index is not None:
+        result[default_index]["is_default"] = True
 
     return result
 
@@ -176,18 +416,43 @@ def list_output_devices() -> list[dict[str, object]]:
     driver stacks crash inside PyAudioWPatch/PortAudio while opening loopback
     streams.
     """
+    errors: list[str] = []
     try:
         sc = _import_soundcard()
         devices = _enumerate_soundcard_loopback_devices(sc)
         logger.debug("Enumerated %s SoundCard loopback output devices", len(devices))
-        return devices
-    except RuntimeError as exc:
+        if devices:
+            return _cache_loopback_devices(
+                devices,
+                backend="soundcard",
+                errors=errors,
+            )
+        message = "SoundCard returned no active loopback output devices"
+        errors.append(message)
+        logger.warning(message)
+    except Exception as exc:
+        errors.append(f"SoundCard: {exc}")
         logger.warning("SoundCard loopback enumeration unavailable: %s", exc)
 
     # Hold _pyaudio_lock for the entire PyAudio lifecycle so that device
     # enumeration and the capture stream are never active at the same time.
     if not _pyaudio_lock.acquire(blocking=False):
         logger.debug("PyAudio lock held by capture stream; skipping loopback enumeration")
+        cached = _cached_loopback_devices(
+            reason="PyAudioWPatch enumeration deferred while its capture stream is active"
+        )
+        if cached:
+            return _refresh_cached_loopbacks_from_sounddevice(cached)
+        with _loopback_cache_lock:
+            _last_loopback_diagnostics.update(
+                {
+                    "backend": "unavailable",
+                    "device_count": 0,
+                    "from_cache": False,
+                    "errors": [*errors, "PyAudioWPatch capture lock is busy"],
+                    "frozen_runtime": bool(getattr(sys, "frozen", False)),
+                }
+            )
         return []
     p = None
     try:
@@ -195,8 +460,12 @@ def list_output_devices() -> list[dict[str, object]]:
         p = pa.PyAudio()
         devices = _enumerate_pyaudio_loopback_devices(p, pa)
     except Exception as exc:
+        errors.append(f"PyAudioWPatch: {exc}")
         logger.warning("Failed to enumerate PyAudioWPatch WASAPI loopback devices: %s", exc)
-        return []
+        cached = _cached_loopback_devices(reason=str(exc))
+        if cached:
+            return cached
+        devices = []
     finally:
         if p is not None:
             try:
@@ -206,7 +475,29 @@ def list_output_devices() -> list[dict[str, object]]:
         _pyaudio_lock.release()
 
     logger.debug("Enumerated %s PyAudioWPatch loopback output devices", len(devices))
-    return devices
+    if devices:
+        return _cache_loopback_devices(
+            devices,
+            backend="pyaudiowpatch",
+            errors=errors,
+        )
+
+    global _consecutive_empty_loopback_scans
+    with _loopback_cache_lock:
+        _consecutive_empty_loopback_scans += 1
+        empty_scan_count = _consecutive_empty_loopback_scans
+    if empty_scan_count <= 2:
+        cached = _cached_loopback_devices(
+            reason=(
+                "Transient empty desktop-device scan "
+                f"({empty_scan_count}/2); awaiting hot-plug stabilization"
+            )
+        )
+        if cached:
+            return cached
+    _cache_loopback_devices([], backend="unavailable", errors=errors)
+    logger.error("No desktop output device detected; diagnostics=%s", loopback_device_diagnostics())
+    return []
 
 
 def default_output_device_name() -> str | None:
@@ -214,6 +505,10 @@ def default_output_device_name() -> str | None:
     for device in devices:
         if device.get("is_default"):
             return str(device.get("name", "")).strip() or None
+    inventory_default = _default_output_device_name_from_sounddevice()
+    matched = _fuzzy_match_loopback(inventory_default, devices) if inventory_default else None
+    if isinstance(matched, dict):
+        return str(matched.get("name", "")).strip() or None
     if devices:
         return str(devices[0].get("name", "")).strip() or None
     return None
@@ -255,7 +550,7 @@ def _loopback_name_candidates(name: str) -> list[str]:
     headset) on the same hardware share that token, which previously caused
     a microphone endpoint to be picked as the "loopback" and crashed PortAudio.
     """
-    s = str(name or "").strip().lower()
+    s = normalize_device_name(name)
     # Strip trailing " [loopback]" suffix so candidates represent the output name
     s = re.sub(r"\s*\[loopback\]\s*$", "", s).strip()
     results: list[str] = [" ".join(s.split())]
@@ -300,18 +595,29 @@ def _fuzzy_match_loopback(preferred_name: str, loopbacks: list) -> object | None
             if lb_full and lb_full[0] == pref_full:
                 return lb
 
-    # Pass 1: candidate set intersection (catches exact normalised matches)
-    for lb in loopbacks:
-        lb_candidates = _loopback_name_candidates(_name(lb))
-        if set(pref_candidates) & set(lb_candidates):
-            return lb
+    # Pass 1: candidate-set intersection is only safe if it is unique. Generic
+    # prefixes such as "Speakers" occur on many Windows endpoints.
+    candidate_matches = [
+        lb
+        for lb in loopbacks
+        if set(pref_candidates) & set(_loopback_name_candidates(_name(lb)))
+    ]
+    if len(candidate_matches) == 1:
+        return candidate_matches[0]
 
     # Pass 2: substring (catches truncated sounddevice names vs. full COM names)
+    substring_matches = []
     for lb in loopbacks:
-        lb_name = _name(lb).lower()
-        for pc in pref_candidates:
-            if pc and (pc in lb_name or lb_name in pc):
-                return lb
+        lb_name = normalize_device_name(_name(lb))
+        if any(
+            pc
+            and min(len(pc), len(lb_name)) >= 18
+            and (pc in lb_name or lb_name in pc)
+            for pc in pref_candidates
+        ):
+            substring_matches.append(lb)
+    if len(substring_matches) == 1:
+        return substring_matches[0]
 
     return None
 
@@ -433,7 +739,7 @@ class DesktopAudioRecorder(AudioRecorder):
         #   - "webrtc": WebRTC VAD - same as mic, well-tested, permissive.
         #     May produce false positives from game music/SFX.
         vad_type_normalized = str(vad_type or "silero").strip().lower()
-        if vad_type_normalized == "silero":
+        if vad_type_normalized == "silero" and silero_vad_model_available():
             self.vad = SileroVADDetector(
                 sample_rate=sample_rate,
                 frame_duration_ms=frame_duration_ms,
@@ -447,6 +753,10 @@ class DesktopAudioRecorder(AudioRecorder):
             logger.info("DesktopAudioRecorder VAD: Silero (threshold=%.2f min_rms=%.4f)",
                         silero_speech_threshold, vad_min_rms)
         else:
+            if vad_type_normalized == "silero":
+                logger.warning(
+                    "Pinned Silero VAD model is unavailable; using WebRTC VAD"
+                )
             # WebRTC VAD. Sensitivity in webrtcvad is INVERTED from what the
             # name suggests: 0 is least aggressive filter (most permissive, most
             # frames marked as speech), 3 is most aggressive (least permissive).
@@ -536,6 +846,7 @@ class DesktopAudioRecorder(AudioRecorder):
         self._active_device_name = None
         self._last_error = None
         self._capture_rate = self.sample_rate
+        self._reset_streaming_resampler()
         self._capture_channels = 1
         self._capture_dtype = "float32"
         self._running = True
@@ -556,11 +867,6 @@ class DesktopAudioRecorder(AudioRecorder):
             self._total_frames = 0
             self._non_silent_frames = 0
 
-        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self._worker_thread.start()
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._capture_thread.start()
-
         # Pre-warm Silero VAD model in the background while capture initializes.
         # This avoids blocking the first audio frame with torch.jit.load.
         if isinstance(self.vad, SileroVADDetector):
@@ -569,6 +875,11 @@ class DesktopAudioRecorder(AudioRecorder):
                 name="vad-prewarm",
                 daemon=True,
             ).start()
+
+        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._worker_thread.start()
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
 
         if not self._capture_ready_event.wait(timeout=_CAPTURE_START_TIMEOUT_S):
             error = RuntimeError("Desktop audio capture did not become ready in time")
@@ -645,7 +956,7 @@ class DesktopAudioRecorder(AudioRecorder):
         except Exception:
             activation_ratio = 0.0
         with self._stats_lock:
-            return {
+            snapshot = {
                 "running": self.is_running,
                 "last_frame_at": self._last_frame_at,
                 "last_non_silent_at": self._last_non_silent_at,
@@ -681,6 +992,11 @@ class DesktopAudioRecorder(AudioRecorder):
                 "vad_activation_ratio": round(float(activation_ratio), 3),
                 "last_error": self._last_error,
             }
+        try:
+            snapshot["device_inventory"] = loopback_device_diagnostics()
+        except Exception:
+            logger.debug("Failed to attach desktop device diagnostics", exc_info=True)
+        return snapshot
 
     @staticmethod
     def _close_stream_object(stream) -> None:
@@ -861,10 +1177,11 @@ class DesktopAudioRecorder(AudioRecorder):
     def _capture_loop(self) -> None:
         try:
             self._capture_loop_soundcard()
-        except RuntimeError as exc:
-            if not isinstance(getattr(exc, "__cause__", None), ImportError):
-                raise
-            logger.warning("SoundCard capture backend unavailable; falling back to PyAudioWPatch")
+        except _SoundCardFallbackRequested as exc:
+            logger.warning(
+                "SoundCard capture unavailable; falling back to PyAudioWPatch: %s",
+                exc,
+            )
             self._running = True
             self._capture_start_error = None
             self._capture_loop_pyaudio()
@@ -949,7 +1266,8 @@ class DesktopAudioRecorder(AudioRecorder):
                         return
                 except Exception as exc:
                     if startup_completed:
-                        runtime_error = exc
+                        if self._running:
+                            raise _SoundCardFallbackRequested(str(exc)) from exc
                         break
                     last_error = exc
                     logger.debug(
@@ -965,20 +1283,20 @@ class DesktopAudioRecorder(AudioRecorder):
                     last_error = RuntimeError("No compatible SoundCard desktop audio capture configuration was found")
                 raise last_error
         except Exception as exc:
-            if isinstance(getattr(exc, "__cause__", None), ImportError):
+            if not self._running and startup_completed:
+                runtime_error = None
+            else:
                 fallback_requested = True
-                raise
-            runtime_error = exc
-            if not startup_completed:
-                self._capture_start_error = exc
+                raise _SoundCardFallbackRequested(str(exc)) from exc
         finally:
-            self._running = False
             self._capture_stream = None
-            self._enqueue_frame(None)
-            if ready_event is not None and not startup_completed and not fallback_requested:
-                ready_event.set()
-            if runtime_error is not None:
-                self._report_runtime_error(runtime_error)
+            if not fallback_requested:
+                self._running = False
+                self._enqueue_frame(None)
+                if ready_event is not None and not startup_completed:
+                    ready_event.set()
+                if runtime_error is not None:
+                    self._report_runtime_error(runtime_error)
 
     def _capture_loop_pyaudio(self) -> None:
         ready_event = self._capture_ready_event
@@ -1233,9 +1551,18 @@ class DesktopAudioRecorder(AudioRecorder):
 
 def _default_output_device_name_from_sounddevice() -> str:
     try:
-        default_out = sd.default.device[1]
-        if default_out is None or int(default_out) < 0:
-            return ""
-        return str(sd.query_devices(int(default_out))["name"]).strip()
+        return str(
+            inventory_default_output_device_name(
+                force_refresh=False,
+                sounddevice_module=sd,
+            )
+            or ""
+        ).strip()
     except Exception:
-        return ""
+        try:
+            default_out = sd.default.device[1]
+            if default_out is None or int(default_out) < 0:
+                return ""
+            return str(sd.query_devices(int(default_out))["name"]).strip()
+        except Exception:
+            return ""

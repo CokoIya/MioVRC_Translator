@@ -320,6 +320,13 @@ def create_tts_engine(
             optimized_inference=_config_bool(xtts_cfg.get("optimized_inference"), True),
             conditioning_cache_size=xtts_cache_size,
             enable_text_splitting=_config_bool(xtts_cfg.get("enable_text_splitting"), True),
+            precision=str(xtts_cfg.get("precision") or "auto"),
+            cuda_device_index=xtts_cfg.get("cuda_device_index", 0),
+            allow_cpu_fallback=_config_bool(
+                xtts_cfg.get("allow_cpu_fallback"),
+                True,
+            ),
+            cuda_tf32=_config_bool(xtts_cfg.get("cuda_tf32"), True),
             temperature=xtts_cfg.get("temperature"),
             length_penalty=xtts_cfg.get("length_penalty"),
             repetition_penalty=xtts_cfg.get("repetition_penalty"),

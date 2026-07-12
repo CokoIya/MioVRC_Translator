@@ -4,6 +4,7 @@
 # This file is part of Mio RealTime Translator.
 
 import collections
+import hashlib
 from io import BytesIO
 import logging
 import os
@@ -25,6 +26,26 @@ logger = logging.getLogger(__name__)
 
 # Pre-bundled Silero VAD TorchScript model (downloaded at build time).
 _SILERO_LOCAL_JIT = os.path.join(os.path.dirname(__file__), "models", "silero_vad.jit")
+_SILERO_LOCAL_JIT_SIZE = 2_272_526
+_SILERO_LOCAL_JIT_SHA256 = (
+    "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720"
+)
+
+
+def silero_vad_model_available() -> bool:
+    """Return whether the pinned local Silero model is present and authentic."""
+
+    path = Path(_SILERO_LOCAL_JIT)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        if path.stat().st_size != _SILERO_LOCAL_JIT_SIZE:
+            return False
+        with path.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        return digest == _SILERO_LOCAL_JIT_SHA256
+    except OSError:
+        return False
 
 
 class VADDetector:
@@ -40,9 +61,14 @@ class VADDetector:
         max_speech_s: float = 6.0,
         use_envelope_follower: bool = True,
     ):
-        assert sample_rate in (8000, 16000, 32000, 48000)
-        assert frame_duration_ms in (10, 20, 30)
-        assert 0 <= sensitivity <= 3
+        if sample_rate not in (8000, 16000, 32000, 48000):
+            raise ValueError(
+                "sample_rate must be one of 8000, 16000, 32000, or 48000 Hz"
+            )
+        if frame_duration_ms not in (10, 20, 30):
+            raise ValueError("frame_duration_ms must be 10, 20, or 30 ms")
+        if not 0 <= sensitivity <= 3:
+            raise ValueError("sensitivity must be between 0 and 3")
 
         self.vad = webrtcvad.Vad(sensitivity)
         self.sample_rate = sample_rate
@@ -148,6 +174,12 @@ class VADDetector:
             self.envelope_follower.reset()
         self.latest_smooth_rms = 0.0
 
+    def activation_speech_samples(self, fallback_frame_samples: int) -> int:
+        """Return voiced samples already confirmed by the activation window."""
+
+        frame_samples = max(int(self.frame_bytes // 2), int(fallback_frame_samples), 1)
+        return sum(bool(item) for item in self._activation_window) * frame_samples
+
     def set_envelope_params(self, attack_rate: float, release_rate: float):
         """动态调整包络参数（用于实时调整）"""
         if self.envelope_follower:
@@ -186,6 +218,17 @@ class SileroVADDetector:
         self.frame_duration_ms = frame_duration_ms
         self._min_rms = max(float(min_rms), 0.0)
         self._speech_threshold = speech_threshold
+        self._fallback_settings = {
+            "sample_rate": sample_rate,
+            "frame_duration_ms": frame_duration_ms,
+            "sensitivity": 0,
+            "silence_threshold_s": silence_threshold_s,
+            "speech_ratio": speech_ratio,
+            "activation_threshold_s": activation_threshold_s,
+            "min_rms": min_rms,
+            "max_speech_s": max_speech_s,
+            "use_envelope_follower": use_envelope_follower,
+        }
 
         activation_frames = max(1, int(activation_threshold_s * 1000 / frame_duration_ms))
         self._activation_window = collections.deque(maxlen=activation_frames)
@@ -205,6 +248,7 @@ class SileroVADDetector:
         self._model = None
         self._model_error = None
         self._model_lock = threading.Lock()
+        self._fallback_vad: VADDetector | None = None
 
         # Envelope follower for smooth RMS (tomari-guruguru inspired)
         self.envelope_follower = None
@@ -226,24 +270,17 @@ class SileroVADDetector:
 
         with self._model_lock:
             if self._model is None:
-                import torch
-
                 try:
-                    if os.path.isfile(_SILERO_LOCAL_JIT):
-                        # Load from bytes so frozen apps installed under
-                        # non-ASCII Windows paths still work.
-                        model_bytes = Path(_SILERO_LOCAL_JIT).read_bytes()
-                        model = torch.jit.load(BytesIO(model_bytes), map_location="cpu")
-                    else:
-                        try:
-                            model, _ = torch.hub.load(
-                                "snakers4/silero-vad",
-                                "silero_vad",
-                                trust_repo=True,
-                                verbose=False,
-                            )
-                        except TypeError:
-                            model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad")
+                    if not silero_vad_model_available():
+                        raise RuntimeError(
+                            "The pinned Silero VAD model is missing or failed integrity verification"
+                        )
+                    import torch
+
+                    # Load only verified, build-time-bundled bytes. Runtime
+                    # remote-code loading through torch.hub is forbidden.
+                    model_bytes = Path(_SILERO_LOCAL_JIT).read_bytes()
+                    model = torch.jit.load(BytesIO(model_bytes), map_location="cpu")
                     model.eval()
                     self._model = model
                 except Exception as exc:
@@ -252,16 +289,32 @@ class SileroVADDetector:
 
         return self._model
 
+    def _activate_fallback(self, error: BaseException) -> VADDetector:
+        with self._model_lock:
+            if self._fallback_vad is None:
+                self._fallback_vad = VADDetector(**self._fallback_settings)
+                logger.warning(
+                    "Silero VAD is unavailable; using WebRTC VAD fallback: %s",
+                    error,
+                )
+            return self._fallback_vad
+
     def prewarm(self) -> None:
         """Load the Silero VAD model in the background so the first audio frame
         is not blocked by torch.jit.load. Safe to call multiple times."""
         try:
             self._get_model()
         except Exception as exc:
-            logger.debug("Silero VAD prewarm skipped: %s", exc)
+            self._activate_fallback(exc)
 
     def process_frame(self, pcm_bytes: bytes) -> bool:
         """Accept int16 PCM bytes and return the current in-speech state."""
+        if self._fallback_vad is not None:
+            result = self._fallback_vad.process_frame(pcm_bytes)
+            self.in_speech = result
+            self.latest_smooth_rms = self._fallback_vad.get_smooth_rms()
+            return result
+
         audio = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
         self._sample_buffer = np.concatenate([self._sample_buffer, audio])
 
@@ -269,6 +322,12 @@ class SileroVADDetector:
             chunk = self._sample_buffer[: self.CHUNK_SAMPLES]
             self._sample_buffer = self._sample_buffer[self.CHUNK_SAMPLES :]
             voiced = self._is_voiced(chunk)
+            if self._fallback_vad is not None:
+                self._sample_buffer = np.zeros(0, dtype=np.float32)
+                result = self._fallback_vad.process_frame(pcm_bytes)
+                self.in_speech = result
+                self.latest_smooth_rms = self._fallback_vad.get_smooth_rms()
+                return result
             self._update_state(voiced)
 
         return self.in_speech
@@ -284,18 +343,33 @@ class SileroVADDetector:
                 self._model.reset_states()
             except Exception:
                 pass
+        if self._fallback_vad is not None:
+            self._fallback_vad.reset()
         if self.envelope_follower:
             self.envelope_follower.reset()
         self.latest_smooth_rms = 0.0
+
+    def activation_speech_samples(self, fallback_frame_samples: int) -> int:
+        """Return voiced samples already confirmed by the active VAD."""
+
+        if self._fallback_vad is not None:
+            return self._fallback_vad.activation_speech_samples(
+                fallback_frame_samples
+            )
+        return sum(bool(item) for item in self._activation_window) * self.CHUNK_SAMPLES
 
     def set_envelope_params(self, attack_rate: float, release_rate: float):
         """动态调整包络参数（用于实时调整）"""
         if self.envelope_follower:
             self.envelope_follower.set_attack_rate(attack_rate)
             self.envelope_follower.set_release_rate(release_rate)
+        if self._fallback_vad is not None:
+            self._fallback_vad.set_envelope_params(attack_rate, release_rate)
 
     def get_smooth_rms(self) -> float:
         """获取平滑后的 RMS 值（用于音量表显示）"""
+        if self._fallback_vad is not None:
+            return self._fallback_vad.get_smooth_rms()
         return self.latest_smooth_rms
 
     def _is_voiced(self, chunk: np.ndarray) -> bool:
@@ -340,6 +414,7 @@ class SileroVADDetector:
                 )
             return voiced
         except Exception as exc:
+            self._activate_fallback(exc)
             if now - self._last_prob_log_at >= 5.0:
                 self._last_prob_log_at = now
                 logger.warning(

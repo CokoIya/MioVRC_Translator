@@ -1,17 +1,26 @@
 """Shared local HTTP client for VOICEVOX-compatible TTS engines."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import requests
 
 from .base import BaseTTS, TTSVoice
+from src.utils.http_session_pool import ThreadLocalSessionPool
+from src.utils.secure_http import validate_api_base_url
+from src.utils.secure_http import read_bounded_requests_response
 
 logger = logging.getLogger(__name__)
 
+_MAX_VERSION_BYTES = 64 * 1024
+_MAX_JSON_BYTES = 4 * 1024 * 1024
+_MAX_AUDIO_BYTES = 32 * 1024 * 1024
+
 
 class VoicevoxCompatibleTTS(BaseTTS):
+    max_concurrent_synthesis = 2
     """Base client for local VOICEVOX-compatible synthesis services."""
 
     ENGINE_LABEL = "VOICEVOX-compatible TTS"
@@ -23,20 +32,48 @@ class VoicevoxCompatibleTTS(BaseTTS):
         port: int = 50021,
         timeout: float = 5.0,
     ) -> None:
-        self._base_url = f"http://{str(host or '127.0.0.1').strip()}:{int(port)}"
+        host_text = str(host or "127.0.0.1").strip()
+        if ":" in host_text and not host_text.startswith("["):
+            host_text = f"[{host_text}]"
+        self._base_url = validate_api_base_url(
+            f"http://{host_text}:{int(port)}",
+            label=self.ENGINE_LABEL,
+            allow_private_http=True,
+        )
         self._timeout = max(0.5, float(timeout))
-        self._session = requests.Session()
+        self._session_pool = ThreadLocalSessionPool(requests.Session)
         self._voices_cache: list[TTSVoice] | None = None
+
+    @property
+    def _session(self) -> requests.Session:
+        """Compatibility accessor backed by the current thread's session."""
+
+        return self._session_pool.get()
+
+    def close_thread_context(self) -> None:
+        self._session_pool.close_current()
+
+    def close(self) -> None:
+        self._session_pool.close()
 
     def is_available(self) -> bool:
         """Check whether the local engine is reachable."""
         try:
-            response = self._session.get(
+            response = self._session_pool.get().get(
                 f"{self._base_url}/version",
                 timeout=self._timeout,
+                stream=True,
             )
-            response.raise_for_status()
-            return True
+            try:
+                response.raise_for_status()
+                read_bounded_requests_response(
+                    response,
+                    limit=_MAX_VERSION_BYTES,
+                    label=f"{self.ENGINE_LABEL} version response",
+                )
+                return True
+            finally:
+                response.close()
         except Exception as exc:
             logger.debug("%s unavailable at %s: %s", self.ENGINE_LABEL, self._base_url, exc)
             return False
@@ -47,12 +84,15 @@ class VoicevoxCompatibleTTS(BaseTTS):
             return self._voices_cache
 
         try:
-            response = self._session.get(
+            response = self._session_pool.get().get(
                 f"{self._base_url}/speakers",
                 timeout=self._timeout,
+                stream=True,
             )
-            response.raise_for_status()
-            speakers = response.json()
+            speakers = self._bounded_json_response(
+                response,
+                label=f"{self.ENGINE_LABEL} speakers response",
+            )
             if not isinstance(speakers, list):
                 raise RuntimeError("Unexpected speakers response")
 
@@ -116,32 +156,59 @@ class VoicevoxCompatibleTTS(BaseTTS):
         volume = max(0.0, min(1.0, float(volume)))
 
         try:
-            audio_query_response = self._session.post(
+            session = self._session_pool.get()
+            audio_query_response = session.post(
                 f"{self._base_url}/audio_query",
                 params={"text": clean_text, "speaker": clean_voice},
                 timeout=self._timeout,
+                stream=True,
             )
-            audio_query_response.raise_for_status()
-            audio_query = audio_query_response.json()
+            audio_query = self._bounded_json_response(
+                audio_query_response,
+                label=f"{self.ENGINE_LABEL} audio query response",
+            )
             if not isinstance(audio_query, dict):
                 raise RuntimeError("Unexpected audio query response")
 
             self._apply_runtime_controls(audio_query, rate=rate, volume=volume)
 
-            synthesis_response = self._session.post(
+            synthesis_response = session.post(
                 f"{self._base_url}/synthesis",
                 params={"speaker": clean_voice},
                 json=audio_query,
                 timeout=self._timeout,
+                stream=True,
             )
-            synthesis_response.raise_for_status()
-            audio_data = bytes(synthesis_response.content or b"")
+            try:
+                synthesis_response.raise_for_status()
+                audio_data = read_bounded_requests_response(
+                    synthesis_response,
+                    limit=_MAX_AUDIO_BYTES,
+                    label=f"{self.ENGINE_LABEL} synthesis response",
+                )
+            finally:
+                synthesis_response.close()
             if not audio_data:
                 raise RuntimeError("Engine returned empty audio")
             return audio_data
         except Exception as exc:
             logger.error("%s synthesis failed: %s", self.ENGINE_LABEL, exc)
             raise RuntimeError(f"{self.ENGINE_LABEL} synthesis failed: {exc}") from exc
+
+    def _bounded_json_response(self, response, *, label: str) -> object:
+        try:
+            response.raise_for_status()
+            payload = read_bounded_requests_response(
+                response,
+                limit=_MAX_JSON_BYTES,
+                label=label,
+            )
+        finally:
+            response.close()
+        try:
+            return json.loads(payload.decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+            raise RuntimeError(f"{label} is not valid JSON") from exc
 
     @staticmethod
     def _apply_runtime_controls(

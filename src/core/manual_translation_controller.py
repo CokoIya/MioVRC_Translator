@@ -73,7 +73,9 @@ class ManualTranslationController(QObject):
         self._error_formatter = error_formatter
         self._translator = None
         self._generation = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._active_translator_uses: dict[int, int] = {}
+        self._retired_translators: dict[int, Any] = {}
 
     @property
     def generation(self) -> int:
@@ -81,11 +83,24 @@ class ManualTranslationController(QObject):
 
     @property
     def translator(self) -> Any:
-        return self._translator
+        with self._lock:
+            return self._translator
 
     @translator.setter
     def translator(self, value: Any) -> None:
-        self._translator = value
+        close_now = None
+        with self._lock:
+            previous = self._translator
+            if previous is value:
+                return
+            self._translator = value
+            if previous is not None:
+                identity = id(previous)
+                if self._active_translator_uses.get(identity, 0) > 0:
+                    self._retired_translators[identity] = previous
+                else:
+                    close_now = previous
+        self._close_translator(close_now)
 
     def start(self, request: ManualTranslationRequest) -> int | None:
         src_text = str(request.text or "").strip()
@@ -147,14 +162,16 @@ class ManualTranslationController(QObject):
 
         if needs_primary_translation or needs_second_translation or needs_third_translation:
             try:
-                translator = self._ensure_translator()
+                translator = self._acquire_translator()
             except Exception as exc:
                 generation = self._next_generation()
                 self.failed.emit(ManualTranslationError(generation, exc, self._format_error(exc)))
                 self.worker_finished.emit(generation)
                 return generation
+            translator_leased = True
         else:
-            translator = self._translator
+            translator = self.translator
+            translator_leased = False
 
         generation = self._next_generation()
         self.started.emit(generation)
@@ -213,9 +230,16 @@ class ManualTranslationController(QObject):
                 logger.warning("Manual translation failed: %s", exc)
                 self.failed.emit(ManualTranslationError(generation, exc, self._format_error(exc)))
             finally:
+                if translator_leased:
+                    self._release_translator(translator)
                 self.worker_finished.emit(generation)
 
-        threading.Thread(target=run, daemon=True, name="manual-translate").start()
+        try:
+            threading.Thread(target=run, daemon=True, name="manual-translate").start()
+        except Exception:
+            if translator_leased:
+                self._release_translator(translator)
+            raise
         return generation
 
     def timeout_seconds(self) -> float:
@@ -249,9 +273,54 @@ class ManualTranslationController(QObject):
             return self._generation
 
     def _ensure_translator(self) -> Any:
-        if self._translator is None:
-            self._translator = self._translator_factory(self._config)
-        return self._translator
+        with self._lock:
+            if self._translator is None:
+                self._translator = self._translator_factory(self._config)
+            return self._translator
+
+    def _acquire_translator(self) -> Any:
+        """Lease an isolated client when an older manual request is in flight."""
+
+        with self._lock:
+            translator = self._translator
+            if translator is None:
+                translator = self._translator_factory(self._config)
+                self._translator = translator
+            elif self._active_translator_uses.get(id(translator), 0) > 0:
+                candidate = self._translator_factory(self._config)
+                if candidate is not translator:
+                    translator = candidate
+                    self._retired_translators[id(translator)] = translator
+
+            identity = id(translator)
+            self._active_translator_uses[identity] = (
+                self._active_translator_uses.get(identity, 0) + 1
+            )
+            return translator
+
+    def _release_translator(self, translator: Any) -> None:
+        close_now = None
+        identity = id(translator)
+        with self._lock:
+            remaining = self._active_translator_uses.get(identity, 0) - 1
+            if remaining > 0:
+                self._active_translator_uses[identity] = remaining
+            else:
+                self._active_translator_uses.pop(identity, None)
+                close_now = self._retired_translators.pop(identity, None)
+        self._close_translator(close_now)
+
+    @staticmethod
+    def _close_translator(translator: Any) -> None:
+        close = getattr(translator, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.debug("Failed to close manual translator client", exc_info=True)
+
+    def close(self) -> None:
+        self.translator = None
 
     def _format_error(self, error: object) -> object:
         if self._error_formatter is not None:

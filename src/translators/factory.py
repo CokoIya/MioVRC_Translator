@@ -5,7 +5,7 @@ from typing import Callable
 import logging
 
 from .anthropic_translator import AnthropicTranslator
-from .base import BaseTranslator
+from .base import BaseTranslator, TranslationContextStore
 from .deepl_translator import DeepLTranslator
 from .google_web_translator import GoogleWebTranslator
 from .libretranslate_translator import LibreTranslateTranslator
@@ -46,8 +46,11 @@ class FallbackTranslator(BaseTranslator):
         self,
         primary: BaseTranslator,
         fallback_factories: list[tuple[str, Callable[[], BaseTranslator]]],
+        context_store: TranslationContextStore | None = None,
     ):
-        super().__init__()
+        super().__init__(
+            context_store=context_store or getattr(primary, "_context_store", None)
+        )
         self._primary = primary
         self._fallback_factories = list(fallback_factories)
         self._fallbacks: dict[str, BaseTranslator] = {}
@@ -90,6 +93,65 @@ class FallbackTranslator(BaseTranslator):
                         fallback_exc,
                     )
             raise primary_exc
+
+    def rewrite_asr(
+        self,
+        text: str,
+        style: str,
+        *,
+        language_hint: str = "auto",
+        context_source: str = "mic",
+    ) -> str:
+        try:
+            return self._primary.rewrite_asr(
+                text,
+                style,
+                language_hint=language_hint,
+                context_source=context_source,
+            )
+        except Exception as primary_exc:
+            logger.warning(
+                "Primary ASR rewrite backend failed; trying fallbacks: %s",
+                primary_exc,
+            )
+            for backend, factory in self._fallback_factories:
+                try:
+                    translator = self._fallbacks.get(backend)
+                    if translator is None:
+                        translator = factory()
+                        self._fallbacks[backend] = translator
+                    return translator.rewrite_asr(
+                        text,
+                        style,
+                        language_hint=language_hint,
+                        context_source=context_source,
+                    )
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "Fallback ASR rewrite backend failed (backend=%s): %s",
+                        backend,
+                        fallback_exc,
+                    )
+            raise primary_exc
+
+    def close(self) -> None:
+        translators = [self._primary, *self._fallbacks.values()]
+        self._fallbacks.clear()
+        closed: list[BaseTranslator] = []
+        for translator in translators:
+            if any(translator is existing for existing in closed):
+                continue
+            closed.append(translator)
+            close = getattr(translator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.debug(
+                        "Failed to close fallback translator resource",
+                        exc_info=True,
+                    )
+        super().close()
 
 
 def _parse_glossary_entries(raw_text: object) -> list[str]:
@@ -206,15 +268,19 @@ def _fallback_backends(
 def _create_openai_compatible_translator(
     trans_cfg: Mapping[str, object],
     backend: str,
+    context_store: TranslationContextStore | None = None,
 ) -> OpenAITranslator:
     spec = get_backend_spec(backend)
     backend_cfg = _backend_cfg(trans_cfg, backend)
     label = get_backend_label(backend)
     api_key_required = bool(spec.get("api_key_required", True))
-    api_key = str(backend_cfg.get("api_key", "")).strip()
+    configured_api_key = str(backend_cfg.get("api_key", "")).strip()
+    api_key = configured_api_key
     if api_key_required:
         api_key = _require_text(api_key, f"{label} API Key")
     else:
+        if api_key:
+            api_key = _require_text(api_key, f"{label} API Key")
         api_key = api_key or "local-ai"
     model = _require_text(
         get_backend_config_value(trans_cfg, backend, "model"),
@@ -233,7 +299,7 @@ def _create_openai_compatible_translator(
         max_output_tokens=_int_setting(
             backend_cfg.get("max_output_tokens"),
             spec.get("max_output_tokens", 192),
-            minimum=48,
+            minimum=32,
             maximum=4096,
         ),
         max_retries=_int_setting(
@@ -247,12 +313,16 @@ def _create_openai_compatible_translator(
             spec.get("prefer_max_completion_tokens", False)
         ),
         prompt_profile=_translation_prompt_profile(trans_cfg),
+        context_store=context_store,
+        provider_id=backend,
+        allow_private_http=backend == "local_ai" and not configured_api_key,
     )
 
 
 def _create_translator_for_backend(
     trans_cfg: Mapping[str, object],
     backend: str,
+    context_store: TranslationContextStore | None = None,
 ) -> BaseTranslator:
     if backend == "deepl":
         spec = get_backend_spec(backend)
@@ -336,7 +406,11 @@ def _create_translator_for_backend(
         )
 
     if backend in OPENAI_COMPATIBLE_BACKENDS:
-        return _create_openai_compatible_translator(trans_cfg, backend)
+        return _create_openai_compatible_translator(
+            trans_cfg,
+            backend,
+            context_store=context_store,
+        )
 
     if backend in {"anthropic", "anthropic_compatible"}:
         spec = get_backend_spec(backend)
@@ -366,17 +440,26 @@ def _create_translator_for_backend(
             ),
             max_output_tokens=int(spec.get("max_output_tokens", 192)),
             prompt_profile=_translation_prompt_profile(trans_cfg),
+            context_store=context_store,
         )
 
     raise ValueError(f"Unknown translation backend: {backend}")
 
 
-def create_translator(config: dict) -> BaseTranslator:
+def create_translator(
+    config: dict,
+    *,
+    context_store: TranslationContextStore | None = None,
+) -> BaseTranslator:
     trans_cfg = config.get("translation", {})
     if not isinstance(trans_cfg, Mapping):
         trans_cfg = {}
     backend = normalize_backend(trans_cfg.get("backend", DEFAULT_BACKEND))
-    primary = _create_translator_for_backend(trans_cfg, backend)
+    primary = _create_translator_for_backend(
+        trans_cfg,
+        backend,
+        context_store=context_store,
+    )
     fallback_backends = _fallback_backends(trans_cfg, backend)
     if not fallback_backends:
         return primary
@@ -389,7 +472,12 @@ def create_translator(config: dict) -> BaseTranslator:
                 lambda fallback_backend=fallback_backend: _create_translator_for_backend(
                     trans_cfg,
                     fallback_backend,
+                    context_store=context_store,
                 ),
             )
         )
-    return FallbackTranslator(primary, factories)
+    return FallbackTranslator(
+        primary,
+        factories,
+        context_store=context_store,
+    )

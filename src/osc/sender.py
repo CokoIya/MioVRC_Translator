@@ -13,9 +13,9 @@ from pythonosc import udp_client
 MAX_CHATBOX_CHARS = 144
 _VALID_AVATAR_PARAM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
-CHATBOX_DYNAMIC_INTERVAL_BASE_S = 0.45
-CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND = 36.0
-CHATBOX_DYNAMIC_INTERVAL_MAX_S = 4.0
+CHATBOX_DYNAMIC_INTERVAL_BASE_S = 0.55
+CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND = 180.0
+CHATBOX_DYNAMIC_INTERVAL_MAX_S = 1.5
 SEND_QUEUE_MAXSIZE = 32
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class _QueuedOSCMessage:
     rate_limited: bool = False
     queued_at: float = 0.0
     min_interval_s: float | None = None
+    generation: int = 0
 
 
 class VRCOSCSender:
@@ -50,44 +51,40 @@ class VRCOSCSender:
         )
         self._state_lock = threading.Lock()
         self._worker_lock = threading.Lock()
+        self._enqueue_lock = threading.Lock()
         self._last_sent_at = 0.0
         self._avatar_state: dict[str, object] = {}
+        self._chatbox_generation = 0
         self._worker: threading.Thread | None = None
         self._last_error = ""
+        self._closed = False
         self._start_worker()
 
     def _start_worker(self) -> None:
         self._worker = threading.Thread(target=self._send_loop, daemon=True)
         self._worker.start()
 
-    def _ensure_worker_running(self) -> None:
+    def _ensure_worker_running(self) -> bool:
+        with self._state_lock:
+            if self._closed:
+                return False
         worker = self._worker
         if worker is not None and worker.is_alive():
-            return
+            return True
 
-        # Serialize the drain/restart sequence so concurrent callers cannot
-        # spawn duplicate workers consuming the same queue.
+        # The queue itself survives a failed worker. Starting one replacement
+        # directly preserves FIFO order; draining and requeueing here could let
+        # a concurrent producer jump ahead of an older completed sentence.
         with self._worker_lock:
+            with self._state_lock:
+                if self._closed:
+                    return False
             worker = self._worker
             if worker is not None and worker.is_alive():
-                return
-
-            pending: list[_QueuedOSCMessage] = []
-            while True:
-                try:
-                    payload = self._queue.get_nowait()
-                except queue.Empty:
-                    break
-                if payload is not None:
-                    pending.append(payload)
-
-            for payload in pending[-SEND_QUEUE_MAXSIZE:]:
-                try:
-                    self._queue.put_nowait(payload)
-                except queue.Full:
-                    break
+                return True
 
             self._start_worker()
+            return True
 
     @property
     def last_error(self) -> str:
@@ -118,6 +115,9 @@ class VRCOSCSender:
             rate_wait_s = 0.0
             try:
                 if payload.rate_limited:
+                    with self._state_lock:
+                        if payload.generation != self._chatbox_generation:
+                            continue
                     min_interval_s = (
                         payload.min_interval_s
                         if payload.min_interval_s is not None
@@ -127,6 +127,9 @@ class VRCOSCSender:
                     if wait_s > 0:
                         rate_wait_s = wait_s
                         time.sleep(wait_s)
+                    with self._state_lock:
+                        if payload.generation != self._chatbox_generation:
+                            continue
 
                 send_started_at = time.monotonic()
                 self._client.send_message(payload.address, list(payload.arguments))
@@ -156,36 +159,107 @@ class VRCOSCSender:
                 )
 
     def _enqueue_payload(self, payload: _QueuedOSCMessage | None) -> bool:
-        if payload is not None:
-            self._ensure_worker_running()
-        try:
-            self._queue.put_nowait(payload)
-            return True
-        except queue.Full:
-            pass
-
-        # Keep the newest live update by evicting the oldest queued item.
-        try:
-            dropped = self._queue.get_nowait()
-        except queue.Empty:
+        if payload is not None and not self._ensure_worker_running():
             return False
+        enqueue_lock = getattr(self, "_enqueue_lock", None)
+        if enqueue_lock is None:
+            enqueue_lock = threading.Lock()
+            self._enqueue_lock = enqueue_lock
+        with enqueue_lock:
+            if payload is not None:
+                with self._state_lock:
+                    if getattr(self, "_closed", False):
+                        return False
+            try:
+                self._queue.put_nowait(payload)
+                return True
+            except queue.Full:
+                pass
+
+            if payload is None:
+                return self._replace_queued_payload(
+                    payload,
+                    lambda item: item is not None and not item.rate_limited,
+                )
+
+            if payload.rate_limited:
+                # A completed sentence may replace stale avatar telemetry, but
+                # never an earlier sentence. If the chatbox lane itself is
+                # saturated, drop the newest sentence and preserve FIFO order.
+                replaced = self._replace_queued_payload(
+                    payload,
+                    lambda item: item is not None and not item.rate_limited,
+                )
+                if replaced:
+                    return True
+                logger.warning(
+                    "OSC chatbox queue full; preserving earlier sentences and "
+                    "dropping newest payload"
+                )
+                return False
+
+            # Avatar parameters are latest-wins only for the same address. They
+            # must never evict a queued chatbox sentence.
+            replaced = self._replace_queued_payload(
+                payload,
+                lambda item: (
+                    item is not None
+                    and not item.rate_limited
+                    and item.address == payload.address
+                ),
+            )
+            if not replaced:
+                logger.warning(
+                    "OSC avatar queue full; dropping newest update (address=%s)",
+                    payload.address,
+                )
+            return replaced
+
+    def _replace_queued_payload(
+        self,
+        payload: _QueuedOSCMessage | None,
+        predicate,
+    ) -> bool:
+        pending: list[_QueuedOSCMessage | None] = []
+        while True:
+            try:
+                pending.append(self._queue.get_nowait())
+            except queue.Empty:
+                break
+
+        remove_index = next(
+            (index for index, item in enumerate(pending) if predicate(item)),
+            None,
+        )
+        if remove_index is None:
+            for item in pending:
+                try:
+                    self._queue.put_nowait(item)
+                except queue.Full:
+                    break
+            try:
+                self._queue.put_nowait(payload)
+                return True
+            except queue.Full:
+                return False
+
+        dropped = pending.pop(remove_index)
         if dropped is not None:
             logger.warning(
-                "OSC queue full; dropping oldest queued message (address=%s rate_limited=%s)",
+                "OSC queue full; replacing queued message "
+                "(address=%s rate_limited=%s)",
                 dropped.address,
                 dropped.rate_limited,
             )
-
+        for item in pending:
+            try:
+                self._queue.put_nowait(item)
+            except queue.Full:
+                return False
         try:
             self._queue.put_nowait(payload)
             return True
         except queue.Full:
-            if payload is not None:
-                logger.warning(
-                    "OSC queue full; dropping new message (address=%s rate_limited=%s)",
-                    payload.address,
-                    payload.rate_limited,
-                )
             return False
 
     def send_chatbox(
@@ -201,24 +275,62 @@ class VRCOSCSender:
 
         self._ensure_worker_running()
         del force
+        with self._state_lock:
+            generation = int(getattr(self, "_chatbox_generation", 0))
         queued = self._enqueue_payload(
             _QueuedOSCMessage(
                 address="/chatbox/input",
                 arguments=(safe, immediate, False),
                 rate_limited=True,
+                queued_at=time.monotonic(),
                 min_interval_s=self._chatbox_min_interval_s(safe),
+                generation=generation,
             )
         )
         return safe if queued else ""
 
     def clear_chatbox(self) -> bool:
+        with self._state_lock:
+            generation = int(getattr(self, "_chatbox_generation", 0))
         return self._enqueue_payload(
             _QueuedOSCMessage(
                 address="/chatbox/input",
                 arguments=("", True, False),
                 rate_limited=True,
+                queued_at=time.monotonic(),
+                generation=generation,
             )
         )
+
+    def clear_pending_chatbox(self) -> int:
+        """Invalidate queued chatbox text while preserving avatar telemetry."""
+
+        enqueue_lock = getattr(self, "_enqueue_lock", None)
+        if enqueue_lock is None:
+            enqueue_lock = threading.Lock()
+            self._enqueue_lock = enqueue_lock
+        with enqueue_lock:
+            with self._state_lock:
+                self._chatbox_generation = int(
+                    getattr(self, "_chatbox_generation", 0)
+                ) + 1
+            pending: list[_QueuedOSCMessage | None] = []
+            removed = 0
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item is not None and item.rate_limited:
+                    removed += 1
+                    continue
+                pending.append(item)
+            for item in pending:
+                try:
+                    self._queue.put_nowait(item)
+                except queue.Full:
+                    break
+            return removed
 
     def send_avatar_parameter(self, name: str, value: object, *, force: bool = False) -> bool:
         param_name = str(name or "").strip()
@@ -239,6 +351,7 @@ class VRCOSCSender:
                 address=f"/avatar/parameters/{param_name}",
                 arguments=(value,),
                 rate_limited=False,
+                queued_at=time.monotonic(),
             )
         )
         if queued:
@@ -258,7 +371,13 @@ class VRCOSCSender:
             self.send_avatar_parameter(name, value, force=True)
 
     def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
         worker = self._worker
         if worker is not None and worker.is_alive():
+            self.clear_pending_chatbox()
             self._enqueue_payload(None)
             worker.join(timeout=1.0)
+        self._worker = None

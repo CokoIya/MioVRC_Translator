@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
 
 from src.asr.hf_model_downloader import DownloadState
@@ -15,24 +14,31 @@ from src.tts.xtts_downloader import (
     xtts_models_ready,
 )
 from src.tts.xtts_engine import xtts_runtime_status
+from src.ui_qt.installer_repair import build_runtime_repair_update_info, show_installer_download_fallback
 from src.ui_qt.model_download_dialog import DownloadProgressWidget
+from src.updater.update_checker import UpdateInfo, fetch_latest_installer_info
 from src.utils.i18n import tr
 
 logger = logging.getLogger(__name__)
-MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
 
 
 class XTTSDownloadDialog(QDialog):
     """SBV2-style dialog for downloading the Voice Cloning model."""
 
     download_complete = Signal()
+    installer_info_ready = Signal(object)
+    installer_info_failed = Signal(str)
 
     def __init__(self, parent=None, ui_lang: str | None = None):
         super().__init__(parent)
         self._ui_lang = ui_lang or self._resolve_ui_lang(parent)
         self._downloader = XTTSDownloader()
         self._close_scheduled = False
-        self._runtime_status = xtts_runtime_status()
+        self._installer_fetching = False
+        self._update_window = None
+        self._runtime_status = xtts_runtime_status(require_api=True)
+        self.installer_info_ready.connect(self._on_installer_info_ready)
+        self.installer_info_failed.connect(self._on_installer_info_failed)
 
         self.setWindowTitle(self._t("xtts_download_title"))
         self.setFixedSize(500, 500)
@@ -105,8 +111,8 @@ class XTTSDownloadDialog(QDialog):
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
-        self._release_btn = QPushButton(self._t("xtts_download_open_release"))
-        self._release_btn.clicked.connect(self._open_release_page)
+        self._release_btn = QPushButton(self._t("xtts_runtime_download_installer"))
+        self._release_btn.clicked.connect(self._download_full_installer)
         self._release_btn.hide()
         button_row.addWidget(self._release_btn)
         self._close_btn = QPushButton(self._t("xtts_download_close"))
@@ -116,6 +122,8 @@ class XTTSDownloadDialog(QDialog):
         root.addLayout(button_row)
 
         self._apply_style()
+        if not self._runtime_status.ready:
+            self._show_runtime_recovery_actions()
 
     def _auto_start(self) -> None:
         if self._close_scheduled:
@@ -146,9 +154,7 @@ class XTTSDownloadDialog(QDialog):
         self._progress_widget._stop_btn.setEnabled(False)
         self._progress_widget._retry_btn.hide()
         if not self._runtime_status.ready:
-            self._bottom_label.setText(self._runtime_missing_text())
-            self._release_btn.show()
-            self._close_btn.show()
+            self._show_runtime_recovery_actions()
             return
         self._bottom_label.setText(self._t("xtts_download_ready_closing"))
         self._schedule_accept(1200)
@@ -157,9 +163,7 @@ class XTTSDownloadDialog(QDialog):
         if self._close_scheduled:
             return
         if not self._runtime_status.ready:
-            self._bottom_label.setText(self._runtime_missing_text())
-            self._release_btn.show()
-            self._close_btn.show()
+            self._show_runtime_recovery_actions()
             self.download_complete.emit()
             return
         self._bottom_label.setText(self._t("xtts_download_complete_closing"))
@@ -180,12 +184,69 @@ class XTTSDownloadDialog(QDialog):
             components = "Coqui TTS runtime"
         return self._t("xtts_download_runtime_missing", components=components)
 
+    def _show_runtime_recovery_actions(self) -> None:
+        message = self._runtime_missing_text()
+        self._runtime_label.setText(message)
+        self._runtime_label.setObjectName("warningLabel")
+        self._runtime_label.style().unpolish(self._runtime_label)
+        self._runtime_label.style().polish(self._runtime_label)
+        self._bottom_label.setText(message)
+        self._release_btn.show()
+        self._close_btn.show()
+
     def _on_cancelled(self) -> None:
         self.reject()
 
-    @staticmethod
-    def _open_release_page() -> None:
-        QDesktopServices.openUrl(QUrl(MIO_RELEASE_DOWNLOAD_URL))
+    def _download_full_installer(self) -> None:
+        if self._installer_fetching:
+            return
+        self._installer_fetching = True
+        self._release_btn.setEnabled(False)
+        self._release_btn.setText(self._t("xtts_runtime_repair_checking"))
+        self._bottom_label.setText(self._t("xtts_runtime_repair_checking"))
+
+        def on_info(info: UpdateInfo) -> None:
+            self.installer_info_ready.emit(info)
+
+        def on_error(error: str) -> None:
+            self.installer_info_failed.emit(str(error or "unknown error"))
+
+        try:
+            fetch_latest_installer_info(
+                on_info,
+                on_error=on_error,
+                max_retries=2,
+                retry_delays=(2,),
+            )
+        except Exception as exc:
+            self._on_installer_info_failed(str(exc))
+
+    def _on_installer_info_ready(self, info: object) -> None:
+        self._installer_fetching = False
+        self._release_btn.setEnabled(True)
+        self._release_btn.setText(self._t("xtts_runtime_download_installer"))
+        if not isinstance(info, UpdateInfo):
+            self._on_installer_info_failed("Installer manifest did not contain a valid download")
+            return
+        from src.ui_qt.update_window import UpdateWindow
+
+        parent = self.parentWidget()
+        update_parent = parent if parent is not None else self
+        update_info = build_runtime_repair_update_info(info, self._ui_lang, self._runtime_missing_text())
+        window = UpdateWindow(update_parent, update_info, self._ui_lang)
+        self._update_window = window
+        if parent is not None:
+            setattr(parent, "_update_win", window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self.accept()
+
+    def _on_installer_info_failed(self, error: str) -> None:
+        self._installer_fetching = False
+        self._release_btn.setEnabled(True)
+        self._release_btn.setText(self._t("xtts_runtime_download_installer"))
+        show_installer_download_fallback(self, self._ui_lang, detail=self._runtime_missing_text(), error=error)
 
     def _schedule_accept(self, delay_ms: int) -> None:
         if self._close_scheduled:

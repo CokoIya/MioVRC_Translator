@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 import faulthandler
@@ -14,28 +15,126 @@ import warnings
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from src.utils.app_paths import writable_app_dir
+from src.utils.app_paths import (
+    atomic_replace_secure_file,
+    open_secure_append,
+    require_real_directory,
+    secure_file_path,
+    writable_app_dir,
+)
 
 _LOG_INITIALIZED = False
 _LOG_PATH: Path | None = None
 _FAULT_HANDLER_FILE = None
 
+_REDACTED = "[REDACTED]"
+_URL_CREDENTIALS_RE = re.compile(
+    r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@"
+)
+_BEARER_TOKEN_RE = re.compile(
+    r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}"
+)
+_SECRET_FIELD_RE = re.compile(
+    r"(?ix)"
+    r"(?P<prefix>[\"']?(?:"
+    r"api[_ -]?key|access[_ -]?token|refresh[_ -]?token|authorization|"
+    r"password|client[_ -]?secret|private[_ -]?key|signing[_ -]?seed|"
+    r"manifest[_ -]?seed"
+    r")[\"']?\s*[:=]\s*)"
+    r"(?P<quote>[\"']?)"
+    r"(?P<value>(?:Bearer\s+)?[^\s,;}\]\"']{6,})"
+    r"(?P=quote)"
+)
+_PROTECTED_SECRET_RE = re.compile(r"(?i)\bdpapi:v1:[A-Za-z0-9+/=]{12,}")
+_PROVIDER_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:sk|tp)-[A-Za-z0-9_-]{12,}(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_GOOGLE_API_KEY_RE = re.compile(r"(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]{20,}")
+
+
+def _redact_log_text(value: object) -> str:
+    text = str(value)
+    text = _URL_CREDENTIALS_RE.sub(rf"\1{_REDACTED}@", text)
+    text = _BEARER_TOKEN_RE.sub(rf"\1 {_REDACTED}", text)
+
+    def redact_field(match: re.Match[str]) -> str:
+        quote = match.group("quote") or ""
+        return f"{match.group('prefix')}{quote}{_REDACTED}{quote}"
+
+    text = _SECRET_FIELD_RE.sub(redact_field, text)
+    text = _PROTECTED_SECRET_RE.sub(f"dpapi:v1:{_REDACTED}", text)
+    text = _PROVIDER_TOKEN_RE.sub(_REDACTED, text)
+    return _GOOGLE_API_KEY_RE.sub(_REDACTED, text)
+
+
+class _RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return _redact_log_text(super().format(record))
+
 
 def logs_dir() -> Path:
-    target = writable_app_dir() / "logs"
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+    return require_real_directory(writable_app_dir() / "logs")
 
 
 def log_path() -> Path:
     global _LOG_PATH
     if _LOG_PATH is None:
-        _LOG_PATH = logs_dir() / "mio.log"
+        _LOG_PATH = secure_file_path(logs_dir() / "mio.log")
     return _LOG_PATH
 
 
+class _SecureRotatingFileHandler(RotatingFileHandler):
+    def _open(self):
+        return open_secure_append(
+            self.baseFilename,
+            encoding=self.encoding or "utf-8",
+        )
+
+    def _secure_rotation_path(self, index: int) -> Path:
+        base = Path(self.baseFilename)
+        candidate = secure_file_path(
+            self.rotation_filename(f"{self.baseFilename}.{index}")
+        )
+        if os.path.normcase(os.fspath(candidate.parent)) != os.path.normcase(
+            os.fspath(base.parent)
+        ):
+            raise RuntimeError(
+                f"Refusing log rotation outside the log directory: {candidate}"
+            )
+        return candidate
+
+    def doRollover(self) -> None:
+        """Rotate logs without following links or replacing shared files."""
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
+
+        active = secure_file_path(self.baseFilename, must_exist=True)
+        rotations = [
+            self._secure_rotation_path(index)
+            for index in range(1, self.backupCount + 1)
+        ]
+
+        # Validate every path before the first rename so unsafe hard links,
+        # symbolic links, junctions, or custom namer escapes fail closed.
+        for rotation in rotations:
+            secure_file_path(rotation)
+
+        if self.backupCount > 0:
+            for index in range(self.backupCount - 1, 0, -1):
+                source = rotations[index - 1]
+                destination = rotations[index]
+                if os.path.lexists(source):
+                    atomic_replace_secure_file(source, destination)
+            atomic_replace_secure_file(active, rotations[0])
+
+        if not self.delay:
+            self.stream = self._open()
+
+
 def _build_formatter() -> logging.Formatter:
-    return logging.Formatter(
+    return _RedactingFormatter(
         fmt="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
@@ -51,6 +150,24 @@ def _stdout_is_usable() -> bool:
         return True
     except Exception:
         return False
+
+
+def _exception_is(exc_type: object, expected: type[BaseException]) -> bool:
+    """Safely classify exception-hook inputs without trusting their type."""
+    return isinstance(exc_type, type) and issubclass(exc_type, expected)
+
+
+def _request_application_shutdown() -> None:
+    """Ask an active Qt event loop to stop after a console interrupt."""
+    try:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.quit()
+    except Exception:
+        # Logging must remain usable even in headless/minimal installations.
+        pass
 
 
 def setup_logging(console_level: int = logging.INFO) -> Path:
@@ -84,7 +201,10 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
         file_level = logging.INFO
 
     # Use larger file size (10MB) and more backups (10)
-    file_handler = RotatingFileHandler(
+    for backup_index in range(1, 11):
+        secure_file_path(target.with_name(f"{target.name}.{backup_index}"))
+
+    file_handler = _SecureRotatingFileHandler(
         target,
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=10,
@@ -102,21 +222,46 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
 
     logging.captureWarnings(True)
 
+    fault_file = None
     try:
-        fault_path = target.with_name("native_crash.log")
-        _FAULT_HANDLER_FILE = open(fault_path, "ab", buffering=0)
-        faulthandler.enable(file=_FAULT_HANDLER_FILE, all_threads=True)
+        fault_path = secure_file_path(target.with_name("native_crash.log"))
+        fault_file = open_secure_append(
+            fault_path, binary=True, buffering=0
+        )
+        faulthandler.enable(file=fault_file, all_threads=True)
+        _FAULT_HANDLER_FILE = fault_file
     except Exception:
+        if fault_file is not None:
+            try:
+                fault_file.close()
+            except Exception:
+                pass
         _FAULT_HANDLER_FILE = None
 
     def _log_unhandled_exception(exc_type, exc_value, exc_traceback):
+        if _exception_is(exc_type, KeyboardInterrupt):
+            logging.getLogger("mio.unhandled").info(
+                "Application interruption requested"
+            )
+            _request_application_shutdown()
+            return
+        if _exception_is(exc_type, SystemExit):
+            return
         logging.getLogger("mio.unhandled").error(
             "Unhandled exception",
             exc_info=(exc_type, exc_value, exc_traceback),
         )
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
     def _log_thread_exception(args: threading.ExceptHookArgs) -> None:
+        if _exception_is(args.exc_type, SystemExit):
+            return
+        if _exception_is(args.exc_type, KeyboardInterrupt):
+            logging.getLogger("mio.thread").info(
+                "Application interruption requested by thread %s",
+                getattr(args.thread, "name", "unknown"),
+            )
+            _request_application_shutdown()
+            return
         logging.getLogger("mio.thread").error(
             "Unhandled thread exception in %s",
             getattr(args.thread, "name", "unknown"),

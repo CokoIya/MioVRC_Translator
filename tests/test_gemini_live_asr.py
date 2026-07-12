@@ -50,6 +50,7 @@ class _FakeLiveConnect:
         return self.session
 
     async def __aexit__(self, exc_type, exc, tb):
+        _FakeClient.live_exit_count += 1
         return False
 
 
@@ -58,6 +59,8 @@ class _FakeClient:
     last_generate_kwargs = None
     last_live_kwargs = None
     last_live_session = None
+    live_connect_count = 0
+    live_exit_count = 0
 
     def __init__(self, **kwargs):
         _FakeClient.last_init_kwargs = kwargs
@@ -69,12 +72,15 @@ class _FakeClient:
         return SimpleNamespace(text="Transcription: ありがとう")
 
     def _connect_live(self, **kwargs):
+        _FakeClient.live_connect_count += 1
         _FakeClient.last_live_kwargs = kwargs
         _FakeClient.last_live_session = _FakeLiveSession()
         return _FakeLiveConnect(_FakeClient.last_live_session)
 
 
 def _install_fake_genai(monkeypatch):
+    _FakeClient.live_connect_count = 0
+    _FakeClient.live_exit_count = 0
     genai = SimpleNamespace(
         Client=_FakeClient,
         types=SimpleNamespace(Part=_FakePart, Blob=_FakeBlob),
@@ -141,3 +147,46 @@ def test_gemini_live_path_sends_pcm_stream_and_collects_input_transcription(monk
     sent = _FakeClient.last_live_session.sent
     assert sent[0]["audio"].mime_type == "audio/pcm;rate=16000"
     assert sent[1]["audio_stream_end"] is True
+    provider.close()
+
+
+def test_gemini_live_reuses_event_loop_and_websocket_session(monkeypatch):
+    _install_fake_genai(monkeypatch)
+    provider = GeminiLiveASRProvider(
+        {
+            "asr": {
+                "gemini_live": {
+                    "api_key": "test-key",
+                    "use_live_api": True,
+                }
+            }
+        }
+    )
+
+    first = provider.transcribe(np.zeros(1600, dtype=np.float32), sample_rate=16000)
+    runner = provider._async_runner
+    second = provider.transcribe(np.zeros(1600, dtype=np.float32), sample_rate=16000)
+
+    assert first == second
+    assert provider._async_runner is runner
+    assert _FakeClient.live_connect_count == 1
+    assert len(_FakeClient.last_live_session.sent) == 4
+
+    provider.close()
+    assert _FakeClient.live_exit_count == 1
+
+
+def test_explicit_load_prewarms_live_session_for_first_utterance(monkeypatch):
+    _install_fake_genai(monkeypatch)
+    provider = GeminiLiveASRProvider(
+        {"asr": {"gemini_live": {"api_key": "test-key", "use_live_api": True}}}
+    )
+
+    provider.load()
+    provider._prewarm_thread.join(timeout=2)
+    assert _FakeClient.live_connect_count == 1
+
+    provider.transcribe(np.zeros(1600, dtype=np.float32), sample_rate=16000)
+    assert _FakeClient.live_connect_count == 1
+
+    provider.close()

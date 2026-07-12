@@ -75,6 +75,17 @@ class FallbackASR(ASRProvider):
         return bool(getattr(self.primary, "supports_partial", True))
 
     @property
+    def max_concurrent_transcriptions(self) -> int:
+        active = self._ensure_fallback() if self._using_fallback else self.primary
+        try:
+            return max(
+                1,
+                min(int(getattr(active, "max_concurrent_transcriptions", 1)), 4),
+            )
+        except (TypeError, ValueError):
+            return 1
+
+    @property
     def is_loaded(self) -> bool:
         active = self._ensure_fallback() if self._using_fallback else self.primary
         return bool(getattr(active, "is_loaded", True))
@@ -148,23 +159,25 @@ class FallbackASR(ASRProvider):
     ) -> str:
         with self._lock:
             active = self._ensure_fallback() if self._using_fallback else self.primary
-            try:
-                return active.transcribe(
-                    audio,
-                    sample_rate=sample_rate,
-                    language=language,
-                    is_final=is_final,
-                )
-            except _FALLBACK_ERRORS as exc:
+        try:
+            return active.transcribe(
+                audio,
+                sample_rate=sample_rate,
+                language=language,
+                is_final=is_final,
+            )
+        except _FALLBACK_ERRORS as exc:
+            with self._lock:
                 self._activate_fallback(exc)
-                return self._ensure_fallback().transcribe(
-                    audio,
-                    sample_rate=sample_rate,
-                    language=language,
-                    is_final=is_final,
-                )
-            except ASRError:
-                raise
+                fallback = self._ensure_fallback()
+            return fallback.transcribe(
+                audio,
+                sample_rate=sample_rate,
+                language=language,
+                is_final=is_final,
+            )
+        except ASRError:
+            raise
 
     def close(self) -> None:
         self.primary.close()

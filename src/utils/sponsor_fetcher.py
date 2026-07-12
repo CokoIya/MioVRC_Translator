@@ -10,11 +10,16 @@ import logging
 import threading
 import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from src.utils.app_paths import writable_app_dir
+from src.utils.app_paths import (
+    atomic_write_text,
+    read_secure_text,
+    secure_file_path,
+    writable_app_dir,
+)
+from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,20 @@ SPONSOR_SOURCE_URLS = (
     MIRROR_SPONSORS_URL,
 )
 _TIMEOUT_S = 8
+_MAX_CACHE_BYTES = 4 * 1024 * 1024
+_MAX_REMOTE_BYTES = 4 * 1024 * 1024
 _CACHE_FILENAME = "sponsors_cache.json"
+_MAX_SPONSORS = 500
+_MAX_SPONSOR_NAME_CHARS = 128
+_MAX_TIP_LANGUAGES = 16
+_MAX_TIP_CHARS = 1024
+_MAX_UPDATED_CHARS = 64
+_TRUSTED_SOURCE_HOSTS = frozenset(
+    filter(
+        None,
+        (urllib.parse.urlsplit(url).hostname for url in SPONSOR_SOURCE_URLS),
+    )
+)
 
 _EMPTY: dict = {
     "version": 1,
@@ -48,25 +66,30 @@ SponsorCallback = Callable[[dict], None]
 
 
 def _cache_path() -> Path:
-    return writable_app_dir() / _CACHE_FILENAME
+    return secure_file_path(writable_app_dir() / _CACHE_FILENAME)
 
 
 def _load_cache() -> dict | None:
-    path = _cache_path()
-    if not path.exists():
-        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else None
+        path = _cache_path()
+        if not path.exists():
+            return None
+        data = json.loads(
+            read_secure_text(path, encoding="utf-8", max_bytes=_MAX_CACHE_BYTES)
+        )
+        return _validate_sponsors_payload(data)
     except Exception:
+        logger.debug("Failed to load %s cache", "sponsors", exc_info=True)
         return None
 
 
 def _save_cache(data: dict) -> None:
     try:
         path = _cache_path()
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        atomic_write_text(
+            path,
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
     except Exception:
         logger.debug("Failed to save sponsors cache", exc_info=True)
@@ -90,13 +113,62 @@ def _validate_sponsors_payload(data: object) -> dict:
     tip = data.get("tip", {})
     if tip is not None and not isinstance(tip, dict):
         raise ValueError("sponsors.json field 'tip' must be an object")
-    return data
+
+    clean_tip: dict[str, str] = {}
+    for raw_language, raw_text in (tip or {}).items():
+        language = str(raw_language or "").strip().lower().replace("_", "-")
+        text = " ".join(str(raw_text or "").split()).strip()
+        if (
+            not language
+            or len(language) > 24
+            or not language.isprintable()
+            or not text
+            or not text.isprintable()
+        ):
+            continue
+        clean_tip[language] = text[:_MAX_TIP_CHARS]
+        if len(clean_tip) >= _MAX_TIP_LANGUAGES:
+            break
+
+    clean_sponsors: list[dict[str, str]] = []
+    for item in sponsors:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split()).strip()
+        if not name or not name.isprintable():
+            continue
+        clean_sponsors.append({"name": name[:_MAX_SPONSOR_NAME_CHARS]})
+        if len(clean_sponsors) >= _MAX_SPONSORS:
+            break
+
+    updated = " ".join(str(data.get("updated") or "").split()).strip()
+    if not updated.isprintable():
+        updated = ""
+    version = data.get("version", 1)
+    if not isinstance(version, (int, str)) or isinstance(version, bool):
+        version = 1
+    return {
+        "version": version,
+        "updated": updated[:_MAX_UPDATED_CHARS],
+        "tip": clean_tip,
+        "sponsors": clean_sponsors,
+    }
 
 
 def _fetch_remote_from_url(url: str) -> dict:
-    with urllib.request.urlopen(_sponsors_request_url(url), timeout=_TIMEOUT_S) as resp:
+    with open_trusted_https_url(
+        _sponsors_request_url(url),
+        trusted_hosts=_TRUSTED_SOURCE_HOSTS,
+        timeout=_TIMEOUT_S,
+        label="sponsors",
+    ) as resp:
         charset = resp.headers.get_content_charset("utf-8")
-        raw = resp.read().decode(charset)
+        payload = read_bounded_response(
+            resp,
+            limit=_MAX_REMOTE_BYTES,
+            label="sponsors response",
+        )
+        raw = payload.decode(charset)
     return _validate_sponsors_payload(json.loads(raw))
 
 

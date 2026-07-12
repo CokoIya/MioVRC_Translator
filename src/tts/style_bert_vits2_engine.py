@@ -177,7 +177,6 @@ _STYLE_BERT_LANGUAGE_RUNTIME_DEPENDENCIES = {
 }
 
 _MAX_CACHED_SBV2_MODELS = 2
-_DEFAULT_SBV2_CPU_THREADS = 2
 _OPEN_JTALK_REQUIRED_DICT_FILES = ("char.bin", "matrix.bin", "sys.dic", "unk.dic")
 
 
@@ -409,54 +408,36 @@ def style_bert_cuda_available() -> bool:
         return False
 
 
-def _style_bert_cpu_thread_limit() -> int:
-    raw_value = str(os.environ.get("MIO_SBV2_CPU_THREADS") or "").strip()
-    if raw_value:
-        try:
-            return max(0, int(raw_value))
-        except ValueError:
-            logger.warning("Ignoring invalid MIO_SBV2_CPU_THREADS value: %s", raw_value)
-    cpu_count = os.cpu_count() or _DEFAULT_SBV2_CPU_THREADS
-    return max(1, min(_DEFAULT_SBV2_CPU_THREADS, cpu_count))
-
-
 def _configure_style_bert_cpu_runtime() -> None:
-    """Keep SBV2 CPU inference from over-subscribing fragile player PCs."""
+    """Initialize SBV2 diagnostics without mutating process-wide thread pools.
+
+    ``torch.set_num_threads`` and the OMP/MKL environment variables are global
+    to the process. Changing them while merely probing the SBV2 engine used to
+    throttle SenseVoice and XTTS for the rest of the session, even when SBV2
+    was never selected. Stage-level concurrency already bounds SBV2 synthesis,
+    so an individual backend must not silently retune every other model.
+    """
+
     global _SBV2_CPU_RUNTIME_CONFIGURED
     if _SBV2_CPU_RUNTIME_CONFIGURED or torch is None:
         return
     _SBV2_CPU_RUNTIME_CONFIGURED = True
 
-    thread_limit = _style_bert_cpu_thread_limit()
-    if thread_limit <= 0:
-        logger.info("Style-Bert-VITS2 CPU thread limiting disabled by environment")
-        return
-
-    os.environ.setdefault("OMP_NUM_THREADS", str(thread_limit))
-    os.environ.setdefault("MKL_NUM_THREADS", str(thread_limit))
-    os.environ.setdefault("NUMEXPR_NUM_THREADS", str(thread_limit))
-
     actual_threads: int | str = "unknown"
     actual_interop: int | str = "unknown"
     try:
-        current_threads = int(torch.get_num_threads())
-        target_threads = min(current_threads, thread_limit) if current_threads > 0 else thread_limit
-        if target_threads > 0 and target_threads != current_threads:
-            torch.set_num_threads(target_threads)
         actual_threads = int(torch.get_num_threads())
     except Exception:
-        logger.debug("Could not configure SBV2 torch thread count", exc_info=True)
+        logger.debug("Could not inspect SBV2 torch thread count", exc_info=True)
 
     try:
-        current_interop = int(torch.get_num_interop_threads())
-        if current_interop > 1:
-            torch.set_num_interop_threads(1)
         actual_interop = int(torch.get_num_interop_threads())
     except Exception:
-        logger.debug("Could not configure SBV2 torch interop thread count", exc_info=True)
+        logger.debug("Could not inspect SBV2 torch interop thread count", exc_info=True)
 
     logger.info(
-        "Configured Style-Bert-VITS2 CPU runtime (torch_threads=%s interop_threads=%s)",
+        "Style-Bert-VITS2 using shared CPU runtime without global retuning "
+        "(torch_threads=%s interop_threads=%s)",
         actual_threads,
         actual_interop,
     )
@@ -833,6 +814,11 @@ def _ensure_importable_stdio() -> None:
 def _nltk_zip_resource_ready(resource_name: str) -> bool:
     try:
         import nltk
+
+        pathsec = getattr(nltk, "pathsec", None)
+        if pathsec is None:
+            pathsec = importlib.import_module("nltk.pathsec")
+        pathsec.ENFORCE = True
 
         nltk.data.find(resource_name)
         return True

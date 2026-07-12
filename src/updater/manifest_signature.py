@@ -1,15 +1,32 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2024-2026 ここ_Mio and Mio RealTime Translator contributors
+# Copyright (C) 2024-2026 Mio RealTime Translator contributors
 #
 # This file is part of Mio RealTime Translator.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from types import MappingProxyType
+
+try:
+    from cryptography.exceptions import InvalidSignature as _InvalidSignature
+    from cryptography.hazmat.primitives import serialization as _serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey as _Ed25519PrivateKey,
+        Ed25519PublicKey as _Ed25519PublicKey,
+    )
+except (ImportError, OSError) as exc:  # pragma: no cover - import failure path
+    _CRYPTOGRAPHY_IMPORT_ERROR: BaseException | None = exc
+    _InvalidSignature = None
+    _serialization = None
+    _Ed25519PrivateKey = None
+    _Ed25519PublicKey = None
+else:
+    _CRYPTOGRAPHY_IMPORT_ERROR = None
+
 
 SIGNATURE_FIELD = "signature"
 SIGNATURE_ALGORITHM_FIELD = "signature_algorithm"
@@ -20,82 +37,24 @@ _IGNORED_SIGNATURE_FIELDS = {
     SIGNATURE_ALGORITHM_FIELD,
     SIGNATURE_KEY_ID_FIELD,
 }
-
-_P = 2**255 - 19
-_L = 2**252 + 27742317777372353535851937790883648493
-_D = (-121665 * pow(121666, _P - 2, _P)) % _P
-_I = pow(2, (_P - 1) // 4, _P)
+_KEY_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 class ManifestSignatureError(RuntimeError):
     pass
 
 
-def _xrecover(y: int) -> int:
-    xx = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P)
-    x = pow(xx, (_P + 3) // 8, _P)
-    if (x * x - xx) % _P != 0:
-        x = (x * _I) % _P
-    if x & 1:
-        x = _P - x
-    return x
-
-
-_BY = (4 * pow(5, _P - 2, _P)) % _P
-_B = (_xrecover(_BY), _BY)
-_IDENTITY = (0, 1)
-
-
-def _point_add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
-    x1, y1 = left
-    x2, y2 = right
-    common = _D * x1 * x2 * y1 * y2
-    x3 = (x1 * y2 + x2 * y1) * pow(1 + common, _P - 2, _P)
-    y3 = (y1 * y2 + x1 * x2) * pow(1 - common, _P - 2, _P)
-    return x3 % _P, y3 % _P
-
-
-def _point_mul(point: tuple[int, int], scalar: int) -> tuple[int, int]:
-    result = _IDENTITY
-    addend = point
-    while scalar:
-        if scalar & 1:
-            result = _point_add(result, addend)
-        addend = _point_add(addend, addend)
-        scalar >>= 1
-    return result
-
-
-def _is_on_curve(point: tuple[int, int]) -> bool:
-    x, y = point
-    return (-x * x + y * y - 1 - _D * x * x * y * y) % _P == 0
-
-
-def _decode_point(raw: bytes) -> tuple[int, int]:
-    if len(raw) != 32:
-        raise ManifestSignatureError("Ed25519 point must be 32 bytes")
-    y = int.from_bytes(raw, "little") & ((1 << 255) - 1)
-    x = _xrecover(y)
-    if (x & 1) != (raw[31] >> 7):
-        x = _P - x
-    point = (x, y)
-    if not _is_on_curve(point):
-        raise ManifestSignatureError("Ed25519 point is not on curve")
-    return point
-
-
-def _encode_point(point: tuple[int, int]) -> bytes:
-    x, y = point
-    value = y | ((x & 1) << 255)
-    return value.to_bytes(32, "little")
-
-
-def _clamp_scalar(raw: bytes) -> int:
-    data = bytearray(raw[:32])
-    data[0] &= 248
-    data[31] &= 63
-    data[31] |= 64
-    return int.from_bytes(data, "little")
+def _require_cryptography() -> None:
+    if (
+        _CRYPTOGRAPHY_IMPORT_ERROR is not None
+        or _serialization is None
+        or _Ed25519PrivateKey is None
+        or _Ed25519PublicKey is None
+        or _InvalidSignature is None
+    ):
+        raise ManifestSignatureError(
+            "Ed25519 support is unavailable because cryptography could not be imported"
+        ) from _CRYPTOGRAPHY_IMPORT_ERROR
 
 
 def _decode_hex_bytes(value: str, *, expected_len: int, label: str) -> bytes:
@@ -109,6 +68,58 @@ def _decode_hex_bytes(value: str, *, expected_len: int, label: str) -> bytes:
     if len(data) != expected_len:
         raise ManifestSignatureError(f"{label} must be {expected_len} bytes")
     return data
+
+
+def _normalize_signature_key_id(value: object) -> str:
+    key_id = str(value or "").strip()
+    if not _KEY_ID_RE.fullmatch(key_id):
+        raise ManifestSignatureError("Update manifest signature key id is invalid")
+    return key_id
+
+
+def normalize_trusted_manifest_public_keys(
+    values: Mapping[object, object] | Iterable[tuple[object, object]],
+) -> Mapping[str, str]:
+    """Return an immutable key-id to Ed25519 public-key allowlist.
+
+    Accepting more than one key permits a safe overlap release before the
+    active signing key is rotated. Conflicting duplicate key IDs fail closed.
+    """
+
+    items = values.items() if isinstance(values, Mapping) else values
+    try:
+        iterator = iter(items)
+    except TypeError as exc:
+        raise ManifestSignatureError(
+            "Trusted update manifest public-key configuration is invalid"
+        ) from exc
+
+    normalized: dict[str, str] = {}
+    for item in iterator:
+        try:
+            raw_key_id, raw_public_key = item
+        except (TypeError, ValueError) as exc:
+            raise ManifestSignatureError(
+                "Trusted update manifest public-key entries must contain a key id and key"
+            ) from exc
+        key_id = _normalize_signature_key_id(raw_key_id)
+        public_key = _decode_hex_bytes(
+            str(raw_public_key or ""),
+            expected_len=32,
+            label="Ed25519 public key",
+        ).hex()
+        previous = normalized.get(key_id)
+        if previous is not None and previous != public_key:
+            raise ManifestSignatureError(
+                f"Trusted update manifest key id {key_id!r} is configured more than once"
+            )
+        normalized[key_id] = public_key
+
+    if not normalized:
+        raise ManifestSignatureError(
+            "No trusted update manifest public keys are configured; updates are blocked"
+        )
+    return MappingProxyType(normalized)
 
 
 def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
@@ -126,31 +137,43 @@ def canonical_manifest_bytes(manifest: Mapping[str, object]) -> bytes:
 
 
 def public_key_from_seed(seed_hex: str) -> str:
+    _require_cryptography()
     seed = _decode_hex_bytes(seed_hex, expected_len=32, label="Ed25519 seed")
-    digest = hashlib.sha512(seed).digest()
-    scalar = _clamp_scalar(digest)
-    return _encode_point(_point_mul(_B, scalar)).hex()
+    try:
+        private_key = _Ed25519PrivateKey.from_private_bytes(seed)
+        public_key = private_key.public_key().public_bytes(
+            encoding=_serialization.Encoding.Raw,
+            format=_serialization.PublicFormat.Raw,
+        )
+    except Exception as exc:
+        raise ManifestSignatureError(f"Unable to derive Ed25519 public key: {exc}") from exc
+    return public_key.hex()
 
 
 def generate_seed_hex() -> str:
     return os.urandom(32).hex()
 
 
-def sign_manifest(manifest: Mapping[str, object], seed_hex: str) -> str:
+def sign_ed25519(seed_hex: str, message: bytes) -> str:
+    """Sign an arbitrary byte string with a raw 32-byte Ed25519 seed."""
+    _require_cryptography()
     seed = _decode_hex_bytes(seed_hex, expected_len=32, label="Ed25519 seed")
-    public_key = bytes.fromhex(public_key_from_seed(seed.hex()))
-    digest = hashlib.sha512(seed).digest()
-    scalar = _clamp_scalar(digest)
-    prefix = digest[32:]
-    message = canonical_manifest_bytes(manifest)
-    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % _L
-    encoded_r = _encode_point(_point_mul(_B, r))
-    k = int.from_bytes(hashlib.sha512(encoded_r + public_key + message).digest(), "little") % _L
-    s = (r + k * scalar) % _L
-    return (encoded_r + s.to_bytes(32, "little")).hex()
+    try:
+        private_key = _Ed25519PrivateKey.from_private_bytes(seed)
+        signature = private_key.sign(bytes(message))
+    except ManifestSignatureError:
+        raise
+    except Exception as exc:
+        raise ManifestSignatureError(f"Unable to create Ed25519 signature: {exc}") from exc
+    return signature.hex()
+
+
+def sign_manifest(manifest: Mapping[str, object], seed_hex: str) -> str:
+    return sign_ed25519(seed_hex, canonical_manifest_bytes(manifest))
 
 
 def verify_ed25519(public_key_hex: str, signature_hex: str, message: bytes) -> bool:
+    _require_cryptography()
     public_key = _decode_hex_bytes(
         public_key_hex,
         expected_len=32,
@@ -161,20 +184,14 @@ def verify_ed25519(public_key_hex: str, signature_hex: str, message: bytes) -> b
         expected_len=64,
         label="Ed25519 signature",
     )
-    encoded_r = signature[:32]
-    encoded_s = signature[32:]
-    s = int.from_bytes(encoded_s, "little")
-    if s >= _L:
-        return False
-    public_point = _decode_point(public_key)
-    r_point = _decode_point(encoded_r)
-    challenge = int.from_bytes(
-        hashlib.sha512(encoded_r + public_key + message).digest(),
-        "little",
-    ) % _L
-    left = _point_mul(_B, s)
-    right = _point_add(r_point, _point_mul(public_point, challenge))
-    return left == right
+    try:
+        verifier = _Ed25519PublicKey.from_public_bytes(public_key)
+        verifier.verify(signature, bytes(message))
+    except Exception as exc:
+        if _InvalidSignature is not None and isinstance(exc, _InvalidSignature):
+            return False
+        raise ManifestSignatureError(f"Ed25519 verification failed: {exc}") from exc
+    return True
 
 
 def verify_manifest_signature(
@@ -202,17 +219,56 @@ def verify_manifest_signature(
         if key_id != expected_key_id:
             raise ManifestSignatureError("Update manifest signature key id is not trusted")
 
-    algorithm = str(manifest.get(SIGNATURE_ALGORITHM_FIELD, SIGNATURE_ALGORITHM) or "").strip().lower()
+    algorithm = str(
+        manifest.get(SIGNATURE_ALGORITHM_FIELD, SIGNATURE_ALGORITHM) or ""
+    ).strip().lower()
     if algorithm != SIGNATURE_ALGORITHM:
         raise ManifestSignatureError("Update manifest signature algorithm is not supported")
 
     try:
-        verified = verify_ed25519(public_key, signature, canonical_manifest_bytes(manifest))
+        verified = verify_ed25519(
+            public_key,
+            signature,
+            canonical_manifest_bytes(manifest),
+        )
     except ManifestSignatureError:
         raise
     except Exception as exc:
-        raise ManifestSignatureError(f"Update manifest signature verification failed: {exc}") from exc
+        raise ManifestSignatureError(
+            f"Update manifest signature verification failed: {exc}"
+        ) from exc
 
     if not verified:
         raise ManifestSignatureError("Update manifest signature is invalid")
     return True
+
+
+def verify_manifest_signature_with_trusted_keys(
+    manifest: Mapping[str, object],
+    trusted_public_keys: Mapping[object, object]
+    | Iterable[tuple[object, object]],
+    *,
+    required: bool = False,
+) -> str | None:
+    """Verify a manifest by selecting its public key from a trusted allowlist."""
+
+    signature = str(manifest.get(SIGNATURE_FIELD, "") or "").strip()
+    if not signature:
+        if required:
+            raise ManifestSignatureError("Update manifest signature is missing")
+        return None
+
+    key_id = _normalize_signature_key_id(manifest.get(SIGNATURE_KEY_ID_FIELD))
+    trusted = normalize_trusted_manifest_public_keys(trusted_public_keys)
+    public_key = trusted.get(key_id)
+    if public_key is None:
+        raise ManifestSignatureError(
+            "Update manifest signature key id is not trusted"
+        )
+    verify_manifest_signature(
+        manifest,
+        public_key,
+        required=True,
+        expected_key_id=key_id,
+    )
+    return key_id

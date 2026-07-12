@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-import io
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
 import logging
 import threading
 import time
-import wave
 from collections.abc import Mapping
 from typing import Optional
 
 import numpy as np
 
 from src.asr.asr_cleaner import clean_asr_text
+from src.asr.audio_encoding import (
+    normalized_mono_audio,
+    pcm16_bytes,
+    pcm16_wav_bytes,
+)
 from src.asr.base import ASRProvider, ProgressCallback
 from src.asr.errors import (
     ASRConfigurationError,
@@ -70,40 +75,15 @@ def _language_code(language: object) -> str:
 
 
 def _encode_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    arr = _normalized_audio(audio)
-    if arr.size == 0:
-        return b""
-    pcm16 = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2", copy=False)
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(max(int(sample_rate or 16000), 1))
-        wav_file.writeframes(pcm16.tobytes())
-    return buffer.getvalue()
+    return pcm16_wav_bytes(audio, sample_rate)
 
 
 def _encode_pcm16_bytes(audio: np.ndarray) -> bytes:
-    arr = _normalized_audio(audio)
-    if arr.size == 0:
-        return b""
-    pcm16 = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2", copy=False)
-    return pcm16.tobytes()
+    return pcm16_bytes(audio)
 
 
 def _normalized_audio(audio: np.ndarray) -> np.ndarray:
-    arr = np.asarray(audio)
-    if arr.size == 0:
-        return np.asarray([], dtype=np.float32)
-    if arr.ndim > 1:
-        arr = arr.mean(axis=1)
-    arr = np.nan_to_num(arr.astype(np.float32, copy=False).flatten())
-    if arr.size == 0:
-        return arr
-    peak = float(np.max(np.abs(arr))) if arr.size else 0.0
-    if peak > 1.5:
-        arr = arr / 32768.0
-    return arr
+    return normalized_mono_audio(audio)
 
 
 def _prompt(language: str, system_instruction: str) -> str:
@@ -115,26 +95,71 @@ def _prompt(language: str, system_instruction: str) -> str:
     return f"{instruction}\nLanguage hint: {language_name}. Return only the transcript."
 
 
-def _run_async(coro):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
+class _AsyncLoopRunner:
+    """One reusable event loop for all Live API sessions owned by a provider."""
 
-    result: dict[str, object] = {}
+    def __init__(self) -> None:
+        self._ready = threading.Event()
+        self._closed = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="gemini-live-event-loop",
+        )
+        self._thread.start()
+        if not self._ready.wait(timeout=5.0):
+            raise RuntimeError("Gemini Live event loop did not start")
 
-    def _target() -> None:
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
         try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # noqa: BLE001 - re-raise in caller thread
-            result["error"] = exc
+            loop.run_forever()
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+            self._closed.set()
 
-    thread = threading.Thread(target=_target, daemon=True, name="gemini-live-asr")
-    thread.start()
-    thread.join()
-    if "error" in result:
-        raise result["error"]  # type: ignore[misc]
-    return result.get("value")
+    def run(self, coroutine, *, timeout: float):
+        loop = self._loop
+        if loop is None or self._closed.is_set():
+            if hasattr(coroutine, "close"):
+                coroutine.close()
+            raise RuntimeError("Gemini Live event loop is closed")
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+        try:
+            return future.result(timeout=max(float(timeout), 0.1))
+        except FutureTimeoutError:
+            future.cancel()
+            raise ASRNetworkError("Gemini Live request timed out")
+
+    def close(self) -> None:
+        loop = self._loop
+        if loop is None or self._closed.is_set():
+            return
+        loop.call_soon_threadsafe(loop.stop)
+        if threading.current_thread() is not self._thread:
+            self._thread.join(timeout=5.0)
+
+
+@dataclass(slots=True)
+class _LiveSessionSlot:
+    key: tuple[str, str, int]
+    context_manager: object
+    session: object
+    created_at: float
+    uses: int = 0
+    closed: bool = False
 
 
 class GeminiLiveASRProvider(ASRProvider):
@@ -169,12 +194,30 @@ class GeminiLiveASRProvider(ASRProvider):
             200,
             3000,
         )
+        self.max_concurrent_transcriptions = _int_range(
+            provider_cfg.get("max_concurrent_transcriptions"),
+            2,
+            1,
+            4,
+        )
         self._corrector = corrector
         self._client = None
         self._genai = None
         self._lock = threading.RLock()
+        self._async_runner: _AsyncLoopRunner | None = None
+        self._live_condition: asyncio.Condition | None = None
+        self._live_idle: dict[tuple[str, str, int], list[_LiveSessionSlot]] = {}
+        self._live_active: dict[int, _LiveSessionSlot] = {}
+        self._live_session_count = 0
+        self._closing = False
+        self._prewarm_thread: threading.Thread | None = None
 
-    def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
+    def load(
+        self,
+        progress_callback: Optional[ProgressCallback] = None,
+        *,
+        prewarm: bool = True,
+    ) -> None:
         with self._lock:
             if self._client is not None:
                 return
@@ -189,14 +232,46 @@ class GeminiLiveASRProvider(ASRProvider):
             except ImportError as exc:
                 raise ASRConfigurationError("google-genai package is required for Gemini Live ASR") from exc
             try:
-                self._client = genai.Client(api_key=self.api_key)
+                client = genai.Client(api_key=self.api_key)
+                runner = self._async_runner
+                if self.use_live_api and self._async_runner is None:
+                    runner = _AsyncLoopRunner()
+                self._client = client
                 self._genai = genai
+                self._async_runner = runner
+                self._closing = False
             except ASRError:
                 raise
             except Exception as exc:
                 _raise_provider_error(exc)
             if progress_callback is not None:
                 progress_callback({"stage": "ready", "message": "Gemini Live ASR ready"})
+            if prewarm and self.use_live_api and self._async_runner is not None:
+                self._start_live_prewarm(self._async_runner)
+
+    def _start_live_prewarm(self, runner: _AsyncLoopRunner) -> None:
+        if self._prewarm_thread is not None and self._prewarm_thread.is_alive():
+            return
+
+        def _prewarm() -> None:
+            try:
+                runner.run(
+                    self._prewarm_live_session(),
+                    timeout=min(self.timeout_seconds + 5.0, 15.0),
+                )
+            except Exception:
+                logger.debug("Gemini Live session prewarm failed", exc_info=True)
+
+        self._prewarm_thread = threading.Thread(
+            target=_prewarm,
+            daemon=True,
+            name="gemini-live-prewarm",
+        )
+        self._prewarm_thread.start()
+
+    async def _prewarm_live_session(self) -> None:
+        slot = await self._acquire_live_session(self.language)
+        await self._release_live_session(slot, reusable=True)
 
     def transcribe(
         self,
@@ -210,47 +285,53 @@ class GeminiLiveASRProvider(ASRProvider):
         if np.asarray(audio).size == 0:
             return ""
         lang = _language_code(language) or self.language
-        with self._lock:
-            if self._client is None:
-                self.load()
-            genai = self._genai
-            started_at = time.monotonic()
-            try:
-                if self.use_live_api:
-                    pcm_bytes = _encode_pcm16_bytes(audio)
-                    if not pcm_bytes:
-                        return ""
-                    raw_text = str(
-                        _run_async(
-                            self._transcribe_live_once(
-                                pcm_bytes=pcm_bytes,
-                                sample_rate=sample_rate,
-                                language=lang,
-                            )
-                        )
-                        or ""
+        if self._client is None:
+            self.load(prewarm=False)
+        client = self._client
+        genai = self._genai
+        if client is None or genai is None:
+            raise ASRConfigurationError("Gemini Live client is not loaded")
+        started_at = time.monotonic()
+        try:
+            if self.use_live_api:
+                pcm_bytes = _encode_pcm16_bytes(audio)
+                if not pcm_bytes:
+                    return ""
+                runner = self._async_runner
+                if runner is None:
+                    raise ASRConfigurationError("Gemini Live event loop is unavailable")
+                raw_text = str(
+                    runner.run(
+                        self._transcribe_live_once(
+                            pcm_bytes=pcm_bytes,
+                            sample_rate=sample_rate,
+                            language=lang,
+                        ),
+                        timeout=self.timeout_seconds + 10.0,
                     )
-                else:
-                    wav_bytes = _encode_wav_bytes(audio, sample_rate)
-                    if not wav_bytes:
-                        return ""
-                    parts = [
-                        _prompt(lang, self.system_instruction),
-                        genai.types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
-                    ]
-                    response = self._client.models.generate_content(
-                        model=self.model,
-                        contents=parts,
-                    )
-                    raw_text = _response_text(response)
-            except Exception as exc:
-                _raise_provider_error(exc)
-            logger.info(
-                "Gemini Live ASR request finished (mode=%s audio_ms=%.0f duration_ms=%.0f)",
-                "live" if self.use_live_api else "generate_content",
-                len(np.asarray(audio).flatten()) / max(float(sample_rate or 16000), 1.0) * 1000.0,
-                (time.monotonic() - started_at) * 1000.0,
-            )
+                    or ""
+                )
+            else:
+                wav_bytes = _encode_wav_bytes(audio, sample_rate)
+                if not wav_bytes:
+                    return ""
+                parts = [
+                    _prompt(lang, self.system_instruction),
+                    genai.types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
+                ]
+                response = client.models.generate_content(
+                    model=self.model,
+                    contents=parts,
+                )
+                raw_text = _response_text(response)
+        except Exception as exc:
+            _raise_provider_error(exc)
+        logger.info(
+            "Gemini Live ASR request finished (mode=%s audio_ms=%.0f duration_ms=%.0f)",
+            "live" if self.use_live_api else "generate_content",
+            len(np.asarray(audio).flatten()) / max(float(sample_rate or 16000), 1.0) * 1000.0,
+            (time.monotonic() - started_at) * 1000.0,
+        )
         text = clean_asr_text(raw_text)
         if text and self._corrector is not None:
             text = self._corrector.apply(text, language=lang or None)
@@ -271,7 +352,43 @@ class GeminiLiveASRProvider(ASRProvider):
         connect = getattr(live, "connect", None)
         if connect is None:
             raise ASRConfigurationError("google-genai Live API client is not available")
+        del connect
+        mime_type = f"audio/pcm;rate={max(int(sample_rate or 16000), 1)}"
+        for attempt in range(2):
+            slot = await self._acquire_live_session(language)
+            was_reused = slot.uses > 0
+            reusable = False
+            try:
+                session = slot.session
+                blob = genai.types.Blob(data=pcm_bytes, mime_type=mime_type)
+                await session.send_realtime_input(audio=blob)
+                try:
+                    await session.send_realtime_input(audio_stream_end=True)
+                except TypeError:
+                    await session.send_realtime_input(activity_end=True)
+                transcript = await self._collect_live_transcript(session)
+                reusable = True
+                return transcript
+            except Exception:
+                if not was_reused or attempt > 0:
+                    raise
+                logger.debug(
+                    "Reconnecting a stale Gemini Live session",
+                    exc_info=True,
+                )
+            finally:
+                await self._release_live_session(slot, reusable=reusable)
+        raise ASRNetworkError("Gemini Live session could not be refreshed")
 
+    def _live_session_key(self, language: str) -> tuple[str, str, int]:
+        instruction_language = language if self.system_instruction else ""
+        return (
+            instruction_language,
+            self.live_model,
+            self.live_silence_duration_ms,
+        )
+
+    def _live_config(self, language: str) -> dict[str, object]:
         language_name = _LANGUAGE_NAMES.get(language, "the spoken language")
         config: dict[str, object] = {
             "response_modalities": ["AUDIO"],
@@ -287,17 +404,152 @@ class GeminiLiveASRProvider(ASRProvider):
             config["system_instruction"] = (
                 f"{self.system_instruction}\nLanguage hint: {language_name}."
             )
+        return config
 
-        mime_type = f"audio/pcm;rate={max(int(sample_rate or 16000), 1)}"
-        session_cm = connect(model=self.live_model, config=config)
-        async with session_cm as session:
-            blob = genai.types.Blob(data=pcm_bytes, mime_type=mime_type)
-            await session.send_realtime_input(audio=blob)
+    async def _open_live_session(
+        self,
+        key: tuple[str, str, int],
+        language: str,
+    ) -> _LiveSessionSlot:
+        client = self._client
+        live = getattr(getattr(client, "aio", None), "live", None)
+        connect = getattr(live, "connect", None)
+        if connect is None:
+            raise ASRConfigurationError("google-genai Live API client is not available")
+        context_manager = connect(
+            model=self.live_model,
+            config=self._live_config(language),
+        )
+        session = await context_manager.__aenter__()
+        return _LiveSessionSlot(
+            key=key,
+            context_manager=context_manager,
+            session=session,
+            created_at=time.monotonic(),
+        )
+
+    async def _close_live_slot(self, slot: _LiveSessionSlot) -> None:
+        if slot.closed:
+            return
+        slot.closed = True
+        exit_method = getattr(slot.context_manager, "__aexit__", None)
+        if exit_method is None:
+            return
+        try:
+            await exit_method(None, None, None)
+        except Exception:
+            logger.debug("Gemini Live session close failed", exc_info=True)
+
+    def _condition(self) -> asyncio.Condition:
+        condition = self._live_condition
+        if condition is None:
+            condition = asyncio.Condition()
+            self._live_condition = condition
+        return condition
+
+    async def _acquire_live_session(self, language: str) -> _LiveSessionSlot:
+        key = self._live_session_key(language)
+        condition = self._condition()
+        while True:
+            expired: list[_LiveSessionSlot] = []
+            should_create = False
+            async with condition:
+                if self._closing:
+                    raise ASRConfigurationError("Gemini Live provider is closing")
+                idle = self._live_idle.get(key, [])
+                while idle:
+                    slot = idle.pop()
+                    if (
+                        not slot.closed
+                        and slot.uses < 50
+                        and time.monotonic() - slot.created_at < 600.0
+                    ):
+                        self._live_active[id(slot)] = slot
+                        return slot
+                    self._live_session_count = max(0, self._live_session_count - 1)
+                    expired.append(slot)
+                if self._live_session_count < self.max_concurrent_transcriptions:
+                    self._live_session_count += 1
+                    should_create = True
+                else:
+                    # Reclaim an idle session configured for another language.
+                    for other_key, other_idle in self._live_idle.items():
+                        if other_key == key or not other_idle:
+                            continue
+                        expired.append(other_idle.pop())
+                        self._live_session_count = max(
+                            0,
+                            self._live_session_count - 1,
+                        )
+                        self._live_session_count += 1
+                        should_create = True
+                        break
+                    if not should_create:
+                        await condition.wait()
+                        continue
+
+            for slot in expired:
+                await self._close_live_slot(slot)
+            if not should_create:
+                continue
             try:
-                await session.send_realtime_input(audio_stream_end=True)
-            except TypeError:
-                await session.send_realtime_input(activity_end=True)
-            return await self._collect_live_transcript(session)
+                slot = await self._open_live_session(key, language)
+            except BaseException:
+                async with condition:
+                    self._live_session_count = max(0, self._live_session_count - 1)
+                    condition.notify_all()
+                raise
+            async with condition:
+                if self._closing:
+                    self._live_session_count = max(0, self._live_session_count - 1)
+                    condition.notify_all()
+                    close_after = True
+                else:
+                    self._live_active[id(slot)] = slot
+                    close_after = False
+            if close_after:
+                await self._close_live_slot(slot)
+                raise ASRConfigurationError("Gemini Live provider is closing")
+            return slot
+
+    async def _release_live_session(
+        self,
+        slot: _LiveSessionSlot,
+        *,
+        reusable: bool,
+    ) -> None:
+        condition = self._condition()
+        should_close = False
+        async with condition:
+            self._live_active.pop(id(slot), None)
+            slot.uses += 1
+            if reusable and not self._closing and not slot.closed:
+                self._live_idle.setdefault(slot.key, []).append(slot)
+            else:
+                self._live_session_count = max(0, self._live_session_count - 1)
+                should_close = True
+            condition.notify_all()
+        if should_close:
+            await self._close_live_slot(slot)
+
+    async def _close_live_pool(self) -> None:
+        condition = self._condition()
+        async with condition:
+            self._closing = True
+            slots = [
+                *self._live_active.values(),
+                *(
+                    slot
+                    for idle in self._live_idle.values()
+                    for slot in idle
+                ),
+            ]
+            self._live_active.clear()
+            self._live_idle.clear()
+            self._live_session_count = 0
+            condition.notify_all()
+        for slot in slots:
+            await self._close_live_slot(slot)
 
     async def _collect_live_transcript(self, session: object) -> str:
         receive = getattr(session, "receive", None)
@@ -326,9 +578,44 @@ class GeminiLiveASRProvider(ASRProvider):
 
         return clean_asr_text(" ".join(piece for piece in pieces if piece))
 
+    def close(self) -> None:
+        with self._lock:
+            runner = self._async_runner
+            client = self._client
+            prewarm_thread = self._prewarm_thread
+            self._closing = True
+            self._client = None
+            self._genai = None
+            self._async_runner = None
+            self._prewarm_thread = None
+        if runner is not None:
+            try:
+                runner.run(self._close_live_pool(), timeout=5.0)
+            except Exception:
+                logger.debug("Gemini Live pool shutdown failed", exc_info=True)
+            finally:
+                runner.close()
+        if (
+            prewarm_thread is not None
+            and prewarm_thread is not threading.current_thread()
+        ):
+            prewarm_thread.join(timeout=1.0)
+        close_client = getattr(client, "close", None)
+        if callable(close_client):
+            try:
+                close_client()
+            except Exception:
+                logger.debug("Gemini client close failed", exc_info=True)
+        with self._lock:
+            self._live_condition = None
+            self._live_idle.clear()
+            self._live_active.clear()
+            self._live_session_count = 0
+
     @property
     def is_loaded(self) -> bool:
-        return self._client is not None
+        with self._lock:
+            return self._client is not None
 
 
 def _float_value(value: object, default: float) -> float:

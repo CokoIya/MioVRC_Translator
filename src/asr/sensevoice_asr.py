@@ -153,7 +153,8 @@ class SenseVoiceASR(ASRProvider):
         corrector: LayeredASRCorrector | None = None,
     ):
         self.device = device
-        self.ncpu = max(ncpu or max(2, (os.cpu_count() or 4) // 2), 1)
+        default_ncpu = max(2, min(8, (os.cpu_count() or 4) // 2))
+        self.ncpu = max(ncpu or default_ncpu, 1)
         self.model_id = model_id
         self.model_revision = model_revision
         self._model = None
@@ -172,7 +173,11 @@ class SenseVoiceASR(ASRProvider):
             label=_DEFAULT_SPEC.label,
             config_key=_DEFAULT_SPEC.config_key,
             model_id=self.model_id,
-            model_revision=self.model_revision,
+            model_revision=(
+                _DEFAULT_SPEC.model_revision
+                if self.model_id == _DEFAULT_SPEC.model_id
+                else self.model_revision
+            ),
             bundled_dir_names=_DEFAULT_SPEC.bundled_dir_names,
             required_files=_DEFAULT_SPEC.required_files,
             required_file_sha256=required_file_sha256,
@@ -212,6 +217,8 @@ class SenseVoiceASR(ASRProvider):
                 model=model_path,
                 device=self.device,
                 disable_update=True,
+                check_latest=False,
+                trust_remote_code=False,
                 disable_pbar=True,
                 log_level="ERROR",
                 ncpu=self.ncpu,
@@ -233,7 +240,9 @@ class SenseVoiceASR(ASRProvider):
         del sample_rate
         del is_final
 
-        audio_input = np.asarray(audio, dtype=np.float32).flatten()
+        audio_input = np.ascontiguousarray(
+            np.asarray(audio, dtype=np.float32).reshape(-1)
+        )
         if audio_input.size == 0:
             return ""
 

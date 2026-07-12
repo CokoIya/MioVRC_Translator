@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
+import json
+
+import pytest
 
 from src.tts.aivis_speech_engine import AivisSpeechTTS
 from src.tts.voicevox_compatible_engine import VoicevoxCompatibleTTS
@@ -12,12 +16,26 @@ from src.tts.voicevox_engine import VoicevoxTTS
 class FakeResponse:
     payload: object | None = None
     content: bytes = b""
+    headers: dict[str, str] = field(default_factory=dict)
+    closed: bool = False
+
+    def __post_init__(self):
+        if self.payload is not None and not self.content:
+            self.content = json.dumps(self.payload).encode("utf-8")
 
     def raise_for_status(self) -> None:
         return None
 
     def json(self):
         return self.payload
+
+    def iter_content(self, chunk_size):
+        del chunk_size
+        if self.content:
+            yield self.content
+
+    def close(self):
+        self.closed = True
 
 
 def test_voicevox_compatible_engine_flattens_speaker_styles(monkeypatch):
@@ -26,7 +44,7 @@ def test_voicevox_compatible_engine_flattens_speaker_styles(monkeypatch):
     monkeypatch.setattr(
         engine._session,
         "get",
-        lambda url, timeout: FakeResponse(
+        lambda url, timeout, stream: FakeResponse(
             payload=[
                 {
                     "name": "Speaker A",
@@ -52,7 +70,8 @@ def test_voicevox_compatible_engine_synthesizes_with_runtime_controls(monkeypatc
     engine = VoicevoxCompatibleTTS()
     requests_seen: list[tuple[str, dict | None, dict | None]] = []
 
-    def fake_post(url, params=None, json=None, timeout=None):
+    def fake_post(url, params=None, json=None, timeout=None, stream=None):
+        assert stream is True
         requests_seen.append((url, params, json))
         if url.endswith("/audio_query"):
             return FakeResponse(payload={"speedScale": 1.0, "volumeScale": 1.0})
@@ -71,3 +90,15 @@ def test_voicevox_compatible_engine_synthesizes_with_runtime_controls(monkeypatc
 def test_local_tts_engines_use_expected_default_ports():
     assert VoicevoxTTS()._base_url == "http://127.0.0.1:50021"
     assert AivisSpeechTTS()._base_url == "http://127.0.0.1:10101"
+
+
+def test_voicevox_compatible_endpoint_is_limited_to_local_or_private_hosts():
+    assert VoicevoxCompatibleTTS(host="192.168.1.50")._base_url == (
+        "http://192.168.1.50:50021"
+    )
+    assert VoicevoxCompatibleTTS(host="::1")._base_url == "http://[::1]:50021"
+
+    with pytest.raises(ValueError, match="loopback"):
+        VoicevoxCompatibleTTS(host="public.example")
+    with pytest.raises(ValueError):
+        VoicevoxCompatibleTTS(host="user@127.0.0.1")

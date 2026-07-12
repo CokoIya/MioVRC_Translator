@@ -527,7 +527,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "openai": {
         "label": "GPT",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -536,7 +536,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "openai_compatible": {
         "label": "GPT Compatible",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -752,7 +752,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "nvidia": {
         "label": "NVIDIA AI",
         "base_url": NVIDIA_TRANSLATION_BASE_URL,
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": "nvidia/nemotron-3-nano-30b-a3b",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -770,7 +770,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "anthropic": {
         "label": "Claude",
         "base_url": "https://api.anthropic.com",
-        "model": "claude-opus-4-8",
+        "model": "claude-sonnet-4-6",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "model_input": "select",
@@ -797,16 +797,16 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
 
 TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "openai": (
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
     ),
     "openai_compatible": (
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
     ),
     "google_web": ("google-web",),
     "mymemory": ("mymemory",),
@@ -823,153 +823,81 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "glm-4.7-flash",
         "glm-4.7-flashx",
         "glm-4.7",
-        "glm-4.6",
     ),
     "qianwen": (
         "qwen-mt-plus",
         "qwen-mt-flash",
-        "qwen3.7-max",
-        "qwen-mt-turbo",
-        "qwen-mt-lite",
     ),
     "hunyuan": (
         "hunyuan-turbos-latest",
         "hunyuan-turbo-latest",
-        "hunyuan-lite",
     ),
     "xiaomi": (
         "mimo-v2.5-pro",
         "mimo-v2.5",
         "mimo-v2-flash",
-        "mimo-v2-pro",
-        "mimo-v2-omni",
     ),
     "gemini": (
         "gemini-3.5-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
     ),
     "kimi": (
         "kimi-k2.6",
         "kimi-k2.5",
-        "kimi-k2-0905-preview",
-        "kimi-k2-turbo-preview",
-        "kimi-k2-thinking",
-        "kimi-k2-thinking-turbo",
     ),
     "xai": (
         "grok-4.3",
         "grok-4.20",
-        "grok-4.20-multi-agent-0309",
-        "grok-4.20-0309-reasoning",
         "grok-4.20-0309-non-reasoning",
     ),
     "mistral": (
         "mistral-medium-3-5",
         "mistral-medium-latest",
         "mistral-small-latest",
-        "mistral-large-latest",
         "ministral-8b-latest",
-        "ministral-3b-latest",
-        "magistral-small-latest",
-        "magistral-medium-latest",
     ),
     "doubao": (),
     "nvidia": (
-        "nvidia/nemotron-3-super-120b-a12b",
         "nvidia/nemotron-3-nano-30b-a3b",
-        "nvidia/llama-3.1-nemotron-nano-8b-v1",
     ),
     "anthropic": (
-        "claude-opus-4-8",
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-1-20250805",
-        "claude-sonnet-4-20250514",
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
     ),
     "anthropic_compatible": (
-        "claude-opus-4-8",
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-1-20250805",
-        "claude-sonnet-4-20250514",
-        "claude-3-7-sonnet-20250219",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
     ),
 }
 
 TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "openai": {
-        "gpt-5.5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
-        "gpt-5.4-mini": {
+        "gpt-5.6-sol": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "gpt-5.4-nano": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "gpt-5.4": {
-            "speed": "balanced",
+        "gpt-5.6-terra": {
+            "speed": "fast",
             "quality": "high",
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "gpt-5.4-pro": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "gpt-5-mini": {
+        "gpt-5.6-luna": {
             "speed": "fast",
-            "quality": "high",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "gpt-5-nano": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "gpt-5": {
-            "speed": "balanced",
             "quality": "high",
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "gpt-4.1": {
+        "gpt-5.5": {
             "speed": "balanced",
             "quality": "high",
-            "fit": "general",
-            "note": "balanced_quality",
-        },
-        "gpt-4.1-mini": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "gpt-4.1-nano": {
-            "speed": "very_fast",
-            "quality": "basic",
-            "fit": "general",
-            "note": "economy_first",
+            "fit": "recommended",
+            "note": "general_high_quality",
         },
     },
     "openai_compatible": {},
@@ -1018,18 +946,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "general_high_quality",
         },
-        "deepseek-chat": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "very_recommended",
-            "note": "live_default",
-        },
-        "deepseek-reasoner": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "reasoning",
-        },
     },
     "zhipu": {
         "glm-5.1": {
@@ -1062,25 +978,7 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "ultra_fast",
         },
-        "glm-4.5-airx": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "glm-4.5-air": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "quality_first",
-        },
         "glm-4.7": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "general_high_quality",
-        },
-        "glm-4.6": {
             "speed": "balanced",
             "quality": "high",
             "fit": "general",
@@ -1088,12 +986,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "qianwen": {
-        "qwen3.7-max": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "general",
-            "note": "quality_first",
-        },
         "qwen-mt-flash": {
             "speed": "very_fast",
             "quality": "balanced",
@@ -1105,42 +997,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "very_recommended",
             "note": "mt_quality",
-        },
-        "qwen-mt-turbo": {
-            "speed": "balanced",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "legacy_mt",
-        },
-        "qwen-mt-lite": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "qwen-plus": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "qwen-flash": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "ultra_fast",
-        },
-        "qwen-turbo": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "qwen3-max": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
         },
     },
     "hunyuan": {
@@ -1155,12 +1011,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "recommended",
             "note": "balanced_quality",
-        },
-        "hunyuan-lite": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
         },
     },
     "xiaomi": {
@@ -1182,18 +1032,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "mimo-v2-pro": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "balanced_quality",
-        },
-        "mimo-v2-omni": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
     },
     "gemini": {
         "gemini-3.5-flash": {
@@ -1201,30 +1039,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
-        },
-        "gemini-3.1-pro-preview": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "gemini-3-flash-preview": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "gemini-3.1-flash-lite": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "very_recommended",
-            "note": "live_default",
-        },
-        "gemini-3.1-flash-lite-preview": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "ultra_fast",
         },
         "gemini-2.5-flash-lite": {
             "speed": "very_fast",
@@ -1237,12 +1051,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "very_recommended",
             "note": "balanced_quality",
-        },
-        "gemini-2.5-pro": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
         },
     },
     "kimi": {
@@ -1258,48 +1066,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "general_high_quality",
         },
-        "kimi-k2-0905-preview": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "kimi-k2-turbo-preview": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "kimi-k2-thinking": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "reasoning",
-        },
-        "kimi-k2-thinking-turbo": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "reasoning",
-        },
-        "moonshot-v1-8k": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "moonshot-v1-32k": {
-            "speed": "balanced",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "balanced_quality",
-        },
-        "moonshot-v1-128k": {
-            "speed": "slow",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "quality_first",
-        },
     },
     "xai": {
         "grok-4.3": {
@@ -1307,18 +1073,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
-        },
-        "grok-4.20-multi-agent-0309": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "grok-4.20-0309-reasoning": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "reasoning",
         },
         "grok-4.20-0309-non-reasoning": {
             "speed": "balanced",
@@ -1331,30 +1085,6 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
-        },
-        "grok-4": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
-        "grok-code-fast-1": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "ultra_fast",
-        },
-        "grok-3": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "balanced_quality",
-        },
-        "grok-3-mini": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
         },
     },
     "mistral": {
@@ -1376,63 +1106,27 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "mistral-large-latest": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
         "ministral-8b-latest": {
             "speed": "very_fast",
             "quality": "balanced",
             "fit": "general",
             "note": "economy_first",
         },
-        "ministral-3b-latest": {
-            "speed": "very_fast",
-            "quality": "basic",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "magistral-small-latest": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "reasoning",
-        },
-        "magistral-medium-latest": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "reasoning",
-        },
     },
     "nvidia": {
-        "nvidia/llama-3.1-nemotron-nano-8b-v1": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
         "nvidia/nemotron-3-nano-30b-a3b": {
             "speed": "balanced",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "nvidia/nemotron-3-super-120b-a12b": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
     },
     "anthropic": {
-        "claude-opus-4-8": {
-            "speed": "slow",
+        "claude-sonnet-5": {
+            "speed": "balanced",
             "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
+            "fit": "recommended",
+            "note": "general_high_quality",
         },
         "claude-sonnet-4-6": {
             "speed": "balanced",
@@ -1446,59 +1140,30 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "ultra_fast",
         },
-        "claude-opus-4-1-20250805": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "claude-opus-4-20250514": {
-            "speed": "slow",
-            "quality": "high",
-            "fit": "not_recommended",
-            "note": "quality_first",
-        },
-        "claude-sonnet-4-20250514": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "claude-3-7-sonnet-20250219": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "general_high_quality",
-        },
-        "claude-3-5-sonnet-20241022": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "general",
-            "note": "balanced_quality",
-        },
-        "claude-3-5-haiku-20241022": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "very_recommended",
-            "note": "live_default",
-        },
     },
     "anthropic_compatible": {},
 }
 
+# Keep profiles strictly aligned with selectable models. This prevents removed,
+# deprecated, reasoning-only, or known slow models from resurfacing through
+# recommendation metadata even when an older catalog is cached.
+for _profile_backend, _profiles in tuple(TRANSLATION_MODEL_PROFILES.items()):
+    if _profile_backend in {"openai_compatible", "anthropic_compatible"}:
+        TRANSLATION_MODEL_PROFILES[_profile_backend] = {}
+        continue
+    _allowed_models = set(TRANSLATION_MODEL_PRESETS.get(_profile_backend, ()))
+    TRANSLATION_MODEL_PROFILES[_profile_backend] = {
+        _model: _profile
+        for _model, _profile in _profiles.items()
+        if _model in _allowed_models
+    }
+
 TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
     "openai": {
+        "gpt-5.6-sol": "9.6",
+        "gpt-5.6-terra": "9.4",
+        "gpt-5.6-luna": "9.0",
         "gpt-5.5": "9.5",
-        "gpt-5.4-mini": "9.2",
-        "gpt-5.4": "9.0",
-        "gpt-5.4-nano": "7.6",
-        "gpt-5.4-pro": "8.4",
-        "gpt-5-mini": "8.4",
-        "gpt-5-nano": "7.3",
-        "gpt-5": "8.6",
-        "gpt-4.1": "7.8",
-        "gpt-4.1-mini": "7.4",
-        "gpt-4.1-nano": "6.2",
     },
     "openai_compatible": {},
     "google_web": {
@@ -1516,8 +1181,6 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
     "deepseek": {
         "deepseek-v4-flash": "9.1",
         "deepseek-v4-pro": "8.7",
-        "deepseek-chat": "8.8",
-        "deepseek-reasoner": "6.8",
     },
     "zhipu": {
         "glm-5.1": "8.8",
@@ -1525,94 +1188,64 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "glm-5": "8.5",
         "glm-4.7-flash": "8.4",
         "glm-4.7-flashx": "8.1",
-        "glm-4.5-airx": "8.2",
-        "glm-4.5-air": "7.7",
         "glm-4.7": "7.9",
-        "glm-4.6": "7.5",
     },
     "qianwen": {
         "qwen-mt-plus": "9.7",
-        "qwen3.7-max": "8.4",
         "qwen-mt-flash": "8.7",
-        "qwen-mt-lite": "7.8",
-        "qwen-mt-turbo": "7.4",
-        "qwen-plus": "8.2",
-        "qwen-flash": "8.1",
-        "qwen-turbo": "7.6",
-        "qwen3-max": "8.5",
     },
     "hunyuan": {
         "hunyuan-turbos-latest": "8.9",
         "hunyuan-turbo-latest": "8.4",
-        "hunyuan-lite": "7.4",
     },
     "xiaomi": {
         "mimo-v2.5-pro": "9.0",
         "mimo-v2.5": "8.5",
         "mimo-v2-flash": "8.4",
-        "mimo-v2-pro": "7.8",
-        "mimo-v2-omni": "6.7",
     },
     "gemini": {
         "gemini-3.5-flash": "9.3",
         "gemini-2.5-flash": "8.8",
         "gemini-2.5-flash-lite": "8.4",
-        "gemini-2.5-pro": "7.9",
-        "gemini-3-flash-preview": "8.2",
-        "gemini-3.1-flash-lite": "8.1",
-        "gemini-3.1-flash-lite-preview": "7.9",
-        "gemini-3.1-pro-preview": "7.2",
     },
     "kimi": {
         "kimi-k2.6": "9.1",
         "kimi-k2.5": "8.6",
-        "kimi-k2-0905-preview": "8.2",
-        "kimi-k2-turbo-preview": "8.5",
-        "kimi-k2-thinking": "6.9",
-        "kimi-k2-thinking-turbo": "7.5",
-        "moonshot-v1-8k": "7.1",
-        "moonshot-v1-32k": "7.0",
-        "moonshot-v1-128k": "6.3",
     },
     "xai": {
         "grok-4.3": "9.0",
         "grok-4.20": "9.0",
         "grok-4.20-0309-non-reasoning": "8.4",
-        "grok-4.20-0309-reasoning": "6.8",
-        "grok-4.20-multi-agent-0309": "6.4",
-        "grok-4": "8.3",
-        "grok-code-fast-1": "7.2",
-        "grok-3": "7.8",
-        "grok-3-mini": "7.0",
     },
     "mistral": {
         "mistral-small-latest": "8.8",
         "mistral-medium-3-5": "8.7",
         "mistral-medium-latest": "8.5",
-        "mistral-large-latest": "7.2",
         "ministral-8b-latest": "7.5",
-        "ministral-3b-latest": "6.5",
-        "magistral-small-latest": "6.8",
-        "magistral-medium-latest": "6.2",
     },
     "nvidia": {
         "nvidia/nemotron-3-nano-30b-a3b": "8.4",
-        "nvidia/nemotron-3-super-120b-a12b": "7.4",
-        "nvidia/llama-3.1-nemotron-nano-8b-v1": "6.8",
     },
     "anthropic": {
+        "claude-sonnet-5": "9.2",
         "claude-sonnet-4-6": "9.2",
         "claude-haiku-4-5-20251001": "8.4",
-        "claude-opus-4-8": "7.8",
-        "claude-sonnet-4-20250514": "8.5",
-        "claude-3-7-sonnet-20250219": "8.0",
-        "claude-3-5-sonnet-20241022": "7.8",
-        "claude-3-5-haiku-20241022": "8.0",
-        "claude-opus-4-1-20250805": "7.2",
-        "claude-opus-4-20250514": "7.0",
     },
     "anthropic_compatible": {},
 }
+
+for _score_backend, _scores in tuple(
+    TRANSLATION_MODEL_RECOMMENDATION_SCORES.items()
+):
+    if _score_backend in {"openai_compatible", "anthropic_compatible"}:
+        TRANSLATION_MODEL_RECOMMENDATION_SCORES[_score_backend] = {}
+        continue
+    _allowed_models = set(TRANSLATION_MODEL_PRESETS.get(_score_backend, ()))
+    TRANSLATION_MODEL_RECOMMENDATION_SCORES[_score_backend] = {
+        _model: _score
+        for _model, _score in _scores.items()
+        if _model in _allowed_models
+    }
 
 
 def get_backend_order() -> tuple:

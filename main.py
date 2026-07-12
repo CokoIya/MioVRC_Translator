@@ -9,6 +9,8 @@ import logging
 import warnings
 import subprocess
 import shutil
+import stat
+import uuid
 from pathlib import Path
 
 # pydub emits a RuntimeWarning at import time when ffmpeg is not on PATH.
@@ -25,6 +27,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 _APP_MUTEX_HANDLE = None
 _ERROR_ALREADY_EXISTS = 183
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _VENV_RELAUNCH_ENV = "MIO_TRANSLATOR_RELAUNCHED_VENV"
 
 
@@ -126,10 +129,27 @@ def _maybe_relaunch_local_source_venv() -> None:
 def _run_selftest() -> int:
     from src.asr.sensevoice_asr import validate_runtime_dependencies
 
-    ok, message = validate_runtime_dependencies()
-    output = sys.stdout if ok else sys.stderr
-    print(message, file=output)
-    return 0 if ok else 1
+    asr_ok, asr_message = validate_runtime_dependencies()
+    print(asr_message, file=sys.stdout if asr_ok else sys.stderr)
+
+    from src.tts.xtts_engine import xtts_packaging_selftest, xtts_runtime_status
+
+    xtts_status = xtts_runtime_status(require_api=True)
+    xtts_packaging_ok, xtts_packaging_message = xtts_packaging_selftest()
+    xtts_ok = xtts_status.ready and xtts_packaging_ok
+    if xtts_status.ready:
+        print("Voice Cloning runtime dependencies are available.", file=sys.stdout)
+    else:
+        components = ", ".join(xtts_status.missing_component_names) or "unknown"
+        print(
+            f"Voice Cloning runtime dependencies are missing: {components}",
+            file=sys.stderr,
+        )
+    print(
+        xtts_packaging_message,
+        file=sys.stdout if xtts_packaging_ok else sys.stderr,
+    )
+    return 0 if asr_ok and xtts_ok else 1
 
 
 def _run_setup_mode() -> int:
@@ -186,13 +206,56 @@ def _run_cuda_pip_check() -> int:
 def _clean_cuda_runtime_target(target: Path) -> None:
     from src.utils.gpu_support import cuda_runtime_site_packages
 
-    expected = cuda_runtime_site_packages().resolve(strict=False)
-    resolved = target.resolve(strict=False)
-    if resolved != expected:
+    expected = cuda_runtime_site_packages()
+
+    def _lexical_key(path: Path) -> str:
+        return os.path.normcase(os.path.abspath(os.fspath(path.expanduser())))
+
+    expected_key = _lexical_key(expected)
+    if _lexical_key(target) != expected_key:
         raise RuntimeError(f"Refusing to clean unexpected CUDA runtime path: {target}")
-    if resolved.exists():
-        shutil.rmtree(resolved)
-    resolved.mkdir(parents=True, exist_ok=True)
+
+    try:
+        target_stat = expected.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"CUDA runtime target disappeared before cleanup: {expected}"
+        ) from exc
+    attributes = int(getattr(target_stat, "st_file_attributes", 0) or 0)
+    if (
+        not stat.S_ISDIR(target_stat.st_mode)
+        or stat.S_ISLNK(target_stat.st_mode)
+        or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        raise RuntimeError(f"Refusing to clean unsafe CUDA runtime target: {expected}")
+
+    quarantine = expected.parent / (
+        f".{expected.name}.cleanup-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    renamed = False
+    try:
+        os.rename(expected, quarantine)
+        renamed = True
+        quarantine_stat = quarantine.lstat()
+        quarantine_attributes = int(
+            getattr(quarantine_stat, "st_file_attributes", 0) or 0
+        )
+        if (
+            not stat.S_ISDIR(quarantine_stat.st_mode)
+            or stat.S_ISLNK(quarantine_stat.st_mode)
+            or quarantine_attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+        ):
+            raise RuntimeError(
+                f"CUDA runtime target changed during cleanup: {expected}"
+            )
+        shutil.rmtree(quarantine)
+    finally:
+        if renamed:
+            recreated = cuda_runtime_site_packages()
+            if _lexical_key(recreated) != expected_key:
+                raise RuntimeError(
+                    f"CUDA runtime target changed during recreation: {recreated}"
+                )
 
 
 def _run_cuda_pytorch_install(target_arg: str | None) -> int:
@@ -234,18 +297,24 @@ def _run_cuda_pytorch_install(target_arg: str | None) -> int:
 
 
 def _run_cuda_pytorch_verify() -> int:
-    from src.utils.gpu_support import cuda_runtime_site_packages
+    from src.utils.gpu_support import (
+        cuda_runtime_site_packages,
+        inspect_torch_cuda_runtime,
+    )
 
     _activate_cuda_runtime_site(cuda_runtime_site_packages())
     try:
-        import torch
-
-        print("torch=" + str(torch.__version__))
-        print("cuda=" + str(getattr(torch.version, "cuda", "") or ""))
-        available = bool(torch.cuda.is_available())
-        print("available=" + str(available))
-        print("device=" + (torch.cuda.get_device_name(0) if available else ""))
-        return 0 if available else 2
+        status = inspect_torch_cuda_runtime()
+        print("torch=" + status.torch_version)
+        print("cuda=" + status.cuda_build)
+        print("available=" + str(status.cuda_available))
+        print("device_count=" + str(status.device_count))
+        print("device=" + status.device_name)
+        print("capability=" + (".".join(map(str, status.capability)) if status.capability else ""))
+        print("runtime_source=" + status.runtime_source)
+        if status.detail:
+            print("detail=" + status.detail)
+        return 0 if status.ready else 2
     except Exception as exc:
         print(f"CUDA PyTorch verification failed: {exc}", file=sys.stderr)
         return 2

@@ -116,12 +116,70 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert backend_base_url_is_editable("openai_compatible") is True
     assert backend_api_key_is_required("openai_compatible") is True
     assert backend_model_is_selectable("openai_compatible") is True
-    assert get_backend_model_options("openai_compatible")[0] == "gpt-5.5"
+    assert get_backend_model_options("openai_compatible")[0] == "gpt-5.6-sol"
     assert translator._client.kwargs["api_key"] == "relay-key"
     assert translator._client.kwargs["base_url"] == "https://relay.example.com/v1"
     assert translator._client.kwargs["timeout"] == 9.0
     assert translator._client.kwargs["max_retries"] == 1
     assert translator.model == "gpt-proxy-router"
+
+
+def test_credentialed_openai_proxy_rejects_plaintext_public_http(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "openai_compatible": {
+                "api_key": "relay-key",
+                "base_url": "http://relay.example.com/v1",
+                "model": "relay-model",
+            },
+        }
+    }
+
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        create_translator(config)
+
+
+def test_keyless_local_ai_allows_literal_private_lan_http(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    translator = create_translator(
+        {
+            "translation": {
+                "backend": "local_ai",
+                "local_ai": {
+                    "api_key": "",
+                    "base_url": "http://192.168.1.20:11434/v1",
+                    "model": "local-model",
+                },
+            }
+        }
+    )
+
+    assert translator._client.kwargs["base_url"] == "http://192.168.1.20:11434/v1"
+
+
+def test_credentialed_local_ai_requires_https_off_loopback(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        create_translator(
+            {
+                "translation": {
+                    "backend": "local_ai",
+                    "local_ai": {
+                        "api_key": "private-key",
+                        "base_url": "http://192.168.1.20:11434/v1",
+                        "model": "local-model",
+                    },
+                }
+            }
+        )
 
 
 def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
@@ -148,12 +206,75 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert backend_base_url_is_editable("anthropic_compatible") is True
     assert backend_api_key_is_required("anthropic_compatible") is True
     assert backend_model_is_selectable("anthropic_compatible") is True
-    assert get_backend_model_options("anthropic_compatible")[0] == "claude-opus-4-8"
+    assert get_backend_model_options("anthropic_compatible")[0] == "claude-sonnet-5"
     assert translator._client.kwargs["api_key"] == "relay-key"
     assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
     assert translator._client.kwargs["timeout"] == 11.0
     assert translator._client.kwargs["max_retries"] == 2
     assert translator.model == "claude-router"
+
+
+@pytest.mark.parametrize(
+    ("configured_url", "sdk_base_url"),
+    (
+        ("https://fast.fluapi.com/v1", "https://fast.fluapi.com"),
+        (
+            "https://claude-relay.example.com/gateway/v1/",
+            "https://claude-relay.example.com/gateway",
+        ),
+        (
+            "https://claude-relay.example.com/gateway/v1/messages",
+            "https://claude-relay.example.com/gateway",
+        ),
+        ("https://api.anthropic.com", "https://api.anthropic.com"),
+    ),
+)
+def test_anthropic_compatible_normalizes_sdk_api_suffix(
+    monkeypatch,
+    configured_url,
+    sdk_base_url,
+):
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=_FakeAnthropic),
+    )
+    translator = create_translator(
+        {
+            "translation": {
+                "backend": "anthropic_compatible",
+                "anthropic_compatible": {
+                    "api_key": "relay-key",
+                    "base_url": configured_url,
+                    "model": "claude-router",
+                },
+            }
+        }
+    )
+
+    assert translator._client.kwargs["base_url"] == sdk_base_url
+
+
+def test_anthropic_compatible_rejects_plaintext_public_http(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=_FakeAnthropic),
+    )
+
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        create_translator(
+            {
+                "translation": {
+                    "backend": "anthropic_compatible",
+                    "anthropic_compatible": {
+                        "api_key": "relay-key",
+                        "base_url": "http://claude-relay.example.com/v1",
+                        "model": "claude-router",
+                    },
+                }
+            }
+        )
 
 
 def test_online_backends_expose_network_overrides(monkeypatch):

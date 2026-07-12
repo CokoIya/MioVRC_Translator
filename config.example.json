@@ -117,6 +117,7 @@
     "target_language": "ja",
     "target_language_2": "en",
     "target_language_3": "",
+    "asr_rewrite_style": "off",
     "output_format": "translated_with_original",
     "chatbox_template": "",
     "send_to_chatbox": true,
@@ -133,14 +134,14 @@
     "openai": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-sol",
       "timeout_s": 15.0,
       "max_retries": 0
     },
     "openai_compatible": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-sol",
       "timeout_s": 15.0,
       "max_retries": 0
     },
@@ -249,7 +250,7 @@
     "anthropic": {
       "api_key": "",
       "base_url": "https://api.anthropic.com",
-      "model": "claude-opus-4-8",
+      "model": "claude-sonnet-4-6",
       "timeout_s": 15.0,
       "max_retries": 0
     },
@@ -388,10 +389,15 @@
       "volume": 0.8,
       "device": "cpu",
       "language": "auto",
+      "prewarm": true,
       "lazy_load": true,
       "optimized_inference": true,
       "conditioning_cache_size": 4,
-      "enable_text_splitting": true
+      "enable_text_splitting": true,
+      "precision": "auto",
+      "cuda_device_index": 0,
+      "allow_cpu_fallback": true,
+      "cuda_tf32": true
     }
   },
   "ui": {

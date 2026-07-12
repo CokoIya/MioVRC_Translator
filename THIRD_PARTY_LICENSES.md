@@ -44,6 +44,13 @@ This document lists the third-party libraries, tools, and bundled models used by
 - **URL**: https://github.com/wiseman/py-webrtcvad
 - **Usage**: Voice activity detection
 
+#### Silero VAD
+- **License**: MIT License
+- **Copyright**: Copyright (c) Silero Team
+- **URL**: https://github.com/snakers4/silero-vad
+- **Pinned revision**: `7e30209a3e901f9842f81b225f3e93d8199902b1` (v6.2.1)
+- **Usage**: Bundled neural voice activity detection model
+
 ### Speech Recognition
 
 #### FunASR

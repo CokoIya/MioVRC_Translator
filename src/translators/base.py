@@ -4,24 +4,24 @@ import json
 import re
 from abc import ABC, abstractmethod
 from collections import OrderedDict, deque
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from collections.abc import Hashable, Iterator
 from threading import Lock
 from time import monotonic
 
 _TRANSLATION_SYSTEM_PROMPT = (
-    "You are a real-time translator for VR social chat (VRChat). "
-    "Translate only the current utterance, but use recent conversation context when it helps resolve "
-    "pronouns, omitted subjects, slang, jokes, internet-native wording, and relationship tone. "
-    "Produce natural, modern, colloquial translations that sound like something a real person would casually say. "
-    "Prefer everyday spoken wording over formal written phrasing unless the source is clearly formal. "
-    "Never sound stiff, word-for-word, or textbook-like. Preserve emotion, humor, slang, internet expressions, "
-    "and gaming or VR-specific terms. Keep names, acronyms, product names, community jargon, and standard spellings "
-    "in their modern commonly used forms. Correct obvious speech-recognition mistakes only when the intended meaning is clear. "
-    "Return only the translated text with no explanations, notes, quotes, "
-    "or repeated context. Do not add decorative punctuation, wrapping quotes, or unmatched brackets that are not required."
+    "Translate live VRChat speech into natural, modern, colloquial language. "
+    "Use recent context only to resolve ambiguity in the current utterance. "
+    "Preserve meaning, tone, humor, slang, names, and gaming/VR terms; correct clear ASR mistakes. "
+    "Return only the current translation with no notes, repeated context, decorative wrapping, "
+    "or chain-of-thought."
 )
 _CONTEXT_MAX_TURNS = 3
 _CONTEXT_MAX_AGE_S = 75.0
 _CONTEXT_TEXT_LIMIT = 160
+_CONTEXT_TOTAL_TEXT_LIMIT = 640
 _MAX_CACHE_TEXT_LEN = 512
 _WRAP_PAIRS = {
     '"': '"',
@@ -70,18 +70,341 @@ _LANGUAGE_ALIASES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class TranslationContext:
+    """Identity and commit policy for one translation call chain."""
+
+    session_id: Hashable = "default"
+    auto_commit: bool = True
+    sequence: int | None = None
+
+
+_ACTIVE_TRANSLATION_CONTEXT: ContextVar[TranslationContext] = ContextVar(
+    "mio_translation_context",
+    default=TranslationContext(),
+)
+
+
+@contextmanager
+def translation_context_scope(
+    *,
+    session_id: Hashable,
+    auto_commit: bool = True,
+    sequence: int | None = None,
+) -> Iterator[None]:
+    """Apply session-scoped context without changing translator interfaces.
+
+    Realtime workers use ``auto_commit=False`` so completed turns are committed
+    by ordered delivery rather than whichever provider request finishes first.
+    ``ContextVar`` keeps this safe when multiple translation workers run at once.
+    """
+
+    try:
+        hash(session_id)
+        normalized_session = session_id
+    except Exception:
+        normalized_session = str(session_id)
+    token = _ACTIVE_TRANSLATION_CONTEXT.set(
+        TranslationContext(
+            session_id=normalized_session,
+            auto_commit=bool(auto_commit),
+            sequence=int(sequence) if sequence is not None else None,
+        )
+    )
+    try:
+        yield
+    finally:
+        _ACTIVE_TRANSLATION_CONTEXT.reset(token)
+
+
+class TranslationContextStore:
+    """Thread-safe, bounded conversation memory shared by translator workers."""
+
+    def __init__(
+        self,
+        *,
+        max_turns: int = _CONTEXT_MAX_TURNS,
+        max_age_s: float = _CONTEXT_MAX_AGE_S,
+        max_text_chars: int = _CONTEXT_TOTAL_TEXT_LIMIT,
+    ) -> None:
+        self._max_turns = max(1, int(max_turns))
+        self._max_age_s = max(1.0, float(max_age_s))
+        self._max_text_chars = max(64, int(max_text_chars))
+        self._lock = Lock()
+        self._recent: dict[
+            tuple[Hashable, str, str, str],
+            deque[tuple[float, str, str]],
+        ] = {}
+        self._pending_sources: dict[
+            tuple[Hashable, str, str, str],
+            dict[int, tuple[float, str]],
+        ] = {}
+
+    @staticmethod
+    def _normalize_language(code: str) -> str:
+        normalized = str(code or "").strip().lower().replace("_", "-")
+        if not normalized:
+            return ""
+        return _LANGUAGE_ALIASES.get(normalized, normalized.split("-", 1)[0])
+
+    def _key(
+        self,
+        session_id: Hashable,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str,
+    ) -> tuple[Hashable, str, str, str]:
+        try:
+            hash(session_id)
+            normalized_session = session_id
+        except Exception:
+            normalized_session = str(session_id)
+        return (
+            normalized_session,
+            str(context_source or "").strip() or "default",
+            self._normalize_language(src_lang),
+            self._normalize_language(tgt_lang),
+        )
+
+    def _prune(
+        self,
+        turns: deque[tuple[float, str, str]],
+        now: float,
+    ) -> None:
+        cutoff = now - self._max_age_s
+        while turns and turns[0][0] < cutoff:
+            turns.popleft()
+
+    @staticmethod
+    def should_include_context(current_text: str) -> bool:
+        """Avoid paying prompt-token latency for clearly standalone long text."""
+
+        raw_text = str(current_text or "")
+        text = " ".join(raw_text.split()).strip()
+        if not text:
+            return False
+        if len(text) <= 96:
+            return True
+        if len(text) > 360 or raw_text.count("\n") > 3:
+            return False
+        lowered = text.lower()
+        continuity_markers = (
+            " he ", " she ", " it ", " they ", " this ", " that ",
+            "because", "but ", "and ", "so ", "then ",
+            "これ", "それ", "あれ", "さっき", "でも", "だから",
+            "这个", "那个", "刚才", "所以", "但是", "然后",
+            "그거", "이거", "아까", "그래서", "하지만",
+        )
+        padded = f" {lowered} "
+        return any(marker in padded for marker in continuity_markers)
+
+    @staticmethod
+    def context_likely_needed(current_text: str) -> bool:
+        """Detect utterances where a literal stateless MT call is risky."""
+
+        text = " ".join(str(current_text or "").split()).strip()
+        if not text:
+            return False
+        if len(text) <= 18:
+            return True
+        lowered = text.lower()
+        markers = (
+            " he ", " she ", " it ", " they ", " them ", " this ", " that ",
+            "those", "these", "same one", "the other", "again", "too",
+            "but ", "and ", "so ", "then ", "because ",
+            "これ", "それ", "あれ", "さっき", "同じ", "もう一度", "でも", "だから",
+            "这个", "那个", "刚才", "同一个", "再来", "所以", "但是", "然后",
+            "그거", "이거", "아까", "같은", "다시", "그래서", "하지만",
+        )
+        padded = f" {lowered} "
+        return any(marker in padded for marker in markers)
+
+    def snapshot(
+        self,
+        *,
+        session_id: Hashable,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str,
+        current_text: str = "",
+        before_sequence: int | None = None,
+    ) -> tuple[tuple[str, str], ...]:
+        if current_text and not self.should_include_context(current_text):
+            return ()
+        key = self._key(session_id, src_lang, tgt_lang, context_source)
+        now = monotonic()
+        with self._lock:
+            turns = self._recent.get(key)
+            if turns:
+                self._prune(turns, now)
+                if not turns:
+                    self._recent.pop(key, None)
+
+            pending = self._pending_sources.get(key)
+            if pending:
+                cutoff = now - self._max_age_s
+                stale_sequences = [
+                    sequence
+                    for sequence, (timestamp, _text) in pending.items()
+                    if timestamp < cutoff
+                ]
+                for sequence in stale_sequences:
+                    pending.pop(sequence, None)
+                if not pending:
+                    self._pending_sources.pop(key, None)
+
+            entries: list[tuple[str, str]] = [
+                (source_text, translated_text)
+                for _timestamp, source_text, translated_text in (turns or ())
+            ]
+            if pending and before_sequence is not None:
+                committed_sources = {source for source, _translation in entries}
+                for sequence in sorted(pending):
+                    if sequence >= before_sequence:
+                        continue
+                    source_text = pending[sequence][1]
+                    if source_text not in committed_sources:
+                        entries.append((source_text, ""))
+            if not entries:
+                return ()
+            selected: list[tuple[str, str]] = []
+            used_chars = 0
+            for source_text, translated_text in reversed(entries):
+                turn_chars = len(source_text) + len(translated_text)
+                if selected and used_chars + turn_chars > self._max_text_chars:
+                    break
+                selected.append((source_text, translated_text))
+                used_chars += turn_chars
+            selected.reverse()
+            return tuple(selected)
+
+    def stage_source(
+        self,
+        *,
+        session_id: Hashable,
+        sequence: int,
+        text: str,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str,
+    ) -> None:
+        source_text = " ".join(str(text or "").split()).strip()
+        if not source_text:
+            return
+        key = self._key(session_id, src_lang, tgt_lang, context_source)
+        now = monotonic()
+        with self._lock:
+            pending = self._pending_sources.setdefault(key, {})
+            pending[int(sequence)] = (now, source_text)
+            if len(pending) > 64:
+                for stale_sequence in sorted(pending)[: len(pending) - 64]:
+                    pending.pop(stale_sequence, None)
+
+    def remember(
+        self,
+        *,
+        session_id: Hashable,
+        text: str,
+        translated: str,
+        src_lang: str,
+        tgt_lang: str,
+        context_source: str,
+        sequence: int | None = None,
+    ) -> None:
+        source_text = " ".join(str(text or "").split()).strip()
+        translated_text = " ".join(str(translated or "").split()).strip()
+        if not source_text or not translated_text:
+            return
+        key = self._key(session_id, src_lang, tgt_lang, context_source)
+        now = monotonic()
+        with self._lock:
+            if sequence is not None:
+                pending = self._pending_sources.get(key)
+                if pending is not None:
+                    pending.pop(int(sequence), None)
+                    if not pending:
+                        self._pending_sources.pop(key, None)
+            turns = self._recent.get(key)
+            if turns is None:
+                turns = deque(maxlen=self._max_turns)
+                self._recent[key] = turns
+            self._prune(turns, now)
+            if (
+                turns
+                and turns[-1][1] == source_text
+                and turns[-1][2] == translated_text
+            ):
+                turns[-1] = (now, source_text, translated_text)
+                return
+            turns.append((now, source_text, translated_text))
+
+    def discard_staged(
+        self,
+        *,
+        session_id: Hashable,
+        sequence: int,
+        context_source: str | None = None,
+    ) -> None:
+        normalized_source = (
+            str(context_source or "").strip() or None
+        )
+        with self._lock:
+            stale_keys = []
+            for key, pending in self._pending_sources.items():
+                if key[0] != session_id:
+                    continue
+                if normalized_source is not None and key[1] != normalized_source:
+                    continue
+                pending.pop(int(sequence), None)
+                if not pending:
+                    stale_keys.append(key)
+            for key in stale_keys:
+                self._pending_sources.pop(key, None)
+
+    def clear_source(self, *, session_id: Hashable, context_source: str) -> None:
+        normalized_source = str(context_source or "").strip() or "default"
+        with self._lock:
+            recent_keys = [
+                key
+                for key in self._recent
+                if key[0] == session_id and key[1] == normalized_source
+            ]
+            for key in recent_keys:
+                self._recent.pop(key, None)
+            pending_keys = [
+                key
+                for key in self._pending_sources
+                if key[0] == session_id and key[1] == normalized_source
+            ]
+            for key in pending_keys:
+                self._pending_sources.pop(key, None)
+
+    def clear_session(self, session_id: Hashable) -> None:
+        with self._lock:
+            stale = [key for key in self._recent if key[0] == session_id]
+            for key in stale:
+                self._recent.pop(key, None)
+            stale_pending = [
+                key for key in self._pending_sources if key[0] == session_id
+            ]
+            for key in stale_pending:
+                self._pending_sources.pop(key, None)
+
+
 class BaseTranslator(ABC):
     def __init__(
         self,
         cache_size: int = 256,
         prompt_profile: dict[str, object] | None = None,
+        context_store: TranslationContextStore | None = None,
     ):
         self._cache_size = max(int(cache_size), 0)
         self._cache: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
         self._cache_lock = Lock()
-        self._context_lock = Lock()
-        self._recent_context: dict[tuple[str, str, str], deque[tuple[float, str, str]]] = {}
+        self._context_store = context_store or TranslationContextStore()
         self._prompt_profile = prompt_profile or {}
+        self._resource_close_lock = Lock()
+        self._resources_closed = False
         self._prompt_signature = json.dumps(
             self._prompt_profile,
             ensure_ascii=False,
@@ -97,6 +420,53 @@ class BaseTranslator(ABC):
         context_source: str = "default",
     ) -> str:
         pass
+
+    def rewrite_asr(
+        self,
+        text: str,
+        style: str,
+        *,
+        language_hint: str = "auto",
+        context_source: str = "mic",
+    ) -> str:
+        """Rewrite an ASR utterance without translating it.
+
+        Literal machine-translation backends intentionally keep the default
+        implementation.  Generative providers override it, while the realtime
+        pipeline treats an unsupported rewrite as a fail-open style operation
+        and continues translating the original transcript.
+        """
+
+        del text, style, language_hint, context_source
+        raise NotImplementedError(
+            "The selected translation provider does not support ASR style rewriting"
+        )
+
+    def close(self) -> None:
+        """Close reusable HTTP/API clients owned by this translator."""
+
+        with self._resource_close_lock:
+            if self._resources_closed:
+                return
+            self._resources_closed = True
+            resources: list[object] = []
+            for attribute in ("_client", "_session"):
+                resource = getattr(self, attribute, None)
+                if resource is not None and all(
+                    resource is not existing for existing in resources
+                ):
+                    resources.append(resource)
+
+        with self._cache_lock:
+            self._cache.clear()
+        for resource in resources:
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    # Cleanup is best-effort and must not mask pipeline shutdown.
+                    pass
 
     def _normalize_language_code(self, code: str | None) -> str:
         normalized = str(code or "").strip().lower().replace("_", "-")
@@ -149,27 +519,22 @@ class BaseTranslator(ABC):
         if tgt == "zh":
             requirements.extend(
                 [
-                    "write in natural Mainland Simplified Chinese",
-                    "avoid Japanese or English word order and avoid translationese",
-                    "make omitted subjects, particles, and sentence endings sound natural in Chinese",
-                    "keep chatbox output concise while preserving the speaker's intent",
+                    "write concise, natural Mainland Simplified Chinese with idiomatic spoken Chinese flow",
+                    "avoid translationese and foreign word order; adapt omitted subjects, particles, and endings naturally",
                 ]
             )
         if src in {"", "auto", "ja"} and tgt == "zh":
             requirements.extend(
                 [
                     "when the source is Japanese, translate casual speech into idiomatic spoken Chinese instead of a literal gloss",
-                    "when the source is Japanese, adapt softeners, hesitation, jokes, and sentence-final nuance into Chinese conversational wording",
-                    "when the source is Japanese, do not leave honorific or keigo stiffness in Chinese unless it is semantically important",
+                    "adapt Japanese softeners, hesitation, jokes, sentence-final nuance, and politeness without leaving keigo stiffness",
                 ]
             )
         if tgt == "en":
             requirements.extend(
                 [
                     "write in natural conversational English, not literal subtitle English",
-                    "avoid Japanese, Chinese, or Korean word order and avoid translationese",
-                    "correct obvious ASR segmentation, homophone, or punctuation artifacts only when the intended meaning is clear",
-                    "use contractions and short everyday phrasing when it sounds natural, while preserving the speaker's tone",
+                    "avoid translationese and foreign word order; use contractions and short everyday phrasing when natural",
                 ]
             )
         if context_source == "listen":
@@ -189,17 +554,11 @@ class BaseTranslator(ABC):
         src = self._source_language_label(src_lang)
         tgt = self._language_name(tgt_lang)
         requirements = [
-            "sound natural and colloquial, as a real person would casually say it",
-            "prefer everyday spoken wording instead of stiff or bookish phrasing",
-            "preserve emotion, tone, humor, slang, and gaming or VR terms",
-            "prefer modern internet-native wording and community-standard names when appropriate",
-            "keep meaning accurate but prioritize natural flow over word-for-word literalness",
-            "correct obvious ASR mistakes only when the intended meaning is clear",
-            "preserve line breaks when the input contains multiple lines",
-            "use recent context only to disambiguate the current text when helpful",
-            "translate only the current text and do not repeat previous lines",
-            "do not add decorative quotes or extra punctuation",
-            "output only the translation",
+            "use natural colloquial speech, not stiff or word-for-word wording",
+            "preserve meaning, tone, humor, slang, names, and gaming or VR terms",
+            "correct obvious ASR mistakes only when clear and preserve line breaks",
+            "use context only to disambiguate the current text; never repeat prior lines",
+            "output only the translation without decorative quotes or extra punctuation",
         ]
         requirements.extend(
             self._direction_specific_requirements(
@@ -414,44 +773,37 @@ class BaseTranslator(ABC):
         )
         return self._normalize_cjk_spacing(cleaned)
 
-    def _context_key(
-        self,
-        src_lang: str,
-        tgt_lang: str,
-        context_source: str = "default",
-    ) -> tuple[str, str, str]:
-        return (
-            str(src_lang).strip(),
-            str(tgt_lang).strip(),
-            str(context_source or "").strip() or "default",
-        )
-
-    def _prune_context_queue(
-        self,
-        queue: deque[tuple[float, str, str]],
-        now: float | None = None,
-    ) -> None:
-        cutoff = (monotonic() if now is None else now) - _CONTEXT_MAX_AGE_S
-        while queue and queue[0][0] < cutoff:
-            queue.popleft()
+    def _finalize_asr_rewrite_output(self, text: str, *, source_text: str = "") -> str:
+        cleaned = " ".join(str(text or "").split()).strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(
+            r"^\s*(?:rewritten(?:\s+text)?|rewrite|改写(?:结果|文本)?|重写(?:结果|文本)?|"
+            r"書き換え(?:結果)?|リライト(?:結果)?|переписанный\s+текст|재작성(?:된)?\s*문장)"
+            r"\s*[:：]\s*",
+            "",
+            cleaned,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+        return self._finalize_translation_output(cleaned, source_text=source_text)
 
     def _context_snapshot(
         self,
         src_lang: str,
         tgt_lang: str,
         context_source: str = "default",
+        current_text: str = "",
     ) -> tuple[tuple[str, str], ...]:
-        key = self._context_key(src_lang, tgt_lang, context_source=context_source)
-        now = monotonic()
-        with self._context_lock:
-            queue = self._recent_context.get(key)
-            if not queue:
-                return ()
-            self._prune_context_queue(queue, now)
-            if not queue:
-                self._recent_context.pop(key, None)
-                return ()
-            return tuple((src, translated) for _, src, translated in queue)
+        active = _ACTIVE_TRANSLATION_CONTEXT.get()
+        return self._context_store.snapshot(
+            session_id=active.session_id,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            context_source=context_source,
+            current_text=current_text,
+            before_sequence=active.sequence,
+        )
 
     def _context_lines(self, context_snapshot: tuple[tuple[str, str], ...]) -> str:
         if not context_snapshot:
@@ -461,7 +813,10 @@ class BaseTranslator(ABC):
         ]
         for source_text, translated_text in context_snapshot:
             lines.append(f"- Source: {self._trim_context_text(source_text)}")
-            lines.append(f"  Translation: {self._trim_context_text(translated_text)}")
+            if translated_text:
+                lines.append(f"  Translation: {self._trim_context_text(translated_text)}")
+            else:
+                lines.append("  Translation: pending; use the source only for context")
         return "\n".join(lines) + "\n"
 
     def _remember_context_turn(
@@ -477,18 +832,17 @@ class BaseTranslator(ABC):
         if not source_text or not translated_text:
             return
 
-        key = self._context_key(src_lang, tgt_lang, context_source=context_source)
-        now = monotonic()
-        with self._context_lock:
-            queue = self._recent_context.get(key)
-            if queue is None:
-                queue = deque(maxlen=_CONTEXT_MAX_TURNS)
-                self._recent_context[key] = queue
-            self._prune_context_queue(queue, now)
-            if queue and queue[-1][1] == source_text and queue[-1][2] == translated_text:
-                queue[-1] = (now, source_text, translated_text)
-                return
-            queue.append((now, source_text, translated_text))
+        active = _ACTIVE_TRANSLATION_CONTEXT.get()
+        if not active.auto_commit:
+            return
+        self._context_store.remember(
+            session_id=active.session_id,
+            text=source_text,
+            translated=translated_text,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            context_source=context_source,
+        )
 
     def _get_cached_translation(
         self,

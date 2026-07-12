@@ -1,6 +1,13 @@
+import os
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
+from shiboken6 import delete as delete_qt_object
 
+from src.ui_qt import settings_window as settings_module
 from src.ui_qt.settings_window import (
     CapsuleSwitch,
     NAV_ITEMS,
@@ -26,6 +33,11 @@ from src.utils.ui_config import (
 class _DummyTTS:
     def get_available_voices(self):
         return []
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config_writes(monkeypatch):
+    monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
 
 
 @pytest.fixture
@@ -73,6 +85,32 @@ def _patch_dialog_deps(monkeypatch):
             "user_path": "D:/tmp/asr_terms.user.json",
         },
     )
+
+
+def test_loopback_choices_keep_available_cached_device_instead_of_missing(monkeypatch):
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    copies = {
+        "vrc_listen_device_default": "Default output device",
+        "vrc_listen_device_missing": "No output device detected",
+    }
+    dialog._copy = lambda key, **_kwargs: copies[key]
+    dialog._loopback_device_var = SimpleNamespace(value=lambda: "", set=lambda _value: None)
+    monkeypatch.setattr(
+        settings_module,
+        "_list_desktop_output_devices",
+        lambda: [
+            {
+                "index": 40,
+                "name": "Speakers (USB DAC)",
+                "is_default": True,
+                "backend": "cached",
+            }
+        ],
+    )
+
+    choices = dialog._loopback_device_choices()
+
+    assert choices == ["Default output device", "Speakers (USB DAC)"]
 
 
 def _select_settings_page(qtbot, dialog: SettingsWindow, page_id: str) -> None:
@@ -146,6 +184,21 @@ def test_settings_window_deferred_initial_page_builds_after_show(qtbot, config, 
     assert dialog._page_stack is not None
     assert dialog._page_stack.currentIndex() == 0
 
+    dialog.reject()
+
+
+def test_tts_voice_update_ignores_deleted_combo(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+    combo = dialog._tts_voice_combo
+    assert combo is not None
+
+    delete_qt_object(combo)
+    dialog._apply_tts_voices("edge", [])
+
+    assert dialog._tts_voice_combo is None
     dialog.reject()
 
 
@@ -279,9 +332,11 @@ def test_updates_page_lists_models_and_marks_downloaded_green(qtbot, config, mon
     assert "模型下载" in label_text
     assert "请按需求下载" in label_text
     assert "SenseVoice Small" in label_text
-    assert "Whisper Small" in label_text
+    assert "Whisper Small" not in label_text
     assert any(label.text() == "已下载" and label.objectName() == "successLabel" for label in labels)
-    assert any(button.text() == "下载模型" for button in page.findChildren(QPushButton))
+    buttons = page.findChildren(QPushButton)
+    assert not any(button.text() == "下载模型" for button in buttons)
+    assert any(button.text() == "已下载" and not button.isEnabled() for button in buttons)
 
     dialog.reject()
 
@@ -500,7 +555,7 @@ def test_deepseek_translation_region_controls_base_url_and_saves(qtbot, config, 
     dialog.reject()
 
 
-def test_asr_engine_lists_whisper_for_main_and_listen(qtbot, config, monkeypatch):
+def test_asr_engine_hides_legacy_whisper_for_main_and_listen(qtbot, config, monkeypatch):
     _patch_dialog_deps(monkeypatch)
     config["ui"]["language"] = "en"
 
@@ -510,10 +565,10 @@ def test_asr_engine_lists_whisper_for_main_and_listen(qtbot, config, monkeypatch
     main_options = {code: label for label, code in dialog._asr_engine_options()}
     listen_options = {code: label for label, code in dialog._listen_asr_engine_options()}
 
-    assert "whisper-large-v3-turbo" in main_options
-    assert "Whisper Small" in main_options["whisper-large-v3-turbo"]
-    assert "whisper-large-v3-turbo" in listen_options
-    assert "Whisper Small" in listen_options["whisper-large-v3-turbo"]
+    assert "whisper-large-v3-turbo" not in main_options
+    assert "whisper-large-v3-turbo" not in listen_options
+    assert "sensevoice-small" in main_options
+    assert "sensevoice-small" in listen_options
 
     dialog.reject()
 
@@ -760,7 +815,7 @@ def test_local_asr_gpu_device_option_keeps_cuda_and_prompts_when_cuda_missing(qt
         lambda self: shown.append(True),
     )
     config["asr"] = {
-        "engine": "whisper-large-v3-turbo",
+        "engine": "sensevoice-small",
         "device": "cpu",
     }
 
@@ -807,7 +862,7 @@ def test_local_asr_gpu_device_prompts_when_cuda_pytorch_installed_but_not_active
         lambda self: shown.append(True),
     )
     config["asr"] = {
-        "engine": "whisper-large-v3-turbo",
+        "engine": "sensevoice-small",
         "device": "cpu",
     }
 
@@ -1290,6 +1345,72 @@ def test_tts_test_button_disables_until_callback(qtbot, config, monkeypatch):
     assert test_btn.isEnabled() is True
 
 
+def test_tts_test_uses_mixline_output_route_when_vrchat_output_enabled(qtbot, config, monkeypatch):
+    captured_kwargs: list[dict] = []
+    voice_id = "ja-JP-NanamiNeural"
+
+    class FakeTTS:
+        def get_available_voices(self):
+            class Voice:
+                id = voice_id
+                name = "Nanami"
+
+            return [Voice()]
+
+    class FakeTTSManager:
+        def __init__(self, *args, **kwargs):
+            captured_kwargs.append(kwargs)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            pass
+
+        def speak(self, _text, voice, rate=1.0, volume=1.0, callback=None):
+            del voice, rate, volume
+            if callback is not None:
+                callback(True, "")
+            return True
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.create_tts_engine", lambda _engine: FakeTTS())
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.find_best_virtual_output_device",
+        lambda: (12, "Speakers (MIXLINE Stream)"),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.resolve_output_device",
+        lambda device_id, device_name, *, prefer_virtual=False: (
+            device_id,
+            device_name,
+        )
+        if prefer_virtual and device_id is not None
+        else None,
+    )
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FakeTTSManager)
+    config["tts"] = {
+        "enabled": True,
+        "engine": "edge",
+        "output_to_vrchat": True,
+        "monitor_enabled": True,
+        "edge": {"voice": voice_id, "rate": 1.0, "volume": 0.8},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == voice_id, timeout=2000)
+
+    dialog._on_tts_test()
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["output_device"] == 12
+    assert captured_kwargs[0]["output_device_name"] == "Speakers (MIXLINE Stream)"
+    assert captured_kwargs[0]["prefer_virtual_output"] is True
+    assert captured_kwargs[0]["monitor_output"] is True
+
+
 def test_tts_test_button_recovers_on_timeout(qtbot, config, monkeypatch):
     class FakeTTS:
         def get_available_voices(self):
@@ -1738,6 +1859,7 @@ def test_xtts_auto_test_language_uses_translation_target(qtbot, config, monkeypa
 
 def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config, monkeypatch):
     warnings: list[tuple[str, str]] = []
+    opened_repairs: list[str] = []
 
     class FakeVoice:
         id = "sample"
@@ -1766,6 +1888,10 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
         "src.ui_qt.settings_window.QMessageBox.warning",
         lambda _parent, title, message: warnings.append((title, message)),
     )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_xtts_runtime_repair",
+        lambda self, detail=None: opened_repairs.append(str(detail or "")),
+    )
     config["tts"] = {
         "enabled": True,
         "engine": "xtts",
@@ -1781,13 +1907,152 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
     dialog._on_tts_test()
 
     assert dialog._tts_testing is False
-    assert warnings == [
-        (dialog._copy("tts_test"), dialog._copy("xtts_runtime_missing_details", components="Coqui TTS runtime"))
-    ]
+    assert warnings == []
+    assert len(opened_repairs) == 1
+    assert "Coqui TTS runtime" in opened_repairs[0]
+
+
+def test_xtts_runtime_repair_opens_full_installer_update_window(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    opened: list[tuple[object, UpdateInfo, str]] = []
+    info = UpdateInfo(
+        version="v1.3.7.8",
+        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        sha256="a" * 64,
+    )
+
+    class FakeUpdateWindow:
+        def __init__(self, parent, update_info, ui_lang):
+            opened.append((parent, update_info, ui_lang))
+
+        def show(self):
+            pass
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+    def fake_fetch(on_installer_available, **kwargs):
+        assert kwargs["max_retries"] == 2
+        assert kwargs["retry_delays"] == (2,)
+        on_installer_available(info)
+        return None
+
+    monkeypatch.setattr("src.ui_qt.settings_window.fetch_latest_installer_info", fake_fetch)
+    monkeypatch.setattr("src.ui_qt.update_window.UpdateWindow", FakeUpdateWindow)
+    config["tts"] = {"enabled": True, "engine": "xtts", "xtts": {"voice": "sample"}}
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+
+    dialog._open_xtts_runtime_repair("No module named 'sklearn'")
+    qtbot.waitUntil(lambda: bool(opened), timeout=2000)
+
+    assert opened[0][1].version == "v1.3.7.8"
+    assert opened[0][1].flow == "repair"
+    assert opened[0][2] == "zh-CN"
+    assert "sklearn" in opened[0][1].localized_notes["zh-cn"]
+
+
+def test_xtts_test_unavailable_engine_opens_runtime_repair(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+    opened_repairs: list[str] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class UnavailableTTSManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def is_available(self):
+            return False
+
+        def stop_playback(self):
+            pass
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", UnavailableTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_xtts_runtime_repair",
+        lambda self, detail=None: opened_repairs.append(str(detail or "")),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "sample", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._on_tts_test()
+
+    assert warnings == []
+    assert len(opened_repairs) == 1
+
+
+def test_xtts_test_runtime_exception_opens_repair(qtbot, config, monkeypatch):
+    warnings: list[tuple[str, str]] = []
+    opened_repairs: list[str] = []
+
+    class FakeVoice:
+        id = "sample"
+        name = "Sample Voice"
+
+    class FailingTTSManager:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'sklearn'")
+
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
+    monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: object())
+    monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
+    monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.QMessageBox.warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._open_xtts_runtime_repair",
+        lambda self, detail=None: opened_repairs.append(str(detail or "")),
+    )
+    config["tts"] = {
+        "enabled": True,
+        "engine": "xtts",
+        "xtts": {"voice": "sample", "rate": 1.0, "volume": 0.8, "device": "cpu", "language": "auto"},
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "tts")
+    qtbot.waitUntil(lambda: dialog._selected_tts_voice_id() == "sample", timeout=2000)
+
+    dialog._on_tts_test()
+
+    assert warnings == []
+    assert len(opened_repairs) == 1
+    assert "sklearn" in opened_repairs[0]
 
 
 def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, monkeypatch):
     warnings: list[tuple[str, str]] = []
+    opened_downloads: list[bool] = []
 
     class FakeVoice:
         id = "sample"
@@ -1806,6 +2071,10 @@ def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, 
         "src.ui_qt.settings_window.QMessageBox.warning",
         lambda _parent, title, message: warnings.append((title, message)),
     )
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.SettingsWindow._on_download_xtts_models",
+        lambda self: opened_downloads.append(True),
+    )
     config["tts"] = {
         "enabled": True,
         "engine": "xtts",
@@ -1821,7 +2090,8 @@ def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, 
     dialog._on_tts_test()
 
     assert dialog._tts_testing is False
-    assert warnings == [(dialog._copy("tts_test"), dialog._copy("xtts_model_missing"))]
+    assert warnings == []
+    assert opened_downloads == [True]
 
 
 def test_xtts_test_reports_missing_reference_before_creating_manager(qtbot, config, monkeypatch):
@@ -1964,3 +2234,281 @@ def test_xtts_cuda_dropdown_keeps_cuda_when_runtime_available(qtbot, config, mon
     assert config["tts"]["xtts"]["device"] == "cuda"
     assert config["xtts_device"] == "cuda"
     assert messages == [(dialog._copy("notice"), dialog._copy("xtts_device_change_notice"))]
+
+
+
+def _make_settings_directory_link(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return
+    except (OSError, NotImplementedError):
+        if os.name != "nt":
+            pytest.skip("directory symlink creation is unavailable")
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.skip("directory symlink and junction creation are unavailable")
+
+
+def _remove_settings_directory_link(link: Path) -> None:
+    if not os.path.lexists(link):
+        return
+    if os.name == "nt" and not link.is_symlink():
+        os.rmdir(link)
+    else:
+        link.unlink()
+
+
+def _prepare_background_failure_dialog(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog._background_image_path = "existing-background.png"
+    dialog._bg_path_label.setText("existing label")
+    config.setdefault("ui", {})["background_image_path"] = "existing-config.png"
+    messages: list[str] = []
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "critical",
+        lambda _parent, _title, message: messages.append(str(message)),
+    )
+    return dialog, messages
+
+
+def _assert_background_failure_state(dialog, config, messages):
+    assert messages
+    assert dialog._background_image_path == "existing-background.png"
+    assert dialog._bg_path_label.text() == "existing label"
+    assert config["ui"]["background_image_path"] == "existing-config.png"
+
+
+def test_background_import_rejects_invalid_suffix_without_changing_state(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "background.txt"
+    source.write_bytes(b"not an image")
+    dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source), ""),
+    )
+
+    dialog._on_browse_background()
+
+    _assert_background_failure_state(dialog, config, messages)
+    assert "Unsupported background image file type" in messages[0]
+
+
+def test_background_import_rejects_oversized_source_without_changing_state(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "background.png"
+    source.write_bytes(b"12345")
+    destination = tmp_path / "backgrounds"
+    destination.mkdir()
+    dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
+    monkeypatch.setattr(settings_module, "_MAX_BACKGROUND_IMAGE_BYTES", 4)
+    monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source), ""),
+    )
+
+    dialog._on_browse_background()
+
+    _assert_background_failure_state(dialog, config, messages)
+    assert list(destination.iterdir()) == []
+
+
+def test_background_import_rejects_symlink_source_without_changing_state(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    original = tmp_path / "original.png"
+    original.write_bytes(b"image")
+    source = tmp_path / "linked.png"
+    try:
+        os.symlink(original, source)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlink creation is unavailable")
+    destination = tmp_path / "backgrounds"
+    destination.mkdir()
+    dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
+    monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source), ""),
+    )
+
+    dialog._on_browse_background()
+
+    _assert_background_failure_state(dialog, config, messages)
+    assert list(destination.iterdir()) == []
+
+
+def test_background_import_rejects_hardlink_source_without_changing_state(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    original = tmp_path / "original.png"
+    original.write_bytes(b"image")
+    source = tmp_path / "hardlinked.png"
+    try:
+        os.link(original, source)
+    except (OSError, NotImplementedError):
+        pytest.skip("hard-link creation is unavailable")
+    destination = tmp_path / "backgrounds"
+    destination.mkdir()
+    dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
+    monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source), ""),
+    )
+
+    dialog._on_browse_background()
+
+    _assert_background_failure_state(dialog, config, messages)
+    assert list(destination.iterdir()) == []
+
+
+def test_background_import_rejects_redirected_destination_without_changing_state(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "background.png"
+    source.write_bytes(b"image")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    redirected = tmp_path / "redirected-backgrounds"
+    _make_settings_directory_link(redirected, outside)
+    dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
+    monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: redirected)
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(source), ""),
+    )
+
+    try:
+        dialog._on_browse_background()
+
+        _assert_background_failure_state(dialog, config, messages)
+        assert list(outside.iterdir()) == []
+    finally:
+        _remove_settings_directory_link(redirected)
+
+
+def _prepare_xtts_recording_dialog(qtbot, config, monkeypatch, ref_dir: Path):
+    _patch_dialog_deps(monkeypatch)
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings_module, "xtts_reference_audio_dir", lambda: ref_dir)
+    monkeypatch.setattr(settings_module.QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(settings_module.QMessageBox, "critical", lambda *_args: None)
+    monkeypatch.setattr(dialog, "_load_tts_voices", lambda: None)
+    return dialog
+
+
+def test_xtts_recordings_use_unique_private_temporary_paths(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    ref_dir = tmp_path / "references"
+    dialog = _prepare_xtts_recording_dialog(qtbot, config, monkeypatch, ref_dir)
+    temporary_paths: list[Path] = []
+
+    def fake_normalize(source, output):
+        source_path = Path(source)
+        temporary_paths.append(source_path)
+        assert source_path.exists()
+        Path(output).write_bytes(b"normalized")
+
+    monkeypatch.setattr(
+        settings_module,
+        "normalize_xtts_reference_audio_file",
+        fake_normalize,
+    )
+
+    dialog._on_voice_recorded_for_xtts(b"first", "My Voice")
+    dialog._on_voice_recorded_for_xtts(b"second", "My Voice")
+
+    assert len(temporary_paths) == 2
+    assert temporary_paths[0] != temporary_paths[1]
+    assert all(not path.exists() for path in temporary_paths)
+    assert (ref_dir / "My Voice.wav").read_bytes() == b"normalized"
+
+
+def test_xtts_recording_rejects_oversized_payload_before_creating_temp_file(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    ref_dir = tmp_path / "references"
+    dialog = _prepare_xtts_recording_dialog(qtbot, config, monkeypatch, ref_dir)
+    monkeypatch.setattr(settings_module, "_MAX_XTTS_RECORDED_AUDIO_BYTES", 3)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        settings_module,
+        "normalize_xtts_reference_audio_file",
+        lambda *_args, **_kwargs: calls.append(object()),
+    )
+
+    dialog._on_voice_recorded_for_xtts(b"four", "My Voice")
+
+    assert calls == []
+    assert list(ref_dir.iterdir()) == []
+
+
+def test_xtts_recording_cleanup_refuses_replaced_temporary_path(
+    qtbot,
+    config,
+    monkeypatch,
+    tmp_path,
+):
+    ref_dir = tmp_path / "references"
+    dialog = _prepare_xtts_recording_dialog(qtbot, config, monkeypatch, ref_dir)
+    replaced_paths: list[Path] = []
+
+    def replace_temporary_path(source, output):
+        source_path = Path(source)
+        source_path.unlink()
+        source_path.write_bytes(b"replacement")
+        replaced_paths.append(source_path)
+        Path(output).write_bytes(b"normalized")
+
+    monkeypatch.setattr(
+        settings_module,
+        "normalize_xtts_reference_audio_file",
+        replace_temporary_path,
+    )
+
+    dialog._on_voice_recorded_for_xtts(b"recording", "My Voice")
+
+    assert len(replaced_paths) == 1
+    assert replaced_paths[0].read_bytes() == b"replacement"
+    replaced_paths[0].unlink()

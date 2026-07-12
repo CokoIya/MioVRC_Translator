@@ -4,37 +4,35 @@ import os
 import logging
 import time
 
-from .base import BaseTranslator, _TRANSLATION_SYSTEM_PROMPT
+from .base import (
+    BaseTranslator,
+    TranslationContextStore,
+    _TRANSLATION_SYSTEM_PROMPT,
+)
+from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
+from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
 
 _QWEN_COLLOQUIAL_SYSTEM_ADDON = (
-    "Qwen style calibration: be especially careful to avoid literal, machine-translation wording. "
-    "Make the result sound like a normal line in live VRChat conversation, not a subtitle, essay, or dictionary gloss. "
-    "Keep it short, fluent, and natural while preserving meaning."
+    "Qwen style calibration: use brief, fluent, natural live-VRChat speech; "
+    "avoid literal machine translation, subtitle, essay, or dictionary wording."
 )
 _QWEN_ZH_COLLOQUIAL_GUIDE = (
     "Qwen colloquial Chinese guide:\n"
-    "- 目标是中国大陆日常聊天口吻，像真人顺嘴说出来的话。\n"
-    "- 少用“我认为、由于、因此、进行、是否能够、非常感谢你”等书面表达，除非原文真的很正式。\n"
-    "- 日语的语气词、犹豫、撒娇、吐槽、委婉说法，要转成中文里自然的语气，不要照着词序硬翻。\n"
-    "- 可自然使用“有点、挺、吧、嘛、啦、诶、救命、笑死、懂了、可以啊、没事没事”等口语词；不要硬塞网络梗。\n"
-    "- 示例风格：今日はちょっと眠いかも -> 今天有点困了；助かった -> 帮大忙了；行けたら行く -> 有空我就去。"
+    "- 目标是中国大陆日常聊天口吻；避免书面腔和照词序硬翻，自然转换日语语气与委婉表达。\n"
+    "- 示例：今日はちょっと眠いかも -> 今天有点困了。"
 )
 _QWEN_JA_COLLOQUIAL_GUIDE = (
     "Qwen colloquial Japanese guide:\n"
-    "- Target Japanese should sound like natural spoken Japanese in a casual VRChat conversation.\n"
-    "- Prefer short conversational phrasing over textbook translations.\n"
-    "- Use casual particles and sentence endings when appropriate, but do not overdo anime-like speech unless the source has that flavor.\n"
-    "- Preserve politeness if the source is clearly polite."
+    "- Use short, natural spoken Japanese for casual VRChat conversation, not textbook phrasing.\n"
+    "- Preserve politeness; avoid exaggerated anime speech unless present in the source."
 )
 _QWEN_EN_COLLOQUIAL_GUIDE = (
     "Qwen colloquial English guide:\n"
-    "- Target English should sound like a natural spoken line in a casual VRChat conversation.\n"
-    "- Avoid direct calques from Japanese, Chinese, or Korean word order.\n"
-    "- Correct obvious ASR wording or punctuation artifacts only when the intended meaning is clear.\n"
-    "- Prefer short everyday phrasing and contractions when they fit, while preserving tone."
+    "- Use a natural spoken line with short everyday phrasing and contractions when appropriate.\n"
+    "- Avoid direct calques from Japanese, Chinese, or Korean; preserve tone and fix only clear ASR artifacts."
 )
 
 
@@ -50,32 +48,44 @@ class OpenAITranslator(BaseTranslator):
         extra_body: dict | None = None,
         prefer_max_completion_tokens: bool = False,
         prompt_profile: dict[str, object] | None = None,
+        context_store: TranslationContextStore | None = None,
+        provider_id: str = "",
+        allow_private_http: bool = False,
     ):
-        super().__init__(prompt_profile=prompt_profile)
+        super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("openai 未安装，请先执行: pip install openai")
 
+        validated_base_url = validate_api_base_url(
+            base_url,
+            label="Translation API",
+            allow_private_http=allow_private_http,
+        )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
         self._client = OpenAI(
             api_key=api_key,
-            base_url=base_url,
+            base_url=validated_base_url,
             timeout=self._timeout_s,
             max_retries=self._max_retries,
         )
         self.model = model
-        self._base_url = str(base_url or "").strip().lower()
+        self._provider_id = str(provider_id or "").strip().lower()
+        self._base_url = validated_base_url.lower()
         model_name = str(model).lower()
         self._is_openai_api = "api.openai.com" in self._base_url
         self._is_reasoning_model = (
-            model_name.startswith("gpt-5")
-            or "reasoner" in model_name
+            "reasoner" in model_name
+            or "reasoning" in model_name
             or "thinking" in model_name
         )
         self._uses_max_completion_tokens = (
-            (self._is_openai_api and model_name.startswith("gpt-5"))
+            (
+                (self._is_openai_api or self._provider_id == "openai_compatible")
+                and model_name.startswith("gpt-5")
+            )
             or bool(prefer_max_completion_tokens)
             or model_name.startswith("mimo-")
         )
@@ -94,31 +104,38 @@ class OpenAITranslator(BaseTranslator):
         )
         self._omits_temperature = (
             ("api.deepseek.com" in self._base_url and model_name == "deepseek-reasoner")
+            or (self._is_openai_api and model_name.startswith("gpt-5"))
             or self._use_responses_api
         )
-        min_output_tokens = 512 if self._is_reasoning_model else 48
-        self._max_output_tokens = max(int(max_output_tokens), min_output_tokens)
+        self._max_output_tokens = max(int(max_output_tokens), 32)
+        self._managed_no_thinking_extra_keys: set[str] = set()
+        self._no_thinking_request_supported = True
         self._extra_body = self._translation_extra_body(extra_body or {}, model_name)
         self._last_response_summary = ""
 
     def _translation_extra_body(self, extra_body: dict, model_name: str) -> dict:
         body = dict(extra_body)
         if (
-            "api.deepseek.com" in self._base_url
-            and model_name.startswith("deepseek-v4-")
-            and "thinking" not in body
+            self._provider_id in {"qianwen", "hunyuan"}
+            or "dashscope" in self._base_url
+        ) and not model_name.startswith("qwen-mt-"):
+            body["enable_thinking"] = False
+            self._managed_no_thinking_extra_keys.add("enable_thinking")
+        if (
+            self._provider_id
+            in {"deepseek", "xiaomi", "zhipu", "kimi", "doubao"}
+            or "api.deepseek.com" in self._base_url
+            or "api.moonshot.cn" in self._base_url
+            or "open.bigmodel.cn" in self._base_url
         ):
-            # DeepSeek V4 enables thinking mode by default. Live translation
-            # needs the final text quickly, and short max_tokens budgets can
-            # otherwise be consumed by reasoning_content while content stays
-            # empty.
             body["thinking"] = {"type": "disabled"}
+            self._managed_no_thinking_extra_keys.add("thinking")
         return body
 
     def _estimate_max_tokens(self, text: str) -> int:
         compact = "".join(str(text or "").split())
         if not compact:
-            return min(self._max_output_tokens, 48)
+            return min(self._max_output_tokens, 32)
 
         cjk_chars = sum(
             1
@@ -131,10 +148,150 @@ class OpenAITranslator(BaseTranslator):
             )
         )
         other_chars = max(len(compact) - cjk_chars, 0)
-        estimated = cjk_chars + ((other_chars + 2) // 3) + 24
-        if self._is_reasoning_model:
-            return max(256, min(self._max_output_tokens, estimated + 160))
-        return max(48, min(self._max_output_tokens, estimated))
+        estimated = cjk_chars + ((other_chars + 2) // 3) + 18
+        return max(32, min(self._max_output_tokens, estimated))
+
+    def _uses_reasoning_effort_control(self) -> bool:
+        model_name = str(self.model or "").strip().lower()
+        if model_name.startswith("gpt-5"):
+            return bool(getattr(self, "_is_openai_api", False)) or (
+                getattr(self, "_provider_id", "") == "openai_compatible"
+            )
+        provider = getattr(self, "_provider_id", "")
+        if provider == "gemini":
+            return True
+        return provider == "xai" and (
+            "reason" in model_name or "thinking" in model_name
+        )
+
+    def _request_extra_body(self) -> dict:
+        body = dict(getattr(self, "_extra_body", {}) or {})
+        if not getattr(self, "_no_thinking_request_supported", True):
+            for key in getattr(self, "_managed_no_thinking_extra_keys", set()):
+                body.pop(key, None)
+        return body
+
+    @staticmethod
+    def _unsupported_request_parameter(
+        exc: Exception,
+        fields: tuple[str, ...],
+    ) -> bool:
+        message = str(exc or "").strip().lower()
+        if not message:
+            return False
+        mentions_control = any(field in message for field in fields)
+        unsupported = any(
+            marker in message
+            for marker in (
+                "unsupported",
+                "unknown",
+                "unrecognized",
+                "not permitted",
+                "not allowed",
+                "extra_forbidden",
+                "unexpected",
+                "invalid parameter",
+            )
+        )
+        return mentions_control and unsupported
+
+    @staticmethod
+    def _unsupported_no_thinking_control(exc: Exception) -> bool:
+        return OpenAITranslator._unsupported_request_parameter(
+            exc,
+            ("reasoning_effort", "enable_thinking", "thinking"),
+        )
+
+    def _without_no_thinking_controls(self, kwargs: dict) -> dict:
+        fallback = dict(kwargs)
+        fallback.pop("reasoning_effort", None)
+        fallback.pop("reasoning", None)
+        extra_body = fallback.get("extra_body")
+        if isinstance(extra_body, dict):
+            cleaned = dict(extra_body)
+            for key in getattr(self, "_managed_no_thinking_extra_keys", set()):
+                cleaned.pop(key, None)
+            if cleaned:
+                fallback["extra_body"] = cleaned
+            else:
+                fallback.pop("extra_body", None)
+        return fallback
+
+    def _create_with_control_fallback(self, create, kwargs: dict):
+        current = dict(kwargs)
+        removed_no_thinking = False
+        swapped_token_parameter = False
+        for _attempt in range(3):
+            try:
+                return create(**current)
+            except Exception as exc:
+                extra_body = current.get("extra_body")
+                extra_keys = (
+                    extra_body.keys() if isinstance(extra_body, dict) else ()
+                )
+                has_no_thinking_control = bool(
+                    "reasoning_effort" in current
+                    or "reasoning" in current
+                    or getattr(
+                        self,
+                        "_managed_no_thinking_extra_keys",
+                        set(),
+                    ).intersection(extra_keys)
+                )
+                if (
+                    not removed_no_thinking
+                    and has_no_thinking_control
+                    and self._unsupported_no_thinking_control(exc)
+                ):
+                    removed_no_thinking = True
+                    self._no_thinking_request_supported = False
+                    current = self._without_no_thinking_controls(current)
+                    logger.warning(
+                        "Translation provider rejected no-thinking controls; retrying "
+                        "without unsupported fields (model=%s base_url=%s)",
+                        self.model,
+                        self._base_url,
+                    )
+                    continue
+
+                token_parameter = next(
+                    (
+                        field
+                        for field in ("max_completion_tokens", "max_tokens")
+                        if field in current and field in str(exc or "").lower()
+                    ),
+                    "",
+                )
+                if (
+                    not swapped_token_parameter
+                    and token_parameter
+                    and self._unsupported_request_parameter(
+                        exc,
+                        (token_parameter,),
+                    )
+                ):
+                    swapped_token_parameter = True
+                    replacement = (
+                        "max_tokens"
+                        if token_parameter == "max_completion_tokens"
+                        else "max_completion_tokens"
+                    )
+                    current = dict(current)
+                    current[replacement] = current.pop(token_parameter)
+                    self._uses_max_completion_tokens = (
+                        replacement == "max_completion_tokens"
+                    )
+                    logger.warning(
+                        "Translation provider rejected %s; retrying with %s "
+                        "(model=%s base_url=%s)",
+                        token_parameter,
+                        replacement,
+                        self.model,
+                        self._base_url,
+                    )
+                    continue
+                raise
+        raise RuntimeError("Translation request compatibility retry limit exceeded")
 
     def translate(
         self,
@@ -155,7 +312,17 @@ class OpenAITranslator(BaseTranslator):
             src_lang,
             tgt_lang,
             context_source=context_source,
+            current_text=text,
         )
+        if (
+            self._uses_qwen_mt_translation_options
+            and context_snapshot
+            and not TranslationContextStore.context_likely_needed(text)
+        ):
+            # Preserve the low-latency Qwen-MT endpoint for standalone lines;
+            # switch to the contextual prompt only for likely references or
+            # sentence fragments.
+            context_snapshot = ()
         cached = self._get_cached_translation(
             text,
             src_lang,
@@ -207,6 +374,122 @@ class OpenAITranslator(BaseTranslator):
         )
         return translated
 
+    def rewrite_asr(
+        self,
+        text: str,
+        style: str,
+        *,
+        language_hint: str = "auto",
+        context_source: str = "mic",
+    ) -> str:
+        try:
+            text = validate_translation_text(text)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid ASR rewrite input: {exc}") from exc
+
+        normalized_style = normalize_asr_rewrite_style(style)
+        if normalized_style == "off":
+            return text
+        cache_source = f"rewrite:{normalized_style}"
+        cached = self._get_cached_translation(
+            text,
+            cache_source,
+            str(language_hint or "auto"),
+            self.model,
+            context_source=f"asr_rewrite:{context_source}",
+        )
+        if cached is not None:
+            return cached
+
+        messages = build_asr_rewrite_messages(
+            text,
+            normalized_style,
+            language_hint=language_hint,
+        )
+        messages = self._chat_messages_for_backend(messages)
+        output_tokens = min(
+            self._max_output_tokens,
+            max(48, self._estimate_max_tokens(text) * 2),
+        )
+        self._last_response_summary = ""
+        if self._use_responses_api:
+            prompt = "\n\n".join(
+                str(message.get("content", "")) for message in messages
+            )
+            kwargs = {
+                "model": self.model,
+                "input": prompt,
+                "max_output_tokens": output_tokens,
+            }
+            request_timeout = getattr(self, "_timeout_s", None)
+            if request_timeout:
+                kwargs["timeout"] = request_timeout
+            if not self._omits_temperature:
+                kwargs["temperature"] = 0.2
+            if (
+                getattr(self, "_no_thinking_request_supported", True)
+                and self._uses_reasoning_effort_control()
+            ):
+                kwargs["reasoning"] = {"effort": "none"}
+            extra_body = self._request_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            response = self._create_with_control_fallback(
+                self._client.responses.create,
+                kwargs,
+            )
+            output = str(getattr(response, "output_text", "") or "")
+        else:
+            kwargs = {
+                "model": self.model,
+                "messages": messages,
+            }
+            request_timeout = getattr(self, "_timeout_s", None)
+            if request_timeout:
+                kwargs["timeout"] = request_timeout
+            if not self._omits_temperature:
+                kwargs["temperature"] = 0.2
+            if self._uses_max_completion_tokens:
+                kwargs["max_completion_tokens"] = output_tokens
+            else:
+                kwargs["max_tokens"] = output_tokens
+            if (
+                getattr(self, "_no_thinking_request_supported", True)
+                and self._uses_reasoning_effort_control()
+            ):
+                kwargs["reasoning_effort"] = "none"
+            extra_body = self._request_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            response = self._create_with_control_fallback(
+                self._client.chat.completions.create,
+                kwargs,
+            )
+            output = self._chat_completion_output_text(response)
+
+        rewritten = self._finalize_asr_rewrite_output(
+            output,
+            source_text=text,
+        )
+        if not rewritten:
+            self._last_response_summary = self._response_debug_summary(response)
+            raise RuntimeError(
+                "ASR rewrite API returned an empty response"
+                + (
+                    f" ({self._last_response_summary})"
+                    if self._last_response_summary
+                    else ""
+                )
+            )
+        return self._store_cached_translation(
+            text,
+            cache_source,
+            str(language_hint or "auto"),
+            self.model,
+            rewritten,
+            context_source=f"asr_rewrite:{context_source}",
+        )
+
     def _translate_with_chat_completions(
         self,
         text: str,
@@ -215,12 +498,14 @@ class OpenAITranslator(BaseTranslator):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
         context_source: str = "default",
     ) -> str:
-        extra_body = dict(self._extra_body)
+        extra_body = self._request_extra_body()
         uses_translation_options = self._should_use_qwen_mt_translation_options(
             src_lang,
             tgt_lang,
             context_source=context_source,
         )
+        if context_snapshot and TranslationContextStore.context_likely_needed(text):
+            uses_translation_options = False
         if uses_translation_options:
             extra_body["translation_options"] = {
                 "source_lang": self._translation_option_language(src_lang),
@@ -262,12 +547,21 @@ class OpenAITranslator(BaseTranslator):
                 kwargs["max_completion_tokens"] = output_tokens
             else:
                 kwargs["max_tokens"] = output_tokens
+        if (
+            not uses_translation_options
+            and getattr(self, "_no_thinking_request_supported", True)
+            and self._uses_reasoning_effort_control()
+        ):
+            kwargs["reasoning_effort"] = "none"
         if extra_body:
             kwargs["extra_body"] = extra_body
 
         started = time.perf_counter()
         try:
-            response = self._client.chat.completions.create(**kwargs)
+            response = self._create_with_control_fallback(
+                self._client.chat.completions.create,
+                kwargs,
+            )
         except Exception as exc:
             elapsed = time.perf_counter() - started
             logger.warning(
@@ -384,12 +678,22 @@ class OpenAITranslator(BaseTranslator):
             kwargs["timeout"] = request_timeout
         if not self._omits_temperature:
             kwargs["temperature"] = 0.0
-        if self._extra_body:
-            kwargs["extra_body"] = self._extra_body
+        if getattr(
+            self,
+            "_no_thinking_request_supported",
+            True,
+        ) and self._uses_reasoning_effort_control():
+            kwargs["reasoning"] = {"effort": "none"}
+        extra_body = self._request_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         started = time.perf_counter()
         try:
-            response = self._client.responses.create(**kwargs)
+            response = self._create_with_control_fallback(
+                self._client.responses.create,
+                kwargs,
+            )
         except Exception as exc:
             elapsed = time.perf_counter() - started
             logger.warning(

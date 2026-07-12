@@ -36,6 +36,8 @@ src/audio/models/
 *.jit
 *.model
 upload_release.py
+selftest-frozen.stdout.txt
+selftest-frozen.stderr.txt
 
 .wrangler/
 .claude/

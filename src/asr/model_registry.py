@@ -7,6 +7,8 @@ from src.utils.ui_config import DEFAULT_ASR_ENGINE
 WHISPER_ASR_LEGACY_DEFAULT_MODELS = frozenset({"iic/Whisper-large-v3-turbo"})
 WHISPER_ASR_DEFAULT_MODEL = "iic/speech_whisper-small_asr_english"
 WHISPER_ASR_DEFAULT_REVISION = "master"
+SENSEVOICE_DEFAULT_MODEL = "iic/SenseVoiceSmall"
+SENSEVOICE_DEFAULT_REVISION = "70514a3da51f1160f51d18449dab6128bbd4928b"
 QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash-2026-02-10"
 QWEN3_ASR_MODEL_CHOICES = (
     QWEN3_ASR_DEFAULT_MODEL,
@@ -30,7 +32,6 @@ QWEN3_ASR_LEGACY_MODEL_IDS = frozenset(
     {
         "qwen3-asr-0.6b",
         "qwen3-asr-1.7b",
-        "qwen3-asr-flash",
     }
 )
 ASR_ENGINE_FOLLOW_MAIN = "same_as_main"
@@ -54,16 +55,34 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
         engine="sensevoice-small",
         label="SenseVoice Small",
         config_key="sensevoice",
-        model_id="iic/SenseVoiceSmall",
-        model_revision="master",
+        model_id=SENSEVOICE_DEFAULT_MODEL,
+        model_revision=SENSEVOICE_DEFAULT_REVISION,
         requires_local_model=True,
         bundled_dir_names=("sensevoice-small",),
         required_files=(
-            "model.pt",
-            "chn_jpn_yue_eng_ko_spectok.bpe.model",
             "am.mvn",
+            "chn_jpn_yue_eng_ko_spectok.bpe.model",
+            "config.yaml",
+            "configuration.json",
+            "model.pt",
         ),
         required_file_sha256=(
+            (
+                "am.mvn",
+                "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+            ),
+            (
+                "chn_jpn_yue_eng_ko_spectok.bpe.model",
+                "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
+            ),
+            (
+                "config.yaml",
+                "f71e239ba36705564b5bf2d2ffd07eece07b8e3f2bbf6d2c99d8df856339ac19",
+            ),
+            (
+                "configuration.json",
+                "02810a7f8e9e8aee10370a265f7e799728ce25b4c00cdbf4602b303ee395a38e",
+            ),
             (
                 "model.pt",
                 "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
@@ -110,7 +129,6 @@ USER_SELECTABLE_ASR_ENGINES = (
     "webspeech",
     "qwen3-asr",
     "gemini-live",
-    "whisper-large-v3-turbo",
     "sensevoice-small",
 )
 LISTEN_SELECTABLE_ASR_ENGINES = (
@@ -180,6 +198,8 @@ def get_asr_runtime_spec(
         str(engine_cfg.get("model_revision", base_spec.model_revision)).strip()
         or base_spec.model_revision
     )
+    if model_id == base_spec.model_id:
+        model_revision = base_spec.model_revision
     if (
         base_spec.engine == "whisper-large-v3-turbo"
         and model_id in WHISPER_ASR_LEGACY_DEFAULT_MODELS

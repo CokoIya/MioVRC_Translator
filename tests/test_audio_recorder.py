@@ -1,10 +1,94 @@
+import collections
 import unittest
+
+import numpy as np
 
 import src.audio.recorder as recorder_module
 from src.audio.recorder import AudioRecorder
 
 
 class AudioRecorderTests(unittest.TestCase):
+    def test_vad_activation_frames_count_toward_minimum_segment_duration(self):
+        segments = []
+        recorder = AudioRecorder(
+            segments.append,
+            min_segment_s=0.45,
+        )
+
+        class IdentityDenoiser:
+            @staticmethod
+            def process(frame, *, update_profile):
+                del update_profile
+                return frame
+
+        class ActivationVAD:
+            def __init__(self):
+                self.calls = 0
+                self.in_speech = False
+                self._min_rms = 0.0
+                self._activation_window = collections.deque(maxlen=6)
+
+            def process_frame(self, _pcm):
+                self.calls += 1
+                if self.calls <= 6:
+                    self._activation_window.append(True)
+                    self.in_speech = self.calls == 6
+                elif self.calls <= 15:
+                    self.in_speech = True
+                else:
+                    self.in_speech = False
+                return self.in_speech
+
+            def reset(self):
+                self.in_speech = False
+                self._activation_window.clear()
+
+        recorder._denoiser = IdentityDenoiser()
+        recorder.vad = ActivationVAD()
+        frame = np.full(480, 0.1, dtype=np.float32)
+        for _index in range(16):
+            recorder._frame_queue.put_nowait(frame.copy())
+        recorder._frame_queue.put_nowait(None)
+
+        recorder._process_loop()
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].size, 15 * frame.size)
+
+    def test_stateful_soxr_resampler_reblocks_exact_vad_frames(self):
+        if not recorder_module._HAS_SOXR:
+            self.skipTest("soxr is unavailable")
+        recorder = AudioRecorder(lambda _audio: None)
+        recorder._capture_dtype = "float32"
+        recorder._capture_rate = 48000
+        phase = np.arange(1440, dtype=np.float32)
+        frame = np.sin(phase * (2.0 * np.pi * 440.0 / 48000.0)).astype(np.float32)
+
+        outputs = [recorder._prepare_frame(frame) for _ in range(20)]
+        emitted = [output for output in outputs if output.size]
+
+        self.assertGreaterEqual(len(emitted), 18)
+        self.assertTrue(all(output.shape == (480,) for output in emitted))
+        self.assertIsNotNone(recorder._resample_stream)
+        stream = recorder._resample_stream
+        recorder._prepare_frame(frame)
+        self.assertIs(recorder._resample_stream, stream)
+
+    def test_streaming_resampler_resets_when_capture_rate_changes(self):
+        if not recorder_module._HAS_SOXR:
+            self.skipTest("soxr is unavailable")
+        recorder = AudioRecorder(lambda _audio: None)
+        recorder._capture_dtype = "float32"
+        recorder._capture_rate = 48000
+        recorder._prepare_frame(np.zeros(1440, dtype=np.float32))
+        first_stream = recorder._resample_stream
+
+        recorder._capture_rate = 44100
+        recorder._prepare_frame(np.zeros(1323, dtype=np.float32))
+
+        self.assertIsNotNone(first_stream)
+        self.assertIsNot(recorder._resample_stream, first_stream)
+
     def test_diagnostics_snapshot_includes_vad_meter_fields(self):
         recorder = AudioRecorder(lambda _audio: None)
         snapshot = recorder.diagnostics_snapshot()

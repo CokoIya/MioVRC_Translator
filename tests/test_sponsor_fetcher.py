@@ -105,3 +105,33 @@ def test_fetch_remote_tries_github_first_then_mirror(monkeypatch):
     ]
     assert data == fresh
     assert source_url == sponsor_fetcher.MIRROR_SPONSORS_URL
+
+
+def test_validate_sponsors_payload_bounds_and_normalizes_remote_content():
+    payload = {
+        "version": 2,
+        "updated": " 2026-07-11 ",
+        "tip": {
+            "EN": "line one\nline two",
+            "bad\x00lang": "ignored",
+            **{f"lang-{index}": "x" * 2000 for index in range(30)},
+        },
+        "sponsors": [
+            {"name": "<b>shown as plain text</b>"},
+            {"name": "x" * 500},
+            {"name": "bad\x00name"},
+            *({"name": f"sponsor-{index}"} for index in range(700)),
+        ],
+        "untrusted": {"ignored": True},
+    }
+
+    cleaned = sponsor_fetcher._validate_sponsors_payload(payload)
+
+    assert cleaned["updated"] == "2026-07-11"
+    assert cleaned["tip"]["en"] == "line one line two"
+    assert len(cleaned["tip"]) == sponsor_fetcher._MAX_TIP_LANGUAGES
+    assert len(cleaned["sponsors"]) == sponsor_fetcher._MAX_SPONSORS
+    assert cleaned["sponsors"][0]["name"] == "<b>shown as plain text</b>"
+    assert len(cleaned["sponsors"][1]["name"]) == sponsor_fetcher._MAX_SPONSOR_NAME_CHARS
+    assert all("\x00" not in item["name"] for item in cleaned["sponsors"])
+    assert "untrusted" not in cleaned

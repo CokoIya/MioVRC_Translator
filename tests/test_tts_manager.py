@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import io
+import os
 import struct
+import subprocess
 import threading
+import time
 import queue
 import logging
 import wave
@@ -16,6 +19,7 @@ import sounddevice as sd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.tts import manager as manager_module
 from src.tts.base import BaseTTS, TTSVoice
 from src.tts.gtts_engine import GoogleTTS
 from src.tts.manager import (
@@ -135,6 +139,290 @@ def test_tts_manager_queues_and_invokes_playback(monkeypatch):
         manager.stop()
 
 
+def test_tts_manager_close_releases_engine_once_and_cannot_restart(monkeypatch):
+    class ClosableTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = ClosableTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    manager.start()
+    manager.close()
+    manager.close()
+    manager.start()
+
+    assert engine.close_calls == 1
+    assert manager._engine is None
+    assert manager._running is False
+
+
+def test_tts_manager_prewarm_runs_on_synthesis_worker(monkeypatch):
+    class PrewarmTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.prewarm_calls = []
+            self.prewarmed = threading.Event()
+
+        def prewarm(self, voice=""):
+            self.prewarm_calls.append((voice, threading.current_thread().name))
+            self.prewarmed.set()
+
+    engine = PrewarmTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    manager.start()
+    try:
+        assert manager.prewarm("voice") is True
+        assert manager.prewarm("voice") is True
+        assert engine.prewarmed.wait(timeout=1)
+        assert engine.prewarm_calls == [("voice", "tts-synthesis-1")]
+    finally:
+        manager.stop()
+
+
+def test_tts_synthesizes_next_sentence_while_previous_audio_is_playing(monkeypatch):
+    class OverlapTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.second_synthesized = threading.Event()
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            audio = super().synthesize(text, voice, rate, volume)
+            if text == "second":
+                self.second_synthesized.set()
+            return audio + text.encode("utf-8")
+
+    engine = OverlapTTS()
+    playback_started = threading.Event()
+    release_playback = threading.Event()
+    played: list[bytes] = []
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    def play(audio: bytes) -> None:
+        played.append(audio)
+        if len(played) == 1:
+            playback_started.set()
+            release_playback.wait(timeout=2)
+
+    monkeypatch.setattr(manager, "_play_audio", play)
+    manager.start()
+    try:
+        assert manager.speak("first", "voice")
+        assert playback_started.wait(timeout=1)
+        assert manager.speak("second", "voice")
+        assert engine.second_synthesized.wait(timeout=1)
+        assert len(played) == 1
+        release_playback.set()
+        deadline = time.monotonic() + 2
+        while len(played) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert played[0].endswith(b"first")
+        assert played[1].endswith(b"second")
+    finally:
+        release_playback.set()
+        manager.stop()
+
+
+def test_tts_predecodes_next_sentence_while_previous_audio_is_playing(monkeypatch):
+    class ValidWavTTS(FakeTTS):
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            sample = 1000 if text == "first" else 2000
+            return _pcm_wav_bytes(2, struct.pack("<h", sample))
+
+    engine = ValidWavTTS()
+    first_playback_started = threading.Event()
+    release_first_playback = threading.Event()
+    second_decoded = threading.Event()
+    decoded_count = 0
+    decoded_lock = threading.Lock()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    original_decode = manager._decode_audio_data
+
+    def decode(audio):
+        nonlocal decoded_count
+        result = original_decode(audio)
+        with decoded_lock:
+            decoded_count += 1
+            if decoded_count == 2:
+                second_decoded.set()
+        return result
+
+    def play(_audio):
+        if not first_playback_started.is_set():
+            first_playback_started.set()
+            release_first_playback.wait(timeout=2)
+
+    monkeypatch.setattr(manager, "_decode_audio_data", decode)
+    monkeypatch.setattr(manager, "_play_audio", play)
+    manager.start()
+    try:
+        assert manager.speak("first", "voice")
+        assert first_playback_started.wait(timeout=1)
+        assert manager.speak("second", "voice")
+        assert second_decoded.wait(timeout=1)
+    finally:
+        release_first_playback.set()
+        manager.stop()
+
+
+def test_tts_resampling_prefers_soxr(monkeypatch):
+    calls = []
+
+    class FakeSoxr:
+        @staticmethod
+        def resample(audio, source_rate, target_rate, quality):
+            calls.append((audio.copy(), source_rate, target_rate, quality))
+            return np.array([0.25, -0.25], dtype=np.float32)
+
+    monkeypatch.setitem(sys.modules, "soxr", FakeSoxr)
+
+    result = TTSManager._resample_audio(
+        np.array([0.0, 1.0], dtype=np.float32),
+        24000,
+        48000,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1:] == (24000, 48000, "HQ")
+    np.testing.assert_array_equal(result, [0.25, -0.25])
+
+
+def test_concurrent_tts_synthesis_still_plays_in_sentence_order(monkeypatch):
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    class OutOfOrderTTS(FakeTTS):
+        max_concurrent_synthesis = 2
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "first":
+                first_started.set()
+                release_first.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    engine = OutOfOrderTTS()
+    played: list[bytes] = []
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=2,
+    )
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+    manager.start()
+    try:
+        assert manager.speak("first", "voice")
+        assert first_started.wait(timeout=1)
+        assert manager.speak("second", "voice")
+        deadline = time.monotonic() + 1
+        while len(engine.requests) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(engine.requests) == 2
+        assert played == []
+        release_first.set()
+        deadline = time.monotonic() + 2
+        while len(played) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert played == [b"RIFF-first", b"RIFF-second"]
+    finally:
+        release_first.set()
+        manager.stop()
+
+
+def test_tts_generation_clear_suppresses_stale_synthesis_result(monkeypatch):
+    old_started = threading.Event()
+    release_old = threading.Event()
+    callbacks: list[tuple[str, bool]] = []
+
+    class GenerationTTS(FakeTTS):
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "old":
+                old_started.set()
+                release_old.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    engine = GenerationTTS()
+    played: list[bytes] = []
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+    manager.start()
+    try:
+        assert manager.speak(
+            "old",
+            "voice",
+            callback=lambda success, _message: callbacks.append(("old", success)),
+        )
+        assert old_started.wait(timeout=1)
+        manager.clear_queue()
+        assert manager.speak(
+            "new",
+            "voice",
+            callback=lambda success, _message: callbacks.append(("new", success)),
+        )
+        release_old.set()
+        deadline = time.monotonic() + 2
+        while not any(name == "new" for name, _success in callbacks) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert played == [b"RIFF-new"]
+        assert callbacks.count(("old", False)) == 1
+        assert callbacks.count(("new", True)) == 1
+    finally:
+        release_old.set()
+        manager.stop()
+
+
 def test_tts_manager_cache_returns_audio_bytes(monkeypatch):
     """Cached TTS requests should return the original audio bytes, not metadata."""
     fake_engine = FakeTTS()
@@ -189,6 +477,25 @@ def test_decode_wav_handles_unsigned_8_bit_pcm():
     np.testing.assert_allclose(audio, [-1.0, 0.0, 127.0 / 128.0], rtol=0, atol=1e-6)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"OggS-container",
+        b"fLaC-container",
+        b"\x1aE\xdf\xa3-webm",
+        b"\x00\x00\x00\x18ftypisom-container",
+    ],
+)
+def test_decode_audio_routes_supported_containers_through_pyav(payload):
+    manager = TTSManager.__new__(TTSManager)
+    decoded = (np.array([0.25], dtype=np.float32), 24000)
+    calls = []
+    manager._decode_mp3 = lambda data: calls.append(data) or decoded
+
+    assert manager._decode_audio_data(payload) == decoded
+    assert calls == [payload]
+
+
 def test_decode_wav_handles_signed_24_bit_pcm():
     frames = b"\x00\x00\x80" + b"\x00\x00\x00" + b"\xff\xff\x7f"
 
@@ -216,6 +523,28 @@ def test_decode_wav_handles_ieee_float_wav():
 
     assert sample_rate == 8000
     np.testing.assert_allclose(audio, [-0.5, 0.0, 0.5], rtol=0, atol=1e-6)
+
+
+def test_decode_wav_ignores_trailing_bytes_after_audio_data():
+    frames = struct.pack("<hhh", -32768, 0, 32767)
+    data = _pcm_wav_bytes(2, frames) + b"TAIL" + struct.pack("<I", 999999)
+
+    audio, sample_rate = TTSManager._decode_wav(data)
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-1.0, 0.0, 32767.0 / 32768.0], rtol=0, atol=1e-6)
+
+
+def test_decode_wav_accepts_overstated_final_data_chunk_size():
+    frames = struct.pack("<hhh", -32768, 0, 32767)
+    data = bytearray(_pcm_wav_bytes(2, frames))
+    data_chunk_offset = data.index(b"data")
+    data[data_chunk_offset + 4 : data_chunk_offset + 8] = struct.pack("<I", 0xFFFFFFFF)
+
+    audio, sample_rate = TTSManager._decode_wav(bytes(data))
+
+    assert sample_rate == 8000
+    np.testing.assert_allclose(audio, [-1.0, 0.0, 32767.0 / 32768.0], rtol=0, atol=1e-6)
 
 
 def test_tts_manager_rejects_non_byte_audio(monkeypatch):
@@ -761,7 +1090,7 @@ def test_append_tail_silence_extends_audio_without_changing_source_frames():
 
     padded = _append_tail_silence(audio, 1000)
 
-    assert padded.shape == (182, 2)
+    assert padded.shape == (82, 2)
     np.testing.assert_allclose(padded[:2], audio)
     assert np.all(padded[2:] == 0)
 
@@ -1328,6 +1657,50 @@ def test_resolve_output_device_preserves_saved_same_name_host_api(monkeypatch):
     assert resolved == (1, "Speakers (MIXLINE)")
 
 
+def test_unconfigured_tts_output_uses_canonical_wasapi_default(monkeypatch):
+    fake_devices = [
+        {
+            "name": "Speakers (USB DAC)",
+            "max_output_channels": 2,
+            "max_input_channels": 0,
+            "hostapi": 0,
+        },
+        {
+            "name": "Speakers (USB DAC)",
+            "max_output_channels": 2,
+            "max_input_channels": 0,
+            "hostapi": 1,
+        },
+    ]
+    fake_hostapis = [
+        {"name": "MME", "default_input_device": -1, "default_output_device": 0},
+        {"name": "Windows WASAPI", "default_input_device": -1, "default_output_device": 1},
+    ]
+    monkeypatch.setattr("src.tts.manager.sd.query_devices", lambda: fake_devices)
+    monkeypatch.setattr("src.tts.manager.sd.query_hostapis", lambda: fake_hostapis)
+    monkeypatch.setattr("src.tts.manager.sd.default.device", [-1, 0])
+
+    assert resolve_output_device(None, None) == (1, "Speakers (USB DAC)")
+
+
+def test_follow_default_tts_route_does_not_persist_transient_device_id(monkeypatch):
+    manager = TTSManager.__new__(TTSManager)
+    manager._output_device = None
+    manager._output_device_name = ""
+    manager._prefer_virtual_output = False
+    manager._update_device_config = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("automatic default resolution must not become a fixed device")
+    )
+    monkeypatch.setattr(
+        "src.tts.manager.resolve_output_device",
+        lambda *_args, **_kwargs: (40, "Speakers (USB DAC)"),
+    )
+
+    assert manager._resolve_playback_device() == (40, "Speakers (USB DAC)")
+    assert manager._output_device is None
+    assert manager._output_device_name == ""
+
+
 def test_tts_manager_persists_recovered_virtual_output(monkeypatch):
     fake_devices = [
         {
@@ -1375,3 +1748,73 @@ def test_google_tts_voice_loading_is_local():
 
     assert any(voice.id == "zh-CN" for voice in voices)
     assert any(voice.id == "en" for voice in voices)
+
+
+
+def test_debug_audio_filename_sanitizes_untrusted_label(monkeypatch, tmp_path):
+    monkeypatch.setenv(manager_module.TTS_DEBUG_AUDIO_ENV, "1")
+    monkeypatch.setattr(manager_module, "app_temp_dir", lambda: tmp_path)
+    monkeypatch.setattr(manager_module.time, "time_ns", lambda: 123)
+    monkeypatch.setattr(manager_module.secrets, "token_hex", lambda _size: "abcdef123456")
+
+    TTSManager._maybe_save_debug_audio(b"RIFF-data", "..\\evil/voice :?../")
+
+    files = list((tmp_path / "tts_debug_audio").iterdir())
+    assert [path.name for path in files] == [
+        "123-evil_voice-abcdef123456.wav"
+    ]
+    assert files[0].parent == tmp_path / "tts_debug_audio"
+
+
+def test_debug_audio_uses_unique_names_even_at_same_timestamp(monkeypatch, tmp_path):
+    tokens = iter(["000000000001", "000000000002"])
+    monkeypatch.setenv(manager_module.TTS_DEBUG_AUDIO_ENV, "1")
+    monkeypatch.setattr(manager_module, "app_temp_dir", lambda: tmp_path)
+    monkeypatch.setattr(manager_module.time, "time_ns", lambda: 456)
+    monkeypatch.setattr(manager_module.secrets, "token_hex", lambda _size: next(tokens))
+
+    TTSManager._maybe_save_debug_audio(b"first", "sample")
+    TTSManager._maybe_save_debug_audio(b"second", "sample")
+
+    files = sorted((tmp_path / "tts_debug_audio").iterdir())
+    assert [path.name for path in files] == [
+        "456-sample-000000000001.audio",
+        "456-sample-000000000002.audio",
+    ]
+    assert [path.read_bytes() for path in files] == [b"first", b"second"]
+
+
+def test_debug_audio_rejects_redirected_output_directory(monkeypatch, tmp_path, caplog):
+    app_temp = tmp_path / "temp"
+    outside = tmp_path / "outside"
+    app_temp.mkdir()
+    outside.mkdir()
+    redirected = app_temp / "tts_debug_audio"
+    try:
+        os.symlink(outside, redirected, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        if os.name != "nt":
+            pytest.skip("directory symlink creation is unavailable")
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(redirected), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("directory symlink and junction creation are unavailable")
+
+    monkeypatch.setenv(manager_module.TTS_DEBUG_AUDIO_ENV, "1")
+    monkeypatch.setattr(manager_module, "app_temp_dir", lambda: app_temp)
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.tts.manager"):
+            TTSManager._maybe_save_debug_audio(b"blocked", "sample")
+
+        assert list(outside.iterdir()) == []
+        assert "Failed to save debug TTS audio" in caplog.text
+    finally:
+        if os.path.lexists(redirected):
+            if os.name == "nt" and not redirected.is_symlink():
+                os.rmdir(redirected)
+            else:
+                redirected.unlink()

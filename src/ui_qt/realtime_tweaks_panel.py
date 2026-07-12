@@ -24,6 +24,10 @@ from PySide6.QtWidgets import (
 from src.ui_qt.icon_utils import ui_icon, ui_icon_url
 from src.ui_qt.theme import icon_tint, theme_tokens
 from src.ui_qt.widgets import NoWheelComboBox
+from src.translators.asr_rewriter import (
+    get_asr_rewrite_options,
+    normalize_asr_rewrite_style,
+)
 from src.utils.i18n import tr
 from src.utils.ui_config import (
     get_backend_config_value,
@@ -261,6 +265,11 @@ class RealtimeTweaksPanel(QDialog):
         self._add_combo(self._tts_section, "tts_voice", "quick_switch_tts_voice")
 
         self._persona_section = self._section("message.svg", "quick_switch_section_persona")
+        self._add_combo(
+            self._persona_section,
+            "asr_rewrite_style",
+            "quick_switch_asr_rewrite_style",
+        )
         self._add_combo(self._persona_section, "roleplay_profile", "quick_switch_roleplay_profile")
 
         self._body_layout.addStretch(1)
@@ -374,6 +383,14 @@ class RealtimeTweaksPanel(QDialog):
         voice_options = _voice_entries_for_engine(self._config, engine)
         self._set_combo_options("tts_voice", voice_options, str(engine_cfg.get("voice", "") or ""))
 
+        rewrite_style = normalize_asr_rewrite_style(
+            trans_cfg.get("asr_rewrite_style", "off")
+        )
+        self._set_combo_options(
+            "asr_rewrite_style",
+            list(get_asr_rewrite_options(self._ui_lang)),
+            rewrite_style,
+        )
         self._set_combo_options("roleplay_profile", _roleplay_entries(self._ui_lang), _current_roleplay_value(self._config))
 
     def _refresh_noise_control(self) -> None:

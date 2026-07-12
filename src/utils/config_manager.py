@@ -16,7 +16,17 @@ import logging
 from pathlib import Path
 from ctypes import wintypes
 
-from src.utils.app_paths import resource_base_dirs, writable_app_dir
+from src.utils.app_paths import (
+    atomic_copy_secure_file,
+    atomic_write_bytes,
+    atomic_write_text,
+    read_secure_bytes,
+    read_secure_text,
+    require_real_directory,
+    resource_base_dirs,
+    secure_file_path,
+    writable_app_dir,
+)
 from src.utils.ui_language_detection import bootstrap_ui_language
 from src.utils.locale_detect import select_default_asr_engine
 from src.utils.global_hotkey import (
@@ -67,8 +77,20 @@ from src.asr.model_registry import (
 )
 
 _SAVE_LOCK = threading.Lock()
+_MAX_CONFIG_BYTES = 4 * 1024 * 1024
 logger = logging.getLogger(__name__)
 _PROTECTED_SECRET_PREFIX = "dpapi:v1:"
+_LAST_GOOD_CONFIG_SUFFIX = ".last-good"
+_REQUIRED_CONFIG_SECTIONS = frozenset(
+    {"asr", "audio", "osc", "translation", "tts", "ui"}
+)
+from src.translators.asr_rewriter import normalize_asr_rewrite_style
+
+
+class SecretProtectionError(RuntimeError):
+    """Raised when a nonempty secret cannot be protected for storage."""
+
+
 _DEFAULT_DENOISE_STRENGTH = 0.0
 _DEFAULT_MIC_TAIL_SILENCE_S = 0.65
 _DEFAULT_LISTEN_TAIL_SILENCE_S = 0.65
@@ -81,13 +103,20 @@ _DEFAULT_PARTIAL_MIN_SPEECH_S = 0.45
 _DEFAULT_MAX_SEGMENT_S = 6.0
 _DEFAULT_SAMPLE_RATE = 16000
 _DEFAULT_FRAME_DURATION_MS = 30
+_ASR_STREAMING_DEFAULTS = {
+    "chunk_interval_ms": 250,
+    "chunk_window_s": 1.6,
+    "ring_buffer_s": 4.0,
+    "recent_speech_hold_s": 0.8,
+    "partial_stability_hits": 2,
+}
 _DEFAULT_LISTEN_VAD_SPEECH_RATIO = 0.4
 _DEFAULT_LISTEN_VAD_ACTIVATION_THRESHOLD_S = 0.06
 _DEFAULT_LISTEN_VAD_MIN_RMS = 0.020
 _DEFAULT_LISTEN_DENOISE_STRENGTH = 0.35
 _DEFAULT_LISTEN_SILERO_SPEECH_THRESHOLD = 0.15
 _DEFAULT_OPENAI_MODEL = str(
-    _catalog_backends().get("openai", {}).get("model", "gpt-5.5")
+    _catalog_backends().get("openai", {}).get("model", "gpt-5.6-sol")
 )
 _DEFAULT_ANTHROPIC_MODEL = str(
     _catalog_backends().get("anthropic", {}).get("model", "claude-sonnet-4-6")
@@ -118,35 +147,32 @@ _LEGACY_OPENAI_MODEL_PREFIXES = (
     "gpt-3.5",
     "gpt-4-",
     "gpt-4o",
+    "gpt-5.4",
 )
 _LEGACY_OPENAI_MODEL_IDS = {
     "gpt-4",
     "gpt-5.4-pro",
+    "gpt-5.6",
+    "gpt-5.6-mini",
+    "gpt-5.6-nano",
 }
-_CROSS_PROVIDER_OPENAI_MODEL_PREFIXES = ("claude",)
 _LEGACY_ANTHROPIC_MODEL_IDS = {
     "claude-sonnet-4-20250514",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
 }
-_LOW_QUALITY_QWEN_TRANSLATION_MODEL_IDS = {
-    "qwen-mt-flash",
-}
+_CROSS_PROVIDER_OPENAI_MODEL_PREFIXES = ("claude",)
 _UNROUTABLE_QWEN_GENERAL_MODEL_IDS = {
     "qwen3.6-max-preview",
     "qwen3.6-plus",
     "qwen3.6-flash",
-}
-_LEGACY_XIAOMI_MODEL_IDS = {
-    "mimo-v2-flash",
 }
 _LEGACY_GEMINI_MODEL_IDS = {
     "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
-}
-_LEGACY_NVIDIA_MODEL_IDS = {
-    "nvidia/nemotron-3-nano-30b-a3b",
-    "nvidia/llama-3.1-nemotron-nano-8b-v1",
 }
 _LEGACY_DOUBAO_BASE_URLS = {
     "https://ark.cn-beijing.volces.com/api/compatible/v1",
@@ -156,6 +182,48 @@ _LEGACY_DOUBAO_MODEL_IDS = {
 }
 _LEGACY_DEEPSEEK_BASE_URLS = {
     "https://api.deepseek.com/v1",
+}
+_THINKING_MODEL_REPLACEMENTS = {
+    "deepseek": {
+        "deepseek-reasoner": "deepseek-v4-flash",
+    },
+    "kimi": {
+        "kimi-k2-thinking": "kimi-k2.6",
+        "kimi-k2-thinking-turbo": "kimi-k2.6",
+    },
+    "xai": {
+        "grok-4.20-0309-reasoning": "grok-4.20-0309-non-reasoning",
+    },
+    "mistral": {
+        "magistral-small-latest": "mistral-small-latest",
+        "magistral-medium-latest": "mistral-medium-3-5",
+    },
+}
+_RETIRED_MODEL_REPLACEMENTS = {
+    "qianwen": {
+        "qwen3.7-max": "qwen-mt-plus",
+        "qwen-mt-turbo": "qwen-mt-plus",
+        "qwen-mt-lite": "qwen-mt-flash",
+    },
+    "hunyuan": {"hunyuan-lite": "hunyuan-turbo-latest"},
+    "xiaomi": {
+        "mimo-v2-pro": "mimo-v2.5-pro",
+        "mimo-v2-omni": "mimo-v2.5",
+    },
+    "gemini": {"gemini-2.5-pro": "gemini-3.5-flash"},
+    "kimi": {
+        "kimi-k2-0905-preview": "kimi-k2.6",
+        "kimi-k2-turbo-preview": "kimi-k2.6",
+    },
+    "xai": {"grok-4.20-multi-agent-0309": "grok-4.20-0309-non-reasoning"},
+    "mistral": {
+        "mistral-large-latest": "mistral-medium-3-5",
+        "ministral-3b-latest": "ministral-8b-latest",
+    },
+    "nvidia": {
+        "nvidia/nemotron-3-super-120b-a12b": "nvidia/nemotron-3-nano-30b-a3b",
+        "nvidia/llama-3.1-nemotron-nano-8b-v1": "nvidia/nemotron-3-nano-30b-a3b",
+    },
 }
 _ASR_CONFIG_KEYS = frozenset(
     {
@@ -261,16 +329,15 @@ def _protect_secret(value: object) -> str:
     if not text or text.startswith(_PROTECTED_SECRET_PREFIX):
         return text
     if not _can_protect_secrets():
-        return text
+        raise SecretProtectionError(
+            "DPAPI is unavailable; refusing to store a plaintext secret"
+        )
     try:
         sealed = _dpapi_protect(text.encode("utf-8"))
     except Exception as exc:
-        logger.error(
-            "DPAPI sealing failed; secret will be written without OS-level "
-            "protection. Cause: %s",
-            exc,
-        )
-        return text
+        raise SecretProtectionError(
+            "DPAPI failed to protect a secret; configuration was not written"
+        ) from exc
     return _PROTECTED_SECRET_PREFIX + base64.b64encode(sealed).decode("ascii")
 
 
@@ -374,7 +441,29 @@ def _protect_config_for_storage(config: dict) -> dict:
 
 
 def _config_path() -> Path:
-    return writable_app_dir() / "config.json"
+    return secure_file_path(writable_app_dir() / "config.json")
+
+
+def _last_good_config_path(config_path: Path | None = None) -> Path:
+    path = config_path or _config_path()
+    return secure_file_path(path.with_name(f"{path.name}{_LAST_GOOD_CONFIG_SUFFIX}"))
+
+
+def _config_is_complete(config: object) -> bool:
+    return isinstance(config, dict) and all(
+        isinstance(config.get(section), dict)
+        for section in _REQUIRED_CONFIG_SECTIONS
+    )
+
+
+def _config_is_severely_incomplete(config: object) -> bool:
+    if not isinstance(config, dict):
+        return True
+    present = sum(
+        isinstance(config.get(section), dict)
+        for section in _REQUIRED_CONFIG_SECTIONS
+    )
+    return present <= 2
 
 
 def _example_path() -> Path:
@@ -394,16 +483,14 @@ def _path_is_within(child: Path, parent: Path) -> bool:
 
 
 def _cleanup_obsolete_runtime_models() -> None:
-    runtime_models_dir = writable_app_dir() / "runtime_models"
     try:
-        runtime_root = runtime_models_dir.resolve(strict=False)
-    except OSError as exc:
-        logger.warning(
-            "Could not resolve runtime model directory %s: %s", runtime_models_dir, exc
+        runtime_models_dir = require_real_directory(
+            writable_app_dir() / "runtime_models"
         )
+    except RuntimeError as exc:
+        logger.warning("Refusing unsafe runtime model cleanup directory: %s", exc)
         return
-    if not runtime_models_dir.exists():
-        return
+    runtime_root = runtime_models_dir
 
     supported_names = {
         spec.model_id.replace("/", "--")
@@ -421,23 +508,18 @@ def _cleanup_obsolete_runtime_models() -> None:
         if not has_managed_metadata and not has_removed_model_marker:
             continue
         try:
-            resolved_target = target.resolve(strict=False)
-        except OSError as exc:
-            logger.warning("Could not resolve obsolete model path %s: %s", target, exc)
-            continue
-        if resolved_target == runtime_root or not _path_is_within(
-            resolved_target, runtime_root
-        ):
+            safe_target = require_real_directory(target)
+        except RuntimeError:
             logger.warning("Skipping unsafe obsolete model cleanup path: %s", target)
             continue
-        if not target.exists():
+        if safe_target.parent != runtime_root:
+            logger.warning("Skipping escaped obsolete model cleanup path: %s", target)
             continue
         try:
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-            logger.info("Removed obsolete runtime model directory: %s", target)
+            # Revalidate immediately before recursive deletion to narrow path-swap races.
+            require_real_directory(safe_target)
+            shutil.rmtree(safe_target)
+            logger.info("Removed obsolete runtime model directory: %s", safe_target)
         except (OSError, IOError) as exc:
             logger.warning(
                 "Failed to remove obsolete runtime model %s: %s", target, exc
@@ -503,13 +585,23 @@ def _normalize_translation_target_language(language: object) -> str | None:
     return None
 
 
-def _load_json_dict(path: Path) -> dict | None:
-    if not path.exists():
-        return None
+def _load_json_dict(path: Path, *, secure: bool = False) -> dict | None:
     try:
-        with path.open("r", encoding="utf-8-sig") as handle:
-            payload = json.load(handle)
-    except (OSError, IOError, json.JSONDecodeError) as exc:
+        if secure:
+            raw = read_secure_text(
+                path,
+                encoding="utf-8-sig",
+                max_bytes=_MAX_CONFIG_BYTES,
+            )
+            payload = json.loads(raw)
+        else:
+            if not path.exists():
+                return None
+            with path.open("r", encoding="utf-8-sig") as handle:
+                payload = json.load(handle)
+    except FileNotFoundError:
+        return None
+    except (OSError, IOError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("Failed to load JSON from %s: %s", path, exc)
         return None
     except Exception as exc:
@@ -524,14 +616,14 @@ def _backup_invalid_config(path: Path) -> Path | None:
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     backup_path = path.with_name(f"{path.stem}.corrupt-{timestamp}{path.suffix}")
     counter = 1
-    while backup_path.exists():
+    while os.path.lexists(backup_path):
         backup_path = path.with_name(
             f"{path.stem}.corrupt-{timestamp}-{counter}{path.suffix}"
         )
         counter += 1
     try:
-        shutil.copy2(path, backup_path)
-    except (OSError, IOError) as exc:
+        atomic_write_bytes(backup_path, read_secure_bytes(path), overwrite=False)
+    except (OSError, IOError, RuntimeError, ValueError) as exc:
         logger.warning("Failed to backup config file %s: %s", path, exc)
         return None
     except Exception as exc:
@@ -709,6 +801,10 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         vrc_cfg["target_language"] = "zh"
         changed = True
     listen_engine = str(vrc_cfg.get("asr_engine", "") or "").strip()
+    if listen_engine == "whisper-large-v3-turbo":
+        listen_engine = "sensevoice-small"
+        vrc_cfg["asr_engine"] = listen_engine
+        changed = True
     if listen_engine not in LISTEN_SELECTABLE_ASR_ENGINES:
         vrc_cfg["asr_engine"] = ASR_ENGINE_FOLLOW_MAIN
         changed = True
@@ -932,16 +1028,11 @@ def _ensure_audio_device_config(config: dict, loaded: dict | None = None) -> boo
         audio_cfg, "max_segment_s", _DEFAULT_MAX_SEGMENT_S, 0.2, 120.0
     ):
         changed = True
-    if _coerce_int_range_config(
-        audio_cfg, "sample_rate", _DEFAULT_SAMPLE_RATE, 8000, 48000
-    ):
-        changed = True
-    if int(audio_cfg.get("sample_rate", _DEFAULT_SAMPLE_RATE)) not in {
-        8000,
-        16000,
-        32000,
-        48000,
-    }:
+    # Every bundled/local and cloud ASR path consumes 16 kHz mono speech. A
+    # configurable processing rate previously let 8/32/48 kHz arrays reach
+    # providers that interpreted them as 16 kHz, harming both latency and
+    # recognition quality while multiplying VAD and buffer-copying work.
+    if audio_cfg.get("sample_rate") != _DEFAULT_SAMPLE_RATE:
         audio_cfg["sample_rate"] = _DEFAULT_SAMPLE_RATE
         changed = True
     if _coerce_int_range_config(
@@ -1303,6 +1394,12 @@ def _ensure_translation_config(
     if "send_to_chatbox" not in trans_cfg:
         trans_cfg["send_to_chatbox"] = True
         changed = True
+    rewrite_style = normalize_asr_rewrite_style(
+        trans_cfg.get("asr_rewrite_style", "off")
+    )
+    if trans_cfg.get("asr_rewrite_style") != rewrite_style:
+        trans_cfg["asr_rewrite_style"] = rewrite_style
+        changed = True
     if "chatbox_template" not in trans_cfg:
         trans_cfg["chatbox_template"] = ""
         changed = True
@@ -1380,45 +1477,72 @@ def _ensure_translation_config(
                 backend_cfg[key] = default_value
                 changed = True
 
-    openai_cfg = trans_cfg.get("openai", {})
-    if isinstance(openai_cfg, dict):
+    for openai_backend in ("openai", "openai_compatible"):
+        openai_cfg = trans_cfg.get(openai_backend, {})
+        if not isinstance(openai_cfg, dict):
+            continue
         model = str(openai_cfg.get("model", "") or "").strip().lower()
         if (
             model in _LEGACY_OPENAI_MODEL_IDS
             or model.startswith(_LEGACY_OPENAI_MODEL_PREFIXES)
-            or model.startswith(_CROSS_PROVIDER_OPENAI_MODEL_PREFIXES)
+            or (
+                openai_backend == "openai"
+                and model.startswith(_CROSS_PROVIDER_OPENAI_MODEL_PREFIXES)
+            )
         ):
             openai_cfg["model"] = _DEFAULT_OPENAI_MODEL
             changed = True
 
-    anthropic_cfg = trans_cfg.get("anthropic", {})
-    if isinstance(anthropic_cfg, dict):
+    for anthropic_backend in ("anthropic", "anthropic_compatible"):
+        anthropic_cfg = trans_cfg.get(anthropic_backend, {})
+        if not isinstance(anthropic_cfg, dict):
+            continue
         model = str(anthropic_cfg.get("model", "") or "").strip().lower()
-        if model in _LEGACY_ANTHROPIC_MODEL_IDS:
+        if (
+            "opus" in model
+            or model in _LEGACY_ANTHROPIC_MODEL_IDS
+            or (
+                "sonnet" in model
+                and model not in {"claude-sonnet-4-6", "claude-sonnet-5"}
+            )
+        ):
             anthropic_cfg["model"] = _DEFAULT_ANTHROPIC_MODEL
             changed = True
 
     qwen_cfg = trans_cfg.get("qianwen", {})
     if isinstance(qwen_cfg, dict):
         model = str(qwen_cfg.get("model", "") or "").strip().lower()
-        if model in _LOW_QUALITY_QWEN_TRANSLATION_MODEL_IDS:
-            qwen_cfg["model"] = get_backend_value("qianwen", "model")
-            changed = True
-        elif model in _UNROUTABLE_QWEN_GENERAL_MODEL_IDS:
-            qwen_cfg["model"] = "qwen3.7-max"
+        if model in _UNROUTABLE_QWEN_GENERAL_MODEL_IDS:
+            qwen_cfg["model"] = "qwen-mt-plus"
             changed = True
 
-    for backend, legacy_models in (
-        ("xiaomi", _LEGACY_XIAOMI_MODEL_IDS),
-        ("gemini", _LEGACY_GEMINI_MODEL_IDS),
-        ("nvidia", _LEGACY_NVIDIA_MODEL_IDS),
-    ):
+    for backend, legacy_models in (("gemini", _LEGACY_GEMINI_MODEL_IDS),):
         backend_cfg = trans_cfg.get(backend, {})
         if not isinstance(backend_cfg, dict):
             continue
         model = str(backend_cfg.get("model", "") or "").strip().lower()
         if model in legacy_models:
             backend_cfg["model"] = get_backend_value(backend, "model")
+            changed = True
+
+    for backend, replacements in _THINKING_MODEL_REPLACEMENTS.items():
+        backend_cfg = trans_cfg.get(backend, {})
+        if not isinstance(backend_cfg, dict):
+            continue
+        model = str(backend_cfg.get("model", "") or "").strip().lower()
+        replacement = replacements.get(model)
+        if replacement:
+            backend_cfg["model"] = replacement
+            changed = True
+
+    for backend, replacements in _RETIRED_MODEL_REPLACEMENTS.items():
+        backend_cfg = trans_cfg.get(backend, {})
+        if not isinstance(backend_cfg, dict):
+            continue
+        model = str(backend_cfg.get("model", "") or "").strip().lower()
+        replacement = replacements.get(model)
+        if replacement:
+            backend_cfg["model"] = replacement
             changed = True
 
     doubao_cfg = trans_cfg.get("doubao", {})
@@ -1469,6 +1593,13 @@ def _ensure_asr_config(config: dict) -> bool:
         changed = True
 
     engine = str(asr_cfg.get("engine", "")).strip()
+    if engine == "whisper-large-v3-turbo":
+        engine = "sensevoice-small"
+        asr_cfg["engine"] = engine
+        changed = True
+    if str(asr_cfg.get("fallback_engine", "")).strip() == "whisper-large-v3-turbo":
+        asr_cfg["fallback_engine"] = "sensevoice-small"
+        changed = True
     if engine not in ASR_ENGINE_SPECS:
         engine = DEFAULT_ASR_ENGINE
         asr_cfg["engine"] = engine
@@ -1623,6 +1754,66 @@ def _ensure_asr_config(config: dict) -> bool:
             gemini_cfg[key] = value
             changed = True
 
+    streaming_cfg = asr_cfg.get("streaming")
+    if not isinstance(streaming_cfg, dict):
+        streaming_cfg = {}
+        asr_cfg["streaming"] = streaming_cfg
+        changed = True
+    for key, value in _ASR_STREAMING_DEFAULTS.items():
+        if key not in streaming_cfg:
+            streaming_cfg[key] = value
+            changed = True
+    if _coerce_int_range_config(
+        streaming_cfg,
+        "chunk_interval_ms",
+        int(_ASR_STREAMING_DEFAULTS["chunk_interval_ms"]),
+        100,
+        5000,
+    ):
+        changed = True
+    if _coerce_float_range_config(
+        streaming_cfg,
+        "chunk_window_s",
+        float(_ASR_STREAMING_DEFAULTS["chunk_window_s"]),
+        0.25,
+        30.0,
+    ):
+        changed = True
+    if _coerce_float_range_config(
+        streaming_cfg,
+        "ring_buffer_s",
+        float(_ASR_STREAMING_DEFAULTS["ring_buffer_s"]),
+        0.25,
+        60.0,
+    ):
+        changed = True
+    if _coerce_float_range_config(
+        streaming_cfg,
+        "recent_speech_hold_s",
+        float(_ASR_STREAMING_DEFAULTS["recent_speech_hold_s"]),
+        0.0,
+        5.0,
+    ):
+        changed = True
+    if _coerce_int_range_config(
+        streaming_cfg,
+        "partial_stability_hits",
+        int(_ASR_STREAMING_DEFAULTS["partial_stability_hits"]),
+        1,
+        10,
+    ):
+        changed = True
+
+    minimum_window_s = int(streaming_cfg["chunk_interval_ms"]) / 1000.0
+    if float(streaming_cfg["chunk_window_s"]) < minimum_window_s:
+        streaming_cfg["chunk_window_s"] = minimum_window_s
+        changed = True
+    if float(streaming_cfg["ring_buffer_s"]) < float(
+        streaming_cfg["chunk_window_s"]
+    ):
+        streaming_cfg["ring_buffer_s"] = float(streaming_cfg["chunk_window_s"])
+        changed = True
+
     return changed
 
 
@@ -1757,10 +1948,15 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             "volume": 0.8,
             "device": "cpu",
             "language": "auto",
+            "prewarm": True,
             "lazy_load": True,
             "optimized_inference": True,
             "conditioning_cache_size": 4,
             "enable_text_splitting": True,
+            "precision": "auto",
+            "cuda_device_index": 0,
+            "allow_cpu_fallback": True,
+            "cuda_tf32": True,
         },
     }
     for engine in TTS_API_ENGINE_IDS:
@@ -1837,9 +2033,12 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             changed = True
 
         for key, default in (
+            ("prewarm", True),
             ("lazy_load", True),
             ("optimized_inference", True),
             ("enable_text_splitting", True),
+            ("allow_cpu_fallback", True),
+            ("cuda_tf32", True),
         ):
             value = _coerce_bool_value(xtts_cfg.get(key), default)
             if xtts_cfg.get(key) is not value:
@@ -1853,6 +2052,30 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
         cache_size = max(0, min(cache_size, 16))
         if xtts_cfg.get("conditioning_cache_size") != cache_size:
             xtts_cfg["conditioning_cache_size"] = cache_size
+            changed = True
+
+        precision = str(xtts_cfg.get("precision", "auto") or "auto").strip().lower()
+        precision_aliases = {
+            "fp16": "float16",
+            "half": "float16",
+            "fp32": "float32",
+            "full": "float32",
+            "bf16": "bfloat16",
+        }
+        precision = precision_aliases.get(precision, precision)
+        if precision not in {"auto", "float16", "float32", "bfloat16"}:
+            precision = "auto"
+        if xtts_cfg.get("precision") != precision:
+            xtts_cfg["precision"] = precision
+            changed = True
+
+        try:
+            cuda_device_index = int(xtts_cfg.get("cuda_device_index", 0))
+        except (TypeError, ValueError):
+            cuda_device_index = 0
+        cuda_device_index = max(0, min(cuda_device_index, 15))
+        if xtts_cfg.get("cuda_device_index") != cuda_device_index:
+            xtts_cfg["cuda_device_index"] = cuda_device_index
             changed = True
 
     for engine in TTS_API_ENGINE_IDS:
@@ -2005,17 +2228,29 @@ def load_config() -> dict:
     if not config_path.exists():
         example_path = _example_path()
         if example_path.exists():
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(example_path, config_path)
+            atomic_write_bytes(config_path, example_path.read_bytes(), overwrite=False)
             created_new = True
         else:
             return {}
     example_path = _example_path()
     defaults = _load_json_dict(example_path) or {}
-    loaded = _load_json_dict(config_path)
+    loaded = _load_json_dict(config_path, secure=True)
+    recovered_from_last_good = False
+    if loaded is None or _config_is_severely_incomplete(loaded):
+        last_good = _load_json_dict(
+            _last_good_config_path(config_path),
+            secure=True,
+        )
+        if _config_is_complete(last_good):
+            logger.warning(
+                "Configuration was missing or severely incomplete; recovering the last-good backup"
+            )
+            loaded = last_good
+            recovered_invalid = True
+            recovered_from_last_good = True
     had_plaintext_secret = _contains_plaintext_api_key(loaded)
     loaded = _unprotect_config_for_runtime(loaded)
-    config_changed = False
+    config_changed = recovered_from_last_good
     if loaded is None:
         _backup_invalid_config(config_path)
         loaded = {}
@@ -2057,7 +2292,13 @@ def load_config() -> dict:
     ):
         config_changed = True
     if config_changed:
-        save_config(merged)
+        try:
+            save_config(merged)
+        except SecretProtectionError:
+            logger.exception(
+                "Configuration normalization could not be persisted because secret "
+                "protection failed; using the normalized runtime configuration only"
+            )
     logger.info(
         "Configuration ready (created_new=%s recovered_invalid=%s changed=%s)",
         created_new,
@@ -2069,25 +2310,25 @@ def load_config() -> dict:
 
 def save_config(config: dict) -> None:
     config_path = _config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
     storage_config = _protect_config_for_storage(config)
-    temp_path = config_path.with_name(
-        f"{config_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-    )
+    serialized = json.dumps(storage_config, ensure_ascii=False, indent=2)
     with _SAVE_LOCK:
-        try:
-            with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-                json.dump(storage_config, handle, ensure_ascii=False, indent=2)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, config_path)
-            logger.debug("Configuration saved to %s", config_path)
-        finally:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except Exception:
-                    pass
+        existing = _load_json_dict(config_path, secure=True)
+        if _config_is_complete(existing) and _config_is_severely_incomplete(
+            storage_config
+        ):
+            raise ValueError(
+                "Refusing to replace a complete configuration with a severely incomplete one"
+            )
+        if _config_is_complete(existing) and existing != storage_config:
+            atomic_copy_secure_file(
+                config_path,
+                _last_good_config_path(config_path),
+                max_bytes=_MAX_CONFIG_BYTES,
+                overwrite=True,
+            )
+        atomic_write_text(config_path, serialized, encoding="utf-8")
+        logger.debug("Configuration saved to %s", config_path)
 
 
 def get(config: dict, *keys, default=None):

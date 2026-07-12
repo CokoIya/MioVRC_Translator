@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import sys
 import os
 
@@ -39,6 +40,17 @@ class TestConfigEncryption(unittest.TestCase):
         protected = "dpapi:v1:somebase64data"
         result = config_manager._protect_secret(protected)
         assert result == protected
+
+    def test_protect_secret_raises_when_dpapi_is_unavailable(self):
+        with patch.object(config_manager, "_can_protect_secrets", return_value=False):
+            with self.assertRaises(config_manager.SecretProtectionError):
+                config_manager._protect_secret("must-not-be-plaintext")
+
+    def test_protect_secret_raises_when_dpapi_sealing_fails(self):
+        with patch.object(config_manager, "_can_protect_secrets", return_value=True), \
+             patch.object(config_manager, "_dpapi_protect", side_effect=OSError("failure")):
+            with self.assertRaises(config_manager.SecretProtectionError):
+                config_manager._protect_secret("must-not-be-plaintext")
 
     def test_unprotect_secret_plaintext(self):
         """Plaintext secrets should pass through unchanged."""
@@ -157,6 +169,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["style_bert_vits2"]["bert_language"] == "jp"
         assert config["tts"]["xtts"]["device"] == "cpu"
         assert config["tts"]["xtts"]["language"] == "auto"
+        assert config["tts"]["xtts"]["prewarm"] is True
         assert config["tts"]["xtts"]["optimized_inference"] is True
         assert config["tts"]["mimo_tts"]["model"] == "mimo-v2.5-tts"
         assert config["tts"]["mimo_tts"]["voice"] == "mimo_default"
@@ -251,6 +264,7 @@ class TestConfigValidation(unittest.TestCase):
                 "xtts": {
                     "device": "CUDA",
                     "language": "zh",
+                    "prewarm": "false",
                     "lazy_load": "false",
                     "optimized_inference": "false",
                     "enable_text_splitting": "true",
@@ -265,6 +279,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["xtts"]["device"] == "cuda"
         assert config["xtts_device"] == "cuda"
         assert config["tts"]["xtts"]["language"] == "zh-cn"
+        assert config["tts"]["xtts"]["prewarm"] is False
         assert config["tts"]["xtts"]["lazy_load"] is False
         assert config["tts"]["xtts"]["optimized_inference"] is False
         assert config["tts"]["xtts"]["enable_text_splitting"] is True
@@ -333,6 +348,14 @@ class TestConfigValidation(unittest.TestCase):
         assert config["audio"]["max_segment_s"] == 6.0
         assert config["audio"]["sample_rate"] == 16000
         assert config["audio"]["frame_duration_ms"] == 30
+
+    def test_audio_processing_forces_asr_native_16khz_rate(self):
+        config = {"audio": {"sample_rate": 48000}}
+
+        changed = config_manager._ensure_audio_device_config(config, loaded=config)
+
+        assert changed is True
+        assert config["audio"]["sample_rate"] == 16000
 
     def test_hotkey_config_defaults_mic_mute_hotkey(self):
         """New hotkey configs should default the microphone mute shortcut."""
@@ -507,6 +530,15 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is False
         assert config["asr"]["engine"] == "qwen3-asr"
 
+
+    def test_vrc_listen_whisper_migrates_to_sensevoice_not_follow_main(self):
+        config = {"vrc_listen": {"asr_engine": "whisper-large-v3-turbo"}}
+
+        changed = config_manager._ensure_vrc_listen_config(config, config)
+
+        assert changed is True
+        assert config["vrc_listen"]["asr_engine"] == "sensevoice-small"
+
     def test_ensure_asr_config_adds_online_provider_defaults(self):
         config = {"asr": {"engine": "qwen3-asr"}}
 
@@ -532,14 +564,45 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["whisper"]["language"] == "auto"
         assert config["asr"]["whisper"]["ncpu"] is None
         assert config["asr"]["gemini_live"]["transcribe_only"] is True
+        assert config["asr"]["streaming"] == {
+            "chunk_interval_ms": 250,
+            "chunk_window_s": 1.6,
+            "ring_buffer_s": 4.0,
+            "recent_speech_hold_s": 0.8,
+            "partial_stability_hits": 2,
+        }
 
-    def test_ensure_asr_config_adds_whisper_defaults(self):
+    def test_ensure_asr_config_bounds_streaming_cadence_and_buffer_relationships(self):
+        config = {
+            "asr": {
+                "engine": "sensevoice-small",
+                "streaming": {
+                    "chunk_interval_ms": 2000,
+                    "chunk_window_s": 0.5,
+                    "ring_buffer_s": 0.25,
+                    "recent_speech_hold_s": -1,
+                    "partial_stability_hits": 99,
+                },
+            }
+        }
+
+        changed = config_manager._ensure_asr_config(config)
+
+        assert changed is True
+        streaming = config["asr"]["streaming"]
+        assert streaming["chunk_interval_ms"] == 2000
+        assert streaming["chunk_window_s"] == 2.0
+        assert streaming["ring_buffer_s"] == 2.0
+        assert streaming["recent_speech_hold_s"] == 0.8
+        assert streaming["partial_stability_hits"] == 2
+
+    def test_ensure_asr_config_migrates_whisper_engine_to_sensevoice(self):
         config = {"asr": {"engine": "whisper-large-v3-turbo"}}
 
         changed = config_manager._ensure_asr_config(config)
 
         assert changed is True
-        assert config["asr"]["engine"] == "whisper-large-v3-turbo"
+        assert config["asr"]["engine"] == "sensevoice-small"
         assert (
             config["asr"]["whisper"]["model_id"]
             == "iic/speech_whisper-small_asr_english"
@@ -561,6 +624,7 @@ class TestConfigValidation(unittest.TestCase):
         changed = config_manager._ensure_asr_config(config)
 
         assert changed is True
+        assert config["asr"]["engine"] == "sensevoice-small"
         assert (
             config["asr"]["whisper"]["model_id"]
             == "iic/speech_whisper-small_asr_english"
@@ -591,6 +655,18 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash-2026-02-10"
+
+    def test_ensure_asr_config_preserves_qwen3_latest_flash_alias(self):
+        config = {
+            "asr": {
+                "engine": "qwen3-asr",
+                "qwen3_asr": {"model": "qwen3-asr-flash"},
+            }
+        }
+
+        config_manager._ensure_asr_config(config)
+
+        assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash"
 
     def test_ensure_asr_config_updates_known_qwen3_base_url_for_region(self):
         config = {
@@ -980,18 +1056,21 @@ class TestConfigValidation(unittest.TestCase):
         """OpenAI presets should expose real current model ids only."""
         presets = TRANSLATION_MODEL_PRESETS["openai"]
 
-        assert TRANSLATION_BACKENDS["openai"]["model"] == "gpt-5.5"
+        assert TRANSLATION_BACKENDS["openai"]["model"] == "gpt-5.6-sol"
+        assert "gpt-5.6-sol" in presets
+        assert "gpt-5.6-terra" in presets
+        assert "gpt-5.6-luna" in presets
         assert "gpt-5.5" in presets
-        assert "gpt-5.4" in presets
-        assert "gpt-5.4-mini" in presets
-        assert "gpt-5.4-nano" in presets
+        assert "gpt-5.4" not in presets
+        assert "gpt-5.4-mini" not in presets
+        assert "gpt-5.4-nano" not in presets
         assert "gpt-5.4-pro" not in presets
         assert "gpt-5.5-mini" not in presets
 
     def test_api_provider_presets_include_latest_model_families(self):
         """All hosted translation backends should expose their current model families."""
         expected_models = {
-            "qianwen": ("qwen3.7-max", "qwen-mt-plus", "qwen-mt-flash"),
+            "qianwen": ("qwen-mt-plus", "qwen-mt-flash"),
             "xiaomi": ("mimo-v2.5-pro", "mimo-v2-flash"),
             "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
             "zhipu": ("glm-5.1", "glm-5-turbo"),
@@ -1000,11 +1079,8 @@ class TestConfigValidation(unittest.TestCase):
             "hunyuan": ("hunyuan-turbos-latest", "hunyuan-turbo-latest"),
             "xai": ("grok-4.3",),
             "mistral": ("mistral-medium-3-5", "mistral-small-latest"),
-            "nvidia": (
-                "nvidia/nemotron-3-super-120b-a12b",
-                "nvidia/nemotron-3-nano-30b-a3b",
-            ),
-            "anthropic": ("claude-opus-4-8", "claude-sonnet-4-6"),
+            "nvidia": ("nvidia/nemotron-3-nano-30b-a3b",),
+            "anthropic": ("claude-sonnet-5", "claude-sonnet-4-6"),
         }
 
         for backend, models in expected_models.items():
@@ -1016,16 +1092,20 @@ class TestConfigValidation(unittest.TestCase):
         assert TRANSLATION_BACKENDS["mistral"]["model"] == "mistral-medium-3-5"
         assert (
             TRANSLATION_BACKENDS["nvidia"]["model"]
-            == "nvidia/nemotron-3-super-120b-a12b"
+            == "nvidia/nemotron-3-nano-30b-a3b"
         )
-        assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-opus-4-8"
-        assert TRANSLATION_BACKENDS["openai_compatible"]["model"] == "gpt-5.5"
+        assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert TRANSLATION_BACKENDS["openai_compatible"]["model"] == "gpt-5.6-sol"
         assert (
             TRANSLATION_BACKENDS["anthropic_compatible"]["model"] == "claude-sonnet-4-6"
         )
         assert TRANSLATION_BACKENDS["hunyuan"]["model"] == "hunyuan-turbos-latest"
+        assert "gpt-5.6-sol" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "gpt-5.6-terra" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "gpt-5.6-luna" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.5" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
-        assert "gpt-5.4-mini" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "gpt-5.4-mini" not in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "claude-sonnet-5" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert "claude-sonnet-4-6" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert (
             "claude-haiku-4-5-20251001"
@@ -1037,11 +1117,34 @@ class TestConfigValidation(unittest.TestCase):
         assert "qwen3.6-max-preview" not in TRANSLATION_MODEL_PRESETS["qianwen"]
         assert "qwen3.6-plus" not in TRANSLATION_MODEL_PRESETS["qianwen"]
         assert "qwen3.6-flash" not in TRANSLATION_MODEL_PRESETS["qianwen"]
+        assert "kimi-k2-thinking" not in TRANSLATION_MODEL_PRESETS["kimi"]
+        assert "grok-4.20-0309-reasoning" not in TRANSLATION_MODEL_PRESETS["xai"]
+        assert "magistral-small-latest" not in TRANSLATION_MODEL_PRESETS["mistral"]
+
+    def test_every_selectable_translation_model_survives_config_normalization(self):
+        for backend, models in TRANSLATION_MODEL_PRESETS.items():
+            for model in models:
+                with self.subTest(backend=backend, model=model):
+                    config = {
+                        "ui": {"language": "en"},
+                        "translation": {
+                            "backend": backend,
+                            "backend_source": "manual",
+                            backend: {"model": model},
+                        },
+                    }
+
+                    config_manager._ensure_translation_config(
+                        config,
+                        loaded={"translation": dict(config["translation"])},
+                    )
+
+                    assert config["translation"][backend]["model"] == model
 
     def test_model_profiles_expose_ten_point_live_scores(self):
         qwen_mt = get_backend_model_profile("qianwen", "qwen-mt-plus")
         gpt = get_backend_model_profile("openai", "gpt-5.5")
-        opus = get_backend_model_profile("anthropic", "claude-opus-4-8")
+        sonnet_5 = get_backend_model_profile("anthropic", "claude-sonnet-5")
         compat_gpt = get_backend_model_profile("openai_compatible", "gpt-5.5")
         compat_claude = get_backend_model_profile(
             "anthropic_compatible", "claude-sonnet-4-6"
@@ -1050,15 +1153,15 @@ class TestConfigValidation(unittest.TestCase):
 
         assert qwen_mt["score"] == "9.7"
         assert gpt["score"] == "9.5"
-        assert opus["score"] == "7.8"
+        assert sonnet_5["score"] == "9.2"
         assert compat_gpt["score"] == "9.5"
         assert compat_gpt["note"] == "general_high_quality"
         assert compat_claude["score"] == "9.2"
         assert compat_claude["note"] == "live_default"
         assert custom["score"] == "6.5"
-        assert float(qwen_mt["score"]) > float(opus["score"])
+        assert float(qwen_mt["score"]) > float(compat_claude["score"])
 
-    def test_legacy_provider_defaults_migrate_to_runnable_model_ids(self):
+    def test_legacy_provider_defaults_migrate_without_overwriting_selectable_fast_models(self):
         config = {
             "ui": {"language": "zh-CN"},
             "translation": {
@@ -1088,7 +1191,7 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert config["translation"]["qianwen"]["model"] == "qwen-mt-plus"
+        assert config["translation"]["qianwen"]["model"] == "qwen-mt-flash"
         assert (
             config["translation"]["doubao"]["base_url"]
             == "https://ark.cn-beijing.volces.com/api/v3"
@@ -1097,14 +1200,14 @@ class TestConfigValidation(unittest.TestCase):
         assert (
             config["translation"]["deepseek"]["base_url"] == "https://api.deepseek.com"
         )
-        assert config["translation"]["xiaomi"]["model"] == "mimo-v2.5-pro"
+        assert config["translation"]["xiaomi"]["model"] == "mimo-v2-flash"
         assert config["translation"]["gemini"]["model"] == "gemini-3.5-flash"
         assert (
             config["translation"]["nvidia"]["model"]
-            == TRANSLATION_BACKENDS["nvidia"]["model"]
+            == "nvidia/nemotron-3-nano-30b-a3b"
         )
 
-    def test_unroutable_qwen36_models_migrate_to_qwen37(self):
+    def test_unroutable_qwen36_models_migrate_to_qwen_mt(self):
         config = {
             "ui": {"language": "zh-CN"},
             "translation": {
@@ -1126,7 +1229,35 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert config["translation"]["qianwen"]["model"] == "qwen3.7-max"
+        assert config["translation"]["qianwen"]["model"] == "qwen-mt-plus"
+
+    def test_thinking_models_migrate_to_non_thinking_variants(self):
+        cases = (
+            ("deepseek", "deepseek-reasoner", "deepseek-v4-flash"),
+            ("kimi", "kimi-k2-thinking", "kimi-k2.6"),
+            (
+                "xai",
+                "grok-4.20-0309-reasoning",
+                "grok-4.20-0309-non-reasoning",
+            ),
+            ("mistral", "magistral-medium-latest", "mistral-medium-3-5"),
+        )
+        for backend, thinking_model, expected in cases:
+            with self.subTest(backend=backend, model=thinking_model):
+                config = {
+                    "translation": {
+                        "backend": backend,
+                        backend: {"model": thinking_model},
+                    }
+                }
+
+                changed = config_manager._ensure_translation_config(
+                    config,
+                    loaded={"translation": dict(config["translation"])},
+                )
+
+                assert changed is True
+                assert config["translation"][backend]["model"] == expected
 
     def test_legacy_openai_model_migrates_to_live_default(self):
         """Old GPT-4 defaults should migrate without touching newer official ids."""
@@ -1148,7 +1279,32 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert config["translation"]["openai"]["model"] == "gpt-5.5"
+        assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
+
+    def test_removed_gpt54_and_claude_opus_models_migrate_for_direct_and_proxy(self):
+        config = {
+            "translation": {
+                "backend": "openai_compatible",
+                "openai": {"model": "gpt-5.4"},
+                "openai_compatible": {"model": "gpt-5.4-mini"},
+                "anthropic": {"model": "claude-opus-4-8"},
+                "anthropic_compatible": {"model": "claude-opus-4-1-20250805"},
+            }
+        }
+
+        changed = config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert changed is True
+        assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
+        assert config["translation"]["openai_compatible"]["model"] == "gpt-5.6-sol"
+        assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert (
+            config["translation"]["anthropic_compatible"]["model"]
+            == "claude-sonnet-4-6"
+        )
 
     def test_corrupted_openai_claude_model_migrates_to_live_default(self):
         config = {
@@ -1169,7 +1325,7 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert config["translation"]["openai"]["model"] == "gpt-5.5"
+        assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
 
     def test_compatible_proxy_models_are_preserved(self):
         config = {
@@ -1215,7 +1371,7 @@ class TestConfigValidation(unittest.TestCase):
             == "https://claude-relay.example.com"
         )
 
-    def test_legacy_anthropic_model_migrates_to_current_default(self):
+    def test_legacy_anthropic_sonnet_migrates_to_supported_floor(self):
         config = {
             "ui": {"language": "zh-CN"},
             "translation": {
@@ -1234,10 +1390,7 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert (
-            config["translation"]["anthropic"]["model"]
-            == TRANSLATION_BACKENDS["anthropic"]["model"]
-        )
+        assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
 
     def test_current_openai_gpt41_model_is_preserved(self):
         """GPT-4.1 is still an official option and should not be auto-migrated."""
@@ -1285,6 +1438,17 @@ class TestPerformanceConfig(unittest.TestCase):
 class TestConfigSave(unittest.TestCase):
     """Test configuration saving."""
 
+    @staticmethod
+    def _complete_config(marker: str) -> dict:
+        return {
+            "asr": {},
+            "audio": {},
+            "osc": {},
+            "translation": {"marker": marker},
+            "tts": {},
+            "ui": {},
+        }
+
     def test_save_config_atomic(self):
         """Config save should be atomic (temp file + replace)."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1306,6 +1470,109 @@ class TestConfigSave(unittest.TestCase):
                 assert loaded["number"] == 42
             finally:
                 config_manager._config_path = original_config_path
+
+    def test_failed_secret_protection_leaves_existing_file_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            original_bytes = b'{"existing": true}\n'
+            config_path.write_bytes(original_bytes)
+            plaintext = "secret-that-must-never-reach-disk"
+            config = {"translation": {"openai": {"api_key": plaintext}}}
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_can_protect_secrets", return_value=False):
+                with self.assertRaises(config_manager.SecretProtectionError):
+                    config_manager.save_config(config)
+
+            assert config_path.read_bytes() == original_bytes
+            assert plaintext.encode("utf-8") not in config_path.read_bytes()
+            assert list(root.glob("config.json.*.tmp")) == []
+
+    def test_failed_secret_protection_never_creates_plaintext_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            plaintext = "secret-that-must-never-reach-disk"
+            config = {"translation": {"openai": {"api_key": plaintext}}}
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_can_protect_secrets", return_value=False):
+                with self.assertRaises(config_manager.SecretProtectionError):
+                    config_manager.save_config(config)
+
+            assert not config_path.exists()
+            assert list(root.glob("config.json.*.tmp")) == []
+
+    def test_load_returns_normalized_runtime_config_when_persistence_is_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            example_path = root / "config.example.json"
+            config_path.write_text(
+                json.dumps({"translation": {"openai": {"api_key": "legacy-plaintext"}}}),
+                encoding="utf-8",
+            )
+            example_path.write_text("{}", encoding="utf-8")
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_example_path", return_value=example_path), \
+                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"), \
+                 patch.object(config_manager, "_ensure_ui_config", return_value=True), \
+                 patch.object(
+                     config_manager,
+                     "save_config",
+                     side_effect=config_manager.SecretProtectionError("blocked"),
+                 ):
+                loaded = config_manager.load_config()
+
+            assert loaded["translation"]["openai"]["api_key"] == "legacy-plaintext"
+
+    def test_save_refuses_to_replace_complete_config_with_sparse_payload(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            original = self._complete_config("original")
+            config_path.write_text(json.dumps(original), encoding="utf-8")
+
+            with patch.object(config_manager, "_config_path", return_value=config_path):
+                with self.assertRaisesRegex(ValueError, "severely incomplete"):
+                    config_manager.save_config({})
+
+            assert json.loads(config_path.read_text(encoding="utf-8")) == original
+
+    def test_save_preserves_previous_complete_config_as_last_good(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            original = self._complete_config("original")
+            updated = self._complete_config("updated")
+            config_path.write_text(json.dumps(original), encoding="utf-8")
+
+            with patch.object(config_manager, "_config_path", return_value=config_path):
+                config_manager.save_config(updated)
+
+            backup_path = config_manager._last_good_config_path(config_path)
+            assert json.loads(backup_path.read_text(encoding="utf-8")) == original
+            assert json.loads(config_path.read_text(encoding="utf-8")) == updated
+
+    def test_load_recovers_severely_incomplete_config_from_last_good(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            example_path = root / "config.example.json"
+            backup_path = config_manager._last_good_config_path(config_path)
+            config_path.write_text("{}", encoding="utf-8")
+            example_path.write_text("{}", encoding="utf-8")
+            backup_path.write_text(
+                json.dumps(self._complete_config("recovered")),
+                encoding="utf-8",
+            )
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_example_path", return_value=example_path), \
+                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"):
+                loaded = config_manager.load_config()
+
+            assert loaded["translation"]["marker"] == "recovered"
 
 
 class TestConfigGet(unittest.TestCase):

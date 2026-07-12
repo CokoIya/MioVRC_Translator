@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import uuid
 import logging
-from typing import Iterable
+from typing import Any, Iterable
 
 import sounddevice as sd
 
@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def default_output_device_name() -> str | None:
+    try:
+        from .device_inventory import default_output_device_name as inventory_default_name
+
+        resolved = inventory_default_name()
+        if resolved:
+            return resolved
+    except Exception:
+        logger.debug("Central audio inventory default lookup failed", exc_info=True)
     try:
         default_out = sd.default.device[1]
         if default_out is None or int(default_out) < 0:
@@ -30,7 +38,15 @@ if sys.platform == "win32":
     CLSCTX_ALL = 23
     COINIT_MULTITHREADED = 0x0
     DEVICE_STATE_ACTIVE = 0x00000001
+    DEVICE_STATE_DISABLED = 0x00000002
+    DEVICE_STATE_NOTPRESENT = 0x00000004
+    DEVICE_STATE_UNPLUGGED = 0x00000008
+    DEVICE_STATEMASK_ALL = 0x0000000F
     E_RENDER = 0
+    E_CAPTURE = 1
+    E_CONSOLE = 0
+    E_MULTIMEDIA = 1
+    E_COMMUNICATIONS = 2
     STGM_READ = 0
     VT_LPWSTR = 31
     AUDIO_SESSION_STATE_ACTIVE = 1
@@ -104,6 +120,8 @@ if sys.platform == "win32":
     _ole32.CoCreateInstance.restype = HRESULT
     _ole32.PropVariantClear.argtypes = [POINTER(PROPVARIANT)]
     _ole32.PropVariantClear.restype = HRESULT
+    _ole32.CoTaskMemFree.argtypes = [c_void_p]
+    _ole32.CoTaskMemFree.restype = None
     _kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
     _kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
     _kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, POINTER(PROCESSENTRY32W)]
@@ -121,6 +139,13 @@ if sys.platform == "win32":
     )
     ReleaseProto = ctypes.WINFUNCTYPE(c_ulong, c_void_p)
     EnumAudioEndpointsProto = ctypes.WINFUNCTYPE(
+        HRESULT,
+        c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        POINTER(c_void_p),
+    )
+    GetDefaultAudioEndpointProto = ctypes.WINFUNCTYPE(
         HRESULT,
         c_void_p,
         wintypes.DWORD,
@@ -151,6 +176,16 @@ if sys.platform == "win32":
         c_void_p,
         wintypes.DWORD,
         POINTER(c_void_p),
+    )
+    DeviceGetIdProto = ctypes.WINFUNCTYPE(
+        HRESULT,
+        c_void_p,
+        POINTER(wintypes.LPWSTR),
+    )
+    DeviceGetStateProto = ctypes.WINFUNCTYPE(
+        HRESULT,
+        c_void_p,
+        POINTER(wintypes.DWORD),
     )
     PropertyStoreGetValueProto = ctypes.WINFUNCTYPE(
         HRESULT,
@@ -261,6 +296,183 @@ if sys.platform == "win32":
             except Exception:
                 pass
             _release(store)
+
+    def _get_device_id(device: c_void_p) -> str | None:
+        value = wintypes.LPWSTR()
+        hr = _vtable_method(device, 5, DeviceGetIdProto)(
+            device,
+            byref(value),
+        )
+        if not _succeeded(hr) or not value:
+            return None
+        try:
+            device_id = str(value.value or "").strip()
+            return device_id or None
+        finally:
+            try:
+                _ole32.CoTaskMemFree(cast(value, c_void_p))
+            except Exception:
+                pass
+
+    def _get_device_state(device: c_void_p) -> int | None:
+        state = wintypes.DWORD()
+        hr = _vtable_method(device, 6, DeviceGetStateProto)(
+            device,
+            byref(state),
+        )
+        if not _succeeded(hr):
+            return None
+        return int(state.value)
+
+    def _device_state_name(state: int | None) -> str:
+        if state == DEVICE_STATE_ACTIVE:
+            return "active"
+        if state == DEVICE_STATE_DISABLED:
+            return "disabled"
+        if state == DEVICE_STATE_NOTPRESENT:
+            return "not_present"
+        if state == DEVICE_STATE_UNPLUGGED:
+            return "unplugged"
+        if state is None:
+            return "unknown"
+        labels: list[str] = []
+        if state & DEVICE_STATE_ACTIVE:
+            labels.append("active")
+        if state & DEVICE_STATE_DISABLED:
+            labels.append("disabled")
+        if state & DEVICE_STATE_NOTPRESENT:
+            labels.append("not_present")
+        if state & DEVICE_STATE_UNPLUGGED:
+            labels.append("unplugged")
+        return "|".join(labels) or f"unknown_0x{state:08x}"
+
+    def _default_endpoint_ids(enumerator: c_void_p, flow: int) -> dict[str, str]:
+        defaults: dict[str, str] = {}
+        for role, role_name in (
+            (E_MULTIMEDIA, "multimedia"),
+            (E_CONSOLE, "console"),
+            (E_COMMUNICATIONS, "communications"),
+        ):
+            device = c_void_p()
+            try:
+                hr = _vtable_method(
+                    enumerator,
+                    4,
+                    GetDefaultAudioEndpointProto,
+                )(
+                    enumerator,
+                    flow,
+                    role,
+                    byref(device),
+                )
+                if not _succeeded(hr) or not device:
+                    continue
+                device_id = _get_device_id(device)
+                if device_id:
+                    defaults[role_name] = device_id
+            finally:
+                _release(device)
+        return defaults
+
+    def _list_audio_endpoints_for_flow(
+        enumerator: c_void_p,
+        *,
+        flow: int,
+        include_inactive: bool,
+    ) -> list[dict[str, Any]]:
+        collection = c_void_p()
+        state_mask = DEVICE_STATEMASK_ALL if include_inactive else DEVICE_STATE_ACTIVE
+        hr = _vtable_method(enumerator, 3, EnumAudioEndpointsProto)(
+            enumerator,
+            flow,
+            state_mask,
+            byref(collection),
+        )
+        if not _succeeded(hr) or not collection:
+            return []
+
+        defaults = _default_endpoint_ids(enumerator, flow)
+        default_ids = set(defaults.values())
+        result: list[dict[str, Any]] = []
+        try:
+            count = wintypes.UINT()
+            hr = _vtable_method(collection, 3, CollectionGetCountProto)(
+                collection,
+                byref(count),
+            )
+            if not _succeeded(hr):
+                return []
+
+            for index in range(int(count.value)):
+                device = c_void_p()
+                try:
+                    hr = _vtable_method(collection, 4, CollectionItemProto)(
+                        collection,
+                        index,
+                        byref(device),
+                    )
+                    if not _succeeded(hr) or not device:
+                        continue
+                    device_id = _get_device_id(device)
+                    name = _get_device_name(device)
+                    state = _get_device_state(device)
+                    if not device_id and not name:
+                        continue
+                    result.append(
+                        {
+                            "id": device_id,
+                            "name": name,
+                            "flow": "render" if flow == E_RENDER else "capture",
+                            "state": state,
+                            "state_name": _device_state_name(state),
+                            "active": state == DEVICE_STATE_ACTIVE,
+                            "is_default": bool(device_id and device_id in default_ids),
+                            "default_roles": [
+                                role_name
+                                for role_name, default_id in defaults.items()
+                                if device_id and default_id == device_id
+                            ],
+                        }
+                    )
+                finally:
+                    _release(device)
+            return result
+        finally:
+            _release(collection)
+
+    def list_audio_endpoints(*, include_inactive: bool = True) -> list[dict[str, Any]]:
+        """Return Windows CoreAudio endpoints with state and default-role data."""
+
+        should_uninitialize = False
+        enumerator = None
+        try:
+            should_uninitialize = _co_initialize()
+            enumerator = _create_device_enumerator()
+            if enumerator is None:
+                return []
+            endpoints = _list_audio_endpoints_for_flow(
+                enumerator,
+                flow=E_RENDER,
+                include_inactive=include_inactive,
+            )
+            endpoints.extend(
+                _list_audio_endpoints_for_flow(
+                    enumerator,
+                    flow=E_CAPTURE,
+                    include_inactive=include_inactive,
+                )
+            )
+            return endpoints
+        except Exception:
+            logger.debug("Windows CoreAudio endpoint enumeration failed", exc_info=True)
+            return []
+        finally:
+            _release(enumerator)
+            if should_uninitialize:
+                try:
+                    _ole32.CoUninitialize()
+                except Exception:
+                    pass
 
     def _list_process_ids(process_names: Iterable[str]) -> set[int]:
         targets = {str(name).strip().lower() for name in process_names if str(name).strip()}
@@ -436,6 +648,7 @@ if sys.platform == "win32":
         names = [str(name).strip() for name in process_names if str(name).strip()]
         process_ids = _list_process_ids(names)
         matches = _device_matches_for_process_ids(process_ids)
+        coreaudio_endpoints = list_audio_endpoints(include_inactive=True)
         active_device = next(
             (str(name).strip() for name, is_active in matches if is_active and str(name).strip()),
             None,
@@ -460,6 +673,24 @@ if sys.platform == "win32":
                 for name, is_active in matches
                 if str(name).strip()
             ],
+            "coreaudio": {
+                "endpoint_count": len(coreaudio_endpoints),
+                "active_count": sum(
+                    1 for endpoint in coreaudio_endpoints if endpoint.get("active")
+                ),
+                "inactive_count": sum(
+                    1 for endpoint in coreaudio_endpoints if not endpoint.get("active")
+                ),
+                "defaults": [
+                    {
+                        "name": endpoint.get("name"),
+                        "flow": endpoint.get("flow"),
+                        "roles": endpoint.get("default_roles", []),
+                    }
+                    for endpoint in coreaudio_endpoints
+                    if endpoint.get("is_default")
+                ],
+            },
         }
         logger.debug("Process output inspection: %s", snapshot)
         return snapshot
@@ -469,6 +700,10 @@ if sys.platform == "win32":
 
 
 else:
+
+    def list_audio_endpoints(*, include_inactive: bool = True) -> list[dict[str, Any]]:
+        del include_inactive
+        return []
 
     def detect_process_output_device_name(process_names: Iterable[str]) -> str | None:
         return None
@@ -483,6 +718,12 @@ else:
             "active_device": None,
             "has_active_audio_session": False,
             "matches": [],
+            "coreaudio": {
+                "endpoint_count": 0,
+                "active_count": 0,
+                "inactive_count": 0,
+                "defaults": [],
+            },
         }
 
     def is_process_running(process_names: Iterable[str]) -> bool:

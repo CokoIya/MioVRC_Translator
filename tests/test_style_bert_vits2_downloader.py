@@ -19,10 +19,22 @@ def test_hololive_bundle_metadata_matches_catalog():
         "config.json",
         "style_vectors.npy",
     )
+    assert len(bundle.revision) == 40
+    assert set(dict(bundle.file_sha256)) == set(bundle.files)
+    assert "/resolve/main/" not in downloader._repo_url(
+        "https://huggingface.co",
+        bundle.model_path,
+        bundle.files[0],
+    )
 
 
 def test_hololive_bundle_complete_checks_managed_model_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    monkeypatch.setattr(
+        downloader,
+        "_secure_file_matches_sha256",
+        lambda _path, _expected: True,
+    )
 
     target = model_store.style_bert_models_dir() / "SBV2_HoloLow"
     target.mkdir(parents=True, exist_ok=True)
@@ -45,6 +57,22 @@ def test_hololive_bundle_complete_rejects_partial_or_invalid_files(tmp_path, mon
     (target / "SBV2_HoloLow.safetensors").write_bytes(b"weights")
     (target / "config.json").write_text("{}", encoding="utf-8")
     (target / "style_vectors.npy").write_bytes(b"not-numpy")
+
+    assert downloader.hololive_bundle_is_complete("SBV2_HoloLow") is False
+
+
+def test_hololive_bundle_complete_rejects_hash_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    monkeypatch.setattr(
+        downloader,
+        "_secure_file_matches_sha256",
+        lambda _path, _expected: False,
+    )
+
+    target = model_store.style_bert_models_dir() / "SBV2_HoloLow"
+    target.mkdir(parents=True, exist_ok=True)
+    for filename in model_store.hololive_model_bundle("SBV2_HoloLow").files:
+        (target / filename).write_bytes(b"tampered")
 
     assert downloader.hololive_bundle_is_complete("SBV2_HoloLow") is False
 

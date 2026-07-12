@@ -23,6 +23,19 @@ class TTSVoice:
 class BaseTTS(ABC):
     """Base class for TTS engines."""
 
+    max_concurrent_synthesis = 1
+
+    def prewarm(self, voice: str = "") -> None:
+        """Optionally prepare heavy runtime state before the first utterance."""
+
+        del voice
+
+    def close_thread_context(self) -> None:
+        """Release resources owned only by the current synthesis worker."""
+
+    def close(self) -> None:
+        """Release process-level resources owned by this engine."""
+
     @abstractmethod
     def get_available_voices(self) -> list[TTSVoice]:
         """Get list of available voices.

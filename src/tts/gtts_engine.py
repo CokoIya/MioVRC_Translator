@@ -24,6 +24,7 @@ GTTS_LANGUAGE_MAP = {
 
 
 class GoogleTTS(BaseTTS):
+    max_concurrent_synthesis = 2
     """Google TTS engine using gTTS."""
 
     def __init__(self):

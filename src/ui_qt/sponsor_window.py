@@ -273,6 +273,7 @@ class SponsorWindow(QDialog):
         layout.setSpacing(8)
 
         self._qr_tip_label = QLabel(_t(_QR_TIP, self._lang))
+        self._qr_tip_label.setTextFormat(Qt.TextFormat.PlainText)
         self._qr_tip_label.setWordWrap(True)
         self._qr_tip_label.setObjectName("mutedLabel")
         layout.addWidget(self._qr_tip_label)
@@ -357,6 +358,7 @@ class SponsorWindow(QDialog):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(12, 8, 12, 8)
             label = QLabel(name)
+            label.setTextFormat(Qt.TextFormat.PlainText)
             label.setWordWrap(True)
             label.setObjectName("sponsorName")
             card_layout.addWidget(label)

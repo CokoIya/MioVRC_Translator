@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
 from src.translators.factory import create_translator
+from src.translators.base import translation_context_scope
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,15 @@ class MicPipeline:
             context_source=str(context_source or "mic"),
         )
 
-    def translate_plan(self, plan: MicTranslationPlan, translator: Any = None) -> tuple[RealtimeTranslationResult, Any]:
+    def translate_plan(
+        self,
+        plan: MicTranslationPlan,
+        translator: Any = None,
+        *,
+        context_session_id: object | None = None,
+        defer_context_commit: bool = False,
+        context_sequence: int | None = None,
+    ) -> tuple[RealtimeTranslationResult, Any]:
         active_translator = translator
         if plan.needs_api_translation and active_translator is None:
             active_translator = self._translator_factory(self._current_config())
@@ -141,39 +151,49 @@ class MicPipeline:
         translated_2 = ""
         translated_3 = ""
 
-        if plan.needs_primary_translation:
-            translated = active_translator.translate(
-                plan.original_text,
-                plan.source_language,
-                plan.target_language,
-                context_source=plan.context_source,
+        context_manager = (
+            translation_context_scope(
+                session_id=context_session_id,
+                auto_commit=not defer_context_commit,
+                sequence=context_sequence,
             )
-        if plan.output_format != "original_only" and plan.include_second_target:
-            if plan.second_target_language == plan.target_language:
-                translated_2 = translated
-            elif plan.source_language != "auto" and plan.source_language == plan.second_target_language:
-                translated_2 = plan.original_text
-            else:
-                translated_2 = active_translator.translate(
+            if context_session_id is not None
+            else nullcontext()
+        )
+        with context_manager:
+            if plan.needs_primary_translation:
+                translated = active_translator.translate(
                     plan.original_text,
                     plan.source_language,
-                    plan.second_target_language,
+                    plan.target_language,
                     context_source=plan.context_source,
                 )
-        if plan.output_format != "original_only" and plan.include_third_target:
-            if plan.third_target_language == plan.target_language:
-                translated_3 = translated
-            elif plan.third_target_language == plan.second_target_language and plan.include_second_target:
-                translated_3 = translated_2
-            elif plan.source_language != "auto" and plan.source_language == plan.third_target_language:
-                translated_3 = plan.original_text
-            else:
-                translated_3 = active_translator.translate(
-                    plan.original_text,
-                    plan.source_language,
-                    plan.third_target_language,
-                    context_source=plan.context_source,
-                )
+            if plan.output_format != "original_only" and plan.include_second_target:
+                if plan.second_target_language == plan.target_language:
+                    translated_2 = translated
+                elif plan.source_language != "auto" and plan.source_language == plan.second_target_language:
+                    translated_2 = plan.original_text
+                else:
+                    translated_2 = active_translator.translate(
+                        plan.original_text,
+                        plan.source_language,
+                        plan.second_target_language,
+                        context_source=plan.context_source,
+                    )
+            if plan.output_format != "original_only" and plan.include_third_target:
+                if plan.third_target_language == plan.target_language:
+                    translated_3 = translated
+                elif plan.third_target_language == plan.second_target_language and plan.include_second_target:
+                    translated_3 = translated_2
+                elif plan.source_language != "auto" and plan.source_language == plan.third_target_language:
+                    translated_3 = plan.original_text
+                else:
+                    translated_3 = active_translator.translate(
+                        plan.original_text,
+                        plan.source_language,
+                        plan.third_target_language,
+                        context_source=plan.context_source,
+                    )
 
         display_text = self._output_dispatcher.manual_display_text(translated, translated_2, translated_3)
         chatbox_text = self._output_dispatcher.format_chatbox_output(
@@ -257,17 +277,35 @@ class ListenPipeline:
             context_source=str(context_source or "listen"),
         )
 
-    def translate_plan(self, plan: ListenTranslationPlan, translator: Any = None) -> tuple[RealtimeTranslationResult, Any]:
+    def translate_plan(
+        self,
+        plan: ListenTranslationPlan,
+        translator: Any = None,
+        *,
+        context_session_id: object | None = None,
+        defer_context_commit: bool = False,
+        context_sequence: int | None = None,
+    ) -> tuple[RealtimeTranslationResult, Any]:
         active_translator = translator
         if plan.needs_api_translation:
             if active_translator is None:
                 active_translator = self._translator_factory(self._current_config())
-            translated = active_translator.translate(
-                plan.original_text,
-                plan.source_language,
-                plan.target_language,
-                context_source=plan.context_source,
+            context_manager = (
+                translation_context_scope(
+                    session_id=context_session_id,
+                    auto_commit=not defer_context_commit,
+                    sequence=context_sequence,
+                )
+                if context_session_id is not None
+                else nullcontext()
             )
+            with context_manager:
+                translated = active_translator.translate(
+                    plan.original_text,
+                    plan.source_language,
+                    plan.target_language,
+                    context_source=plan.context_source,
+                )
         else:
             translated = plan.original_text
 

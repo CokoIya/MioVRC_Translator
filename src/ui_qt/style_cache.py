@@ -83,7 +83,10 @@ class StyleCache:
     def _hash_params(self, params: dict) -> str:
         """生成参数的哈希值"""
         param_str = str(sorted(params.items()))
-        return hashlib.md5(param_str.encode()).hexdigest()[:8]
+        return hashlib.md5(
+            param_str.encode(),
+            usedforsecurity=False,
+        ).hexdigest()[:8]
 
     def get_size(self) -> int:
         """获取缓存大小（字节）"""

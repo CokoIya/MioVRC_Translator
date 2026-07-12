@@ -1,3 +1,5 @@
+import threading
+
 from PySide6.QtWidgets import QApplication
 
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
@@ -156,3 +158,59 @@ def test_manual_translation_controller_translates_third_when_second_not_requeste
     ]
     assert results[0].translated_text_2 == ""
     assert results[0].translated_text_3 == "en:你好"
+
+
+def test_overlapping_manual_requests_use_isolated_clients_and_retire_them(qtbot):
+    _app()
+    config = {"translation": {"output_format": "translated_only"}}
+    dispatcher = OutputDispatcher(config)
+    created = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    class Translator(_Translator):
+        def __init__(self, *, blocking: bool):
+            super().__init__()
+            self.blocking = blocking
+            self.closed = False
+
+        def translate(self, text, src, tgt, context_source=None):
+            if self.blocking:
+                first_started.set()
+                release_first.wait(timeout=3)
+            return super().translate(text, src, tgt, context_source)
+
+        def close(self):
+            self.closed = True
+
+    def factory(_config):
+        translator = Translator(blocking=not created)
+        created.append(translator)
+        return translator
+
+    controller = ManualTranslationController(
+        config,
+        dispatcher,
+        translator_factory=factory,
+        language_detector=lambda _text: "en",
+    )
+    finished: list[int] = []
+    controller.worker_finished.connect(finished.append)
+
+    controller.start(
+        ManualTranslationRequest("first", "en", "ja")
+    )
+    assert first_started.wait(timeout=1)
+    controller.start(
+        ManualTranslationRequest("second", "en", "ja")
+    )
+
+    qtbot.waitUntil(lambda: 2 in finished, timeout=1000)
+    assert len(created) == 2
+    assert created[0].closed is False
+    assert created[1].closed is True
+
+    release_first.set()
+    qtbot.waitUntil(lambda: 1 in finished, timeout=1000)
+    controller.close()
+    assert created[0].closed is True

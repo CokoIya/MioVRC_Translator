@@ -109,7 +109,8 @@ class WhisperASR(ASRProvider):
         corrector: LayeredASRCorrector | None = None,
     ):
         self.device = device
-        self.ncpu = max(ncpu or max(2, (os.cpu_count() or 4) // 2), 1)
+        default_ncpu = max(2, min(8, (os.cpu_count() or 4) // 2))
+        self.ncpu = max(ncpu or default_ncpu, 1)
         self.model_id = model_id
         self.model_revision = model_revision
         self._model = None
@@ -179,13 +180,17 @@ class WhisperASR(ASRProvider):
         del sample_rate
         del is_final
 
-        audio_input = np.asarray(audio, dtype=np.float32).flatten()
+        audio_input = np.ascontiguousarray(
+            np.asarray(audio, dtype=np.float32).reshape(-1)
+        )
         if audio_input.size == 0:
             return ""
 
         kwargs = {
             "input": audio_input,
-            "batch_size_s": 300,
+            # Realtime utterances are short. A smaller batch window avoids the
+            # memory reservation and scheduler overhead intended for long files.
+            "batch_size_s": 60,
             "disable_pbar": True,
         }
         lang = _normalize_language(language)

@@ -10,11 +10,16 @@ import logging
 import threading
 import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from src.utils.app_paths import writable_app_dir
+from src.utils.app_paths import (
+    atomic_write_text,
+    read_secure_text,
+    secure_file_path,
+    writable_app_dir,
+)
+from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,15 @@ CATALOG_SOURCE_URLS = (
     MIRROR_CATALOG_URL,
 )
 _TIMEOUT_S = 8
+_MAX_CACHE_BYTES = 4 * 1024 * 1024
+_MAX_REMOTE_BYTES = 4 * 1024 * 1024
 _CACHE_FILENAME = "catalog_cache.json"
+_TRUSTED_SOURCE_HOSTS = frozenset(
+    filter(
+        None,
+        (urllib.parse.urlsplit(url).hostname for url in CATALOG_SOURCE_URLS),
+    )
+)
 
 _EMPTY_CATALOG: dict = {
     "version": 1,
@@ -46,25 +59,30 @@ CatalogCallback = Callable[[dict], None]
 
 
 def _cache_path() -> Path:
-    return writable_app_dir() / _CACHE_FILENAME
+    return secure_file_path(writable_app_dir() / _CACHE_FILENAME)
 
 
 def _load_cache() -> dict | None:
-    path = _cache_path()
-    if not path.exists():
-        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else None
+        path = _cache_path()
+        if not path.exists():
+            return None
+        data = json.loads(
+            read_secure_text(path, encoding="utf-8", max_bytes=_MAX_CACHE_BYTES)
+        )
+        return _validate_catalog_payload(data)
     except Exception:
+        logger.debug("Failed to load %s cache", "catalog", exc_info=True)
         return None
 
 
 def _save_cache(data: dict) -> None:
     try:
         path = _cache_path()
-        path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        atomic_write_text(
+            path,
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
     except Exception:
         logger.debug("Failed to save catalog cache", exc_info=True)
@@ -89,9 +107,19 @@ def _validate_catalog_payload(data: object) -> dict:
 
 
 def _fetch_remote_from_url(url: str) -> dict:
-    with urllib.request.urlopen(_catalog_request_url(url), timeout=_TIMEOUT_S) as resp:
+    with open_trusted_https_url(
+        _catalog_request_url(url),
+        trusted_hosts=_TRUSTED_SOURCE_HOSTS,
+        timeout=_TIMEOUT_S,
+        label="catalog",
+    ) as resp:
         charset = resp.headers.get_content_charset("utf-8")
-        raw = resp.read().decode(charset)
+        payload = read_bounded_response(
+            resp,
+            limit=_MAX_REMOTE_BYTES,
+            label="catalog response",
+        )
+        raw = payload.decode(charset)
     return _validate_catalog_payload(json.loads(raw))
 
 

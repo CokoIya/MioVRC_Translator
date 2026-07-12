@@ -1,18 +1,24 @@
 {
-  "version": "v1.3.7.8",
-  "installer_name": "MioTranslator-Setup-v1.3.7.8.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.8/MioTranslator-Setup-v1.3.7.8.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.8/MioTranslator-Setup-v1.3.7.8.exe",
-  "size_bytes": 467415052,
-  "sha256": "75f002645d17a576d7445371fb709addfd9d294aca7406b6d00d2298c057d046",
-  "notes": "v1.3.7.8 fixes the in-app Install & Restart updater flow and reduces startup/idle resource usage when using only online services or text translation; Voice Cloning, reference audio import, and multilingual support remain available, with local ASR/TTS models still downloaded on demand.",
+  "version": "v1.3.7.9",
+  "installer_name": "MioTranslator-Setup-v1.3.7.9.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.9/MioTranslator-Setup-v1.3.7.9.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.9/MioTranslator-Setup-v1.3.7.9.exe",
+  "size_bytes": 463531454,
+  "sha256": "fcf339b39573fb0b300b7824970bc2857517d260ca52d3843621de9a0493b4ad",
+  "installer_signature_algorithm": "ed25519",
+  "installer_signature_key_id": "mio-installer-ed25519-v1",
+  "installer_signature": "93360fcc60e3b80440201c7e7b1d97f01a8ad9bc47f70a8671722cf101752fc650b7a0dbc30702184468c3fc4f97ae7f050bd0080da03b2fcd6944b6201fa905",
+  "notes": "v1.3.7.9 hardens in-app updates with Ed25519 verification and delivers a bounded concurrent ASR → rewrite → translation → ordered OSC/TTS pipeline, faster ASR/translation/TTS, reliable Windows audio hot-plug detection, isolated reverse translation, improved XTTS CUDA support, and refreshed AI model catalogs.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7.8 修复应用内更新下载后“安装并重启”无响应的问题，并降低仅使用在线服务/文本翻译时的启动与空闲资源占用；Voice Cloning、参考音频导入和多语言支持继续保留，本地 ASR/TTS 模型仍按需下载。",
-    "en": "v1.3.7.8 fixes the in-app Install & Restart updater flow and reduces startup/idle resource usage when using only online services or text translation; Voice Cloning, reference audio import, and multilingual support remain available, with local ASR/TTS models still downloaded on demand.",
-    "ja": "v1.3.7.8 では、アプリ内更新の「インストールして再起動」が反応しない問題を修正し、オンラインサービスやテキスト翻訳のみを使う場合の起動時/待機時リソース使用量を削減しました。Voice Cloning、参照音声インポート、多言語対応は引き続き利用できます。",
-    "ru": "v1.3.7.8 исправляет кнопку Install & Restart во встроенном обновлении и снижает расход ресурсов при использовании только онлайн-сервисов или текстового перевода; Voice Cloning, импорт эталонного аудио и многоязычная поддержка остаются доступны, локальные модели ASR/TTS загружаются по требованию.",
-    "ko": "v1.3.7.8은 앱 내 업데이트의 Install & Restart가 반응하지 않던 문제를 수정하고, 온라인 서비스나 텍스트 번역만 사용할 때의 시작/대기 리소스 사용량을 줄입니다. Voice Cloning, 기준 음성 가져오기, 다국어 지원은 계속 사용할 수 있으며 로컬 ASR/TTS 모델은 필요할 때 다운로드됩니다."
+    "zh-CN": "v1.3.7.9 通过 Ed25519 验证强化应用内更新，并带来有界并发的 ASR → 改写 → 翻译 → 顺序 OSC/TTS 流水线、更快的 ASR/翻译/TTS、可靠的 Windows 音频热插拔检测、隔离的反向翻译、改进的 XTTS CUDA 支持以及更新后的 AI 模型目录。",
+    "en": "v1.3.7.9 hardens in-app updates with Ed25519 verification and delivers a bounded concurrent ASR → rewrite → translation → ordered OSC/TTS pipeline, faster ASR/translation/TTS, reliable Windows audio hot-plug detection, isolated reverse translation, improved XTTS CUDA support, and refreshed AI model catalogs.",
+    "ja": "v1.3.7.9 は Ed25519 検証でアプリ内更新を強化し、上限付き並行 ASR → リライト → 翻訳 → 順序付き OSC/TTS パイプライン、高速化した ASR/翻訳/TTS、安定した Windows オーディオのホットプラグ検出、分離された逆翻訳、改善された XTTS CUDA 対応、更新済み AI モデルカタログを提供します。",
+    "ru": "v1.3.7.9 усиливает встроенное обновление проверкой Ed25519 и добавляет ограниченный параллельный конвейер ASR → перезапись → перевод → упорядоченный OSC/TTS, ускоряет ASR/перевод/TTS, улучшает обнаружение аудиоустройств Windows при горячем подключении, изолирует обратный перевод, улучшает XTTS CUDA и обновляет каталог моделей ИИ.",
+    "ko": "v1.3.7.9은 Ed25519 검증으로 앱 내 업데이트를 강화하고, 용량이 제한된 동시 ASR → 재작성 → 번역 → 순서 보장 OSC/TTS 파이프라인, 더 빠른 ASR/번역/TTS, 안정적인 Windows 오디오 핫플러그 감지, 격리된 역번역, 개선된 XTTS CUDA 지원 및 최신 AI 모델 카탈로그를 제공합니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-06T14:21:05+09:00"
+  "published_at": "2026-07-12T12:11:16+09:00",
+  "signature_algorithm": "ed25519",
+  "signature_key_id": "mio-update-ed25519-v1",
+  "signature": "c73b6a8ea289f97a2de859b707f35f9143d81faa772b8400141aa51f587988f4a433b375e0a956c2b44683c9a8437f1f28194a7644faa3f47ed21e3c4b2a7200"
 }

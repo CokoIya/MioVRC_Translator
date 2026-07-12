@@ -4,6 +4,7 @@ from __future__ import annotations
 import builtins
 import json
 import importlib
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 from pathlib import Path
@@ -35,6 +36,28 @@ def _write_style_model(root: Path, name: str = "sample_voice") -> Path:
     return model_dir
 
 
+def test_sbv2_probe_does_not_throttle_process_wide_torch_threads(monkeypatch):
+    setter_calls: list[tuple[str, int]] = []
+    fake_torch = SimpleNamespace(
+        get_num_threads=lambda: 16,
+        get_num_interop_threads=lambda: 8,
+        set_num_threads=lambda value: setter_calls.append(("threads", value)),
+        set_num_interop_threads=lambda value: setter_calls.append(("interop", value)),
+    )
+    monkeypatch.setattr(engine_store, "torch", fake_torch)
+    monkeypatch.setattr(engine_store, "_SBV2_CPU_RUNTIME_CONFIGURED", False)
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        monkeypatch.delenv(name, raising=False)
+
+    engine_store._configure_style_bert_cpu_runtime()
+
+    assert setter_calls == []
+    assert all(
+        name not in os.environ
+        for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+    )
+
+
 def test_import_style_model_folder_and_list_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     source_dir = _write_style_model(tmp_path / "source")
@@ -59,6 +82,45 @@ def test_import_model_root_accepts_multiple_children(tmp_path, monkeypatch):
     imported = model_store.import_style_bert_model_path(source_root)
 
     assert [item.name for item in imported] == ["voice_a", "voice_b"]
+
+
+@pytest.mark.parametrize("suffix", (".pth", ".pt"))
+def test_import_rejects_pickle_backed_style_bert_weights(tmp_path, suffix):
+    model_dir = _write_style_model(tmp_path / "source")
+    (model_dir / "voice.safetensors").unlink()
+    (model_dir / f"voice{suffix}").write_bytes(b"pickle")
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Convert the model to .safetensors",
+    ):
+        model_store.inspect_style_bert_model_dir(model_dir)
+
+
+def test_newer_pickle_weight_cannot_override_safe_style_bert_weight(tmp_path):
+    model_dir = _write_style_model(tmp_path / "source")
+    unsafe = model_dir / "newer.pth"
+    unsafe.write_bytes(b"pickle")
+    newer = (model_dir / "voice.safetensors").stat().st_mtime_ns + 10_000_000
+    os.utime(unsafe, ns=(newer, newer))
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Unsafe pickle-backed model weights",
+    ):
+        model_store.inspect_style_bert_model_dir(model_dir)
+
+
+def test_import_rejects_unsupported_onnx_style_bert_weight(tmp_path):
+    model_dir = _write_style_model(tmp_path / "source")
+    (model_dir / "voice.safetensors").unlink()
+    (model_dir / "voice.onnx").write_bytes(b"onnx")
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Unsupported Style-Bert-VITS2",
+    ):
+        model_store.inspect_style_bert_model_dir(model_dir)
 
 
 def test_style_bert_engine_lists_and_synthesizes_imported_voice(tmp_path, monkeypatch):
@@ -509,6 +571,24 @@ def test_style_bert_installs_offline_g2p_fallback_when_nltk_is_missing(monkeypat
     assert g2p_en.G2p()("hello") == ["HH", "AH0", "L", "OW1"]
 
 
+def test_style_bert_enforces_nltk_path_security_before_resource_access(monkeypatch):
+    pathsec = SimpleNamespace(ENFORCE=False)
+    observed = []
+
+    def find(resource_name):
+        observed.append((resource_name, pathsec.ENFORCE))
+        return object()
+
+    fake_nltk = SimpleNamespace(
+        pathsec=pathsec,
+        data=SimpleNamespace(find=find),
+    )
+    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+
+    assert engine_store._nltk_zip_resource_ready("corpora/cmudict.zip") is True
+    assert observed == [("corpora/cmudict.zip", True)]
+
+
 def test_style_bert_repairs_packaged_g2p_module_spec(monkeypatch):
     fake_module = ModuleType("g2p_en")
     fake_module.__spec__ = None
@@ -518,3 +598,235 @@ def test_style_bert_repairs_packaged_g2p_module_spec(monkeypatch):
 
     assert fake_module.__spec__ is not None
     assert fake_module.__spec__ is importlib.util.find_spec("g2p_en")
+
+
+
+def _managed_install_fixture(tmp_path: Path):
+    root = tmp_path / "managed"
+    root.mkdir()
+    target = _write_style_model(root, "sample_voice")
+    (target / "old.marker").write_text("old", encoding="utf-8")
+    staging = _write_style_model(root, ".incoming.staging")
+    (staging / "new.marker").write_text("new", encoding="utf-8")
+    _, staging_snapshot = model_store._scan_model_tree(staging)
+    return root, target, staging, staging_snapshot
+
+
+def test_staged_publication_keeps_existing_target_recoverable_until_validated(
+    tmp_path,
+    monkeypatch,
+):
+    root, target, staging, staging_snapshot = _managed_install_fixture(tmp_path)
+    original_inspect = model_store.inspect_style_bert_model_dir
+    observed_backups: list[Path] = []
+
+    def inspect_published(path):
+        backups = [
+            candidate
+            for candidate in root.iterdir()
+            if candidate.name.startswith(".sample_voice.")
+            and candidate.name.endswith(".backup")
+        ]
+        assert len(backups) == 1
+        assert (backups[0] / "old.marker").read_text(encoding="utf-8") == "old"
+        assert (Path(path) / "new.marker").read_text(encoding="utf-8") == "new"
+        observed_backups.extend(backups)
+        return original_inspect(path)
+
+    monkeypatch.setattr(model_store, "inspect_style_bert_model_dir", inspect_published)
+
+    installed = model_store._install_staged_tree(
+        staging,
+        staging_snapshot,
+        target,
+        root,
+    )
+
+    assert installed.name == "sample_voice"
+    assert observed_backups
+    assert (target / "new.marker").read_text(encoding="utf-8") == "new"
+    assert not (target / "old.marker").exists()
+    assert not any(path.exists() for path in observed_backups)
+
+
+def test_post_install_validation_failure_restores_previous_target(tmp_path, monkeypatch):
+    root, target, staging, staging_snapshot = _managed_install_fixture(tmp_path)
+
+    def fail_validation(_path):
+        raise model_store.StyleBertVits2ModelError("forced post-install failure")
+
+    monkeypatch.setattr(model_store, "inspect_style_bert_model_dir", fail_validation)
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="forced post-install failure",
+    ):
+        model_store._install_staged_tree(
+            staging,
+            staging_snapshot,
+            target,
+            root,
+        )
+
+    assert (target / "old.marker").read_text(encoding="utf-8") == "old"
+    assert not (target / "new.marker").exists()
+    assert not any(path.name.endswith(".backup") for path in root.iterdir())
+
+
+def test_staging_tampering_is_rejected_before_existing_target_moves(tmp_path):
+    root, target, staging, staging_snapshot = _managed_install_fixture(tmp_path)
+    (staging / "voice.safetensors").write_bytes(b"tampered weights")
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Staged model changed before atomic publication",
+    ):
+        model_store._install_staged_tree(
+            staging,
+            staging_snapshot,
+            target,
+            root,
+        )
+
+    assert (target / "old.marker").read_text(encoding="utf-8") == "old"
+    assert staging.exists()
+    assert not any(path.name.endswith(".backup") for path in root.iterdir())
+
+
+def test_tampered_backup_is_not_republished_during_rollback(tmp_path, monkeypatch):
+    root, target, staging, staging_snapshot = _managed_install_fixture(tmp_path)
+    tampered_backups: list[Path] = []
+
+    def tamper_backup_then_fail(_path):
+        backup = next(path for path in root.iterdir() if path.name.endswith(".backup"))
+        (backup / "old.marker").write_text("tampered", encoding="utf-8")
+        tampered_backups.append(backup)
+        raise model_store.StyleBertVits2ModelError("forced validation failure")
+
+    monkeypatch.setattr(
+        model_store,
+        "inspect_style_bert_model_dir",
+        tamper_backup_then_fail,
+    )
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="could not be restored safely",
+    ):
+        model_store._install_staged_tree(
+            staging,
+            staging_snapshot,
+            target,
+            root,
+        )
+
+    assert not target.exists()
+    assert len(tampered_backups) == 1
+    assert tampered_backups[0].exists()
+    assert (tampered_backups[0] / "old.marker").read_text(encoding="utf-8") == "tampered"
+
+
+def test_tree_snapshot_remains_equal_after_root_directory_rename(tmp_path):
+    original = tmp_path / "original"
+    nested = original / "nested"
+    nested.mkdir(parents=True)
+    (nested / "payload.bin").write_bytes(b"payload")
+    _, before = model_store._scan_model_tree(original)
+    renamed = tmp_path / "renamed"
+
+    os.rename(original, renamed)
+    _, after = model_store._scan_model_tree(renamed)
+
+    assert after == before
+
+
+def _write_file_at_tree_depth(root: Path, depth: int) -> Path:
+    root.mkdir()
+    parent = root
+    for _index in range(1, depth):
+        parent = parent / "d"
+        parent.mkdir()
+    payload = parent / "payload.bin"
+    payload.write_bytes(b"payload")
+    return payload
+
+
+def test_model_tree_accepts_file_at_maximum_depth(tmp_path):
+    root = tmp_path / "depth-16"
+    payload = _write_file_at_tree_depth(root, model_store._MAX_MODEL_DEPTH)
+
+    _, snapshot = model_store._scan_model_tree(root)
+
+    assert any(entry.relative_path == payload.relative_to(root).as_posix() for entry in snapshot.entries)
+
+
+def test_model_tree_rejects_file_beyond_maximum_depth(tmp_path):
+    root = tmp_path / "depth-17"
+    _write_file_at_tree_depth(root, model_store._MAX_MODEL_DEPTH + 1)
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="maximum depth",
+    ):
+        model_store._scan_model_tree(root)
+
+
+def test_remove_validated_tree_wraps_nested_directory_identity_failure(
+    tmp_path,
+    monkeypatch,
+):
+    managed = tmp_path / "managed"
+    tree = managed / "tree"
+    nested = tree / "nested"
+    nested.mkdir(parents=True)
+    _, expected_snapshot = model_store._scan_model_tree(tree)
+    original_scan = model_store._scan_model_tree
+    replaced: list[Path] = []
+
+    def scan_then_replace(path):
+        result = original_scan(path)
+        if Path(path) == tree and not replaced:
+            nested.rmdir()
+            nested.mkdir()
+            replaced.append(nested)
+        return result
+
+    monkeypatch.setattr(model_store, "_scan_model_tree", scan_then_replace)
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Could not remove managed model directory",
+    ):
+        model_store._remove_validated_tree(tree, managed, expected_snapshot)
+
+    assert nested.exists()
+
+
+def test_remove_validated_tree_wraps_root_identity_failure(tmp_path, monkeypatch):
+    managed = tmp_path / "managed"
+    tree = managed / "tree"
+    tree.mkdir(parents=True)
+    _, expected_snapshot = model_store._scan_model_tree(tree)
+    original_scan = model_store._scan_model_tree
+    quarantine = managed / "quarantine"
+    replaced = False
+
+    def scan_then_replace(path):
+        nonlocal replaced
+        result = original_scan(path)
+        if Path(path) == tree and not replaced:
+            os.rename(tree, quarantine)
+            tree.mkdir()
+            replaced = True
+        return result
+
+    monkeypatch.setattr(model_store, "_scan_model_tree", scan_then_replace)
+
+    with pytest.raises(
+        model_store.StyleBertVits2ModelError,
+        match="Could not remove managed model tree",
+    ):
+        model_store._remove_validated_tree(tree, managed, expected_snapshot)
+
+    assert tree.exists()
+    assert quarantine.exists()

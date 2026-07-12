@@ -58,6 +58,23 @@ def test_translation_failure_backoff_cools_down_and_resets(monkeypatch):
     assert window._translation_failure_streak == 0
 
 
+def test_reverse_translation_backoff_does_not_block_microphone(monkeypatch):
+    monkeypatch.setattr("src.ui_qt.main_window.time.monotonic", lambda: 100.0)
+    window = _window_for_backoff()
+
+    cooldown = window._record_translation_failure(
+        _friendly("network"),
+        DESKTOP_SOURCE,
+    )
+
+    assert cooldown == 12.0
+    assert window._translation_cooldown_active(DESKTOP_SOURCE) is True
+    assert window._translation_cooldown_active("mic") is False
+
+    window._record_translation_success(DESKTOP_SOURCE)
+    assert window._translation_cooldown_active(DESKTOP_SOURCE) is False
+
+
 def test_translation_cooldown_only_skips_segments_that_need_api():
     window = _window_for_backoff()
     window._current_tgt_lang = "ja"

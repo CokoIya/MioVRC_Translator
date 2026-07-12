@@ -89,17 +89,23 @@ def _read_wav_chunks(data: bytes) -> tuple[WavInfo, bytes]:
     if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         raise RuntimeError("Invalid WAV data")
 
+    riff_size = struct.unpack_from("<I", data, 4)[0]
+    declared_end = 8 + riff_size
+    chunk_limit = declared_end if 12 <= declared_end <= len(data) else len(data)
+
     fmt_chunk: bytes | None = None
     data_chunk: bytes | None = None
     offset = 12
-    data_len = len(data)
 
-    while offset + 8 <= data_len:
+    while offset + 8 <= chunk_limit:
         chunk_id = data[offset : offset + 4]
         chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
         chunk_start = offset + 8
         chunk_end = chunk_start + chunk_size
-        if chunk_end > data_len:
+        if chunk_end > chunk_limit:
+            if chunk_id == b"data" and chunk_start < chunk_limit:
+                data_chunk = data[chunk_start:chunk_limit]
+                break
             raise RuntimeError("Truncated WAV chunk")
         chunk_data = data[chunk_start:chunk_end]
 
@@ -108,6 +114,8 @@ def _read_wav_chunks(data: bytes) -> tuple[WavInfo, bytes]:
         elif chunk_id == b"data":
             data_chunk = chunk_data
 
+        if fmt_chunk is not None and data_chunk is not None:
+            break
         offset = chunk_end + (chunk_size & 1)
 
     if fmt_chunk is None:

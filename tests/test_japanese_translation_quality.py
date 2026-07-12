@@ -7,7 +7,11 @@ import pytest
 
 from src.asr.sensevoice_asr import SenseVoiceASR
 from src.translators.anthropic_translator import AnthropicTranslator
-from src.translators.base import BaseTranslator
+from src.translators.base import (
+    BaseTranslator,
+    TranslationContextStore,
+    translation_context_scope,
+)
 from src.translators.openai_translator import OpenAITranslator
 from src.utils.lang_detect import detect_language
 
@@ -40,7 +44,7 @@ def _openai_translator_stub(
 ):
     translator = OpenAITranslator.__new__(OpenAITranslator)
     BaseTranslator.__init__(translator, prompt_profile=prompt_profile or {})
-    translator.model = "qwen-mt-flash" if uses_qwen_mt else "qwen3.7-max"
+    translator.model = "qwen-mt-flash" if uses_qwen_mt else "qwen-plus"
     translator._base_url = (
         "https://dashscope.aliyuncs.com/compatible-mode/v1"
         if is_qwen
@@ -436,6 +440,25 @@ def test_qwen_mt_request_uses_dashscope_translation_shape():
     assert "max_completion_tokens" not in kwargs
 
 
+def test_qwen_mt_switches_to_contextual_prompt_for_ambiguous_followup():
+    translator = _openai_translator_stub(uses_qwen_mt=True)
+    translator._client = _CaptureChatClient()
+    translator._extra_body = {}
+    translator._omits_temperature = False
+    translator._uses_max_completion_tokens = False
+    translator._max_output_tokens = 192
+
+    assert translator._translate_with_chat_completions(
+        "that one too",
+        "en",
+        "ja",
+        context_snapshot=(("the blue avatar", "青いアバター"),),
+    ) == "ok"
+    kwargs = translator._client.chat.completions.kwargs
+    assert "translation_options" not in kwargs.get("extra_body", {})
+    assert "the blue avatar" in kwargs["messages"][0]["content"]
+
+
 def test_dashscope_prompt_request_flattens_system_role():
     translator = _openai_translator_stub(is_qwen=True, uses_qwen_mt=False)
     translator._base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -507,7 +530,7 @@ def test_anthropic_request_includes_roleplay_profile(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=_AnthropicClient))
     translator = AnthropicTranslator(
         api_key="test-key",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
         prompt_profile={
             "mode": "roleplay",
             "tone": "playful",
@@ -541,6 +564,237 @@ def test_deepseek_v4_translation_disables_thinking(monkeypatch):
     assert kwargs["extra_body"]["thinking"]["type"] == "disabled"
 
 
+def test_openai_gpt_translation_disables_reasoning_and_uses_short_budget(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
+    translator = OpenAITranslator(
+        api_key="test-key",
+        model="gpt-5.6-sol",
+        base_url="https://api.openai.com/v1",
+        provider_id="openai",
+    )
+    translator._client = _CaptureChatClient()
+
+    assert translator._translate_with_chat_completions("hello", "en", "zh") == "ok"
+    kwargs = translator._client.chat.completions.kwargs
+    assert kwargs["reasoning_effort"] == "none"
+    assert "temperature" not in kwargs
+    assert 32 <= kwargs["max_completion_tokens"] <= 64
+
+
+def test_qwen_general_translation_disables_thinking(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
+    translator = OpenAITranslator(
+        api_key="test-key",
+        model="qwen-plus",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        provider_id="qianwen",
+    )
+    translator._client = _CaptureChatClient()
+
+    assert translator._translate_with_chat_completions("hello", "en", "zh") == "ok"
+    assert translator._client.chat.completions.kwargs["extra_body"]["enable_thinking"] is False
+
+
+def test_no_thinking_control_has_one_compatibility_fallback(monkeypatch):
+    class RejectingCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if "reasoning_effort" in kwargs:
+                raise RuntimeError("unsupported parameter: reasoning_effort")
+            message = SimpleNamespace(content="ok")
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
+    translator = OpenAITranslator(
+        api_key="test-key",
+        model="gpt-5.6-terra",
+        base_url="https://relay.example.com/v1",
+        provider_id="openai_compatible",
+    )
+    completions = RejectingCompletions()
+    translator._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+
+    assert translator.translate("hello", "en", "zh") == "ok"
+    assert len(completions.calls) == 2
+    assert completions.calls[0]["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in completions.calls[1]
+
+    assert translator.translate("goodbye", "en", "zh") == "ok"
+    assert len(completions.calls) == 3
+    assert "reasoning_effort" not in completions.calls[2]
+
+
+def test_relay_falls_back_to_supported_completion_token_parameter(monkeypatch):
+    class RejectingCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if "reasoning_effort" in kwargs:
+                raise RuntimeError("unsupported parameter: reasoning_effort")
+            if "max_completion_tokens" in kwargs:
+                raise RuntimeError("unsupported parameter: max_completion_tokens")
+            message = SimpleNamespace(content="ok")
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
+    translator = OpenAITranslator(
+        api_key="test-key",
+        model="gpt-5.6-luna",
+        base_url="https://relay.example.com/v1",
+        provider_id="openai_compatible",
+    )
+    completions = RejectingCompletions()
+    translator._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+
+    assert translator.translate("hello", "en", "zh") == "ok"
+    assert len(completions.calls) == 3
+    assert "reasoning_effort" in completions.calls[0]
+    assert "max_completion_tokens" in completions.calls[1]
+    assert "max_tokens" in completions.calls[2]
+
+    assert translator.translate("goodbye", "en", "zh") == "ok"
+    assert len(completions.calls) == 4
+    assert "reasoning_effort" not in completions.calls[3]
+    assert "max_completion_tokens" not in completions.calls[3]
+    assert "max_tokens" in completions.calls[3]
+
+
+def test_shared_translation_context_is_session_isolated_and_deferred():
+    store = TranslationContextStore()
+    first = DummyTranslator(context_store=store)
+    second = DummyTranslator(context_store=store)
+
+    with translation_context_scope(session_id=7, auto_commit=False):
+        first._remember_context_turn("first", "第一", "en", "zh", "mic")
+        assert second._context_snapshot("en", "zh", "mic", "and then?") == ()
+
+    store.remember(
+        session_id=7,
+        text="first",
+        translated="第一",
+        src_lang="en",
+        tgt_lang="zh",
+        context_source="mic",
+    )
+    with translation_context_scope(session_id=7, auto_commit=False):
+        assert second._context_snapshot("en", "zh", "mic", "and then?") == (
+            ("first", "第一"),
+        )
+    with translation_context_scope(session_id=8, auto_commit=False):
+        assert second._context_snapshot("en", "zh", "mic", "and then?") == ()
+
+
+def test_pending_ordered_source_context_is_available_without_blocking_translation():
+    store = TranslationContextStore()
+    translator = DummyTranslator(context_store=store)
+    store.stage_source(
+        session_id=7,
+        sequence=0,
+        text="Alice said she would join later.",
+        src_lang="en",
+        tgt_lang="zh",
+        context_source="mic",
+    )
+
+    with translation_context_scope(
+        session_id=7,
+        sequence=1,
+        auto_commit=False,
+    ):
+        assert translator._context_snapshot("en", "zh", "mic", "What about her?") == (
+            ("Alice said she would join later.", ""),
+        )
+
+    store.remember(
+        session_id=7,
+        sequence=0,
+        text="Alice said she would join later.",
+        translated="Alice will join later.",
+        src_lang="en",
+        tgt_lang="zh",
+        context_source="mic",
+    )
+    with translation_context_scope(
+        session_id=7,
+        sequence=1,
+        auto_commit=False,
+    ):
+        assert translator._context_snapshot("en", "zh", "mic", "What about her?") == (
+            ("Alice said she would join later.", "Alice will join later."),
+        )
+
+
+def test_discarding_mic_sequence_does_not_remove_reverse_context_with_same_sequence():
+    store = TranslationContextStore()
+    store.stage_source(
+        session_id=9,
+        sequence=0,
+        text="my microphone sentence",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+    )
+    store.stage_source(
+        session_id=9,
+        sequence=0,
+        text="the other player's sentence",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="vrc_listen",
+    )
+
+    store.discard_staged(
+        session_id=9,
+        sequence=0,
+        context_source="mic",
+    )
+
+    assert store.snapshot(
+        session_id=9,
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+        current_text="and then?",
+        before_sequence=1,
+    ) == ()
+    assert store.snapshot(
+        session_id=9,
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="vrc_listen",
+        current_text="and then?",
+        before_sequence=1,
+    ) == (("the other player's sentence", ""),)
+
+
+def test_context_detection_skips_long_standalone_text():
+    store = TranslationContextStore()
+    store.remember(
+        session_id="session",
+        text="earlier",
+        translated="之前",
+        src_lang="en",
+        tgt_lang="zh",
+        context_source="mic",
+    )
+    assert store.snapshot(
+        session_id="session",
+        src_lang="en",
+        tgt_lang="zh",
+        context_source="mic",
+        current_text="A" * 400,
+    ) == ()
+
+
 def test_deepseek_empty_response_reports_provider_summary(monkeypatch):
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_DeepSeekOpenAI))
     translator = OpenAITranslator(
@@ -563,7 +817,7 @@ def test_anthropic_empty_response_reports_provider_summary(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=_AnthropicClient))
     translator = AnthropicTranslator(
         api_key="test-key",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-5",
     )
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -571,7 +825,7 @@ def test_anthropic_empty_response_reports_provider_summary(monkeypatch):
 
     message = str(excinfo.value)
     assert "empty response" in message
-    assert "claude-sonnet-4-20250514" in message
+    assert "claude-sonnet-5" in message
     assert "stop_reason=end_turn" in message
     assert "content_blocks=1" in message
     assert "text_chars=0" in message

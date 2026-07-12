@@ -64,8 +64,13 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
         "output_format",
         "tts_language",
         "tts_voice",
+        "asr_rewrite_style",
         "roleplay_profile",
     }
+    combo_order = tuple(panel._combos)
+    assert combo_order.index("asr_rewrite_style") < combo_order.index(
+        "roleplay_profile"
+    )
     assert not hasattr(panel, "mic_gain_slider")
     assert not hasattr(panel, "manual_close_toggle")
     assert panel._noise_slider is not None

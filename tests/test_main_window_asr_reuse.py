@@ -75,7 +75,7 @@ def test_listen_asr_builds_separate_provider_when_engine_is_explicit(monkeypatch
     assert mic_asr is not listen_asr
 
 
-def test_shared_asr_instance_drops_desktop_when_mic_is_transcribing():
+def test_shared_asr_instance_serializes_both_final_transcriptions_without_dropping():
     class SharedASR:
         provider_id = "shared"
 
@@ -92,7 +92,7 @@ def test_shared_asr_instance_drops_desktop_when_mic_is_transcribing():
                 self.active += 1
                 self.max_active = max(self.max_active, self.active)
             self.entered.set()
-            self.release.wait(timeout=1.0)
+            self.release.wait(timeout=2.0)
             with self.lock:
                 self.active -= 1
             return "ok"
@@ -103,28 +103,43 @@ def test_shared_asr_instance_drops_desktop_when_mic_is_transcribing():
     window._listen_asr = shared
     window._refresh_asr_transcribe_locks()
 
-    results: list[str] = []
+    results: dict[str, str] = {}
+    desktop_done = threading.Event()
 
     mic_thread = threading.Thread(
-        target=lambda: results.append(
-            window._transcribe_for_source(MIC_SOURCE, object(), language=None, is_final=True)
+        target=lambda: results.setdefault(
+            "mic",
+            window._transcribe_for_source(
+                MIC_SOURCE,
+                object(),
+                language=None,
+                is_final=True,
+            ),
         )
     )
 
+    def transcribe_desktop() -> None:
+        results["desktop"] = window._transcribe_for_source(
+            DESKTOP_SOURCE,
+            object(),
+            language=None,
+            is_final=True,
+        )
+        desktop_done.set()
+
+    desktop_thread = threading.Thread(target=transcribe_desktop)
     mic_thread.start()
     assert shared.entered.wait(timeout=1.0)
 
-    desktop_result = window._transcribe_for_source(
-        DESKTOP_SOURCE,
-        object(),
-        language=None,
-        is_final=True,
-    )
+    desktop_thread.start()
+    assert not desktop_done.wait(timeout=0.1)
     assert shared.max_active == 1
-    assert desktop_result == ""
 
     shared.release.set()
     mic_thread.join(timeout=1.0)
+    desktop_thread.join(timeout=1.0)
 
-    assert results == ["ok"]
+    assert not mic_thread.is_alive()
+    assert not desktop_thread.is_alive()
+    assert results == {"mic": "ok", "desktop": "ok"}
     assert shared.max_active == 1

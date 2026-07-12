@@ -125,6 +125,25 @@ def test_auto_detect_avoids_tts_mixline_default_output(monkeypatch):
     assert window._auto_detect_listen_device_name() == "Headphones (Realtek(R) Audio)"
 
 
+def test_auto_fallback_prefers_physical_endpoint_over_virtual_driver():
+    window = MainWindow.__new__(MainWindow)
+    window._desktop_devices = {
+        "Speakers (MIXLINE)": 0,
+        "Speakers 03 (ASIOVADPRO Driver)": 1,
+        "Headphones (USB DAC)": 2,
+    }
+    window._tts_config = lambda: {
+        "enabled": True,
+        "output_to_vrchat": True,
+        "output_device_name": "Speakers (MIXLINE)",
+    }
+
+    assert (
+        window._listen_auto_fallback_output_device_name("Speakers (MIXLINE)")
+        == "Headphones (USB DAC)"
+    )
+
+
 def test_auto_detect_can_use_process_probe_when_enabled(monkeypatch):
     from src.ui_qt import main_window
 

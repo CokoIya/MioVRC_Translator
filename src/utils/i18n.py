@@ -2112,6 +2112,16 @@ _QUICK_SWITCH_PANEL_TEXTS = {
     },
 }
 
+_QUICK_SWITCH_ASR_REWRITE_LABELS = {
+    "zh-CN": "ASR 识别改写风格",
+    "en": "ASR rewrite style",
+    "ja": "ASR 認識文の書き換え",
+    "ru": "Стиль перезаписи ASR",
+    "ko": "ASR 인식문 재작성 스타일",
+}
+for _language, _label in _QUICK_SWITCH_ASR_REWRITE_LABELS.items():
+    _QUICK_SWITCH_PANEL_TEXTS[_language]["quick_switch_asr_rewrite_style"] = _label
+
 for _language, _texts in _QUICK_SWITCH_PANEL_TEXTS.items():
     UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
 
@@ -2150,6 +2160,31 @@ _XTTS_DOWNLOAD_RUNTIME_TEXTS = {
 
 for _language, _texts in _XTTS_DOWNLOAD_RUNTIME_TEXTS.items():
     UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
+
+_XTTS_RUNTIME_REPAIR_TEXTS = {
+    "xtts_runtime_repair_title": "Voice Cloning Repair",
+    "xtts_runtime_unknown_issue": "Missing bundled Voice Cloning runtime components.",
+    "xtts_runtime_download_installer": "Download Full Installer",
+    "xtts_runtime_repair_checking": "Preparing the full installer download...",
+    "xtts_runtime_repair_ready": "Full installer downloaded. Click Install & Restart to repair Voice Cloning.",
+    "xtts_runtime_repair_install_note": "Mio will close, run the full installer, and restart after the repair finishes.",
+    "xtts_runtime_repair_notes": (
+        "This full installer contains the missing Voice Cloning runtime components. "
+        "Download it, then click Install & Restart to repair Mio Translator.\n\n"
+        "Detected issue: {detail}"
+    ),
+    "xtts_runtime_repair_manual": (
+        "Mio needs the full installer to repair missing Voice Cloning runtime components.\n\n"
+        "Detected issue: {detail}"
+    ),
+    "xtts_runtime_repair_fetch_failed": (
+        "Mio could not load the installer manifest: {error}\n\n"
+        "Use Download Full Installer to open the official download page.\n\n"
+        "Detected issue: {detail}"
+    ),
+}
+for _language in ("zh-CN", "en", "ja", "ru", "ko"):
+    UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_XTTS_RUNTIME_REPAIR_TEXTS)
 
 for _language, _texts in UI_TEXT_COMPLETIONS.items():
     UI_TEXTS.setdefault(_language, {}).update(_texts)

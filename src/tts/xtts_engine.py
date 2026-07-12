@@ -5,25 +5,49 @@
 # This file is part of Mio RealTime Translator.
 from __future__ import annotations
 
+import importlib
 import importlib.util
+import contextlib
+import gc
 import logging
 import os
 import re
+import sys
 import threading
 import tempfile
+import types
 import warnings
 import wave
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from importlib.machinery import ModuleSpec
 
 import numpy as np
 
 from .base import BaseTTS, TTSVoice
 from .wav_utils import decode_wav_bytes, encode_pcm16_wav, scale_wav_volume_pcm16
 from .xtts_downloader import xtts_coqui_model_kwargs
-from src.utils.app_paths import writable_app_dir
+from src.utils.app_paths import (
+    app_temp_dir,
+    atomic_write_bytes,
+    open_secure_read,
+    read_secure_bytes,
+    require_existing_real_directory,
+    require_real_directory,
+    secure_file_path,
+    secure_file_size,
+    secure_unlink,
+    writable_app_dir,
+)
+from src.utils.gpu_support import (
+    TorchCudaRuntimeStatus,
+    choose_torch_precision,
+    clear_torch_cuda_cache,
+    inspect_torch_cuda_runtime,
+    normalize_torch_precision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +69,9 @@ XTTS_REFERENCE_MAX_CLIPPED_RATIO = 0.02
 XTTS_REFERENCE_TARGET_PEAK = 0.72
 XTTS_REFERENCE_TARGET_RMS = 0.08
 XTTS_REFERENCE_MAX_GAIN = 128.0
+XTTS_REFERENCE_MAX_FILE_BYTES = 256 * 1024 * 1024
+_XTTS_REFERENCE_DECODE_MAX_SECONDS = 5 * 60
+_XTTS_SYNTHESIS_MAX_FILE_BYTES = 256 * 1024 * 1024
 XTTS_OPTIMIZED_SPLIT_PAUSE_SECONDS = 0.18
 XTTS_LANGUAGE_TEXT_LIMITS = {
     "en": 249,
@@ -81,6 +108,7 @@ XTTS_REFERENCE_AUDIO_NAME_FILTER = (
     "Audio Files (*.wav *.mp3 *.m4a *.aac *.flac *.ogg *.opus *.webm *.wma)"
 )
 XTTS_CONDITIONING_CACHE_MAX_ITEMS = 4
+XTTS_CUDA_PRECISIONS = ("auto", "float32", "float16", "bfloat16")
 XTTS_SUPPORTED_LANGUAGES = (
     "en",
     "es",
@@ -138,6 +166,7 @@ XTTS_LANGUAGE_ALIASES = {
 }
 XTTS_RUNTIME_COMPONENTS = {
     "TTS": "Coqui TTS runtime",
+    "sklearn": "scikit-learn runtime",
     "av": "MP3/audio decoder runtime",
     "av.audio.resampler": "MP3/audio resampler runtime",
     "pypinyin": "Chinese text frontend",
@@ -147,6 +176,38 @@ XTTS_RUNTIME_COMPONENTS = {
     "fugashi": "Japanese tokenizer",
     "unidic_lite": "Japanese dictionary",
     "mojimoji": "Japanese normalizer",
+}
+_REQUIRED_TRANSFORMERS_XTTS_EXPORTS = (
+    "GenerationMixin",
+    "GenerationConfig",
+    "LogitsProcessorList",
+    "PreTrainedModel",
+    "StoppingCriteriaList",
+    "GPT2Config",
+    "GPT2Model",
+    "GPT2PreTrainedModel",
+)
+_TRANSFORMERS_XTTS_EXPORT_IMPORTS = {
+    "GenerationMixin": ("transformers.generation", "GenerationMixin"),
+    "GenerationConfig": (
+        "transformers.generation.configuration_utils",
+        "GenerationConfig",
+    ),
+    "LogitsProcessorList": (
+        "transformers.generation.logits_process",
+        "LogitsProcessorList",
+    ),
+    "PreTrainedModel": ("transformers.modeling_utils", "PreTrainedModel"),
+    "StoppingCriteriaList": (
+        "transformers.generation.stopping_criteria",
+        "StoppingCriteriaList",
+    ),
+    "GPT2Config": ("transformers.models.gpt2.configuration_gpt2", "GPT2Config"),
+    "GPT2Model": ("transformers.models.gpt2.modeling_gpt2", "GPT2Model"),
+    "GPT2PreTrainedModel": (
+        "transformers.models.gpt2.modeling_gpt2",
+        "GPT2PreTrainedModel",
+    ),
 }
 
 _XTTS_SENTENCE_END_CHARS = {".", "!", "?", "\n", "。", "！", "？"}
@@ -158,6 +219,10 @@ class XTTSAudioDecoderUnavailableError(RuntimeError):
 
 class XTTSAudioDecodeError(RuntimeError):
     """Raised when a supported-looking reference file cannot be decoded."""
+
+
+class _XTTSPCMWavDecodeError(RuntimeError):
+    """The secured input was read successfully but is not supported PCM WAV."""
 
 
 @dataclass(frozen=True)
@@ -206,7 +271,7 @@ class XTTSRuntimeStatus:
 
     @property
     def ready(self) -> bool:
-        return self.coqui_available and self.audio_import_available and self.language_frontends_available
+        return not self.missing_modules and self.import_error is None
 
     @property
     def missing_component_names(self) -> tuple[str, ...]:
@@ -224,12 +289,252 @@ warnings.filterwarnings(
 )
 
 
+def _missing_transformers_xtts_exports(transformers_module: Any) -> list[str]:
+    missing: list[str] = []
+    for name in _REQUIRED_TRANSFORMERS_XTTS_EXPORTS:
+        try:
+            getattr(transformers_module, name)
+        except Exception:
+            missing.append(name)
+    return missing
+
+
+def _disable_broken_transformers_optional_vision() -> None:
+    """Prevent optional torchvision failures from breaking text-only XTTS imports."""
+    try:
+        import_utils = importlib.import_module("transformers.utils.import_utils")
+    except Exception:
+        return
+
+    try:
+        torchvision_available = bool(import_utils.is_torchvision_available())
+    except Exception:
+        torchvision_available = bool(getattr(import_utils, "_torchvision_available", False))
+    if not torchvision_available:
+        return
+
+    try:
+        importlib.import_module("torchvision.transforms")
+    except Exception as exc:
+        try:
+            setattr(import_utils, "_torchvision_available", False)
+            setattr(import_utils, "_torchvision_version", "unavailable")
+        except Exception:
+            logger.debug("Could not patch transformers torchvision availability", exc_info=True)
+        logger.warning(
+            "Disabling broken optional torchvision integration for Voice Cloning: %s",
+            exc,
+        )
+
+
+def _install_transformers_xtts_exports(transformers_module: Any) -> dict[str, str]:
+    """Restore top-level transformers exports used by Coqui XTTS."""
+    errors: dict[str, str] = {}
+    for name in _missing_transformers_xtts_exports(transformers_module):
+        import_info = _TRANSFORMERS_XTTS_EXPORT_IMPORTS.get(name)
+        if import_info is None:
+            continue
+        module_name, attr_name = import_info
+        try:
+            source_module = importlib.import_module(module_name)
+            value = getattr(source_module, attr_name)
+        except Exception as exc:
+            errors[name] = f"{module_name}.{attr_name}: {exc}"
+            logger.debug(
+                "Could not recover transformers export %s from %s",
+                name,
+                module_name,
+                exc_info=True,
+            )
+            continue
+        try:
+            setattr(transformers_module, name, value)
+        except Exception:
+            logger.debug("Could not attach transformers export %s", name, exc_info=True)
+    return errors
+
+
+def _install_transformers_pytorch_utils_compat() -> None:
+    """Restore the small helper Coqui imports from Transformers 4.x."""
+
+    try:
+        pytorch_utils = importlib.import_module("transformers.pytorch_utils")
+        if hasattr(pytorch_utils, "isin_mps_friendly"):
+            return
+        import torch
+
+        def isin_mps_friendly(elements, test_elements):
+            return torch.isin(elements, test_elements)
+
+        pytorch_utils.isin_mps_friendly = isin_mps_friendly
+        logger.info(
+            "Installed Transformers 5 compatibility shim for Coqui Voice Cloning"
+        )
+    except Exception:
+        logger.debug(
+            "Could not install Transformers pytorch_utils compatibility shim",
+            exc_info=True,
+        )
+
+
+def _drop_transformers_modules() -> None:
+    for module_name in list(sys.modules):
+        if module_name == "transformers" or module_name.startswith("transformers."):
+            sys.modules.pop(module_name, None)
+
+
+def _install_matplotlib_runtime_stub() -> None:
+    """Provide no-op plotting modules for Coqui utilities in slim frozen builds."""
+    if "matplotlib" not in sys.modules and _module_available("matplotlib"):
+        return
+    if "matplotlib" in sys.modules and "matplotlib.pyplot" in sys.modules:
+        return
+
+    class _NoOpFigure:
+        def colorbar(self, *_args, **_kwargs) -> None:
+            return None
+
+        def savefig(self, *_args, **_kwargs) -> None:
+            return None
+
+    class _NoOpAxes:
+        def imshow(self, *_args, **_kwargs) -> object:
+            return object()
+
+        def plot(self, *_args, **_kwargs) -> list[object]:
+            return []
+
+        def set_xlabel(self, *_args, **_kwargs) -> None:
+            return None
+
+        def set_ylabel(self, *_args, **_kwargs) -> None:
+            return None
+
+        def twinx(self) -> "_NoOpAxes":
+            return _NoOpAxes()
+
+    def _subplots(*_args, **_kwargs) -> tuple[_NoOpFigure, _NoOpAxes]:
+        return _NoOpFigure(), _NoOpAxes()
+
+    def _figure(*_args, **_kwargs) -> _NoOpFigure:
+        return _NoOpFigure()
+
+    def _noop(*_args, **_kwargs) -> None:
+        return None
+
+    matplotlib_module = types.ModuleType("matplotlib")
+    matplotlib_module.__path__ = []  # type: ignore[attr-defined]
+    matplotlib_module.__package__ = "matplotlib"
+    matplotlib_module.__spec__ = ModuleSpec("matplotlib", loader=None, is_package=True)
+    matplotlib_module.use = _noop  # type: ignore[attr-defined]
+
+    pyplot_module = types.ModuleType("matplotlib.pyplot")
+    pyplot_module.__package__ = "matplotlib"
+    pyplot_module.__spec__ = ModuleSpec("matplotlib.pyplot", loader=None)
+    pyplot_module.rcParams = {"figure.figsize": [6.4, 4.8]}  # type: ignore[attr-defined]
+    for name in (
+        "axis",
+        "close",
+        "colorbar",
+        "imshow",
+        "plot",
+        "subplot",
+        "tight_layout",
+        "title",
+        "xlabel",
+        "xticks",
+        "ylabel",
+        "yticks",
+    ):
+        setattr(pyplot_module, name, _noop)
+    pyplot_module.figure = _figure  # type: ignore[attr-defined]
+    pyplot_module.subplots = _subplots  # type: ignore[attr-defined]
+
+    colors_module = types.ModuleType("matplotlib.colors")
+    colors_module.__package__ = "matplotlib"
+    colors_module.__spec__ = ModuleSpec("matplotlib.colors", loader=None)
+
+    class LogNorm:  # noqa: N801 - matches matplotlib public API
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+    colors_module.LogNorm = LogNorm  # type: ignore[attr-defined]
+    matplotlib_module.pyplot = pyplot_module  # type: ignore[attr-defined]
+    matplotlib_module.colors = colors_module  # type: ignore[attr-defined]
+    sys.modules.setdefault("matplotlib", matplotlib_module)
+    sys.modules.setdefault("matplotlib.pyplot", pyplot_module)
+    sys.modules.setdefault("matplotlib.colors", colors_module)
+
+
+def _ensure_transformers_xtts_exports() -> None:
+    """Refresh transformers if frozen lazy exports needed by XTTS are incomplete."""
+    _disable_broken_transformers_optional_vision()
+    try:
+        transformers_module = importlib.import_module("transformers")
+    except Exception as exc:
+        raise RuntimeError(f"Could not import transformers: {exc}") from exc
+    _install_transformers_pytorch_utils_compat()
+
+    missing = _missing_transformers_xtts_exports(transformers_module)
+    if not missing:
+        return
+
+    import_errors = _install_transformers_xtts_exports(transformers_module)
+    missing = _missing_transformers_xtts_exports(transformers_module)
+    if not missing:
+        logger.info("Recovered Voice Cloning transformers exports without reload")
+        return
+
+    version = str(getattr(transformers_module, "__version__", "unknown"))
+    logger.warning(
+        "Transformers %s is missing Voice Cloning exports %s; refreshing import cache",
+        version,
+        ", ".join(missing),
+    )
+    importlib.invalidate_caches()
+    _drop_transformers_modules()
+    _disable_broken_transformers_optional_vision()
+
+    try:
+        refreshed = importlib.import_module("transformers")
+    except Exception as exc:
+        raise RuntimeError(f"Could not re-import transformers after refresh: {exc}") from exc
+
+    import_errors.update(_install_transformers_xtts_exports(refreshed))
+    missing = _missing_transformers_xtts_exports(refreshed)
+    if missing:
+        version = str(getattr(refreshed, "__version__", version))
+        details = "; ".join(import_errors.get(name, "") for name in missing)
+        details = f" ({details})" if details else ""
+        raise RuntimeError(
+            "The bundled transformers package "
+            f"({version}) is missing exports required by Voice Cloning: "
+            + ", ".join(missing)
+            + details
+        )
+
+
+def xtts_packaging_selftest() -> tuple[bool, str]:
+    """Exercise XTTS imports that PyInstaller can otherwise miss."""
+    try:
+        _install_matplotlib_runtime_stub()
+        _ensure_transformers_xtts_exports()
+        importlib.import_module("TTS.tts.layers.xtts.gpt_inference")
+        importlib.import_module("TTS.tts.layers.xtts.gpt")
+        importlib.import_module("TTS.tts.models.xtts")
+    except Exception as exc:
+        return False, str(exc) or exc.__class__.__name__
+    return True, "Voice Cloning packaged XTTS imports are available."
+
+
 def _load_xtts_api() -> Any | None:
     """Load Coqui TTS lazily so importing the app does not probe torch/runtime DLLs."""
     global XTTS_API_CLASS, XTTS_IMPORT_ERROR, XTTS_AVAILABLE
     if XTTS_API_CLASS is not None:
         return XTTS_API_CLASS
     try:
+        _install_matplotlib_runtime_stub()
+        _ensure_transformers_xtts_exports()
         from TTS.api import TTS as api_class
     except Exception as exc:
         XTTS_AVAILABLE = False
@@ -312,7 +617,9 @@ def xtts_reference_import_error_message(error: BaseException) -> str:
 
 def xtts_reference_audio_dir() -> Path:
     """Return the writable directory for XTTS reference WAV files."""
-    return writable_app_dir() / "tts_models" / "xtts" / "reference_audio"
+    return require_real_directory(
+        writable_app_dir() / "tts_models" / "xtts" / "reference_audio"
+    )
 
 
 def _safe_voice_name(voice_name: str) -> str:
@@ -349,18 +656,17 @@ def _resample_audio(audio: np.ndarray, source_rate: int, target_rate: int) -> np
 
 
 def _write_wav_int16(path: Path, samples: np.ndarray, sample_rate: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    target = secure_file_path(path)
     pcm = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
-    pcm_i16 = (pcm * 32767.0).astype(np.int16)
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(pcm_i16.tobytes())
+    atomic_write_bytes(target, encode_pcm16_wav(pcm, sample_rate))
 
 
 def _read_pcm_wav(path: Path) -> tuple[np.ndarray, int]:
-    audio, sample_rate = decode_wav_bytes(path.read_bytes())
+    payload = read_secure_bytes(path, max_bytes=XTTS_REFERENCE_MAX_FILE_BYTES)
+    try:
+        audio, sample_rate = decode_wav_bytes(payload)
+    except Exception as exc:
+        raise _XTTSPCMWavDecodeError(str(exc) or "Unsupported PCM WAV data") from exc
     if audio.ndim > 1 and audio.size:
         audio = audio.mean(axis=1)
     return np.asarray(audio, dtype=np.float32), sample_rate
@@ -456,11 +762,12 @@ def validate_xtts_reference_audio_file(
     audio_path: str | os.PathLike[str],
 ) -> tuple[bool, str, XTTSReferenceAudioQuality | None]:
     path = Path(audio_path)
-    if not path.is_file():
-        return False, f"Reference audio file not found: {path}", None
     try:
+        path = secure_file_path(path, must_exist=True)
         audio, sample_rate = _read_pcm_wav(path)
         stats = analyze_xtts_reference_audio(audio, sample_rate)
+    except FileNotFoundError:
+        return False, f"Reference audio file not found: {path}", None
     except Exception as exc:
         return False, f"Reference audio could not be decoded: {exc}", None
     problem = xtts_reference_quality_problem(stats)
@@ -526,6 +833,10 @@ def _normalize_reference_level(audio: np.ndarray, sample_rate: int) -> np.ndarra
 
 
 def _read_audio_with_av(path: Path, target_sample_rate: int) -> tuple[np.ndarray, int]:
+    source = secure_file_path(path, must_exist=True)
+    if secure_file_size(source) > XTTS_REFERENCE_MAX_FILE_BYTES:
+        raise ValueError("Reference audio exceeds the 256 MiB safety limit.")
+
     try:
         import av
         from av.audio.resampler import AudioResampler
@@ -536,34 +847,117 @@ def _read_audio_with_av(path: Path, target_sample_rate: int) -> tuple[np.ndarray
         ) from exc
 
     chunks: list[np.ndarray] = []
+    decoded_samples = 0
+    max_decoded_samples = max(
+        1,
+        int(target_sample_rate * _XTTS_REFERENCE_DECODE_MAX_SECONDS),
+    )
     try:
-        with av.open(str(path)) as container:
-            stream = next((item for item in container.streams if item.type == "audio"), None)
-            if stream is None:
-                raise XTTSAudioDecodeError("The selected file does not contain an audio stream")
-            resampler = AudioResampler(format="s16", layout="mono", rate=target_sample_rate)
+        with open_secure_read(source, binary=True) as source_handle:
+            with av.open(source_handle) as container:
+                stream = next(
+                    (item for item in container.streams if item.type == "audio"),
+                    None,
+                )
+                if stream is None:
+                    raise XTTSAudioDecodeError(
+                        "The selected file does not contain an audio stream"
+                    )
+                resampler = AudioResampler(
+                    format="s16",
+                    layout="mono",
+                    rate=target_sample_rate,
+                )
 
-            def collect(frames: object) -> None:
-                if frames is None:
-                    return
-                frame_list = frames if isinstance(frames, list) else [frames]
-                for frame in frame_list:
-                    arr = frame.to_ndarray()
-                    if arr.size:
-                        chunks.append(np.asarray(arr).reshape(-1).astype(np.int16))
+                def collect(frames: object) -> bool:
+                    nonlocal decoded_samples
+                    if frames is None:
+                        return decoded_samples >= max_decoded_samples
+                    frame_list = frames if isinstance(frames, list) else [frames]
+                    for frame in frame_list:
+                        arr = np.asarray(frame.to_ndarray()).reshape(-1)
+                        if not arr.size:
+                            continue
+                        remaining = max_decoded_samples - decoded_samples
+                        if remaining <= 0:
+                            return True
+                        pcm = arr[:remaining].astype(np.int16, copy=False)
+                        chunks.append(pcm)
+                        decoded_samples += int(pcm.size)
+                        if decoded_samples >= max_decoded_samples:
+                            return True
+                    return False
 
-            for frame in container.decode(stream):
-                collect(resampler.resample(frame))
-            collect(resampler.resample(None))
+                limit_reached = False
+                for frame in container.decode(stream):
+                    if collect(resampler.resample(frame)):
+                        limit_reached = True
+                        break
+                if not limit_reached:
+                    collect(resampler.resample(None))
     except XTTSAudioDecodeError:
         raise
     except Exception as exc:
-        raise XTTSAudioDecodeError(str(exc) or f"Could not decode {path.name}") from exc
+        raise XTTSAudioDecodeError(
+            str(exc) or f"Could not decode {source.name}"
+        ) from exc
 
     if not chunks:
-        raise XTTSAudioDecodeError("No decodable audio was found in the selected file")
+        raise XTTSAudioDecodeError(
+            "No decodable audio was found in the selected file"
+        )
     pcm = np.concatenate(chunks).astype(np.float32) / 32768.0
     return pcm, target_sample_rate
+
+
+def _allocate_private_temp_file(
+    directory: Path,
+    *,
+    prefix: str,
+    suffix: str,
+) -> tuple[Path, os.stat_result]:
+    safe_directory = require_existing_real_directory(directory)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=prefix,
+        suffix=suffix,
+        dir=safe_directory,
+    )
+    try:
+        file_stat = os.fstat(fd)
+    finally:
+        os.close(fd)
+    return Path(temp_name), file_stat
+
+
+def _cleanup_private_temp_file(
+    path: Path | None,
+    expected_stat: os.stat_result | None,
+    *,
+    purpose: str,
+) -> None:
+    if path is None:
+        return
+    try:
+        if expected_stat is not None:
+            try:
+                current_path = secure_file_path(path, must_exist=True)
+                current_stat = os.lstat(current_path)
+                if os.path.samestat(expected_stat, current_stat):
+                    expected_stat = current_stat
+            except FileNotFoundError:
+                return
+        secure_unlink(
+            path,
+            missing_ok=True,
+            expected_stat=expected_stat,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Refused unsafe %s temporary-file cleanup %s: %s",
+            purpose,
+            path,
+            exc,
+        )
 
 
 def normalize_xtts_reference_audio_file(
@@ -573,14 +967,14 @@ def normalize_xtts_reference_audio_file(
     sample_rate: int = XTTS_REFERENCE_SAMPLE_RATE,
 ) -> Path:
     """Convert an imported reference clip to a stable mono PCM WAV file."""
-    src = Path(source_path)
-    dest = Path(output_path)
-    if not src.is_file():
-        raise FileNotFoundError(f"Reference audio file not found: {src}")
+    src = secure_file_path(source_path, must_exist=True)
+    if secure_file_size(src) > XTTS_REFERENCE_MAX_FILE_BYTES:
+        raise ValueError("Reference audio exceeds the 256 MiB safety limit.")
+    dest = secure_file_path(output_path)
 
     try:
         audio, source_rate = _read_pcm_wav(src)
-    except Exception:
+    except _XTTSPCMWavDecodeError:
         audio, source_rate = _read_audio_with_av(src, sample_rate)
 
     if audio.size == 0:
@@ -598,22 +992,65 @@ def repair_xtts_reference_audio_file(
 ) -> tuple[bool, str, XTTSReferenceAudioQuality | None]:
     """Try to repair a saved XTTS reference WAV by re-normalizing it in place."""
     path = Path(audio_path)
-    if not path.is_file():
-        return False, f"Reference audio file not found: {path}", None
-
-    tmp_path = path.with_name(f"{path.stem}.repair.tmp.wav")
     try:
+        path = secure_file_path(path, must_exist=True)
+    except FileNotFoundError:
+        return False, f"Reference audio file not found: {path}", None
+    except Exception as exc:
+        return False, str(exc), None
+
+    tmp_path: Path | None = None
+    tmp_stat: os.stat_result | None = None
+    try:
+        tmp_path, tmp_stat = _allocate_private_temp_file(
+            path.parent,
+            prefix=f".{path.stem}.repair.",
+            suffix=".wav",
+        )
         normalize_xtts_reference_audio_file(path, tmp_path)
+        tmp_stat = os.lstat(tmp_path)
         usable, reason, stats = validate_xtts_reference_audio_file(tmp_path)
         if not usable:
             return False, reason, stats
-        tmp_path.replace(path)
+        repaired_audio = read_secure_bytes(
+            tmp_path,
+            max_bytes=XTTS_REFERENCE_MAX_FILE_BYTES,
+        )
+        atomic_write_bytes(path, repaired_audio)
         logger.info("Repaired XTTS reference audio by normalizing gain: %s", path)
         return True, "", stats
     except Exception as exc:
         return False, str(exc), None
     finally:
-        tmp_path.unlink(missing_ok=True)
+        _cleanup_private_temp_file(
+            tmp_path,
+            tmp_stat,
+            purpose="XTTS repair",
+        )
+
+
+
+def _safe_reference_audio_files(ref_audio_dir: Path | None = None) -> list[Path]:
+    directory = ref_audio_dir or xtts_reference_audio_dir()
+    try:
+        directory = require_existing_real_directory(directory)
+    except (OSError, RuntimeError, ValueError):
+        if os.path.lexists(directory):
+            logger.warning(
+                "Refusing unsafe XTTS reference audio directory: %s",
+                directory,
+            )
+        return []
+    files: list[Path] = []
+    for candidate in sorted(
+        directory.glob("*.wav"),
+        key=lambda path: path.stem.casefold(),
+    ):
+        try:
+            files.append(secure_file_path(candidate, must_exist=True))
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Skipping unsafe XTTS reference audio path: %s", candidate)
+    return files
 
 
 def list_xtts_reference_voices(ref_audio_dir: Path | None = None) -> list[TTSVoice]:
@@ -628,45 +1065,40 @@ def list_xtts_reference_voices(ref_audio_dir: Path | None = None) -> list[TTSVoi
         )
     ]
 
-    directory = ref_audio_dir or xtts_reference_audio_dir()
-    if directory.exists():
-        for audio_file in sorted(directory.glob("*.wav"), key=lambda path: path.stem.casefold()):
-            voice_name = audio_file.stem
-            voices.append(
-                TTSVoice(
-                    id=voice_name,
-                    name=f"Cloned: {voice_name}",
-                    language="multi",
-                    gender="Neutral",
-                    locale="multi",
-                )
+    for audio_file in _safe_reference_audio_files(ref_audio_dir):
+        voice_name = audio_file.stem
+        voices.append(
+            TTSVoice(
+                id=voice_name,
+                name=f"Cloned: {voice_name}",
+                language="multi",
+                gender="Neutral",
+                locale="multi",
             )
+        )
 
     return voices
 
 
 def first_xtts_reference_audio_path(ref_audio_dir: Path | None = None) -> Path | None:
     """Return the first saved XTTS reference WAV, if any."""
-    directory = ref_audio_dir or xtts_reference_audio_dir()
-    if not directory.exists():
-        return None
-    return next(
-        (
-            audio_file
-            for audio_file in sorted(directory.glob("*.wav"), key=lambda path: path.stem.casefold())
-            if audio_file.is_file() and audio_file.stat().st_size > 0
-        ),
-        None,
-    )
+    for audio_file in _safe_reference_audio_files(ref_audio_dir):
+        try:
+            if secure_file_size(audio_file) > 0:
+                return audio_file
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Skipping changed XTTS reference audio path: %s", audio_file)
+    return None
 
 
 def first_usable_xtts_reference_audio_path(ref_audio_dir: Path | None = None) -> Path | None:
     """Return the first saved XTTS reference WAV that passes quality checks."""
-    directory = ref_audio_dir or xtts_reference_audio_dir()
-    if not directory.exists():
-        return None
-    for audio_file in sorted(directory.glob("*.wav"), key=lambda path: path.stem.casefold()):
-        if not audio_file.is_file() or audio_file.stat().st_size <= 0:
+    for audio_file in _safe_reference_audio_files(ref_audio_dir):
+        try:
+            if secure_file_size(audio_file) <= 0:
+                continue
+        except (OSError, RuntimeError, ValueError):
+            logger.warning("Skipping changed XTTS reference audio path: %s", audio_file)
             continue
         usable, reason, _stats = validate_xtts_reference_audio_file(audio_file)
         if usable:
@@ -688,6 +1120,10 @@ class XTTSTS(BaseTTS):
         optimized_inference: bool = True,
         conditioning_cache_size: int = XTTS_CONDITIONING_CACHE_MAX_ITEMS,
         enable_text_splitting: bool = True,
+        precision: str = "auto",
+        cuda_device_index: int = 0,
+        allow_cpu_fallback: bool = True,
+        cuda_tf32: bool = True,
         temperature: float | None = None,
         length_penalty: float | None = None,
         repetition_penalty: float | None = None,
@@ -703,6 +1139,18 @@ class XTTSTS(BaseTTS):
         self._requested_device = requested_device
         self._device = requested_device
         self._runtime_device = "cpu"
+        self._torch_device = "cpu"
+        self._requested_precision = normalize_torch_precision(precision)
+        self._runtime_precision = "float32"
+        try:
+            self._cuda_device_index = max(0, min(int(cuda_device_index), 15))
+        except (TypeError, ValueError):
+            self._cuda_device_index = 0
+        self._allow_cpu_fallback = bool(allow_cpu_fallback)
+        self._cuda_tf32 = bool(cuda_tf32)
+        self._cuda_status: TorchCudaRuntimeStatus | None = None
+        self._cuda_fallback_reason = ""
+        self._precision_fallback_reason = ""
         self._model_name = model_name
         self._model: Any | None = None
         self._reference_audio_path: str | None = None
@@ -771,56 +1219,272 @@ class XTTSTS(BaseTTS):
             kwargs["do_sample"] = values["do_sample"]
         return kwargs
 
-    def _initialize_model(self) -> None:
-        """Initialize XTTS-v2 model."""
+    def _initialize_model(self, *, force_device: str | None = None) -> None:
+        """Initialize XTTS with explicit runtime planning and safe CPU fallback."""
+
+        if self._model is not None:
+            return
+        requested = str(force_device or self._requested_device or "cpu").lower()
+        use_gpu = False
+        runtime_device = "cpu"
+        torch_device = "cpu"
+        runtime_precision = "float32"
+        cuda_status: TorchCudaRuntimeStatus | None = None
+
+        if requested == "cuda":
+            cuda_status = inspect_torch_cuda_runtime(
+                getattr(self, "_cuda_device_index", 0)
+            )
+            self._cuda_status = cuda_status
+            if cuda_status.ready:
+                use_gpu = True
+                runtime_device = "cuda"
+                torch_device = f"cuda:{cuda_status.device_index}"
+                runtime_precision = choose_torch_precision(
+                    getattr(self, "_requested_precision", "auto"),
+                    cuda_status,
+                )
+            else:
+                reason = cuda_status.detail or "CUDA runtime is unavailable"
+                self._cuda_fallback_reason = reason
+                if not getattr(self, "_allow_cpu_fallback", True):
+                    raise RuntimeError(reason)
+                logger.warning(
+                    "CUDA requested for XTTS but unavailable; using CPU: %s",
+                    reason,
+                )
+
+        self._runtime_device = runtime_device
+        self._torch_device = torch_device
+        self._runtime_precision = runtime_precision
+        self._device = runtime_device
+        logger.info(
+            "Loading XTTS-v2 requested=%s runtime=%s torch_device=%s precision=%s "
+            "torch=%s cuda_build=%s gpu=%s",
+            self._requested_device,
+            runtime_device,
+            torch_device,
+            runtime_precision,
+            cuda_status.torch_version if cuda_status else "",
+            cuda_status.cuda_build if cuda_status else "",
+            cuda_status.device_name if cuda_status else "",
+        )
+
+        api_class = _load_xtts_api()
+        if api_class is None:
+            raise RuntimeError(XTTS_IMPORT_ERROR or "Coqui TTS is not installed")
+
         try:
-            if self._model is not None:
-                return
-            logger.info("Loading XTTS-v2 model on requested device: %s", self._requested_device)
-
-            use_gpu = False
-            runtime_device = "cpu"
-            if self._requested_device == "cuda":
-                try:
-                    import torch
-
-                    use_gpu = torch.cuda.is_available()
-                except ImportError:
-                    logger.warning("PyTorch not available, using CPU")
-                    use_gpu = False
-                if use_gpu:
-                    runtime_device = "cuda"
-                else:
-                    logger.warning("CUDA requested but not available; loading XTTS on CPU for this session")
-            self._runtime_device = runtime_device
-            self._device = runtime_device
-
-            api_class = _load_xtts_api()
-            if api_class is None:
-                raise RuntimeError(XTTS_IMPORT_ERROR or "Coqui TTS is not installed")
-
-            self._model = api_class(**self._coqui_model_kwargs(use_gpu=use_gpu))
-            logger.info("XTTS-v2 model loaded successfully")
-
+            model = api_class(**self._coqui_model_kwargs(use_gpu=use_gpu))
+            self._model = model
+            self._configure_loaded_model_runtime()
+            logger.info(
+                "XTTS-v2 model loaded successfully (runtime=%s precision=%s)",
+                self._runtime_device,
+                self._runtime_precision,
+            )
         except Exception as exc:
-            logger.error("Failed to load XTTS-v2 model: %s", exc)
             self._model = None
+            if (
+                use_gpu
+                and getattr(self, "_allow_cpu_fallback", True)
+                and self._is_cuda_runtime_failure(exc)
+            ):
+                self._cuda_fallback_reason = str(exc) or exc.__class__.__name__
+                logger.warning(
+                    "XTTS CUDA model initialization failed; retrying on CPU: %s",
+                    exc,
+                )
+                clear_torch_cuda_cache()
+                gc.collect()
+                self._initialize_model(force_device="cpu")
+                return
+            logger.error("Failed to load XTTS-v2 model: %s", exc)
             raise
 
     def _ensure_model_loaded(self) -> None:
         """Load the heavy XTTS model on demand."""
-        if self._model is not None:
-            return
-        with self._model_lock:
+        model_lock = getattr(self, "_model_lock", None)
+        if model_lock is None:
+            model_lock = threading.RLock()
+            self._model_lock = model_lock
+        with model_lock:
             if self._model is not None:
                 return
             self._initialize_model()
 
+    @staticmethod
+    def _is_cuda_runtime_failure(error: BaseException) -> bool:
+        name = error.__class__.__name__.lower()
+        message = str(error or "").lower()
+        markers = (
+            "cuda",
+            "cudnn",
+            "cublas",
+            "cusolver",
+            "device-side",
+            "gpu",
+            "out of memory",
+            "no kernel image",
+            "driver version",
+        )
+        return "outofmemory" in name or any(marker in message for marker in markers)
+
+    def _configure_loaded_model_runtime(self) -> None:
+        if getattr(self, "_runtime_device", "cpu") != "cuda":
+            return
+        try:
+            import torch
+
+            index = int(getattr(self, "_cuda_device_index", 0))
+            torch.cuda.set_device(index)
+            if getattr(self, "_cuda_tf32", True):
+                cuda_backends = getattr(getattr(torch, "backends", None), "cuda", None)
+                matmul = getattr(cuda_backends, "matmul", None)
+                if matmul is not None:
+                    matmul.allow_tf32 = True
+                cudnn = getattr(getattr(torch, "backends", None), "cudnn", None)
+                if cudnn is not None:
+                    cudnn.allow_tf32 = True
+                    cudnn.benchmark = True
+                set_precision = getattr(torch, "set_float32_matmul_precision", None)
+                if callable(set_precision):
+                    set_precision("high")
+        except Exception as exc:
+            raise RuntimeError(f"Could not initialize the CUDA execution context: {exc}") from exc
+
+        target = str(getattr(self, "_torch_device", "cuda:0"))
+        moved_ids: set[int] = set()
+        candidates = (
+            getattr(self, "_model", None),
+            getattr(getattr(self, "_model", None), "synthesizer", None),
+            self._xtts_core_model(),
+        )
+        for candidate in candidates:
+            if candidate is None or id(candidate) in moved_ids:
+                continue
+            moved_ids.add(id(candidate))
+            move = getattr(candidate, "to", None)
+            if callable(move):
+                try:
+                    move(target)
+                except TypeError:
+                    move(device=target)
+            evaluate = getattr(candidate, "eval", None)
+            if callable(evaluate):
+                evaluate()
+
+        actual_device = self._core_model_device()
+        if actual_device and not actual_device.startswith("cuda"):
+            raise RuntimeError(
+                f"XTTS model placement verification failed: expected {target}, got {actual_device}"
+            )
+
+    def _core_model_device(self) -> str:
+        core_model = self._xtts_core_model()
+        if core_model is None:
+            return ""
+        direct = getattr(core_model, "device", None)
+        if direct is not None:
+            text = str(direct)
+            if text:
+                return text
+        parameters = getattr(core_model, "parameters", None)
+        if callable(parameters):
+            try:
+                parameter = next(iter(parameters()))
+                return str(getattr(parameter, "device", "") or "")
+            except (StopIteration, TypeError):
+                return ""
+            except Exception:
+                return ""
+        return ""
+
+    def _torch_execution_context(self, *, mixed_precision: bool) -> contextlib.AbstractContextManager:
+        try:
+            import torch
+        except Exception:
+            return contextlib.nullcontext()
+
+        stack = contextlib.ExitStack()
+        inference_mode = getattr(torch, "inference_mode", None)
+        if callable(inference_mode):
+            stack.enter_context(inference_mode())
+        if (
+            mixed_precision
+            and getattr(self, "_runtime_device", "cpu") == "cuda"
+            and getattr(self, "_runtime_precision", "float32") != "float32"
+        ):
+            dtype_name = str(self._runtime_precision)
+            dtype = getattr(
+                torch,
+                "bfloat16" if dtype_name == "bfloat16" else "float16",
+                None,
+            )
+            autocast = getattr(torch, "autocast", None)
+            if callable(autocast) and dtype is not None:
+                stack.enter_context(
+                    autocast(device_type="cuda", dtype=dtype, enabled=True)
+                )
+        return stack
+
+    def _move_tensor_to_runtime(self, value: Any) -> Any:
+        if getattr(self, "_runtime_device", "cpu") != "cuda":
+            return value
+        move = getattr(value, "to", None)
+        if not callable(move):
+            return value
+        target = str(getattr(self, "_torch_device", "cuda:0"))
+        try:
+            return move(target, non_blocking=True)
+        except TypeError:
+            return move(target)
+
+    @staticmethod
+    def _samples_to_numpy(value: Any) -> np.ndarray:
+        tensor = value
+        detach = getattr(tensor, "detach", None)
+        if callable(detach):
+            tensor = detach()
+        float_method = getattr(tensor, "float", None)
+        if callable(float_method):
+            tensor = float_method()
+        cpu = getattr(tensor, "cpu", None)
+        if callable(cpu):
+            tensor = cpu()
+        numpy_method = getattr(tensor, "numpy", None)
+        if callable(numpy_method):
+            tensor = numpy_method()
+        return np.asarray(tensor, dtype=np.float32)
+
+    def _switch_to_cpu_after_cuda_failure(self, error: BaseException) -> None:
+        model_lock = getattr(self, "_model_lock", None)
+        if model_lock is None:
+            model_lock = threading.RLock()
+            self._model_lock = model_lock
+        with model_lock:
+            if getattr(self, "_runtime_device", "cpu") != "cuda":
+                return
+            self._cuda_fallback_reason = str(error) or error.__class__.__name__
+            self._model = None
+            cache = getattr(self, "_conditioning_cache", None)
+            if cache is not None:
+                cache.clear()
+            clear_torch_cuda_cache()
+            gc.collect()
+            self._initialize_model(force_device="cpu")
+
     def _coqui_model_kwargs(self, *, use_gpu: bool) -> dict[str, object]:
-        """Build Coqui API kwargs, preferring the managed local XTTS model."""
+        """Build Coqui API kwargs, preferring the managed local XTTS model.
+
+        Coqui's legacy ``gpu`` constructor flag is deprecated and cannot
+        select a specific CUDA device.  Models are intentionally loaded on
+        CPU first and then moved to the validated ``cuda:N`` target by
+        ``_configure_loaded_model_runtime``.
+        """
         local_kwargs = xtts_coqui_model_kwargs()
         if local_kwargs is not None:
-            return {**local_kwargs, "gpu": use_gpu}
+            return dict(local_kwargs)
 
         configured = str(self._model_name or "").strip()
         if configured and configured != XTTS_DEFAULT_MODEL_NAME:
@@ -833,12 +1497,10 @@ class XTTSTS(BaseTTS):
                     "model_path": str(configured_path),
                     "config_path": str(config_path),
                     "progress_bar": False,
-                    "gpu": use_gpu,
                 }
             return {
                 "model_name": configured,
                 "progress_bar": False,
-                "gpu": use_gpu,
             }
 
         raise RuntimeError("XTTS-v2 local model files are not ready. Download the XTTS-v2 model first.")
@@ -919,31 +1581,21 @@ class XTTSTS(BaseTTS):
         logger.info("Reference audio set: %s", path)
         return True
 
-    def synthesize(
-        self,
-        text: str,
-        voice: str,
-        rate: float = 1.0,
-        volume: float = 1.0,
-    ) -> bytes:
-        """Synthesize speech using XTTS-v2."""
-        speed = self._normalize_speed(rate)
-        if not self._can_synthesize():
-            raise RuntimeError(
-                "XTTS-v2 engine not available. Install Coqui TTS and ensure the model can load."
-            )
-
-        if not text or not text.strip():
-            raise ValueError("Text cannot be empty")
-
+    def _resolve_reference_audio(self, voice: str) -> str:
         ref_audio = self._reference_audio_path
         selected_voice_path = False
         voice_id = str(voice or "").strip()
         if voice_id and voice_id != "custom":
-            voice_file = xtts_reference_audio_dir() / f"{voice_id}.wav"
-            if voice_file.exists():
-                ref_audio = str(voice_file)
-                selected_voice_path = True
+            safe_voice_id = _safe_voice_name(voice_id)
+            if safe_voice_id == voice_id:
+                voice_file = secure_file_path(
+                    xtts_reference_audio_dir() / f"{safe_voice_id}.wav"
+                )
+                if voice_file.exists():
+                    ref_audio = str(voice_file)
+                    selected_voice_path = True
+            else:
+                logger.warning("Ignoring unsafe XTTS voice identifier: %r", voice_id)
         if ref_audio:
             usable, reason, _stats = validate_xtts_reference_audio_file(ref_audio)
             if not usable:
@@ -970,6 +1622,42 @@ class XTTSTS(BaseTTS):
                 "No usable XTTS reference audio is available. Please record or import a clear "
                 "5-10 second voice sample before testing synthesis."
             )
+        return ref_audio
+
+    def prewarm(self, voice: str = "") -> None:
+        """Load XTTS and cache voice conditioning before the first utterance."""
+
+        if not self._can_synthesize():
+            return
+        ref_audio = self._resolve_reference_audio(voice)
+        model_lock = getattr(self, "_model_lock", None)
+        if model_lock is None:
+            model_lock = threading.RLock()
+            self._model_lock = model_lock
+        with model_lock:
+            self._ensure_model_loaded()
+            if getattr(self, "_optimized_inference", False):
+                self._get_conditioning_latents(ref_audio)
+        logger.info("XTTS-v2 prewarm completed (ref_audio=%s)", Path(ref_audio).name)
+
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        rate: float = 1.0,
+        volume: float = 1.0,
+    ) -> bytes:
+        """Synthesize speech using XTTS-v2."""
+        speed = self._normalize_speed(rate)
+        if not self._can_synthesize():
+            raise RuntimeError(
+                "XTTS-v2 engine not available. Install Coqui TTS and ensure the model can load."
+            )
+
+        if not text or not text.strip():
+            raise ValueError("Text cannot be empty")
+
+        ref_audio = self._resolve_reference_audio(voice)
 
         language = self._detect_language(text) if self._language == "auto" else self._language
         self._ensure_model_loaded()
@@ -980,6 +1668,45 @@ class XTTSTS(BaseTTS):
             self._language,
             Path(ref_audio).name,
         )
+
+        try:
+            return self._synthesize_loaded(
+                text=text,
+                ref_audio=ref_audio,
+                language=language,
+                speed=speed,
+                volume=volume,
+            )
+        except Exception as exc:
+            if (
+                getattr(self, "_runtime_device", "cpu") == "cuda"
+                and getattr(self, "_allow_cpu_fallback", True)
+                and self._is_cuda_runtime_failure(exc)
+            ):
+                logger.warning(
+                    "XTTS CUDA synthesis failed; reloading on CPU and retrying once: %s",
+                    exc,
+                )
+                self._switch_to_cpu_after_cuda_failure(exc)
+                return self._synthesize_loaded(
+                    text=text,
+                    ref_audio=ref_audio,
+                    language=language,
+                    speed=speed,
+                    volume=volume,
+                )
+            logger.error("XTTS-v2 synthesis failed: %s", exc)
+            raise RuntimeError(f"XTTS-v2 synthesis failed: {exc}") from exc
+
+    def _synthesize_loaded(
+        self,
+        *,
+        text: str,
+        ref_audio: str,
+        language: str,
+        speed: float,
+        volume: float,
+    ) -> bytes:
 
         if getattr(self, "_optimized_inference", False):
             try:
@@ -993,6 +1720,11 @@ class XTTSTS(BaseTTS):
                 logger.info("XTTS-v2 optimized synthesis successful, audio size: %d bytes", len(audio_data))
                 return audio_data
             except Exception as exc:
+                if (
+                    getattr(self, "_runtime_device", "cpu") == "cuda"
+                    and self._is_cuda_runtime_failure(exc)
+                ):
+                    raise
                 logger.warning(
                     "XTTS optimized inference failed; falling back to Coqui API path: %s",
                     exc,
@@ -1009,8 +1741,7 @@ class XTTSTS(BaseTTS):
             logger.info("XTTS-v2 synthesis successful, audio size: %d bytes", len(audio_data))
             return audio_data
         except Exception as exc:
-            logger.error("XTTS-v2 synthesis failed: %s", exc)
-            raise RuntimeError(f"XTTS-v2 synthesis failed: {exc}") from exc
+            raise RuntimeError(f"XTTS Coqui API synthesis failed: {exc}") from exc
 
     def _xtts_core_model(self) -> Any | None:
         model = getattr(self, "_model", None)
@@ -1040,6 +1771,8 @@ class XTTSTS(BaseTTS):
             mtime_ns,
             size,
             XTTS_REFERENCE_SAMPLE_RATE,
+            str(getattr(self, "_torch_device", "cpu")),
+            str(getattr(self, "_runtime_precision", "float32")),
         )
 
     def _get_conditioning_latents(self, ref_audio: str) -> tuple[Any, Any]:
@@ -1057,14 +1790,17 @@ class XTTSTS(BaseTTS):
         if core_model is None:
             raise RuntimeError("Loaded Coqui XTTS model does not expose optimized inference APIs")
 
-        gpt_cond_latent, speaker_embedding = core_model.get_conditioning_latents(
-            audio_path=str(ref_audio),
-            max_ref_length=int(XTTS_REFERENCE_MAX_DURATION_SECONDS),
-            gpt_cond_len=6,
-            gpt_cond_chunk_len=6,
-            sound_norm_refs=False,
-            load_sr=22050,
-        )
+        with self._torch_execution_context(mixed_precision=False):
+            gpt_cond_latent, speaker_embedding = core_model.get_conditioning_latents(
+                audio_path=str(ref_audio),
+                max_ref_length=int(XTTS_REFERENCE_MAX_DURATION_SECONDS),
+                gpt_cond_len=6,
+                gpt_cond_chunk_len=6,
+                sound_norm_refs=False,
+                load_sr=22050,
+            )
+        gpt_cond_latent = self._move_tensor_to_runtime(gpt_cond_latent)
+        speaker_embedding = self._move_tensor_to_runtime(speaker_embedding)
 
         max_items = int(getattr(self, "_conditioning_cache_size", XTTS_CONDITIONING_CACHE_MAX_ITEMS))
         if max_items > 0:
@@ -1142,14 +1878,20 @@ class XTTSTS(BaseTTS):
             int(sample_rate * XTTS_OPTIMIZED_SPLIT_PAUSE_SECONDS),
             dtype=np.float32,
         )
-        tmp_paths: list[str] = []
+        temp_files: list[tuple[Path, os.stat_result]] = []
+        synthesis_temp_dir = require_real_directory(
+            app_temp_dir() / "xtts_synthesis"
+        )
         try:
             if len(chunks) > 1:
                 logger.info("XTTS Coqui API path split text into %d chunk(s)", len(chunks))
             for index, chunk in enumerate(chunks or [text]):
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                tmp_paths.append(tmp_path)
+                tmp_path, original_stat = _allocate_private_temp_file(
+                    synthesis_temp_dir,
+                    prefix=".xtts-output.",
+                    suffix=".wav",
+                )
+                temp_files.append((tmp_path, original_stat))
                 kwargs = dict(getattr(self, "_inference_kwargs", {}))
                 kwargs["speed"] = speed
                 kwargs["split_sentences"] = False
@@ -1157,10 +1899,22 @@ class XTTSTS(BaseTTS):
                     text=chunk,
                     speaker_wav=ref_audio,
                     language=language,
-                    file_path=tmp_path,
+                    file_path=str(tmp_path),
                     **kwargs,
                 )
-                chunk_samples, chunk_rate = decode_wav_bytes(Path(tmp_path).read_bytes())
+                generated_path = secure_file_path(tmp_path, must_exist=True)
+                generated_stat = os.lstat(generated_path)
+                if not os.path.samestat(original_stat, generated_stat):
+                    raise RuntimeError(
+                        "XTTS synthesis output path was replaced during generation."
+                    )
+                chunk_payload = read_secure_bytes(
+                    generated_path,
+                    max_bytes=_XTTS_SYNTHESIS_MAX_FILE_BYTES,
+                )
+                generated_stat = os.lstat(generated_path)
+                temp_files[-1] = (generated_path, generated_stat)
+                chunk_samples, chunk_rate = decode_wav_bytes(chunk_payload)
                 if chunk_samples.ndim > 1 and chunk_samples.size:
                     chunk_samples = chunk_samples.mean(axis=1)
                 if chunk_rate != sample_rate:
@@ -1175,11 +1929,12 @@ class XTTSTS(BaseTTS):
                     int(np.asarray(chunk_samples).size),
                 )
         finally:
-            for tmp_path in tmp_paths:
-                try:
-                    os.unlink(tmp_path)
-                except Exception as exc:
-                    logger.debug("Failed to delete temp file %s: %s", tmp_path, exc)
+            for tmp_path, expected_stat in temp_files:
+                _cleanup_private_temp_file(
+                    tmp_path,
+                    expected_stat,
+                    purpose="XTTS synthesis",
+                )
         samples = np.concatenate(generated) if generated else np.zeros(0, dtype=np.float32)
         if volume != 1.0:
             samples = np.clip(samples * max(0.0, float(volume)), -1.0, 1.0)
@@ -1198,27 +1953,50 @@ class XTTSTS(BaseTTS):
         kwargs = dict(getattr(self, "_inference_kwargs", {}))
         kwargs["speed"] = speed
         kwargs["enable_text_splitting"] = False
+        def run_inference() -> Any:
+            try:
+                return core_model.inference(
+                    text=text,
+                    language=language,
+                    gpt_cond_latent=gpt_cond_latent,
+                    speaker_embedding=speaker_embedding,
+                    **kwargs,
+                )
+            except TypeError as exc:
+                if "enable_text_splitting" not in str(exc):
+                    raise
+                kwargs.pop("enable_text_splitting", None)
+                return core_model.inference(
+                    text=text,
+                    language=language,
+                    gpt_cond_latent=gpt_cond_latent,
+                    speaker_embedding=speaker_embedding,
+                    **kwargs,
+                )
+
         try:
-            result = core_model.inference(
-                text=text,
-                language=language,
-                gpt_cond_latent=gpt_cond_latent,
-                speaker_embedding=speaker_embedding,
-                **kwargs,
-            )
-        except TypeError as exc:
-            if "enable_text_splitting" not in str(exc):
+            with self._torch_execution_context(mixed_precision=True):
+                result = run_inference()
+        except Exception as exc:
+            if (
+                getattr(self, "_runtime_device", "cpu") == "cuda"
+                and getattr(self, "_runtime_precision", "float32") != "float32"
+                and not self._is_cuda_runtime_failure(exc)
+            ):
+                previous_precision = str(self._runtime_precision)
+                self._runtime_precision = "float32"
+                self._precision_fallback_reason = str(exc) or exc.__class__.__name__
+                logger.warning(
+                    "XTTS %s mixed precision failed; retrying this session in float32: %s",
+                    previous_precision,
+                    exc,
+                )
+                with self._torch_execution_context(mixed_precision=False):
+                    result = run_inference()
+            else:
                 raise
-            kwargs.pop("enable_text_splitting", None)
-            result = core_model.inference(
-                text=text,
-                language=language,
-                gpt_cond_latent=gpt_cond_latent,
-                speaker_embedding=speaker_embedding,
-                **kwargs,
-            )
         wav = result["wav"] if isinstance(result, dict) and "wav" in result else result
-        samples = np.asarray(wav, dtype=np.float32)
+        samples = self._samples_to_numpy(wav)
         if samples.ndim > 1:
             samples = np.asarray(samples).reshape(-1)
         return np.nan_to_num(samples, nan=0.0, posinf=1.0, neginf=-1.0).astype(np.float32, copy=False)
@@ -1387,33 +2165,56 @@ class XTTSTS(BaseTTS):
 
     def save_reference_audio(self, audio_data: bytes, voice_name: str) -> bool:
         """Save reference audio for future use."""
+        tmp_path: Path | None = None
+        tmp_stat: os.stat_result | None = None
         try:
+            if len(audio_data) > XTTS_REFERENCE_MAX_FILE_BYTES:
+                raise ValueError("Reference audio exceeds the 256 MiB safety limit.")
             ref_audio_dir = xtts_reference_audio_dir()
-            ref_audio_dir.mkdir(parents=True, exist_ok=True)
-            output_path = ref_audio_dir / f"{_safe_voice_name(voice_name)}.wav"
-            tmp_path = output_path.with_suffix(".tmp.wav")
-            with open(tmp_path, "wb") as f:
-                f.write(audio_data)
-            try:
-                normalize_xtts_reference_audio_file(tmp_path, output_path)
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            output_path = secure_file_path(
+                ref_audio_dir / f"{_safe_voice_name(voice_name)}.wav"
+            )
+            tmp_path, tmp_stat = _allocate_private_temp_file(
+                ref_audio_dir,
+                prefix=f".{output_path.stem}.recording.",
+                suffix=".wav",
+            )
+            atomic_write_bytes(tmp_path, audio_data)
+            tmp_stat = os.lstat(tmp_path)
+            normalize_xtts_reference_audio_file(tmp_path, output_path)
             logger.info("Saved reference audio: %s", output_path)
             return True
         except Exception as exc:
             logger.error("Failed to save reference audio: %s", exc)
             return False
+        finally:
+            _cleanup_private_temp_file(
+                tmp_path,
+                tmp_stat,
+                purpose="XTTS recording",
+            )
 
     def get_model_info(self) -> dict:
         """Get information about the loaded model."""
         if not self.is_available():
             return {"available": False}
-        return {
+        info = {
             "available": True,
             "model_name": self._model_name,
             "device": self._device,
             "requested_device": self._requested_device,
             "runtime_device": self._runtime_device,
+            "torch_device": getattr(self, "_torch_device", "cpu"),
+            "requested_precision": getattr(self, "_requested_precision", "auto"),
+            "runtime_precision": getattr(self, "_runtime_precision", "float32"),
+            "cuda_device_index": getattr(self, "_cuda_device_index", 0),
+            "allow_cpu_fallback": getattr(self, "_allow_cpu_fallback", True),
+            "cuda_fallback_reason": getattr(self, "_cuda_fallback_reason", ""),
+            "precision_fallback_reason": getattr(
+                self,
+                "_precision_fallback_reason",
+                "",
+            ),
             "model_loaded": self._model is not None,
             "lazy_load": self._lazy_load,
             "optimized_inference": self._optimized_inference,
@@ -1422,3 +2223,20 @@ class XTTSTS(BaseTTS):
             "has_reference_audio": self._reference_audio_path is not None,
             "reference_audio": self._reference_audio_path,
         }
+        status = getattr(self, "_cuda_status", None)
+        if isinstance(status, TorchCudaRuntimeStatus):
+            info["cuda"] = {
+                "ready": status.ready,
+                "torch_version": status.torch_version,
+                "cuda_build": status.cuda_build,
+                "cuda_available": status.cuda_available,
+                "device_count": status.device_count,
+                "device_index": status.device_index,
+                "device_name": status.device_name,
+                "capability": status.capability,
+                "total_memory_bytes": status.total_memory_bytes,
+                "bf16_supported": status.bf16_supported,
+                "runtime_source": status.runtime_source,
+                "detail": status.detail,
+            }
+        return info

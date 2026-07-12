@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import base64
-import io
 import logging
 import threading
-import wave
 from collections.abc import Mapping
 from typing import Optional
 
 import numpy as np
 
 from src.asr.asr_cleaner import clean_asr_text
+from src.asr.audio_encoding import wav_data_url
 from src.asr.base import ASRProvider, ProgressCallback
 from src.asr.model_registry import (
     QWEN3_ASR_DEFAULT_MODEL,
@@ -27,6 +25,7 @@ from src.asr.errors import (
     ASRRateLimitError,
 )
 from src.asr.text_corrections import LayeredASRCorrector
+from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,26 +65,7 @@ def _language_code(language: object) -> str:
 
 
 def _encode_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
-    arr = np.asarray(audio)
-    if arr.size == 0:
-        return ""
-    if arr.ndim > 1:
-        arr = arr.mean(axis=1)
-    arr = arr.astype(np.float32, copy=False).flatten()
-    if arr.size == 0:
-        return ""
-    if np.nanmax(np.abs(arr)) > 1.5:
-        arr = arr / 32768.0
-    pcm16 = np.clip(arr, -1.0, 1.0)
-    pcm16 = (pcm16 * 32767.0).astype("<i2", copy=False)
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(max(int(sample_rate or 16000), 1))
-        wav_file.writeframes(pcm16.tobytes())
-    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:audio/wav;base64,{payload}"
+    return wav_data_url(audio, sample_rate)
 
 
 class Qwen3ASRProvider(ASRProvider):
@@ -113,16 +93,27 @@ class Qwen3ASRProvider(ASRProvider):
             DEFAULT_TIMEOUT_SECONDS,
         )
         self.max_retries = _int_value(provider_cfg.get("max_retries"), 0)
+        self.max_concurrent_transcriptions = _int_range(
+            provider_cfg.get("max_concurrent_transcriptions"),
+            2,
+            1,
+            4,
+        )
         self._corrector = corrector
         self._client = None
         self._lock = threading.RLock()
 
     def _resolved_base_url(self) -> str:
         if self.base_url:
-            return self.base_url.rstrip("/")
-        if self.region == "custom":
+            candidate = self.base_url
+        elif self.region == "custom":
             raise ASRConfigurationError("Qwen3-ASR base_url is required when region is custom")
-        return get_qwen3_asr_base_url(self.region)
+        else:
+            candidate = get_qwen3_asr_base_url(self.region)
+        try:
+            return validate_api_base_url(candidate, label="Qwen3-ASR API")
+        except ValueError as exc:
+            raise ASRConfigurationError(str(exc)) from exc
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
@@ -156,32 +147,34 @@ class Qwen3ASRProvider(ASRProvider):
         data_url = _encode_wav_data_url(audio, sample_rate)
         if not data_url:
             return ""
-        with self._lock:
-            if self._client is None:
-                self.load()
-            lang = _language_code(language) or self.language
-            extra_body: dict[str, object] = {"asr_options": {"enable_itn": False}}
-            if lang:
-                extra_body["asr_options"]["language"] = lang
-            try:
-                completion = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "input_audio",
-                                    "input_audio": {"data": data_url},
-                                }
-                            ],
-                        }
-                    ],
-                    extra_body=extra_body,
-                    timeout=self.timeout_seconds,
-                )
-            except Exception as exc:
-                _raise_provider_error(exc)
+        if self._client is None:
+            self.load()
+        client = self._client
+        if client is None:
+            raise ASRConfigurationError("Qwen3-ASR client is not loaded")
+        lang = _language_code(language) or self.language
+        extra_body: dict[str, object] = {"asr_options": {"enable_itn": False}}
+        if lang:
+            extra_body["asr_options"]["language"] = lang
+        try:
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": data_url},
+                            }
+                        ],
+                    }
+                ],
+                extra_body=extra_body,
+                timeout=self.timeout_seconds,
+            )
+        except Exception as exc:
+            _raise_provider_error(exc)
         content = completion.choices[0].message.content if completion.choices else ""
         text = clean_asr_text(str(content or ""))
         if text and self._corrector is not None:
@@ -207,6 +200,14 @@ def _int_value(value: object, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(parsed, 0)
+
+
+def _int_range(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))
 
 
 def _raise_provider_error(exc: Exception) -> None:

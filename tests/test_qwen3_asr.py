@@ -66,3 +66,21 @@ def test_qwen3_asr_sends_audio_and_cleans_text(monkeypatch):
     assert _FakeOpenAI.last_kwargs["extra_body"] == {
         "asr_options": {"enable_itn": False, "language": "ja"}
     }
+
+
+def test_qwen3_asr_uses_selected_latest_flash_alias(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    provider = Qwen3ASRProvider(
+        {
+            "asr": {
+                "qwen3_asr": {
+                    "api_key": "test-key",
+                    "model": "qwen3-asr-flash",
+                }
+            }
+        }
+    )
+
+    provider.transcribe(np.zeros(1600, dtype=np.float32), sample_rate=16000)
+
+    assert _FakeOpenAI.last_kwargs["model"] == "qwen3-asr-flash"

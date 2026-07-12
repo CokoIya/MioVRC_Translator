@@ -23,8 +23,21 @@ try:
 except ImportError:
     _HAS_SCIPY = False
 
+try:
+    import soxr as _soxr
+
+    _HAS_SOXR = True
+except ImportError:
+    _HAS_SOXR = False
+
 from .adaptive_denoiser import AdaptiveDenoiser
 from .chunk_streamer import ChunkStreamer
+from .device_inventory import (
+    default_input_device_index,
+    device_inventory_diagnostics,
+    list_input_devices,
+    list_output_devices as list_sounddevice_output_devices,
+)
 from .vad_detector import VADDetector
 
 FRAME_QUEUE_MAXSIZE = 64
@@ -122,6 +135,9 @@ class AudioRecorder:
         self._capture_rate: int = sample_rate
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
+        self._resample_stream = None
+        self._resample_stream_key: tuple[int, int] | None = None
+        self._resample_output_buffer = np.zeros(0, dtype=np.float32)
         self._active_device_name: str | None = None
         self._frames_processed = 0
         self._segments_emitted = 0
@@ -154,6 +170,7 @@ class AudioRecorder:
         self._speech_samples = 0
         self._was_in_speech = False
         self._capture_rate = self.sample_rate
+        self._reset_streaming_resampler()
         self._frames_processed = 0
         self._segments_emitted = 0
         self._last_frame_rms = 0.0
@@ -200,7 +217,7 @@ class AudioRecorder:
             )
         except Exception:
             activation_ratio = 0.0
-        return {
+        snapshot = {
             "active_device": self._active_device_name,
             "running": self.is_running,
             "frames_processed": self._frames_processed,
@@ -217,14 +234,35 @@ class AudioRecorder:
             "vad_speech_ratio": getattr(self.vad, "_speech_ratio", None),
             "vad_activation_ratio": round(float(activation_ratio), 3),
         }
+        try:
+            snapshot["device_inventory"] = device_inventory_diagnostics()
+        except Exception:
+            logger.debug("Failed to attach microphone device diagnostics", exc_info=True)
+        return snapshot
 
     def _open_stream(self, device, extra_settings=None) -> sd.InputStream:
         loopback_enabled = extra_settings is not None
 
-        def _default_input_index() -> int | None:
+        def _native_default_input_index() -> int | None:
             try:
                 default_idx = int(sd.default.device[0])
-                return default_idx if default_idx >= 0 else None
+                if default_idx >= 0:
+                    info = sd.query_devices(default_idx)
+                    if int(info.get("max_input_channels", 0) or 0) > 0:
+                        return default_idx
+            except Exception:
+                pass
+            return None
+
+        def _default_input_index() -> int | None:
+            native_default = _native_default_input_index()
+            if native_default is not None:
+                return native_default
+            try:
+                return default_input_device_index(
+                    force_refresh=True,
+                    sounddevice_module=sd,
+                )
             except Exception:
                 return None
 
@@ -341,13 +379,18 @@ class AudioRecorder:
 
         def _devices_to_try() -> list[int | None]:
             if device is None:
-                return [None]
+                fallback_default = _default_input_index()
+                return [None] if _native_default_input_index() is not None else [fallback_default]
             if loopback_enabled:
                 return [device]
             candidates: list[int | None] = [device]
             candidates.extend(_same_named_input_devices(device))
             if self.allow_default_fallback:
-                candidates.append(None)
+                candidates.append(
+                    None
+                    if _native_default_input_index() is not None
+                    else _default_input_index()
+                )
             deduped_devices: list[int | None] = []
             seen: set[int | None] = set()
             for candidate in candidates:
@@ -452,6 +495,7 @@ class AudioRecorder:
             self._worker_thread.join(timeout=2)
             self._worker_thread = None
         self._clear_frame_queue()
+        self._reset_streaming_resampler()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
         logger.info("AudioRecorder stopped (active_device=%s)", self._active_device_name)
@@ -506,7 +550,37 @@ class AudioRecorder:
                     # 语音刚开始：把预录缓冲一起并进去，补上起始辅音
                     self._buffer = list(self._pre_speech_buffer)
                     self._pre_speech_buffer.clear()
-                    self._speech_samples = normalized.size
+                    # VAD activation intentionally waits for several voiced
+                    # frames. Count those confirmed activation frames toward
+                    # the minimum speech duration; otherwise every utterance
+                    # is under-counted by the activation delay and valid short
+                    # sentences are discarded despite being present in the
+                    # pre-roll buffer.
+                    activation_counter = getattr(
+                        self.vad,
+                        "activation_speech_samples",
+                        None,
+                    )
+                    try:
+                        activation_samples = (
+                            int(activation_counter(normalized.size))
+                            if callable(activation_counter)
+                            else sum(
+                                bool(item)
+                                for item in getattr(
+                                    self.vad,
+                                    "_activation_window",
+                                    (),
+                                )
+                            )
+                            * normalized.size
+                        )
+                    except (TypeError, ValueError):
+                        activation_samples = normalized.size
+                    self._speech_samples = max(
+                        activation_samples,
+                        normalized.size,
+                    )
                 else:
                     self._buffer.append(normalized)
                     self._speech_samples += normalized.size
@@ -588,8 +662,66 @@ class AudioRecorder:
             normalized = (audio / 32768.0).astype(np.float32, copy=False)
 
         if self._capture_rate == self.sample_rate:
+            self._reset_streaming_resampler()
             return normalized
-        return self._resample_audio(normalized, self._capture_rate, self.sample_rate)
+        return self._resample_frame_streaming(
+            normalized,
+            self._capture_rate,
+            self.sample_rate,
+        )
+
+    def _reset_streaming_resampler(self) -> None:
+        stream = self._resample_stream
+        if stream is not None:
+            try:
+                stream.clear()
+            except Exception:
+                pass
+        self._resample_stream = None
+        self._resample_stream_key = None
+        self._resample_output_buffer = np.zeros(0, dtype=np.float32)
+
+    def _resample_frame_streaming(
+        self,
+        audio: np.ndarray,
+        source_rate: int,
+        target_rate: int,
+    ) -> np.ndarray:
+        if not _HAS_SOXR:
+            return self._resample_audio(audio, source_rate, target_rate)
+        key = (int(source_rate), int(target_rate))
+        if self._resample_stream is None or self._resample_stream_key != key:
+            self._reset_streaming_resampler()
+            self._resample_stream = _soxr.ResampleStream(
+                source_rate,
+                target_rate,
+                1,
+                dtype="float32",
+                quality="MQ",
+            )
+            self._resample_stream_key = key
+
+        chunk = self._resample_stream.resample_chunk(
+            np.ascontiguousarray(audio, dtype=np.float32),
+            last=False,
+        )
+        if chunk.size:
+            if self._resample_output_buffer.size:
+                self._resample_output_buffer = np.concatenate(
+                    (self._resample_output_buffer, chunk.astype(np.float32, copy=False))
+                )
+            else:
+                self._resample_output_buffer = chunk.astype(np.float32, copy=False)
+
+        target_samples = max(
+            int(target_rate * self.frame_duration_ms / 1000),
+            1,
+        )
+        if self._resample_output_buffer.size < target_samples:
+            return np.zeros(0, dtype=np.float32)
+        result = self._resample_output_buffer[:target_samples].copy()
+        self._resample_output_buffer = self._resample_output_buffer[target_samples:]
+        return result
 
     @staticmethod
     def _resample_audio(
@@ -618,80 +750,22 @@ class AudioRecorder:
 
     @staticmethod
     def list_devices() -> list[dict]:
-        api_preference = {
-            "Windows WASAPI": 0,
-            "Windows WDM-KS": 1,
-            "Windows DirectSound": 2,
-            "MME": 3,
-        }
-        try:
-            hostapis = sd.query_hostapis()
-        except Exception:
-            hostapis = []
-
-        seen: dict[str, dict] = {}
-        try:
-            queried_devices = sd.query_devices()
-        except Exception as exc:
-            logger.warning("Failed to enumerate input devices: %s", exc)
-            return []
-
-        for index, device in enumerate(queried_devices):
-            if device["max_input_channels"] <= 0:
-                continue
-            api_name = hostapis[device["hostapi"]]["name"] if hostapis else ""
-            pref = api_preference.get(api_name, 99)
-            existing = seen.get(device["name"])
-            if existing is None or pref < existing["_pref"]:
-                seen[device["name"]] = {"index": index, "name": device["name"], "_pref": pref}
-
-        result = sorted(seen.values(), key=lambda item: item["index"])
-        logger.debug("Enumerated %s input devices", len(result))
-        return [{"index": item["index"], "name": item["name"]} for item in result]
+        devices = list_input_devices(
+            force_refresh=True,
+            sounddevice_module=sd,
+        )
+        logger.debug("Enumerated %s canonical input devices", len(devices))
+        return devices
 
     @staticmethod
     def list_loopback_devices() -> list[dict]:
-        try:
-            hostapis = sd.query_hostapis()
-            devices = sd.query_devices()
-        except Exception as exc:
-            logger.warning("Failed to enumerate loopback devices via sounddevice: %s", exc)
-            return []
-
-        def _hostapi_name(device: dict) -> str:
-            try:
-                return str(hostapis[int(device.get("hostapi", -1))]["name"]).strip()
-            except Exception:
-                return ""
-
-        try:
-            default_output_index = int(sd.default.device[1])
-            if default_output_index < 0:
-                default_output_index = -1
-        except Exception:
-            default_output_index = -1
-
-        seen: dict[str, dict] = {}
-
-        for index, device in enumerate(devices):
-            if int(device.get("max_output_channels", 0)) <= 0:
-                continue
-            hostapi_name = _hostapi_name(device)
-            if "WASAPI" not in hostapi_name.upper():
-                continue
-            name = str(device.get("name", "")).strip()
-            if not name:
-                continue
-
-            pref = 0 if index == default_output_index else 1
-            existing = seen.get(name)
-            if existing is None or pref < existing["_pref"]:
-                seen[name] = {
-                    "index": index,
-                    "name": name,
-                    "_pref": pref,
-                }
-
-        result = sorted(seen.values(), key=lambda item: (item["_pref"], item["index"]))
-        logger.debug("Enumerated %s loopback-capable output devices", len(result))
-        return [{"index": item["index"], "name": item["name"]} for item in result]
+        devices = [
+            item
+            for item in list_sounddevice_output_devices(
+                force_refresh=True,
+                sounddevice_module=sd,
+            )
+            if "WASAPI" in str(item.get("hostapi", "")).upper()
+        ]
+        logger.debug("Enumerated %s loopback-capable WASAPI outputs", len(devices))
+        return devices

@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 import time
 
+import src.audio.desktop_recorder as desktop_recorder
 from src.audio.desktop_recorder import DesktopAudioRecorder, auto_select_virtual_device, list_output_devices
 
 
@@ -420,3 +421,200 @@ def test_desktop_start_can_fall_back_to_pyaudiowpatch_loopback_stream(monkeypatc
     assert recorder.extra_settings is None
 
     recorder.stop()
+
+
+def test_empty_soundcard_scan_falls_back_to_pyaudiowpatch(monkeypatch):
+    desktop_recorder._reset_loopback_device_cache_for_tests()
+
+    class EmptySoundCard:
+        @staticmethod
+        def all_microphones(include_loopback=False):
+            assert include_loopback is True
+            return []
+
+        @staticmethod
+        def default_speaker():
+            return None
+
+    class FakePyAudio:
+        @staticmethod
+        def get_host_api_info_by_type(_api):
+            return {"index": 2}
+
+        @staticmethod
+        def get_device_count():
+            return 1
+
+        @staticmethod
+        def get_device_info_by_index(_index):
+            return {
+                "index": 9,
+                "hostApi": 2,
+                "name": "Speakers (Fallback DAC) [Loopback]",
+                "defaultSampleRate": 48000,
+                "maxInputChannels": 2,
+            }
+
+        @staticmethod
+        def terminate():
+            pass
+
+    class FakePaModule:
+        paWASAPI = 13
+        PyAudio = FakePyAudio
+
+    monkeypatch.setattr(desktop_recorder, "_import_soundcard", lambda: EmptySoundCard)
+    monkeypatch.setattr(desktop_recorder, "_import_pyaudio", lambda: FakePaModule)
+    monkeypatch.setattr(desktop_recorder, "_windows_render_endpoints", lambda: [])
+    monkeypatch.setattr(
+        desktop_recorder,
+        "_default_output_device_name_from_sounddevice",
+        lambda: "Speakers (Fallback DAC)",
+    )
+
+    devices = list_output_devices()
+
+    assert [item["name"] for item in devices] == ["Speakers (Fallback DAC)"]
+    assert devices[0]["is_default"] is True
+
+
+def test_generic_speakers_prefix_does_not_mark_multiple_defaults(monkeypatch):
+    default_speaker = _FakeSoundCardDevice("Speakers", device_id="{default-speaker}")
+
+    class FakeSoundCard:
+        @staticmethod
+        def all_microphones(include_loopback=False):
+            assert include_loopback is True
+            return [
+                _FakeSoundCardDevice("Speakers (USB DAC)", device_id="{dac}"),
+                _FakeSoundCardDevice("Speakers (VR Headset)", device_id="{vr}"),
+            ]
+
+        @staticmethod
+        def default_speaker():
+            return default_speaker
+
+    monkeypatch.setattr(desktop_recorder, "_windows_render_endpoints", lambda: [])
+    monkeypatch.setattr(
+        desktop_recorder,
+        "_default_output_device_name_from_sounddevice",
+        lambda: "",
+    )
+
+    devices = desktop_recorder._enumerate_soundcard_loopback_devices(FakeSoundCard)
+
+    assert len(devices) == 2
+    assert not any(item["is_default"] for item in devices)
+
+
+def test_busy_pyaudio_enumeration_returns_last_good_devices(monkeypatch):
+    desktop_recorder._reset_loopback_device_cache_for_tests()
+    cached = [
+        {
+            "index": 2,
+            "name": "Speakers (Cached DAC)",
+            "is_default": True,
+            "backend": "soundcard",
+        }
+    ]
+    desktop_recorder._cache_loopback_devices(cached, backend="soundcard")
+    monkeypatch.setattr(desktop_recorder, "_import_soundcard", _missing_soundcard)
+    monkeypatch.setattr(
+        desktop_recorder,
+        "_refresh_cached_loopbacks_from_sounddevice",
+        lambda devices: devices,
+    )
+
+    desktop_recorder._pyaudio_lock.acquire()
+    try:
+        devices = list_output_devices()
+    finally:
+        desktop_recorder._pyaudio_lock.release()
+
+    assert [item["name"] for item in devices] == ["Speakers (Cached DAC)"]
+    diagnostics = desktop_recorder.loopback_device_diagnostics()
+    assert diagnostics["from_cache"] is True
+    assert "capture stream is active" in str(diagnostics["cache_reason"])
+
+
+def test_inactive_soundcard_endpoint_is_excluded(monkeypatch):
+    endpoint_id = "{inactive-endpoint}"
+    fake_sc = _FakeSoundCardModule(
+        [
+            _FakeSoundCardDevice(
+                "Speakers (Disconnected DAC)",
+                device_id=endpoint_id,
+                isloopback=True,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        desktop_recorder,
+        "_windows_render_endpoints",
+        lambda: [
+            {
+                "id": endpoint_id,
+                "name": "Speakers (Disconnected DAC)",
+                "flow": "render",
+                "active": False,
+                "state_name": "unplugged",
+            }
+        ],
+    )
+
+    assert desktop_recorder._enumerate_soundcard_loopback_devices(fake_sc) == []
+
+
+def test_missing_packaged_loopback_backends_fail_cleanly_with_diagnostics(monkeypatch):
+    desktop_recorder._reset_loopback_device_cache_for_tests()
+
+    def missing_pyaudio():
+        raise RuntimeError(
+            "Desktop audio capture component is unavailable in the packaged runtime"
+        )
+
+    monkeypatch.setattr(desktop_recorder, "_import_soundcard", _missing_soundcard)
+    monkeypatch.setattr(desktop_recorder, "_import_pyaudio", missing_pyaudio)
+
+    assert list_output_devices() == []
+    diagnostics = desktop_recorder.loopback_device_diagnostics()
+    assert diagnostics["backend"] == "unavailable"
+    assert diagnostics["device_count"] == 0
+    assert any("SoundCard" in error for error in diagnostics["errors"])
+    assert any("packaged runtime" in error for error in diagnostics["errors"])
+
+
+def test_hotplug_refresh_updates_cached_pyaudio_names_without_reopening_portaudio(monkeypatch):
+    monkeypatch.setattr(
+        desktop_recorder,
+        "list_sounddevice_output_devices",
+        lambda **_kwargs: [
+            {
+                "index": 40,
+                "name": "Speakers (New USB DAC)",
+                "is_default": True,
+                "hostapi": "Windows WASAPI",
+            }
+        ],
+    )
+
+    refreshed = desktop_recorder._refresh_cached_loopbacks_from_sounddevice(
+        [
+            {
+                "index": 9,
+                "name": "Speakers (Removed USB DAC)",
+                "is_default": True,
+                "backend": "pyaudiowpatch",
+            }
+        ]
+    )
+
+    assert refreshed == [
+        {
+            "index": 40,
+            "name": "Speakers (New USB DAC)",
+            "is_default": True,
+            "backend": "sounddevice_inventory",
+            "enumeration_only": True,
+        }
+    ]

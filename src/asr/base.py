@@ -18,6 +18,7 @@ class ASRProvider(ABC):
     is_streaming = False
     requires_api_key = False
     supports_partial = True
+    max_concurrent_transcriptions = 1
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         del progress_callback

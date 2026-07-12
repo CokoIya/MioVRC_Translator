@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.utils.i18n import tr as _base_tr
+from src.utils.logger import logs_dir
 
 
 def tr(language: str | None, key: str, **kwargs) -> str:
@@ -246,6 +248,14 @@ class AdvancedTab(QWidget):
 
         group_layout.addLayout(level_layout)
 
+        log_path = QLabel(str(logs_dir() / "mio.log"))
+        log_path.setWordWrap(True)
+        log_path.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        group_layout.addWidget(log_path)
+
         # Open logs button
         logs_btn = QPushButton("📄 " + self._t("open_logs"))
         logs_btn.clicked.connect(self._on_open_logs)
@@ -297,8 +307,9 @@ class AdvancedTab(QWidget):
 
     def _on_open_logs(self) -> None:
         """Open log folder."""
-        logger.info("Opening logs...")
-        # TODO: Implement open logs
+        path = logs_dir()
+        logger.info("Opening log folder: %s", path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def get_config(self) -> dict:
         """Get current configuration from UI."""

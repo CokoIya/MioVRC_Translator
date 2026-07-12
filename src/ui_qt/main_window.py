@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import logging
 import queue
+import re
 import threading
 import time
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QObject, Signal, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
@@ -32,11 +39,27 @@ from PySide6.QtWidgets import (
 )
 
 from src.asr.model_registry import ASR_ENGINE_FOLLOW_MAIN, LISTEN_SELECTABLE_ASR_ENGINES, get_asr_runtime_spec, normalize_asr_engine
+from src.audio.device_inventory import (
+    default_input_device_name as inventory_default_input_device_name,
+    device_names_match as audio_device_names_match,
+    unique_device_name_match,
+)
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
 from src.core.mode_manager import AppMode, ModeManager
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
 from src.core.overlay_service import OverlayService
-from src.core.realtime_pipelines import ListenPipeline, MicPipeline
+from src.core.realtime_pipelines import ListenPipeline, MicPipeline, RealtimeTranslationResult
+from src.core.realtime_scheduler import (
+    AdmissionStatus,
+    RealtimeCompletion,
+    RealtimeScheduler,
+    RealtimeTask,
+)
+from src.translators.base import TranslationContextStore
+from src.translators.asr_rewriter import (
+    ASR_REWRITE_DISABLED,
+    normalize_asr_rewrite_style,
+)
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.styles import build_app_stylesheet, build_main_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme, normalize_theme_preference, resolve_theme, theme_preference_from_config, theme_tokens
@@ -77,8 +100,15 @@ logger = logging.getLogger(__name__)
 MIC_SOURCE = "mic"
 DESKTOP_SOURCE = "vrc_listen"
 PARTIAL_TASK_QUEUE_MAXSIZE = 1
-FINAL_TASK_QUEUE_MAXSIZE = 1
-DESKTOP_FINAL_TASK_QUEUE_MAXSIZE = 1
+FINAL_TASK_QUEUE_MAXSIZE = 8
+DESKTOP_FINAL_TASK_QUEUE_MAXSIZE = 8
+TRANSLATION_TASK_QUEUE_MAXSIZE = 12
+ASR_REWRITE_TASK_QUEUE_MAXSIZE = 12
+ASR_WORKER_CONCURRENCY = 2
+ASR_REWRITE_WORKER_CONCURRENCY = 2
+TRANSLATION_WORKER_CONCURRENCY = 2
+MIC_PRIORITY_BURST = 3
+WORKER_STOP_TIMEOUT_S = 5.0
 CONFIG_SAVE_DEBOUNCE_MS = 280
 MAIN_WINDOW_DEFAULT_SIZE = (940, 440)
 MAIN_WINDOW_MIN_SIZE = (900, 430)
@@ -105,6 +135,10 @@ MIN_MAIN_UI_SCALE = 0.9
 MAX_MAIN_UI_SCALE = 1.35
 UI_CALLBACK_DRAIN_MS = 25
 UI_CALLBACK_DRAIN_LIMIT = 128
+UI_CALLBACK_QUEUE_MAXSIZE = 256
+UI_PRIORITY_CALLBACK_QUEUE_MAXSIZE = 4
+UI_DELIVERY_ACK_POLL_S = 0.05
+_TTS_REQUEST_SCOPED_CONFIG_KEYS = frozenset({"voice", "rate", "volume"})
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
@@ -141,6 +175,7 @@ DEFAULT_LISTEN_SELF_SUPPRESS_S = 0.65
 DEFAULT_LISTEN_SEGMENT_DURATION_S = 2.0
 DEFAULT_LISTEN_TAIL_SILENCE_S = 0.65
 LISTEN_DIAGNOSTIC_IDLE_S = 15.0
+MIC_DIAGNOSTIC_LOG_INTERVAL_S = 60.0
 LISTEN_VIRTUAL_OUTPUT_TOKENS = (
     "mixline",
     "mix line",
@@ -412,6 +447,13 @@ MAIN_COPY = {
         "ru": "Отправка в чат не поставлена в очередь",
         "ko": "채팅박스 전송이 대기열에 들어가지 않았습니다",
     },
+    "realtime_queue_full": {
+        "zh-CN": "???????????????",
+        "en": "Speech processing is at capacity; please pause briefly",
+        "ja": "????????????????????????",
+        "ru": "????????? ???? ???????????; ???????? ???????? ?????",
+        "ko": "?? ?? ???? ?? ????. ?? ?? ???",
+    },
     "update_badge": {
         "zh-CN": "新版本",
         "en": "Update",
@@ -480,10 +522,14 @@ def create_asr(config: dict, engine: str | None = None):
     return _create_asr(config, engine=engine)
 
 
-def create_translator(config: dict):
+def create_translator(
+    config: dict,
+    *,
+    context_store: TranslationContextStore | None = None,
+):
     from src.translators.factory import create_translator as _create_translator
 
-    return _create_translator(config)
+    return _create_translator(config, context_store=context_store)
 
 
 def default_output_device_name() -> str | None:
@@ -631,6 +677,126 @@ class BackgroundWidget(QWidget):
         super().paintEvent(event)
 
 
+@dataclass(frozen=True, slots=True)
+class _RealtimeAudioPayload:
+    audio: Any
+    asr_provider: Any
+    asr_language: str | None
+    source_language: str | None
+    target_language: str
+    second_target_language: str
+    third_target_language: str
+    listen_target_language: str
+    listen_prefix: str
+    send_to_chatbox: bool
+    config_snapshot: Mapping[str, Any]
+    source_generation: int = 0
+
+
+@dataclass(slots=True)
+class _RealtimeTranslationWorkerState:
+    """Worker-confined translator state; never shared across translation threads."""
+
+    translator: Any = None
+    config_snapshot: Mapping[str, Any] | None = None
+    config: dict[str, Any] | None = None
+    dispatcher: OutputDispatcher | None = None
+    mic_pipeline: MicPipeline | None = None
+    listen_pipeline: ListenPipeline | None = None
+
+    def close_translator(self) -> None:
+        translator = self.translator
+        self.translator = None
+        close = getattr(translator, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.debug(
+                    "Failed to close realtime translation worker client",
+                    exc_info=True,
+                )
+
+    def close(self) -> None:
+        self.close_translator()
+        self.config_snapshot = None
+        self.config = None
+        self.dispatcher = None
+        self.mic_pipeline = None
+        self.listen_pipeline = None
+
+
+@dataclass(slots=True)
+class _RealtimeRewriteWorkerState:
+    """Worker-confined generative client for the optional rewrite stage."""
+
+    translator: Any = None
+    config_snapshot: Mapping[str, Any] | None = None
+
+    def close(self) -> None:
+        translator = self.translator
+        self.translator = None
+        self.config_snapshot = None
+        close = getattr(translator, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.debug(
+                    "Failed to close realtime ASR rewrite worker client",
+                    exc_info=True,
+                )
+
+
+def _freeze_snapshot_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_snapshot_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_snapshot_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_snapshot_value(item) for item in value)
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value
+
+
+def _thaw_snapshot_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_snapshot_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_snapshot_value(item) for item in value]
+    if isinstance(value, frozenset):
+        return [_thaw_snapshot_value(item) for item in value]
+    return value
+
+
+def _immutable_audio_snapshot(audio: Any) -> Any:
+    """Copy recorder-owned buffers so capture can immediately reuse its storage."""
+
+    try:
+        import numpy as np
+
+        if isinstance(audio, np.ndarray):
+            snapshot = np.array(audio, copy=True, order="C")
+            snapshot.setflags(write=False)
+            return snapshot
+    except Exception:
+        logger.debug("Unable to create NumPy audio snapshot", exc_info=True)
+    if isinstance(audio, memoryview):
+        return audio.tobytes()
+    if isinstance(audio, bytearray):
+        return bytes(audio)
+    if isinstance(audio, (bytes, str, int, float, type(None))):
+        return audio
+    try:
+        return copy.deepcopy(audio)
+    except Exception:
+        logger.debug("Unable to deep-copy audio payload; using original object", exc_info=True)
+        return audio
+
+
 # ----------------------------------------------------------------
 # Qt MainWindow with real backend wiring
 # ----------------------------------------------------------------
@@ -644,7 +810,14 @@ class MainWindow(QMainWindow):
         self._config = config
         self._destroying = False
         self._ui_thread_id = threading.get_ident()
-        self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue()
+        self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue(
+            maxsize=UI_CALLBACK_QUEUE_MAXSIZE
+        )
+        self._ui_priority_callback_queue: queue.Queue[tuple[int, object]] = (
+            queue.Queue(maxsize=UI_PRIORITY_CALLBACK_QUEUE_MAXSIZE)
+        )
+        self._ui_callback_drop_count = 0
+        self._realtime_delivery_cancel_event = threading.Event()
 
         # Shared state for the realtime tweaks panel.
         self._state = AppState()
@@ -653,10 +826,14 @@ class MainWindow(QMainWindow):
         self._running = False
         self._listen_session = 0
         self._startup_cancel_event = threading.Event()
+        self._startup_thread: threading.Thread | None = None
         self._recorder: AudioRecorder | None = None
         self._listen_recorder: DesktopAudioRecorder | None = None
         self._asr = None
         self._listen_asr = None
+        self._asr_close_lock = threading.RLock()
+        self._reserved_asr_providers: list[Any] = []
+        self._asr_cleanup_threads: list[threading.Thread] = []
         self._translator = None
         self._output_dispatcher = OutputDispatcher(lambda: getattr(self, "_config", {}))
         self._mic_pipeline: MicPipeline | None = None
@@ -676,6 +853,7 @@ class MainWindow(QMainWindow):
         self._translation_failure_streak = 0
         self._translation_cooldown_until = 0.0
         self._translation_cooldown_category: str | None = None
+        self._translation_backoff_by_source: dict[str, dict[str, Any]] = {}
         self._listen_tts_echo_suppress_until = 0.0
         self._listen_tts_echo_pending_count = 0
         self._listen_tts_echo_lock = threading.Lock()
@@ -768,7 +946,11 @@ class MainWindow(QMainWindow):
         self._final_workers: dict[str, threading.Thread] = {}
         self._partial_task_queues: dict[str, queue.Queue] = {}
         self._final_task_queues: dict[str, queue.Queue] = {}
+        self._realtime_scheduler: RealtimeScheduler | None = None
         self._partial_generation = 0
+        self._partial_result_lock = threading.Lock()
+        self._partial_result_candidate = ""
+        self._partial_result_hits = 0
 
         # --- Avatar ---
         self._avatar_error_after_id: str | None = None
@@ -943,8 +1125,6 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.debug("Failed to preload settings window", exc_info=True)
 
-    def _settings_preload_enabled(self) -> bool:
-        return self._current_tts_engine() != "style_bert_vits2"
 
     def _schedule_settings_preload(self, delay_ms: int) -> None:
         if not self._settings_preload_enabled():
@@ -985,6 +1165,10 @@ class MainWindow(QMainWindow):
         if self._destroying:
             return
         self._destroying = True
+        with self._asr_lifecycle_lock():
+            startup_cancel_event = getattr(self, "_startup_cancel_event", None)
+            if startup_cancel_event is not None:
+                startup_cancel_event.set()
         logger.info("Qt MainWindow shutdown requested")
         self._stop_hotkeys()
         self._close_independent_tool_windows()
@@ -992,9 +1176,16 @@ class MainWindow(QMainWindow):
         if self._running:
             self._do_stop()
         else:
+            with self._asr_lifecycle_lock():
+                self._listen_session = getattr(self, "_listen_session", 0) + 1
+                self._running = False
+            self._reset_streaming_state()
             self._stop_listen()
             self._stop_microphone_capture()
-        self._stop_workers()
+            shutdown_barrier = self._stop_workers()
+            self._close_asr_providers(wait_for=shutdown_barrier)
+            self._close_osc_sender()
+        self._clear_cached_translator()
         self._reset_tts_manager()
         service = getattr(self, "_osc_service", None)
         if service is not None:
@@ -1063,339 +1254,6 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
     # UI Construction
     # ----------------------------------------------------------------
-    def _build_ui(self) -> None:
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(build_app_stylesheet(self._main_theme))
-        self.setStyleSheet(build_main_window_styles(self._main_theme))
-        apply_window_chrome_theme(self, self._main_theme)
-
-        background = BackgroundWidget(self._background_image_path(), self)
-        background.set_theme(self._main_theme)
-        self.setCentralWidget(background)
-
-        outer_layout = QVBoxLayout(background)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setSpacing(0)
-
-        shell = QFrame(background)
-        shell.setObjectName("appChrome")
-        shell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._apply_shadow(shell, blur=36, alpha=20 if self._main_theme == "light" else 78, y_offset=12)
-        outer_layout.addWidget(shell)
-
-        shell_layout = QVBoxLayout(shell)
-        shell_layout.setContentsMargins(0, 0, 0, 0)
-        shell_layout.setSpacing(6)
-        shell_layout.addWidget(self._build_header())
-        shell_layout.addWidget(self._build_content(), 1)
-        shell_layout.addWidget(self._build_footer())
-
-    def _build_header(self) -> QFrame:
-        header = QFrame()
-        header.setObjectName("headerPanel")
-        header.setFixedHeight(78)
-        layout = QHBoxLayout(header)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
-
-        brand = QHBoxLayout()
-        brand.setSpacing(12)
-        icon_label = QLabel()
-        icon = self._load_icon_pixmap(APP_ICON_PNG_FILE, 44)
-        if icon is not None:
-            icon_label.setPixmap(icon)
-        icon_label.setFixedSize(44, 44)
-        brand.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
-        self._brand_title_label = QLabel(self._t("window_title"))
-        self._brand_title_label.setObjectName("brandTitle")
-        self._creator_banner_label = QLabel(self._t("creator_banner"))
-        self._creator_banner_label.setObjectName("brandSubtitle")
-        self._creator_banner_label.setWordWrap(True)
-        brand_text.addWidget(self._brand_title_label)
-        brand_text.addWidget(self._creator_banner_label)
-        brand.addLayout(brand_text)
-        layout.addLayout(brand, 1)
-
-        self._status_label = QLabel(self._t("status_ready"))
-        self._status_label.setObjectName("statusPill")
-        self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setFixedHeight(30)
-        self._status_label.setMinimumWidth(132)
-        self._status_label.setMaximumWidth(220)
-        self._status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        layout.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self._update_badge_btn = QPushButton(self._t("update_badge"))
-        self._update_badge_btn.setObjectName("updateBadge")
-        self._update_badge_btn.setFixedHeight(30)
-        self._update_badge_btn.clicked.connect(self._open_update_window)
-        self._update_badge_btn.hide()
-        layout.addWidget(self._update_badge_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-
-        self._ui_lang_combo = NoWheelComboBox()
-        self._ui_lang_combo.setObjectName("headerCombo")
-        self._ui_lang_combo.setFixedSize(HEADER_ACTION_WIDTH, 40)
-        self._ui_lang_combo.addItems([label for label, _ in UI_LANGUAGE_OPTIONS])
-        self._ui_lang_combo.currentTextChanged.connect(self._on_ui_lang_selected)
-        action_row.addWidget(self._ui_lang_combo)
-
-        self._settings_btn = QPushButton(self._copy("settings_short"))
-        self._settings_btn.setObjectName("headerButton")
-        self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
-        self._settings_btn.clicked.connect(self.show_settings)
-        action_row.addWidget(self._settings_btn)
-
-        # 实时调整按钮
-        self._tweaks_btn = QPushButton(self._t("realtime_button"))
-        self._tweaks_btn.setObjectName("headerButton")
-        self._tweaks_btn.setToolTip(self._t("realtime_tooltip"))
-        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
-        self._tweaks_btn.clicked.connect(self._toggle_tweaks_panel)
-        self._refresh_tweaks_button()
-        action_row.addWidget(self._tweaks_btn)
-
-        self._theme_btn = QPushButton("")
-        self._theme_btn.setObjectName("themeIconButton")
-        self._theme_btn.setFixedSize(40, 40)
-        self._theme_btn.setIconSize(QSize(17, 17))
-        self._theme_btn.clicked.connect(self._on_theme_toggle)
-        action_row.addWidget(self._theme_btn)
-
-        layout.addLayout(action_row)
-        return header
-
-    def _build_content(self) -> QWidget:
-        content = QFrame()
-        content.setObjectName("workspacePanel")
-        layout = QHBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        layout.addWidget(self._build_translation_card(), 5)
-        layout.addWidget(self._build_side_card(), 2)
-        return content
-
-    def _build_translation_card(self) -> QFrame:
-        card = QFrame()
-        card.setObjectName("translationCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-
-        flow_panel = QFrame()
-        flow_panel.setObjectName("langFlowPanel")
-        flow_layout = QHBoxLayout(flow_panel)
-        flow_layout.setContentsMargins(12, 10, 12, 10)
-        flow_layout.setSpacing(10)
-        self._src_header_label = QLabel(self._copy("source_panel"))
-        self._src_header_label.setObjectName("sectionTitleMain")
-        flow_layout.addWidget(self._src_header_label)
-        self._src_lang_combo = NoWheelComboBox()
-        self._src_lang_combo.setObjectName("langCombo")
-        self._src_lang_combo.setFixedSize(132, 32)
-        self._src_lang_combo.currentTextChanged.connect(self._on_src_lang_change)
-        flow_layout.addWidget(self._src_lang_combo)
-        self._swap_lang_btn = QPushButton("")
-        self._swap_lang_btn.setObjectName("swapIconButton")
-        self._swap_lang_btn.setFixedSize(32, 32)
-        self._swap_lang_btn.setIconSize(QSize(15, 15))
-        self._swap_lang_btn.clicked.connect(self._swap_langs)
-        flow_layout.addWidget(self._swap_lang_btn)
-        flow_layout.addStretch(1)
-        self._char_label = QLabel(self._t("char_count", count=0))
-        self._char_label.setObjectName("counterLabel")
-        flow_layout.addWidget(self._char_label)
-        self._tgt_header_label = QLabel(self._copy("translation_panel"))
-        self._tgt_header_label.setObjectName("sectionTitleMain")
-        flow_layout.addWidget(self._tgt_header_label)
-        self._tgt_lang_combo = NoWheelComboBox()
-        self._tgt_lang_combo.setObjectName("langCombo")
-        self._tgt_lang_combo.setFixedSize(146, 32)
-        self._tgt_lang_combo.currentTextChanged.connect(self._on_tgt_lang_change)
-        flow_layout.addWidget(self._tgt_lang_combo)
-        layout.addWidget(flow_panel)
-
-        panes = QHBoxLayout()
-        panes.setContentsMargins(0, 0, 0, 0)
-        panes.setSpacing(12)
-
-        self._left_panel = self._panel()
-        self._left_panel.setObjectName("editorPanel")
-        self._left_panel.setProperty("role", "source")
-        left_layout = QVBoxLayout(self._left_panel)
-        left_layout.setContentsMargins(14, 14, 14, 14)
-        left_layout.setSpacing(10)
-        self._src_text_widget = QPlainTextEdit()
-        self._src_text_widget.setObjectName("textPane")
-        self._src_text_widget.setPlaceholderText(self._src_placeholder)
-        self._src_text_widget.setReadOnly(True)
-        self._src_text_widget.setMinimumHeight(280)
-        left_layout.addWidget(self._src_text_widget, 1)
-        panes.addWidget(self._left_panel, 1)
-
-        self._right_panel = self._panel()
-        self._right_panel.setObjectName("editorPanel")
-        self._right_panel.setProperty("role", "target")
-        right_layout = QVBoxLayout(self._right_panel)
-        right_layout.setContentsMargins(14, 14, 14, 14)
-        right_layout.setSpacing(10)
-        self._tgt_text_widget = QPlainTextEdit()
-        self._tgt_text_widget.setObjectName("textPane")
-        self._tgt_text_widget.setReadOnly(True)
-        self._tgt_text_widget.setMinimumHeight(280)
-        right_layout.addWidget(self._tgt_text_widget, 1)
-        panes.addWidget(self._right_panel, 1)
-        layout.addLayout(panes, 1)
-
-        action_strip = QFrame()
-        action_strip.setObjectName("actionStrip")
-        action_layout = QHBoxLayout(action_strip)
-        action_layout.setContentsMargins(10, 10, 10, 10)
-        action_layout.setSpacing(8)
-
-        self._translate_btn = QPushButton(self._t("translate"))
-        self._translate_btn.setObjectName("primaryButton")
-        self._fit_button_to_text(self._translate_btn, min_width=88, height=38)
-        self._translate_btn.clicked.connect(self._on_translate_clicked)
-        action_layout.addWidget(self._translate_btn)
-
-        self._clear_btn = QPushButton(self._t("clear"))
-        self._clear_btn.setObjectName("secondaryButton")
-        self._fit_button_to_text(self._clear_btn, min_width=84, height=38)
-        self._clear_btn.clicked.connect(self._clear_input)
-        action_layout.addWidget(self._clear_btn)
-
-        action_layout.addStretch(1)
-
-        self._copy_source_btn = QPushButton(self._t("copy_source"))
-        self._copy_source_btn.setObjectName("secondaryButton")
-        self._fit_button_to_text(self._copy_source_btn, min_width=112, height=38)
-        self._copy_source_btn.clicked.connect(self._copy_source)
-        action_layout.addWidget(self._copy_source_btn)
-
-        self._copy_result_btn = QPushButton(self._t("copy"))
-        self._copy_result_btn.setObjectName("secondaryButton")
-        self._fit_button_to_text(self._copy_result_btn, min_width=112, height=38)
-        self._copy_result_btn.clicked.connect(self._copy_result)
-        action_layout.addWidget(self._copy_result_btn)
-
-        self._send_to_vrc_btn = QPushButton(self._t("send_to_vrc"))
-        self._send_to_vrc_btn.setObjectName("primaryButton")
-        send_icon = ui_icon("send.svg", 15, "#ffffff")
-        if not send_icon.isNull():
-            self._send_to_vrc_btn.setIcon(send_icon)
-            self._send_to_vrc_btn.setIconSize(QSize(15, 15))
-        self._fit_button_to_text(self._send_to_vrc_btn, min_width=142, height=38, icon_gap=18)
-        self._send_to_vrc_btn.clicked.connect(self._on_send_clicked)
-        action_layout.addWidget(self._send_to_vrc_btn)
-
-        layout.addWidget(action_strip)
-        return card
-
-    def _build_side_card(self) -> QFrame:
-        tokens = _main_theme_palette(self._main_theme)
-        card = QFrame()
-        card.setObjectName("sidePanel")
-        card.setMinimumWidth(max(286, int(tokens["SIDE_WIDTH"]) - 18))
-        card.setMaximumWidth(max(286, int(tokens["SIDE_WIDTH"])))
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        title_row = QVBoxLayout()
-        title_row.setSpacing(4)
-        self._quick_controls_label = QLabel(self._copy("quick_controls"))
-        self._quick_controls_label.setObjectName("controlSectionTitle")
-        title_row.addWidget(self._quick_controls_label)
-        self._quick_controls_hint = None
-        layout.addLayout(title_row)
-
-        self._start_btn = QPushButton(self._t("start_listening"))
-        self._start_btn.setObjectName("primaryButton")
-        self._start_btn.setFixedHeight(48)
-        self._start_btn.clicked.connect(self._toggle_listening)
-        layout.addWidget(self._start_btn)
-
-        mode_box = QFrame()
-        mode_box.setObjectName("modeBox")
-        mode_layout = QHBoxLayout(mode_box)
-        mode_layout.setContentsMargins(4, 4, 4, 4)
-        mode_layout.setSpacing(4)
-        self._mode_translation_button = QPushButton(self._copy("mode_translation"))
-        self._mode_translation_button.setObjectName("modeButton")
-        self._mode_translation_button.setCheckable(True)
-        self._mode_translation_button.setProperty("modeActive", "false")
-        self._mode_translation_button.clicked.connect(lambda: self._set_app_mode(AppMode.TRANSLATION, persist=True))
-        self._mode_translation_button.setFixedHeight(36)
-        mode_layout.addWidget(self._mode_translation_button, 1)
-        self._mode_simultaneous_button = QPushButton(self._copy("mode_simultaneous"))
-        self._mode_simultaneous_button.setObjectName("modeButton")
-        self._mode_simultaneous_button.setCheckable(True)
-        self._mode_simultaneous_button.setProperty("modeActive", "false")
-        self._mode_simultaneous_button.clicked.connect(lambda: self._set_app_mode(AppMode.SIMULTANEOUS, persist=True))
-        self._mode_simultaneous_button.setFixedHeight(36)
-        mode_layout.addWidget(self._mode_simultaneous_button, 1)
-        layout.addWidget(mode_box)
-
-        mic_group = QFrame()
-        mic_group.setObjectName("controlGroup")
-        mic_layout = QVBoxLayout(mic_group)
-        mic_layout.setContentsMargins(12, 12, 12, 12)
-        mic_layout.setSpacing(8)
-        self._microphone_label = QLabel(self._t("microphone"))
-        self._microphone_label.setObjectName("controlLabel")
-        mic_layout.addWidget(self._microphone_label)
-        self._device_combo = NoWheelComboBox()
-        self._device_combo.setObjectName("deviceCombo")
-        self._device_combo.setFixedHeight(38)
-        self._device_combo.currentTextChanged.connect(self._on_device_combo_changed)
-        mic_layout.addWidget(self._device_combo)
-        self._refresh_device_combo()
-        self._device_dropdown_btn = None
-
-        mic_actions = QVBoxLayout()
-        mic_actions.setSpacing(8)
-        self._mute_btn = QPushButton("")
-        self._mute_btn.setObjectName("activeButton")
-        self._mute_btn.setFixedHeight(38)
-        self._mute_btn.clicked.connect(self._toggle_mic_mute)
-        mic_actions.addWidget(self._mute_btn)
-        self._desktop_btn = QPushButton("")
-        self._desktop_btn.setObjectName("activeButton")
-        self._desktop_btn.setFixedHeight(38)
-        self._desktop_btn.clicked.connect(self._toggle_listen)
-        mic_actions.addWidget(self._desktop_btn)
-        mic_layout.addLayout(mic_actions)
-        layout.addWidget(mic_group)
-
-        assist_group = QFrame()
-        assist_group.setObjectName("controlGroup")
-        assist_layout = QVBoxLayout(assist_group)
-        assist_layout.setContentsMargins(12, 12, 12, 12)
-        assist_layout.setSpacing(8)
-        self._assist_label = QLabel(self._copy("guide_short"))
-        self._assist_label.setObjectName("controlLabel")
-        assist_layout.addWidget(self._assist_label)
-        self._listen_overlay_btn = QPushButton("")
-        self._listen_overlay_btn.setObjectName("activeButton")
-        self._listen_overlay_btn.setFixedHeight(40)
-        self._listen_overlay_btn.clicked.connect(self._toggle_listen_overlay)
-        assist_layout.addWidget(self._listen_overlay_btn)
-        self._guide_btn_secondary = QPushButton(self._copy("guide_short"))
-        self._guide_btn_secondary.setObjectName("secondaryButton")
-        self._guide_btn_secondary.setFixedHeight(38)
-        self._guide_btn_secondary.clicked.connect(self._open_osc_guide)
-        assist_layout.addWidget(self._guide_btn_secondary)
-        layout.addWidget(assist_group)
-
-        layout.addStretch(1)
-        return card
 
     def _build_footer(self) -> QFrame:
         footer = QFrame()
@@ -1444,12 +1302,6 @@ class MainWindow(QMainWindow):
         panel.setFrameShape(QFrame.Shape.NoFrame)
         return panel
 
-    @staticmethod
-    def _fit_button_to_text(btn: QPushButton | None, *, min_width: int, height: int, padding: int = 32, icon_gap: int = 0) -> None:
-        if btn is None:
-            return
-        text_width = btn.fontMetrics().horizontalAdvance(btn.text())
-        btn.setFixedSize(max(min_width, text_width + padding + icon_gap), height)
 
     def _copy(self, key: str, **kwargs) -> str:
         table = MAIN_COPY.get(key)
@@ -1459,67 +1311,6 @@ class MainWindow(QMainWindow):
             return text.format(**kwargs) if kwargs else text
         return self._t(key, **kwargs)
 
-    def _refresh_static_texts(self) -> None:
-        self.setWindowTitle(self._t("window_title"))
-        self._src_placeholder = self._t("source_placeholder")
-        if self._brand_title_label:
-            self._brand_title_label.setText(self._t("window_title"))
-        if self._creator_banner_label:
-            self._creator_banner_label.setText(self._t("creator_banner"))
-        if self._ui_lang_combo:
-            label = self._ui_lang_reverse.get(self._ui_lang)
-            if label:
-                self._set_combo_text(self._ui_lang_combo, label)
-        if self._settings_btn:
-            self._settings_btn.setText(self._copy("settings_short"))
-            self._settings_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
-        self._refresh_tweaks_button()
-        if self._guide_btn:
-            self._guide_btn.setText(self._copy("guide_short"))
-        if self._guide_btn_secondary:
-            self._guide_btn_secondary.setText(self._copy("guide_short"))
-        if self._sponsors_btn:
-            self._sponsors_btn.setText(self._copy("sponsors_btn"))
-            self._sponsors_btn.setIcon(ui_icon(ICON_SPONSOR_FILE, 16, "#ffffff"))
-        self._refresh_update_badge()
-        if self._translate_btn:
-            self._translate_btn.setText(self._t("translating") if not self._translate_btn.isEnabled() else self._t("translate"))
-            self._fit_button_to_text(self._translate_btn, min_width=88, height=38)
-        if self._clear_btn:
-            self._clear_btn.setText(self._t("clear"))
-            self._fit_button_to_text(self._clear_btn, min_width=84, height=38)
-        if self._copy_source_btn:
-            self._copy_source_btn.setText(self._t("copy_source"))
-            self._fit_button_to_text(self._copy_source_btn, min_width=112, height=38)
-        if self._copy_result_btn:
-            self._copy_result_btn.setText(self._t("copy"))
-            self._fit_button_to_text(self._copy_result_btn, min_width=112, height=38)
-        if self._send_to_vrc_btn:
-            self._send_to_vrc_btn.setText(self._t("send_to_vrc"))
-            self._fit_button_to_text(self._send_to_vrc_btn, min_width=142, height=38, icon_gap=18)
-        if getattr(self, "_quick_controls_label", None):
-            self._quick_controls_label.setText(self._copy("quick_controls"))
-        if getattr(self, "_src_header_label", None):
-            self._src_header_label.setText(self._copy("source_panel"))
-        if getattr(self, "_tgt_header_label", None):
-            self._tgt_header_label.setText(self._copy("translation_panel"))
-        if getattr(self, "_microphone_label", None):
-            self._microphone_label.setText(self._t("microphone"))
-        self._refresh_device_combo()
-        if getattr(self, "_assist_label", None):
-            self._assist_label.setText(self._copy("guide_short"))
-        if self._status_label is not None and getattr(self, "_status_key", None):
-            self._set_status(self._t(self._status_key), self._status_color, key=self._status_key)
-        if self._bottom_bar is not None and getattr(self, "_bottom_key", None):
-            self._set_bottom(self._t(self._bottom_key), self._bottom_color, key=self._bottom_key)
-        self._refresh_language_combos()
-        self._set_source_text(self._src_text)
-        self._refresh_start_button()
-        self._refresh_mic_mute_button()
-        self._refresh_mode_buttons()
-        self._refresh_desktop_capture_button()
-        self._refresh_listen_overlay_button()
-        self._refresh_theme_button()
 
     @staticmethod
     def _set_combo_text(combo: QComboBox, text: str) -> None:
@@ -1529,39 +1320,6 @@ class MainWindow(QMainWindow):
             combo.setCurrentIndex(idx)
             combo.blockSignals(blocked)
 
-    def _refresh_language_combos(self) -> None:
-        if getattr(self, "_refreshing_language_combos", False):
-            return
-        self._refreshing_language_combos = True
-        try:
-            self._all_target_lang_options = list(get_target_language_options(ui_language=self._ui_lang))
-            self._target_lang_codes = {label: code for label, code in self._all_target_lang_options}
-            target_reverse = {code: label for label, code in self._all_target_lang_options}
-            tgt_code = str(self._config.get("translation", {}).get("target_language", self._current_tgt_lang) or "ja")
-            self._current_tgt_lang = tgt_code
-
-            self._all_manual_lang_options = list(get_manual_source_language_options({tgt_code}, ui_language=self._ui_lang))
-            self._src_lang_codes = {label: code for label, code in self._all_manual_lang_options}
-            src_reverse = {code: label for label, code in self._all_manual_lang_options}
-            src_code = str(self._config.get("translation", {}).get("source_language", "auto") or "auto")
-            self._current_src_lang = None if src_code == "auto" else src_code
-            self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
-
-            if self._src_lang_combo:
-                blocked = self._src_lang_combo.blockSignals(True)
-                self._src_lang_combo.clear()
-                self._src_lang_combo.addItems([label for label, _ in self._all_manual_lang_options])
-                self._src_lang_combo.setCurrentText(src_reverse.get(src_code, self._src_lang_combo.itemText(0)))
-                self._src_lang_combo.blockSignals(blocked)
-
-            if self._tgt_lang_combo:
-                blocked = self._tgt_lang_combo.blockSignals(True)
-                self._tgt_lang_combo.clear()
-                self._tgt_lang_combo.addItems([label for label, _ in self._all_target_lang_options])
-                self._tgt_lang_combo.setCurrentText(target_reverse.get(tgt_code, self._tgt_lang_combo.itemText(0)))
-                self._tgt_lang_combo.blockSignals(blocked)
-        finally:
-            self._refreshing_language_combos = False
 
     def _on_ui_lang_selected(self, selected_label: str) -> None:
         code = self._ui_lang_codes.get(selected_label)
@@ -1625,26 +1383,6 @@ class MainWindow(QMainWindow):
             self._show_tgt("")
             self._schedule_config_save()
 
-    def _set_source_text(self, text: str, text_color: str | None = None) -> None:
-        safe = (text or "").strip()
-        if len(safe) > 500:
-            safe = safe[:500]
-        self._src_text = safe
-        shown = safe or getattr(self, "_src_placeholder", "")
-        if shown == getattr(self, "_src_rendered_text", "") and len(safe) == getattr(self, "_src_rendered_count", -1):
-            return
-        self._src_rendered_text = shown
-        self._src_rendered_count = len(safe)
-        src_text_widget = getattr(self, "_src_text_widget", None)
-        if src_text_widget:
-            palette = _main_theme_palette(getattr(self, "_main_theme", "dark"))
-            src_text_widget.setPlainText(shown)
-            src_text_widget.setStyleSheet(
-                "QPlainTextEdit#textPane { color: %s; }" % (text_color or (palette["TEXT_PRIMARY"] if safe else palette["EDITOR_MUTED"]))
-            )
-        char_label = getattr(self, "_char_label", None)
-        if char_label:
-            char_label.setText(self._t("char_count", count=len(safe)))
 
     def _open_text_input_popup(self, _event=None) -> None:
         from src.ui_qt.text_input_window import TextInputWindow
@@ -2405,30 +2143,6 @@ class MainWindow(QMainWindow):
     def _on_send_clicked(self) -> None:
         self._send_to_vrc()
 
-    def _toggle_tweaks_panel(self) -> None:
-        """切换实时调整面板的显示/隐藏"""
-        if self._tweaks_panel is None:
-            # 首次创建
-            from src.ui_qt.state_manager import AppState
-            state = getattr(self, '_state', None)
-            if state is None:
-                state = AppState()
-                self._state = state
-
-            self._tweaks_panel = RealtimeTweaksPanel(
-                parent=self,
-                state_manager=state,
-                ui_language=self._ui_lang,
-                theme=self._main_theme
-            )
-            self._tweaks_panel.finished.connect(self._on_tweaks_panel_closed)
-
-        if self._tweaks_panel.isVisible():
-            self._tweaks_panel.hide()
-        else:
-            self._tweaks_panel.show()
-            self._tweaks_panel.raise_()
-            self._tweaks_panel.activateWindow()
 
     def _on_tweaks_panel_closed(self) -> None:
         """实时调整面板关闭时的回调"""
@@ -2538,67 +2252,172 @@ class MainWindow(QMainWindow):
         self._listen_session += 1
         self._reset_streaming_state()
         self._reset_translation_failure_backoff()
-        self._startup_cancel_event = threading.Event()
+        cancel_event = threading.Event()
+        self._startup_cancel_event = cancel_event
         session = self._listen_session
 
         def run() -> None:
             try:
-                self._init_pipeline(session)
+                self._init_pipeline(session, cancel_event)
             except _StartupCancelled:
-                self._call_in_ui(lambda: self._cleanup_startup_failure(show_error=False))
-            except Exception as e:
-                self._call_in_ui(lambda msg=str(e): self._cleanup_startup_failure(msg, show_error=True))
+                self._call_in_ui(
+                    lambda sid=session, event=cancel_event: self._cleanup_startup_failure(
+                        show_error=False,
+                        session_id=sid,
+                        cancel_event=event,
+                    )
+                )
+            except Exception as exc:
+                self._call_in_ui(
+                    lambda msg=str(exc), sid=session, event=cancel_event: self._cleanup_startup_failure(
+                        msg,
+                        show_error=True,
+                        session_id=sid,
+                        cancel_event=event,
+                    )
+                )
+            finally:
+                current = threading.current_thread()
+                self._call_in_ui(lambda thread=current: self._clear_startup_thread(thread))
 
-        threading.Thread(target=run, daemon=True, name="pipeline-startup").start()
-
-    def _init_pipeline(self, session_id: int) -> None:
-        self._raise_if_cancelled(session_id)
-
-        self._asr, self._listen_asr = _create_asr_pair(self._config)
-        self._refresh_asr_transcribe_locks()
-        self._asr.load(
-            progress_callback=lambda event: self._call_in_ui(
-                lambda e=event: self._handle_model_progress(e)
-            )
+        startup_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="pipeline-startup",
         )
-        if self._listen_asr is not self._asr:
-            self._listen_asr.load(
+        self._startup_thread = startup_thread
+        startup_thread.start()
+
+    def _clear_startup_thread(self, thread: threading.Thread) -> None:
+        if self._startup_thread is thread:
+            self._startup_thread = None
+
+    def _init_pipeline(
+        self,
+        session_id: int,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        self._raise_if_cancelled(session_id, cancel_event)
+        mic_asr = None
+        listen_asr = None
+        installed = False
+        try:
+            mic_asr, listen_asr = _create_asr_pair(self._config)
+            mic_asr.load(
                 progress_callback=lambda event: self._call_in_ui(
-                    lambda e=event: self._handle_model_progress(e)
+                    lambda e=event, sid=session_id: (
+                        self._handle_model_progress(e)
+                        if sid == self._listen_session and not self._destroying
+                        else None
+                    )
                 )
             )
-        self._raise_if_cancelled(session_id)
+            if listen_asr is not mic_asr:
+                listen_asr.load(
+                    progress_callback=lambda event: self._call_in_ui(
+                        lambda e=event, sid=session_id: (
+                            self._handle_model_progress(e)
+                            if sid == self._listen_session and not self._destroying
+                            else None
+                        )
+                    )
+                )
+            self._raise_if_cancelled(session_id, cancel_event)
 
-        self._sender = self._create_sender()
+            with self._asr_lifecycle_lock():
+                self._raise_if_cancelled(session_id, cancel_event)
+                self._asr = mic_asr
+                self._listen_asr = listen_asr
+                installed = True
+                self._refresh_asr_transcribe_locks()
 
-        self._raise_if_cancelled(session_id)
-        self._start_workers()
-        self._start_microphone_capture()
-        self._raise_if_cancelled(session_id)
+                # Commit all runtime resources under the same lifecycle lock used
+                # by stop/shutdown.  This prevents a cancelled startup from
+                # creating capture or worker resources after shutdown has already
+                # attempted to tear them down.
+                self._sender = self._create_sender()
+                self._raise_if_cancelled(session_id, cancel_event)
+                self._start_workers()
+                self._start_microphone_capture()
+                self._raise_if_cancelled(session_id, cancel_event)
+                self._running = True
+                if self._desktop_capture_enabled:
+                    try:
+                        self._start_listen()
+                    except Exception as exc:
+                        logger.warning("Desktop listen did not start: %s", exc)
+                        self._desktop_capture_enabled = False
+                        self._config.setdefault("vrc_listen", {})["enabled"] = False
+                        self._call_in_ui(
+                            lambda msg=str(exc), sid=session_id: (
+                                self._set_bottom(msg)
+                                if self._running and sid == self._listen_session
+                                else None
+                            )
+                        )
+                        self._call_in_ui(
+                            lambda sid=session_id: (
+                                self._refresh_desktop_capture_button()
+                                if self._running and sid == self._listen_session
+                                else None
+                            )
+                        )
+            self._call_in_ui(
+                lambda sid=session_id: (
+                    self._on_started()
+                    if self._running and sid == self._listen_session and not self._destroying
+                    else None
+                )
+            )
+        except Exception:
+            if installed:
+                self._running = False
+                self._stop_listen()
+                self._stop_microphone_capture()
+                shutdown_barrier = self._stop_workers()
+                self._close_osc_sender()
+                self._close_asr_providers(wait_for=shutdown_barrier)
+            else:
+                self._close_asr_providers(mic_asr, listen_asr)
+            raise
 
-        self._running = True
-        if self._desktop_capture_enabled:
-            try:
-                self._start_listen()
-            except Exception as exc:
-                logger.warning("Desktop listen did not start: %s", exc)
-                self._desktop_capture_enabled = False
-                self._config.setdefault("vrc_listen", {})["enabled"] = False
-                self._call_in_ui(lambda msg=str(exc): self._set_bottom(msg))
-                self._call_in_ui(self._refresh_desktop_capture_button)
-        self._call_in_ui(self._on_started)
-
-    def _raise_if_cancelled(self, session_id: int) -> None:
-        if self._destroying or session_id != self._listen_session:
+    def _raise_if_cancelled(
+        self,
+        session_id: int,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise _StartupCancelled()
+        if (
+            self._destroying
+            or session_id != self._listen_session
+            or (
+                cancel_event is not None
+                and cancel_event is not self._startup_cancel_event
+            )
+        ):
             raise _StartupCancelled()
 
-    def _cleanup_startup_failure(self, msg: str = "", *, show_error: bool) -> None:
-        self._running = False
+    def _cleanup_startup_failure(
+        self,
+        msg: str = "",
+        *,
+        show_error: bool,
+        session_id: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        with self._asr_lifecycle_lock():
+            if session_id is not None and session_id != self._listen_session:
+                return
+            if cancel_event is not None and cancel_event is not self._startup_cancel_event:
+                return
+            self._running = False
         self._reset_streaming_state()
         self._stop_listen()
         self._stop_microphone_capture()
-        self._stop_workers()
+        shutdown_barrier = self._stop_workers()
         self._close_osc_sender()
+        self._close_asr_providers(wait_for=shutdown_barrier)
         self._refresh_start_button()
         if show_error:
             self._on_start_error(msg)
@@ -2606,57 +2425,336 @@ class MainWindow(QMainWindow):
             self._set_status(self._t("status_ready"), "success", key="status_ready")
 
     def _do_stop(self) -> None:
-        self._startup_cancel_event.set()
-        self._listen_session += 1
-        self._running = False
+        with self._asr_lifecycle_lock():
+            startup_cancel_event = getattr(self, "_startup_cancel_event", None)
+            if startup_cancel_event is not None:
+                startup_cancel_event.set()
+            self._listen_session = getattr(self, "_listen_session", 0) + 1
+            self._running = False
         self._reset_streaming_state()
         self._reset_translation_failure_backoff()
         self._reset_avatar_params()
 
+        # Capture must stop producing work before the staged scheduler is
+        # cancelled.  ASR providers are closed only after all owned workers have
+        # been asked to exit.
         self._stop_listen()
         self._stop_microphone_capture()
-        self._stop_workers()
-
+        shutdown_barrier = self._stop_workers()
+        self._close_asr_providers(wait_for=shutdown_barrier)
         self._close_osc_sender()
 
         self._refresh_start_button()
         self._set_status(self._t("status_ready"), "success", key="status_ready")
 
-    def _start_workers(self) -> None:
-        for source in (MIC_SOURCE, DESKTOP_SOURCE):
-            self._partial_task_queues[source] = queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE)
-            final_maxsize = (
-                DESKTOP_FINAL_TASK_QUEUE_MAXSIZE
-                if source == DESKTOP_SOURCE
-                else FINAL_TASK_QUEUE_MAXSIZE
-            )
-            self._final_task_queues[source] = queue.Queue(maxsize=final_maxsize)
+    def _asr_lifecycle_lock(self):
+        lock = self.__dict__.get("_asr_close_lock")
+        if lock is None:
+            lock = self.__dict__.setdefault("_asr_close_lock", threading.RLock())
+        return lock
 
-            p = threading.Thread(
+    def _start_asr_cleanup_thread(
+        self,
+        target: Callable[[], None],
+        *,
+        name: str,
+    ) -> threading.Thread:
+        lock = self._asr_lifecycle_lock()
+        thread: threading.Thread
+
+        def run() -> None:
+            try:
+                target()
+            except Exception:
+                logger.exception("Deferred ASR cleanup failed")
+            finally:
+                current = threading.current_thread()
+                with lock:
+                    threads = self.__dict__.setdefault("_asr_cleanup_threads", [])
+                    threads[:] = [item for item in threads if item is not current]
+
+        thread = threading.Thread(target=run, daemon=True, name=name)
+        with lock:
+            threads = self.__dict__.setdefault("_asr_cleanup_threads", [])
+            threads[:] = [item for item in threads if item.is_alive()]
+            threads.append(thread)
+            try:
+                thread.start()
+            except Exception:
+                threads.remove(thread)
+                raise
+        return thread
+
+    def _close_asr_providers(
+        self,
+        *providers: Any,
+        wait_for: threading.Event | None = None,
+    ) -> None:
+        lock = self._asr_lifecycle_lock()
+        with lock:
+            current_asr = getattr(self, "_asr", None)
+            current_listen_asr = getattr(self, "_listen_asr", None)
+            candidates = providers or (current_asr, current_listen_asr)
+            unique_candidates: list[Any] = []
+            for provider in candidates:
+                if provider is None or any(
+                    existing is provider for existing in unique_candidates
+                ):
+                    continue
+                unique_candidates.append(provider)
+
+            reserved = self.__dict__.setdefault("_reserved_asr_providers", [])
+            to_close: list[Any] = []
+            for provider in unique_candidates:
+                if any(existing is provider for existing in reserved):
+                    continue
+                reserved.append(provider)
+                to_close.append(provider)
+
+            if any(provider is current_asr for provider in unique_candidates):
+                self._asr = None
+            if any(provider is current_listen_asr for provider in unique_candidates):
+                self._listen_asr = None
+            self._refresh_asr_transcribe_locks()
+
+        if not to_close:
+            return
+
+        def close_reserved() -> None:
+            for provider in to_close:
+                try:
+                    provider.close()
+                except Exception:
+                    logger.debug("Failed to close ASR provider", exc_info=True)
+
+        if wait_for is None or wait_for.is_set():
+            close_reserved()
+            return
+
+        def close_after_workers() -> None:
+            wait_for.wait()
+            close_reserved()
+
+        self._start_asr_cleanup_thread(
+            close_after_workers,
+            name="asr-provider-cleanup",
+        )
+
+    def _start_workers(self) -> None:
+        self._realtime_delivery_cancel_event = threading.Event()
+        self._translation_context_store = TranslationContextStore()
+        self._partial_task_queues = {}
+        self._partial_workers = {}
+        self._final_task_queues = {}
+        self._final_workers = {}
+        self._realtime_source_generations = {
+            MIC_SOURCE: 0,
+            DESKTOP_SOURCE: 0,
+        }
+        self._realtime_config_snapshot = _freeze_snapshot_value(copy.deepcopy(self._config))
+
+        # Partial recognition is disposable UI feedback, not a pipeline stage.
+        # Only create its queue/thread when the active microphone backend can
+        # actually produce useful partials.  This avoids continuously slicing
+        # and copying audio for CPU and online backends that immediately reject
+        # partial work, and prevents desktop-listen partials from competing with
+        # final microphone recognition for the same local model.
+        for source in (MIC_SOURCE, DESKTOP_SOURCE):
+            if not self._should_process_partial_asr(source):
+                continue
+            self._partial_task_queues[source] = queue.Queue(maxsize=PARTIAL_TASK_QUEUE_MAXSIZE)
+            worker = threading.Thread(
                 target=self._partial_worker_loop,
                 args=(source,),
                 daemon=True,
                 name=f"partial-{source}",
             )
-            p.start()
-            self._partial_workers[source] = p
+            worker.start()
+            self._partial_workers[source] = worker
 
-            f = threading.Thread(
-                target=self._final_worker_loop,
-                args=(source,),
-                daemon=True,
-                name=f"final-{source}",
+        scheduler = RealtimeScheduler(
+            sources=(MIC_SOURCE, DESKTOP_SOURCE),
+            asr_handler=self._scheduler_asr_stage,
+            rewrite_handler=self._scheduler_rewrite_stage,
+            translation_handler=self._scheduler_translation_stage,
+            delivery_handler=self._scheduler_delivery_stage,
+            rewrite_state_factory=lambda _index: _RealtimeRewriteWorkerState(),
+            rewrite_state_finalizer=lambda state: state.close(),
+            translation_state_factory=lambda _index: _RealtimeTranslationWorkerState(),
+            translation_state_finalizer=lambda state: state.close(),
+            ingress_limits={
+                MIC_SOURCE: FINAL_TASK_QUEUE_MAXSIZE,
+                DESKTOP_SOURCE: DESKTOP_FINAL_TASK_QUEUE_MAXSIZE,
+            },
+            rewrite_queue_size=ASR_REWRITE_TASK_QUEUE_MAXSIZE,
+            translation_queue_size=TRANSLATION_TASK_QUEUE_MAXSIZE,
+            asr_concurrency=self._realtime_asr_worker_concurrency(),
+            rewrite_concurrency=self._realtime_rewrite_worker_concurrency(),
+            translation_concurrency=self._realtime_translation_worker_concurrency(),
+            priority_source=MIC_SOURCE,
+            priority_burst=MIC_PRIORITY_BURST,
+            thread_name_prefix=f"realtime-{self._listen_session}",
+        )
+        self._realtime_scheduler = scheduler
+        try:
+            scheduler.start()
+        except Exception:
+            self._realtime_scheduler = None
+            for work_queue in self._partial_task_queues.values():
+                self._enqueue_latest(work_queue, None)
+            raise
+
+    def _stop_workers(self) -> threading.Event | None:
+        delivery_cancel_event = getattr(
+            self,
+            "_realtime_delivery_cancel_event",
+            None,
+        )
+        if delivery_cancel_event is not None:
+            delivery_cancel_event.set()
+
+        context_store = getattr(self, "_translation_context_store", None)
+        if isinstance(context_store, TranslationContextStore):
+            context_store.clear_session(int(getattr(self, "_listen_session", -1)))
+
+        tts_manager = getattr(self, "_tts_manager", None)
+        if tts_manager is not None:
+            try:
+                clear_queue = getattr(tts_manager, "clear_queue", None)
+                if callable(clear_queue):
+                    clear_queue()
+                stop_playback = getattr(tts_manager, "stop_playback", None)
+                if callable(stop_playback):
+                    stop_playback()
+            except Exception:
+                logger.debug("Failed to cancel stale TTS session work", exc_info=True)
+
+        osc_sender = getattr(self, "_osc_sender", None)
+        if osc_sender is not None:
+            try:
+                clear_pending = getattr(osc_sender, "clear_pending_chatbox", None)
+                if callable(clear_pending):
+                    clear_pending()
+            except Exception:
+                logger.debug("Failed to cancel stale OSC session work", exc_info=True)
+
+        priority_queue = getattr(self, "_ui_priority_callback_queue", None)
+        if priority_queue is not None:
+            while True:
+                try:
+                    _delay_ms, callback = priority_queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    callback()
+                except Exception:
+                    logger.debug(
+                        "Failed to cancel pending realtime UI delivery",
+                        exc_info=True,
+                    )
+
+        partial_queues = tuple(
+            getattr(self, "_partial_task_queues", {}).values()
+        )
+        partial_workers = tuple(
+            getattr(self, "_partial_workers", {}).values()
+        )
+        scheduler = getattr(self, "_realtime_scheduler", None)
+
+        # Detach owned runtime objects first so no new callback can discover and
+        # enqueue into a scheduler or partial queue that is being cancelled.
+        self._realtime_scheduler = None
+        self._partial_workers = {}
+        self._final_workers = {}
+        self._partial_task_queues = {}
+        self._final_task_queues = {}
+
+        for work_queue in partial_queues:
+            self._enqueue_latest(work_queue, None)
+
+        deadline = time.monotonic() + WORKER_STOP_TIMEOUT_S
+        scheduler_stopped = True
+        if scheduler is not None:
+            try:
+                result = scheduler.stop(timeout=WORKER_STOP_TIMEOUT_S)
+                scheduler_stopped = result is not False
+            except Exception:
+                scheduler_stopped = False
+                logger.exception("Realtime scheduler stop failed")
+
+        current = threading.current_thread()
+        for worker in partial_workers:
+            join = getattr(worker, "join", None)
+            if callable(join) and worker is not current:
+                try:
+                    join(timeout=max(0.0, deadline - time.monotonic()))
+                except Exception:
+                    logger.debug("Failed to join partial ASR worker", exc_info=True)
+
+        def alive_threads(items: tuple[Any, ...]) -> tuple[Any, ...]:
+            alive: list[Any] = []
+            for item in items:
+                is_alive = getattr(item, "is_alive", None)
+                try:
+                    if callable(is_alive) and is_alive():
+                        alive.append(item)
+                except Exception:
+                    alive.append(item)
+            return tuple(alive)
+
+        partial_alive = alive_threads(partial_workers)
+        scheduler_threads = tuple(getattr(scheduler, "threads", ())) if scheduler is not None else ()
+        scheduler_alive = alive_threads(scheduler_threads)
+        if scheduler_stopped and not scheduler_alive and not partial_alive:
+            return None
+
+        names = [
+            str(getattr(worker, "name", type(worker).__name__))
+            for worker in (*scheduler_alive, *partial_alive)
+        ]
+        logger.warning(
+            "Realtime workers did not stop in time; deferring ASR provider cleanup%s",
+            f": {', '.join(names)}" if names else "",
+        )
+        shutdown_barrier = threading.Event()
+
+        def finish_shutdown() -> None:
+            safe_to_close = scheduler is None
+            if scheduler is not None:
+                try:
+                    result = scheduler.stop(timeout=None)
+                    safe_to_close = result is not False
+                except Exception:
+                    safe_to_close = False
+                    logger.exception("Deferred realtime scheduler stop failed")
+
+            for worker in partial_workers:
+                join = getattr(worker, "join", None)
+                if callable(join) and worker is not threading.current_thread():
+                    try:
+                        join()
+                    except Exception:
+                        logger.debug(
+                            "Deferred partial ASR worker join failed",
+                            exc_info=True,
+                        )
+
+            remaining_scheduler = alive_threads(
+                tuple(getattr(scheduler, "threads", ())) if scheduler is not None else ()
             )
-            f.start()
-            self._final_workers[source] = f
+            remaining_partial = alive_threads(partial_workers)
+            if safe_to_close and not remaining_scheduler and not remaining_partial:
+                shutdown_barrier.set()
+                return
+            logger.error(
+                "ASR providers retained because realtime workers failed to terminate"
+            )
 
-    def _stop_workers(self) -> None:
-        for q in self._partial_task_queues.values():
-            self._enqueue_latest(q, None)
-        for q in self._final_task_queues.values():
-            self._enqueue_latest(q, None)
-        self._partial_workers.clear()
-        self._final_workers.clear()
+        self._start_asr_cleanup_thread(
+            finish_shutdown,
+            name="realtime-worker-cleanup",
+        )
+        return shutdown_barrier
 
     @staticmethod
     def _drain_queue(work_queue: queue.Queue) -> None:
@@ -2668,6 +2766,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _enqueue_latest(work_queue: queue.Queue, payload) -> str:
+        """Latest-only admission used exclusively by disposable partial ASR."""
+
         try:
             work_queue.put_nowait(payload)
             return "enqueued"
@@ -2684,22 +2784,24 @@ class MainWindow(QMainWindow):
             return "dropped"
 
     def _partial_worker_loop(self, source: str) -> None:
-        q = self._partial_task_queues.get(source)
-        if q is None:
+        work_queue = self._partial_task_queues.get(source)
+        if work_queue is None:
             return
         while True:
-            payload = q.get()
+            payload = work_queue.get()
             if payload is None:
                 return
             audio, asr_lang, generation, session_id, src = payload
             self._process_partial_audio_chunk(audio, asr_lang, generation, session_id, src)
 
     def _final_worker_loop(self, source: str) -> None:
-        q = self._final_task_queues.get(source)
-        if q is None:
+        """Legacy synchronous queue consumer retained for API compatibility."""
+
+        work_queue = self._final_task_queues.get(source)
+        if work_queue is None:
             return
         while True:
-            payload = q.get()
+            payload = work_queue.get()
             if payload is None:
                 return
             audio, asr_lang, selected_src_lang, session_id, src = payload
@@ -2710,36 +2812,50 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
     def _start_microphone_capture(self) -> None:
         device_name = self._resolve_mic_input_device_name(refresh=True)
-        if device_name and device_name not in self._devices:
-            try:
-                devices = _list_microphone_devices()
-            except Exception:
-                logger.debug("Failed to enumerate microphone devices", exc_info=True)
-                devices = []
-            self._devices = {
-                str(d.get("name", "")).strip(): int(d.get("index", -1))
-                for d in devices
-                if str(d.get("name", "")).strip()
-            }
+        matched_device_name = self._match_mic_input_device_name(device_name)
+        if matched_device_name:
+            device_name = matched_device_name
         dev_idx = self._devices.get(device_name)
         from src.audio.recorder import AudioRecorder
         audio_cfg = self._config.get("audio", {})
         if not isinstance(audio_cfg, dict):
             audio_cfg = {}
+        configured_device_name = str(audio_cfg.get("input_device") or "").strip()
+        if (
+            self._mic_input_device_mode() != "auto"
+            and configured_device_name
+            and dev_idx is None
+        ):
+            logger.warning(
+                "Configured microphone is unavailable; using the system default "
+                "until it becomes available (configured=%s)",
+                configured_device_name,
+            )
+        streaming_cfg = self._asr_streaming_settings()
+        partial_callback = (
+            (lambda audio: self._on_audio_chunk(audio, MIC_SOURCE))
+            if MIC_SOURCE in getattr(self, "_partial_task_queues", {})
+            else None
+        )
 
         self._recorder = AudioRecorder(
             on_segment=self._on_audio_segment,
+            on_chunk=partial_callback,
             sample_rate=int(audio_cfg.get("sample_rate", 16000)),
             frame_duration_ms=int(audio_cfg.get("frame_duration_ms", 30)),
             vad_sensitivity=int(audio_cfg.get("vad_sensitivity", 2)),
-            silence_threshold_s=float(audio_cfg.get("vad_silence_threshold", 0.65)),
+            silence_threshold_s=self._effective_mic_tail_silence_s(audio_cfg),
             vad_speech_ratio=float(audio_cfg.get("vad_speech_ratio", 0.6)),
             vad_activation_threshold_s=float(audio_cfg.get("vad_activation_threshold_s", 0.2)),
             vad_min_rms=float(audio_cfg.get("vad_min_rms", 0.012)),
             min_segment_s=float(audio_cfg.get("min_segment_s", 0.45)),
             partial_min_speech_s=float(audio_cfg.get("partial_min_speech_s", 0.45)),
-            max_segment_s=float(audio_cfg.get("max_segment_s", 6.0)),
+            max_segment_s=self._effective_mic_max_segment_s(audio_cfg),
             denoise_strength=float(audio_cfg.get("denoise_strength", 0.0)),
+            chunk_interval_ms=streaming_cfg["chunk_interval_ms"],
+            chunk_window_s=streaming_cfg["chunk_window_s"],
+            ring_buffer_s=streaming_cfg["ring_buffer_s"],
+            recent_speech_hold_s=streaming_cfg["recent_speech_hold_s"],
             input_device=dev_idx,
             on_vad_state=lambda active: self._call_in_ui(
                 lambda state=active: self._handle_mic_vad_state(state)
@@ -2751,6 +2867,44 @@ class MainWindow(QMainWindow):
         self._last_mic_result_at = self._last_mic_started_at
         self._last_mic_diagnostic_log_at = 0.0
         logger.info("Microphone capture started: %s", self._active_mic_input_device_name)
+
+    def _effective_mic_tail_silence_s(self, audio_cfg: Mapping[str, Any]) -> float:
+        try:
+            configured = max(
+                0.2,
+                float(audio_cfg.get("vad_silence_threshold", 0.65)),
+            )
+        except (TypeError, ValueError):
+            configured = 0.65
+        if AppMode.from_value(self._config.get("app_mode")) is not AppMode.SIMULTANEOUS:
+            return configured
+        simul_cfg = self._config.get("simul_mode", {})
+        if not isinstance(simul_cfg, Mapping):
+            simul_cfg = {}
+        try:
+            target = max(
+                0.2,
+                min(float(simul_cfg.get("vad_silence_ms", 300)) / 1000.0, 1.5),
+            )
+        except (TypeError, ValueError):
+            target = 0.3
+        if bool(simul_cfg.get("aggressive_chunking", False)):
+            target = min(target, 0.22)
+        return min(configured, target)
+
+    def _effective_mic_max_segment_s(self, audio_cfg: Mapping[str, Any]) -> float:
+        try:
+            configured = max(0.5, float(audio_cfg.get("max_segment_s", 6.0)))
+        except (TypeError, ValueError):
+            configured = 6.0
+        if AppMode.from_value(self._config.get("app_mode")) is not AppMode.SIMULTANEOUS:
+            return configured
+        simul_cfg = self._config.get("simul_mode", {})
+        aggressive = bool(
+            isinstance(simul_cfg, Mapping)
+            and simul_cfg.get("aggressive_chunking", False)
+        )
+        return min(configured, 2.5 if aggressive else 4.0)
 
     def _stop_microphone_capture(self) -> None:
         self._mic_in_speech = False
@@ -2771,16 +2925,34 @@ class MainWindow(QMainWindow):
             device_name = self._desktop_output_device_name()
             if not device_name:
                 raise RuntimeError(self._copy("vrc_listen_device_missing"))
-        except Exception:
-            raise RuntimeError(self._copy("vrc_listen_device_missing"))
+        except Exception as exc:
+            try:
+                from src.audio.desktop_recorder import loopback_device_diagnostics
+
+                diagnostics = loopback_device_diagnostics()
+            except Exception:
+                diagnostics = {"diagnostics_error": "unavailable"}
+            logger.error(
+                "Desktop listen output-device resolution failed: %s diagnostics=%s",
+                exc,
+                diagnostics,
+            )
+            raise RuntimeError(self._copy("vrc_listen_device_missing")) from exc
         audio_cfg = self._config.get("audio", {}) if isinstance(self._config.get("audio", {}), dict) else {}
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
         segment_duration_s = self._listen_segment_duration_s()
         chunk_interval_ms = min(max(int(round(segment_duration_s * 500.0)), 700), 1400)
+        streaming_cfg = self._asr_streaming_settings()
+        partial_callback = (
+            (lambda audio: self._on_audio_chunk(audio, DESKTOP_SOURCE))
+            if DESKTOP_SOURCE in getattr(self, "_partial_task_queues", {})
+            else None
+        )
         from src.audio.desktop_recorder import DesktopAudioRecorder
 
         self._listen_recorder = DesktopAudioRecorder(
             on_segment=lambda audio: self._on_audio_segment(audio, DESKTOP_SOURCE),
+            on_chunk=partial_callback,
             sample_rate=int(audio_cfg.get("sample_rate", 16000)),
             frame_duration_ms=int(audio_cfg.get("frame_duration_ms", 30)),
             vad_sensitivity=int(audio_cfg.get("vad_sensitivity", 1)),
@@ -2795,8 +2967,19 @@ class MainWindow(QMainWindow):
             silero_speech_threshold=float(listen_cfg.get("silero_speech_threshold", 0.15)),
             vad_type=str(listen_cfg.get("vad_type", "webrtc")).strip().lower(),
             output_device_name=device_name,
-            chunk_interval_ms=chunk_interval_ms,
-            chunk_window_s=segment_duration_s,
+            chunk_interval_ms=max(
+                chunk_interval_ms,
+                streaming_cfg["chunk_interval_ms"],
+            ),
+            chunk_window_s=max(
+                segment_duration_s,
+                streaming_cfg["chunk_window_s"],
+            ),
+            ring_buffer_s=max(
+                segment_duration_s,
+                streaming_cfg["ring_buffer_s"],
+            ),
+            recent_speech_hold_s=streaming_cfg["recent_speech_hold_s"],
             on_vad_state=lambda active: self._call_in_ui(
                 lambda state=active: self._handle_listen_vad_state(state)
             ),
@@ -2821,6 +3004,9 @@ class MainWindow(QMainWindow):
             raise
 
     def _stop_listen(self) -> None:
+        cancelled = self._invalidate_realtime_source(DESKTOP_SOURCE)
+        if cancelled:
+            logger.info("Cancelled %s stale reverse-translation task(s)", cancelled)
         self._reset_streaming_state(DESKTOP_SOURCE)
         self._listen_in_speech = False
         self._refresh_floating_window_status(False)
@@ -2858,16 +3044,72 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _normalize_audio_device_name(name: str | None) -> str:
-        return " ".join(str(name or "").casefold().split())
+        normalized = unicodedata.normalize("NFKC", str(name or ""))
+        return " ".join(normalized.casefold().split())
+
+    @classmethod
+    def _audio_device_identity_parts(cls, name: str | None) -> frozenset[str]:
+        normalized = cls._normalize_audio_device_name(name)
+        if not normalized:
+            return frozenset()
+        parts = {normalized}
+        for parenthesized in re.findall(r"\(([^()]*)\)", normalized):
+            identity = " ".join(parenthesized.split()).strip(" -_:;")
+            if len(identity) >= 4:
+                parts.add(identity)
+        return frozenset(parts)
+
+    @classmethod
+    def _microphone_device_names_match(
+        cls,
+        left: str | None,
+        right: str | None,
+    ) -> bool:
+        left_norm = cls._normalize_audio_device_name(left)
+        right_norm = cls._normalize_audio_device_name(right)
+        if not left_norm or not right_norm:
+            return False
+        if (
+            left_norm == right_norm
+            or left_norm in right_norm
+            or right_norm in left_norm
+        ):
+            return True
+        return bool(
+            cls._audio_device_identity_parts(left)
+            & cls._audio_device_identity_parts(right)
+        )
+
+    @classmethod
+    def _matching_microphone_device_name(
+        cls,
+        name: str | None,
+        candidates: object,
+    ) -> str | None:
+        clean = str(name or "").strip()
+        if not clean:
+            return None
+        candidate_names = tuple(
+            str(candidate or "").strip() for candidate in (candidates or ())
+        )
+        for candidate_name in candidate_names:
+            if candidate_name == clean:
+                return candidate_name
+        identity_matches = [
+            candidate_name
+            for candidate_name in candidate_names
+            if cls._microphone_device_names_match(clean, candidate_name)
+        ]
+        return identity_matches[0] if len(identity_matches) == 1 else None
+
+    def _match_mic_input_device_name(self, name: str | None) -> str | None:
+        return self._matching_microphone_device_name(
+            name,
+            (getattr(self, "_devices", {}) or {}).keys(),
+        )
 
     def _desktop_device_names_match(self, left: str | None, right: str | None) -> bool:
-        left_norm = self._normalize_audio_device_name(left)
-        right_norm = self._normalize_audio_device_name(right)
-        return bool(
-            left_norm
-            and right_norm
-            and (left_norm == right_norm or left_norm in right_norm or right_norm in left_norm)
-        )
+        return audio_device_names_match(left, right)
 
     def _match_desktop_device_name(self, name: str | None) -> str | None:
         clean = str(name or "").strip()
@@ -2876,9 +3118,9 @@ class MainWindow(QMainWindow):
         devices = getattr(self, "_desktop_devices", {}) or {}
         if clean in devices:
             return clean
-        for candidate in devices:
-            if self._desktop_device_names_match(clean, candidate):
-                return candidate
+        matched = unique_device_name_match(clean, devices)
+        if matched is not None:
+            return matched
         return clean if not devices else None
 
     def _listen_process_output_probe_enabled(self) -> bool:
@@ -2949,15 +3191,25 @@ class MainWindow(QMainWindow):
         return "mixline" in normalized or "mix line" in normalized
 
     def _listen_auto_fallback_output_device_name(self, avoided_name: str | None) -> str | None:
-        for name in getattr(self, "_desktop_devices", {}) or {}:
+        candidates: list[tuple[int, int, str]] = []
+        for index, name in enumerate(getattr(self, "_desktop_devices", {}) or {}):
             if self._desktop_device_names_match(name, avoided_name):
                 continue
             if self._listen_auto_should_avoid_output_device(name):
                 continue
             normalized = self._normalize_audio_device_name(name)
-            if "mixline" not in normalized and "mix line" not in normalized:
-                return name
-        return None
+            score = 0
+            if any(token in normalized for token in LISTEN_REAL_OUTPUT_HINTS):
+                score += 100
+            if "headphone" in normalized or "headphones" in normalized:
+                score += 20
+            if any(token in normalized for token in LISTEN_VIRTUAL_OUTPUT_TOKENS):
+                score -= 250
+            candidates.append((score, -index, name))
+        if not candidates:
+            return None
+        _score, _order, selected = max(candidates)
+        return selected
 
     def _auto_detect_listen_device_name(self) -> str | None:
         if self._listen_process_output_probe_enabled():
@@ -3191,8 +3443,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_listen_availability(self, *, refresh_devices: bool = False) -> bool:
         try:
-            from src.audio.desktop_recorder import desktop_audio_supported
-            available = bool(desktop_audio_supported())
+            if refresh_devices or not self._desktop_devices:
+                self._load_desktop_devices()
+            available = bool(self._desktop_devices)
         except Exception:
             available = False
         self._listen_available = available
@@ -3202,12 +3455,7 @@ class MainWindow(QMainWindow):
         if not devices:
             return None
         try:
-            import sounddevice as sd
-            default_in = sd.default.device[0]
-            if default_in is None or int(default_in) < 0:
-                return None
-            default_info = sd.query_devices(int(default_in))
-            return str(default_info["name"]).strip() if default_info else None
+            return inventory_default_input_device_name(force_refresh=False)
         except Exception:
             return None
 
@@ -3227,6 +3475,8 @@ class MainWindow(QMainWindow):
         from src.audio.recorder import AudioRecorder
         devices = AudioRecorder.list_devices()
         self._devices = {str(d.get("name", "")).strip(): int(d.get("index", -1)) for d in devices}
+        if getattr(self, "_device_combo", None) is not None:
+            self._refresh_device_combo()
         default_name = self._current_default_input_device_name(devices)
         mode = self._mic_input_device_mode()
         configured = self._configured_mic_input_device_name()
@@ -3265,16 +3515,46 @@ class MainWindow(QMainWindow):
                 return
             if recorder is not None:
                 self._maybe_log_mic_diagnostics()
-            active_norm = self._normalize_audio_device_name(self._active_mic_input_device_name or "")
-            resolved_norm = self._normalize_audio_device_name(resolved_name or "")
-            if previous is None:
+            device_names = signature[0]
+            previous_names = previous[0] if previous is not None else ()
+            previous_default = previous[1] if previous is not None else None
+            previous_configured = previous[3] if previous is not None else None
+            previous_resolved = previous[4] if previous is not None else None
+            active_name = self._active_mic_input_device_name
+            active_device = self._matching_microphone_device_name(
+                active_name,
+                device_names,
+            )
+            previous_active_device = self._matching_microphone_device_name(
+                active_name,
+                previous_names,
+            )
+            if (
+                previous is not None
+                and active_name
+                and previous_active_device
+                and not active_device
+            ):
+                logger.info(
+                    "Detected active microphone removal (active=%s)",
+                    active_name,
+                )
+                self._restart_microphone_capture("active microphone was removed")
                 return
-            previous_default = previous[1]
-            previous_resolved = previous[4]
             if mode == "auto":
-                if resolved_norm and resolved_norm != active_norm and (
-                    previous_default != default_name
-                    or self._normalize_audio_device_name(previous_resolved or "") != resolved_norm
+                default_changed = bool(previous_default or default_name) and not (
+                    self._microphone_device_names_match(previous_default, default_name)
+                )
+                resolved_changed = bool(previous_resolved or resolved_name) and not (
+                    self._microphone_device_names_match(previous_resolved, resolved_name)
+                )
+                if resolved_name and not self._microphone_device_names_match(
+                    resolved_name,
+                    active_name,
+                ) and (
+                    previous is None
+                    or default_changed
+                    or resolved_changed
                 ):
                     logger.info(
                         "Detected default microphone change (previous_default=%s current_default=%s active=%s resolved=%s)",
@@ -3286,15 +3566,63 @@ class MainWindow(QMainWindow):
                     self._restart_microphone_capture("system default microphone changed")
                     return
             else:
-                configured_exists = bool(configured_name and configured_name in self._devices)
-                if not configured_exists and resolved_norm and resolved_norm != active_norm:
-                    logger.warning(
-                        "Configured microphone is unavailable, falling back (configured=%s fallback=%s)",
+                configured_device = self._matching_microphone_device_name(
+                    configured_name,
+                    device_names,
+                )
+                previous_configured_device = self._matching_microphone_device_name(
+                    configured_name,
+                    previous_names,
+                )
+                configured_changed = bool(
+                    previous_configured or configured_name
+                ) and not self._microphone_device_names_match(
+                    previous_configured,
+                    configured_name,
+                )
+                if configured_device and not self._microphone_device_names_match(
+                    configured_device,
+                    active_name,
+                ) and (
+                    previous is None
+                    or previous_configured_device is None
+                    or configured_changed
+                ):
+                    logger.info(
+                        "Configured microphone became available "
+                        "(configured=%s resolved=%s active=%s)",
                         configured_name,
-                        resolved_name,
+                        configured_device,
+                        active_name,
                     )
-                    self._restart_microphone_capture("configured microphone unavailable")
+                    self._restart_microphone_capture("configured microphone became available")
                     return
+                if not configured_device and previous is not None:
+                    default_changed = bool(previous_default or default_name) and not (
+                        self._microphone_device_names_match(
+                            previous_default,
+                            default_name,
+                        )
+                    )
+                    if (
+                        default_changed
+                        and default_name
+                        and not self._microphone_device_names_match(
+                            default_name,
+                            active_name,
+                        )
+                    ):
+                        logger.info(
+                            "Detected fallback microphone change "
+                            "(previous_default=%s current_default=%s active=%s)",
+                            previous_default,
+                            default_name,
+                            active_name,
+                        )
+                        self._restart_microphone_capture(
+                            "fallback default microphone changed"
+                        )
+                        return
         except Exception:
             logger.exception("Microphone device watch failed")
         finally:
@@ -3303,7 +3631,13 @@ class MainWindow(QMainWindow):
 
     def _maybe_log_mic_diagnostics(self) -> None:
         now = time.monotonic()
-        if (now - self._last_mic_diagnostic_log_at) < LISTEN_DIAGNOSTIC_IDLE_S:
+        if bool(getattr(self, "_mic_muted", False)):
+            return
+        if (
+            self._last_mic_diagnostic_log_at > 0
+            and (now - self._last_mic_diagnostic_log_at)
+            < MIC_DIAGNOSTIC_LOG_INTERVAL_S
+        ):
             return
         recorder = self._recorder
         if recorder is None or not hasattr(recorder, "diagnostics_snapshot"):
@@ -3320,7 +3654,12 @@ class MainWindow(QMainWindow):
         audio_state = "no_mic_audio"
         if last_non_silent_at > 0 and (now - last_non_silent_at) < LISTEN_DIAGNOSTIC_IDLE_S:
             audio_state = "audio_present_but_no_segment"
-        logger.warning(
+        log_fn = (
+            logger.warning
+            if audio_state == "audio_present_but_no_segment"
+            else logger.info
+        )
+        log_fn(
             "Microphone diagnostics state=%s idle_for=%.1fs stats=%s active=%s resolved=%s muted=%s output_format=%s",
             audio_state,
             now - idle_anchor if idle_anchor > 0 else 0.0,
@@ -3344,32 +3683,706 @@ class MainWindow(QMainWindow):
         finally:
             self._mic_recovery_in_progress = False
 
-    def _on_audio_segment(self, audio, source: str = MIC_SOURCE) -> None:
+    def _asr_provider_key(self, provider: Any) -> Any:
+        explicit_key = getattr(provider, "concurrency_key", None)
+        if explicit_key is not None:
+            try:
+                hash(explicit_key)
+                return explicit_key
+            except Exception:
+                pass
+        provider_id = str(getattr(provider, "provider_id", "") or "").strip()
+        if provider_id and provider_id != "base":
+            return provider_id
+        return ("asr-instance", id(provider))
+
+    @staticmethod
+    def _asr_provider_concurrency(provider: Any) -> int:
+        try:
+            return max(
+                1,
+                min(
+                    int(getattr(provider, "max_concurrent_transcriptions", 1)),
+                    4,
+                ),
+            )
+        except (TypeError, ValueError):
+            return 1
+
+    def _realtime_asr_worker_concurrency(self) -> int:
+        if self._performance_profile() == "low_power":
+            return 1
+        limits: dict[Any, int] = {}
+        for provider in (getattr(self, "_asr", None), getattr(self, "_listen_asr", None)):
+            if provider is None:
+                continue
+            key = self._asr_provider_key(provider)
+            limits[key] = max(
+                limits.get(key, 0),
+                self._asr_provider_concurrency(provider),
+            )
+        if not limits:
+            return ASR_WORKER_CONCURRENCY
+        return max(1, min(sum(limits.values()), 4))
+
+    def _realtime_translation_worker_concurrency(self) -> int:
+        if self._performance_profile() == "low_power":
+            return 1
+        trans_cfg = self._config.get("translation", {})
+        if not isinstance(trans_cfg, Mapping):
+            return TRANSLATION_WORKER_CONCURRENCY
+        backend = normalize_backend(trans_cfg.get("backend"))
+        backend_cfg = trans_cfg.get(backend, {})
+        if not isinstance(backend_cfg, Mapping):
+            backend_cfg = {}
+        configured = backend_cfg.get("max_concurrent_requests")
+        if configured is not None:
+            try:
+                return max(1, min(int(configured), 4))
+            except (TypeError, ValueError):
+                pass
+        base_url = str(backend_cfg.get("base_url", "") or "").strip().lower()
+        if backend == "local_ai" or any(
+            marker in base_url
+            for marker in ("127.0.0.1", "localhost", "[::1]")
+        ):
+            return 1
+        if backend in {"google_web", "mymemory", "deepl", "libretranslate"}:
+            return 2
+        if backend in {"openai", "openai_compatible", "qianwen", "gemini"}:
+            return 3
+        return 2
+
+    def _realtime_rewrite_worker_concurrency(self) -> int:
+        if self._performance_profile() == "low_power":
+            return 1
+        trans_cfg = self._config.get("translation", {})
+        if not isinstance(trans_cfg, Mapping):
+            return 1
+        backend = normalize_backend(trans_cfg.get("backend"))
+        if backend in {"local_ai", "google_web", "mymemory", "deepl", "libretranslate"}:
+            return 1
+        backend_cfg = trans_cfg.get(backend, {})
+        if isinstance(backend_cfg, Mapping):
+            configured = backend_cfg.get("rewrite_concurrency")
+            if configured is not None:
+                try:
+                    return max(1, min(int(configured), 3))
+                except (TypeError, ValueError):
+                    pass
+        return ASR_REWRITE_WORKER_CONCURRENCY
+
+    def _realtime_session_active(self, session_id: int) -> bool:
+        return bool(
+            not getattr(self, "_destroying", False)
+            and getattr(self, "_running", False)
+            and session_id == getattr(self, "_listen_session", -1)
+        )
+
+    def _realtime_task_active(self, task: RealtimeTask) -> bool:
+        if not self._realtime_session_active(task.session_id):
+            return False
+        payload = getattr(task, "payload", None)
+        if not isinstance(payload, _RealtimeAudioPayload):
+            return True
+        current_generation = int(
+            getattr(self, "_realtime_source_generations", {}).get(task.source, 0)
+        )
+        return int(payload.source_generation) == current_generation
+
+    @staticmethod
+    def _realtime_context_source(source: str) -> str:
+        return "listen" if source == DESKTOP_SOURCE else MIC_SOURCE
+
+    def _invalidate_realtime_source(self, source: str) -> int:
+        generations = getattr(self, "_realtime_source_generations", None)
+        if not isinstance(generations, dict):
+            generations = {MIC_SOURCE: 0, DESKTOP_SOURCE: 0}
+            self._realtime_source_generations = generations
+        generations[source] = int(generations.get(source, 0)) + 1
+
+        session_id = int(getattr(self, "_listen_session", -1))
+        store = getattr(self, "_translation_context_store", None)
+        if isinstance(store, TranslationContextStore):
+            store.clear_source(
+                session_id=session_id,
+                context_source=self._realtime_context_source(source),
+            )
+
+        scheduler = getattr(self, "_realtime_scheduler", None)
+        cancel_source = getattr(scheduler, "cancel_source", None)
+        if callable(cancel_source):
+            try:
+                return int(cancel_source(source, session_id=session_id) or 0)
+            except Exception:
+                logger.exception("Failed to cancel stale realtime source work: %s", source)
+        return 0
+
+    def _build_realtime_payload(
+        self,
+        audio: Any,
+        *,
+        source: str,
+        asr_language: str | None,
+        source_language: str | None,
+    ) -> _RealtimeAudioPayload | None:
+        provider = self._asr_for_source(source)
+        if provider is None:
+            return None
+        config_snapshot = getattr(self, "_realtime_config_snapshot", None)
+        if not isinstance(config_snapshot, Mapping):
+            config_snapshot = _freeze_snapshot_value(copy.deepcopy(self._config))
+        return _RealtimeAudioPayload(
+            audio=_immutable_audio_snapshot(audio),
+            asr_provider=provider,
+            asr_language=asr_language,
+            source_language=source_language,
+            target_language=str(getattr(self, "_current_tgt_lang", "ja") or "ja"),
+            second_target_language=str(
+                getattr(self, "_current_tgt_lang_2", "en") or "en"
+            ),
+            third_target_language=str(getattr(self, "_current_tgt_lang_3", "") or ""),
+            listen_target_language=self._listen_target_language(),
+            listen_prefix=self._copy("listen_prefix"),
+            send_to_chatbox=(
+                self._listen_send_to_chatbox_enabled()
+                if source == DESKTOP_SOURCE
+                else self._mic_send_to_chatbox_enabled()
+            ),
+            config_snapshot=config_snapshot,
+            source_generation=int(
+                getattr(self, "_realtime_source_generations", {}).get(source, 0)
+            ),
+        )
+
+    def _on_audio_segment(self, audio, source: str = MIC_SOURCE):
         if not self._running:
-            return
+            return None
         if source == MIC_SOURCE:
             if getattr(self, "_mic_muted", False):
                 self._reset_streaming_state(MIC_SOURCE)
-                return
+                return None
             self._last_mic_result_at = time.monotonic()
             self._reset_streaming_state(MIC_SOURCE)
             asr_lang = self._current_asr_lang
             selected_src_lang = self._current_src_lang
         else:
-            if self._desktop_listen_should_yield_to_mic():
-                return
+            if self._listen_tts_echo_suppress_active():
+                self._reset_streaming_state(DESKTOP_SOURCE)
+                return None
             self._reset_streaming_state(DESKTOP_SOURCE)
             selected_src_lang = self._listen_source_language()
             asr_lang = selected_src_lang
-        q = self._final_task_queues.get(source)
-        if q is None:
+
+        scheduler = getattr(self, "_realtime_scheduler", None)
+        if scheduler is None:
+            return None
+        payload = self._build_realtime_payload(
+            audio,
+            source=source,
+            asr_language=asr_lang,
+            source_language=selected_src_lang,
+        )
+        if payload is None:
+            return None
+        admission = scheduler.submit(
+            source=source,
+            session_id=self._listen_session,
+            provider_key=self._asr_provider_key(payload.asr_provider),
+            payload=payload,
+            provider_concurrency=self._asr_provider_concurrency(
+                payload.asr_provider
+            ),
+        )
+        if admission.status is AdmissionStatus.FULL:
+            logger.warning("Final sentence rejected by backpressure source=%s", source)
+            session_id = self._listen_session
+            self._call_in_ui(
+                lambda sid=session_id: (
+                    self._set_bottom(self._copy("realtime_queue_full"), "warning")
+                    if self._realtime_session_active(sid)
+                    else None
+                )
+            )
+        elif admission.status not in {AdmissionStatus.ACCEPTED, AdmissionStatus.STOPPED}:
+            logger.warning(
+                "Final sentence admission rejected source=%s status=%s",
+                source,
+                admission.status.value,
+            )
+        return admission
+
+    def _on_audio_chunk(self, audio, source: str = MIC_SOURCE) -> None:
+        if not self._running:
+            return
+        if source == MIC_SOURCE:
+            if getattr(self, "_mic_muted", False):
+                return
+            asr_lang = self._current_asr_lang
+        else:
+            if self._listen_tts_echo_suppress_active():
+                return
+            asr_lang = self._listen_source_language()
+        if not self._should_process_partial_asr(source):
+            return
+
+        provider = self._asr_for_source(source)
+        scheduler = getattr(self, "_realtime_scheduler", None)
+        if provider is None or scheduler is None:
+            return
+        provider_key = self._asr_provider_key(provider)
+        if scheduler.should_yield_partial(provider_key):
+            return
+        work_queue = self._partial_task_queues.get(source)
+        if work_queue is None:
             return
         result = self._enqueue_latest(
-            q,
-            (audio, asr_lang, selected_src_lang, self._listen_session, source),
+            work_queue,
+            (
+                _immutable_audio_snapshot(audio),
+                asr_lang,
+                self._partial_generation,
+                self._listen_session,
+                source,
+            ),
         )
-        if result != "enqueued":
-            logger.debug("Final queue update result=%s source=%s", result, source)
+        if result == "dropped":
+            logger.debug("Partial ASR chunk dropped source=%s", source)
+
+    def _scheduler_asr_stage(
+        self,
+        task: RealtimeTask,
+        cancel_event: threading.Event,
+    ) -> str:
+        payload = task.payload
+        if not isinstance(payload, _RealtimeAudioPayload):
+            raise TypeError("Invalid realtime audio task payload")
+        if cancel_event.is_set() or not self._realtime_task_active(task):
+            return ""
+        if task.source == MIC_SOURCE and getattr(self, "_mic_muted", False):
+            return ""
+        if task.source == DESKTOP_SOURCE and self._listen_tts_echo_suppress_active():
+            return ""
+
+        if task.source == MIC_SOURCE:
+            self._call_in_ui(
+                lambda sid=task.session_id: (
+                    self._set_runtime_status("status_translating", "accent")
+                    if self._realtime_session_active(sid)
+                    else None
+                )
+            )
+        else:
+            self._call_in_ui(
+                lambda sid=task.session_id: (
+                    self._set_floating_listen_status(True)
+                    if self._realtime_session_active(sid)
+                    else None
+                )
+            )
+        text = self._transcribe_with_provider(
+            payload.asr_provider,
+            task.source,
+            payload.audio,
+            payload.asr_language,
+            is_final=True,
+        )
+        return text
+
+    def _create_realtime_translator(self, config: dict):
+        runtime_config = copy.deepcopy(config)
+        runtime_translation = runtime_config.get("translation", {})
+        if isinstance(runtime_translation, dict):
+            for backend_config in runtime_translation.values():
+                if isinstance(backend_config, dict):
+                    backend_config["max_retries"] = 0
+        context_store = getattr(self, "_translation_context_store", None)
+        try:
+            return create_translator(
+                runtime_config,
+                context_store=context_store,
+            )
+        except TypeError as exc:
+            # Test doubles and third-party embedding shims may still expose the
+            # historical one-argument factory signature.
+            if "context_store" not in str(exc):
+                raise
+            return create_translator(runtime_config)
+
+    def _scheduler_rewrite_stage(
+        self,
+        task: RealtimeTask,
+        text: str,
+        worker_state: Any,
+        cancel_event: threading.Event,
+    ) -> str:
+        payload = task.payload
+        if not isinstance(payload, _RealtimeAudioPayload):
+            raise TypeError("Invalid realtime rewrite task payload")
+        clean = str(text or "").strip()
+        if (
+            not clean
+            or cancel_event.is_set()
+            or not self._realtime_task_active(task)
+        ):
+            return clean
+
+        config_snapshot = _thaw_snapshot_value(payload.config_snapshot)
+        if not isinstance(config_snapshot, dict):
+            config_snapshot = {}
+        translation_cfg = config_snapshot.get("translation", {})
+        if not isinstance(translation_cfg, Mapping):
+            translation_cfg = {}
+        style = normalize_asr_rewrite_style(
+            translation_cfg.get("asr_rewrite_style", ASR_REWRITE_DISABLED)
+        )
+
+        # The selector changes only the local player's transcript. Rewriting
+        # desktop/listen audio would alter the other speaker's words.
+        rewritten = clean
+        if task.source == MIC_SOURCE and style != ASR_REWRITE_DISABLED:
+            try:
+                if not isinstance(worker_state, _RealtimeRewriteWorkerState):
+                    raise TypeError("Invalid realtime rewrite worker state")
+                if (
+                    worker_state.config_snapshot is not payload.config_snapshot
+                    or worker_state.translator is None
+                ):
+                    worker_state.close()
+                    worker_state.config_snapshot = payload.config_snapshot
+                    worker_state.translator = self._create_realtime_translator(
+                        config_snapshot
+                    )
+                rewrite = getattr(worker_state.translator, "rewrite_asr", None)
+                if not callable(rewrite):
+                    raise RuntimeError(
+                        "The selected translation provider cannot rewrite ASR text"
+                    )
+                rewritten = str(
+                    rewrite(
+                        clean,
+                        style,
+                        language_hint=payload.source_language or "auto",
+                        context_source=MIC_SOURCE,
+                    )
+                    or ""
+                ).strip() or clean
+            except Exception as exc:
+                rewritten = clean
+                logger.warning(
+                    "ASR style rewrite failed open (style=%s source=%s sequence=%d): %s",
+                    style,
+                    task.source,
+                    task.sequence,
+                    exc,
+                )
+                logger.debug("ASR rewrite traceback", exc_info=True)
+
+        self._stage_realtime_source_context(task, payload, rewritten)
+        return rewritten
+
+    def _stage_realtime_source_context(
+        self,
+        task: RealtimeTask,
+        payload: _RealtimeAudioPayload,
+        text: str,
+    ) -> None:
+        clean = str(text or "").strip()
+        store = getattr(self, "_translation_context_store", None)
+        if not clean or not isinstance(store, TranslationContextStore):
+            return
+        if task.source == DESKTOP_SOURCE:
+            targets = (payload.listen_target_language,)
+        else:
+            targets = (
+                payload.target_language,
+                payload.second_target_language,
+                payload.third_target_language,
+            )
+        source_language = str(payload.source_language or "auto")
+        for target_language in dict.fromkeys(
+            str(target or "").strip() for target in targets
+        ):
+            if not target_language:
+                continue
+            store.stage_source(
+                session_id=task.session_id,
+                sequence=task.sequence,
+                text=clean,
+                src_lang=source_language,
+                tgt_lang=target_language,
+                context_source=self._realtime_context_source(task.source),
+            )
+
+    def _scheduler_translation_stage(
+        self,
+        task: RealtimeTask,
+        text: str,
+        worker_state: Any,
+        cancel_event: threading.Event,
+    ) -> RealtimeTranslationResult | None:
+        payload = task.payload
+        if not isinstance(payload, _RealtimeAudioPayload):
+            raise TypeError("Invalid realtime translation task payload")
+        if cancel_event.is_set() or not self._realtime_task_active(task):
+            return None
+        clean = str(text or "").strip()
+        if not clean or (task.source == DESKTOP_SOURCE and len(clean) < 2):
+            return None
+        if not isinstance(worker_state, _RealtimeTranslationWorkerState):
+            raise TypeError("Invalid realtime translation worker state")
+
+        if (
+            worker_state.config_snapshot is not payload.config_snapshot
+            or worker_state.config is None
+            or worker_state.dispatcher is None
+        ):
+            worker_state.close_translator()
+            config_snapshot = _thaw_snapshot_value(payload.config_snapshot)
+            if not isinstance(config_snapshot, dict):
+                config_snapshot = {}
+
+            dispatcher = OutputDispatcher(config_snapshot)
+            worker_state.config_snapshot = payload.config_snapshot
+            worker_state.config = config_snapshot
+            worker_state.dispatcher = dispatcher
+            worker_state.mic_pipeline = MicPipeline(
+                config_snapshot,
+                dispatcher,
+                translator_factory=self._create_realtime_translator,
+            )
+            worker_state.listen_pipeline = ListenPipeline(
+                config_snapshot,
+                dispatcher,
+                translator_factory=self._create_realtime_translator,
+            )
+
+        if task.source == DESKTOP_SOURCE:
+            pipeline = worker_state.listen_pipeline
+            if pipeline is None:
+                raise RuntimeError("Realtime listen translation pipeline is unavailable")
+            plan = pipeline.create_plan(
+                clean,
+                source_language=payload.source_language or "auto",
+                target_language=payload.listen_target_language,
+                listen_prefix=payload.listen_prefix,
+                context_source=self._realtime_context_source(DESKTOP_SOURCE),
+            )
+        else:
+            pipeline = worker_state.mic_pipeline
+            if pipeline is None:
+                raise RuntimeError("Realtime microphone translation pipeline is unavailable")
+            plan = pipeline.create_plan(
+                clean,
+                source_language=payload.source_language or "auto",
+                target_language=payload.target_language,
+                second_target_language=payload.second_target_language,
+                third_target_language=payload.third_target_language,
+                context_source=MIC_SOURCE,
+            )
+        if plan.needs_api_translation and self._translation_cooldown_active(task.source):
+            return None
+
+        try:
+            try:
+                result, translator = pipeline.translate_plan(
+                    plan,
+                    worker_state.translator,
+                    context_session_id=task.session_id,
+                    defer_context_commit=True,
+                    context_sequence=task.sequence,
+                )
+            except TypeError as exc:
+                if not any(
+                    name in str(exc)
+                    for name in ("context_session_id", "context_sequence")
+                ):
+                    raise
+                result, translator = pipeline.translate_plan(
+                    plan,
+                    worker_state.translator,
+                )
+            worker_state.translator = translator
+            if result.api_translation_used:
+                self._record_source_translation_success(task.source)
+            return result
+        except Exception as exc:
+            friendly = self._format_translation_error(exc)
+            self._record_source_translation_failure(task.source, friendly)
+            worker_state.close_translator()
+            raise
+
+    def _scheduler_delivery_stage(self, completion: RealtimeCompletion) -> None:
+        """Deliver one ordered completion and hold its backpressure slot until UI ack."""
+
+        task = completion.task
+        if bool(getattr(completion, "cancelled", False)) or not self._realtime_task_active(task):
+            return
+        self._commit_realtime_translation_context(completion)
+
+        acknowledged = threading.Event()
+        cancel_event = getattr(self, "_realtime_delivery_cancel_event", None)
+
+        def deliver_on_ui() -> None:
+            try:
+                if cancel_event is None or not cancel_event.is_set():
+                    self._deliver_scheduler_completion_ui(completion)
+            finally:
+                acknowledged.set()
+
+        if threading.get_ident() == getattr(self, "_ui_thread_id", None):
+            deliver_on_ui()
+            return
+        if not self._call_in_ui(deliver_on_ui, priority=True):
+            return
+
+        while not acknowledged.wait(UI_DELIVERY_ACK_POLL_S):
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            if not self._realtime_task_active(task):
+                return
+
+    def _commit_realtime_translation_context(
+        self,
+        completion: RealtimeCompletion,
+    ) -> None:
+        """Commit successful turns only after scheduler ordering is satisfied."""
+
+        if not isinstance(completion, RealtimeCompletion):
+            return
+        task = completion.task
+        payload = task.payload
+        result = completion.result
+        store = getattr(self, "_translation_context_store", None)
+        if isinstance(store, TranslationContextStore) and not completion.successful:
+            store.discard_staged(
+                session_id=task.session_id,
+                sequence=task.sequence,
+                context_source=self._realtime_context_source(task.source),
+            )
+            return
+        if (
+            not isinstance(payload, _RealtimeAudioPayload)
+            or not isinstance(result, RealtimeTranslationResult)
+            or not isinstance(store, TranslationContextStore)
+            or not result.api_translation_used
+        ):
+            if isinstance(store, TranslationContextStore):
+                store.discard_staged(
+                    session_id=task.session_id,
+                    sequence=task.sequence,
+                    context_source=self._realtime_context_source(task.source),
+                )
+            return
+
+        source_language = str(payload.source_language or "auto")
+        turns: list[tuple[str, str]] = []
+        if task.source == DESKTOP_SOURCE:
+            turns.append((payload.listen_target_language, result.translated_text))
+        else:
+            turns.append((payload.target_language, result.translated_text))
+            if result.translated_text_2:
+                turns.append(
+                    (payload.second_target_language, result.translated_text_2)
+                )
+            if result.translated_text_3 and payload.third_target_language:
+                turns.append(
+                    (payload.third_target_language, result.translated_text_3)
+                )
+
+        seen_targets: set[str] = set()
+        for target_language, translated_text in turns:
+            normalized_target = str(target_language or "").strip()
+            if not normalized_target or normalized_target in seen_targets:
+                continue
+            seen_targets.add(normalized_target)
+            store.remember(
+                session_id=task.session_id,
+                text=result.original_text,
+                translated=translated_text,
+                src_lang=source_language,
+                tgt_lang=normalized_target,
+                context_source=self._realtime_context_source(task.source),
+                sequence=task.sequence,
+            )
+        store.discard_staged(
+            session_id=task.session_id,
+            sequence=task.sequence,
+            context_source=self._realtime_context_source(task.source),
+        )
+
+    def _deliver_scheduler_completion_ui(
+        self,
+        completion: RealtimeCompletion,
+    ) -> None:
+        """Apply a completion as one UI transaction on the Qt thread."""
+
+        task = completion.task
+        payload = task.payload
+        if not isinstance(payload, _RealtimeAudioPayload):
+            return
+        if bool(getattr(completion, "cancelled", False)) or not self._realtime_task_active(task):
+            return
+
+        try:
+            error = completion.error
+            if error is not None:
+                friendly = self._format_translation_error(error)
+                if task.source == DESKTOP_SOURCE:
+                    self._set_bottom(
+                        friendly.short_message,
+                        key="translation_error",
+                    )
+                    self._show_listen_translation(
+                        friendly.inline_message,
+                        source="error",
+                    )
+                else:
+                    self._set_bottom(
+                        friendly.short_message,
+                        "danger",
+                        key="translation_error",
+                    )
+                    self._pulse_avatar_error()
+                return
+
+            result = completion.result
+            if not isinstance(result, RealtimeTranslationResult):
+                return
+
+            output_message = result.output_message
+            if task.source == DESKTOP_SOURCE:
+                self._last_listen_result_at = time.monotonic()
+                if output_message is not None:
+                    self._dispatch_output_message(output_message, sinks=("overlay",))
+                if payload.send_to_chatbox:
+                    self._send_listen_chatbox(
+                        result.chatbox_text,
+                        session_id=task.session_id,
+                    )
+            else:
+                if output_message is not None:
+                    self._dispatch_output_message(
+                        output_message,
+                        sinks=("ui", "overlay"),
+                    )
+                if payload.send_to_chatbox:
+                    self._send_chatbox_payload(
+                        result.chatbox_text,
+                        session_id=task.session_id,
+                    )
+                if output_message is not None:
+                    self._dispatch_output_message(output_message, sinks=("tts",))
+        finally:
+            self._restore_scheduler_status_ui(task.source, task.session_id)
+
+    def _restore_scheduler_status_ui(self, source: str, session_id: int) -> None:
+        if not self._realtime_session_active(session_id):
+            return
+        if source == MIC_SOURCE:
+            self._restore_runtime_status("status_speaking", "status_translating")
+        else:
+            self._restore_floating_window_waiting_if_idle()
 
     # ----------------------------------------------------------------
     # ASR processing
@@ -3383,20 +4396,89 @@ class MainWindow(QMainWindow):
             return
         if not self._should_process_partial_asr(source):
             return
+        provider = self._asr_for_source(source)
+        scheduler = getattr(self, "_realtime_scheduler", None)
+        if provider is None or scheduler is None:
+            return
+        if scheduler.should_yield_partial(self._asr_provider_key(provider)):
+            return
         try:
             text = self._transcribe_for_source(source, audio, asr_lang, is_final=False)
             if not text or not self._running or session_id != self._listen_session:
                 return
             if generation != self._partial_generation:
                 return
-            self._call_in_ui(lambda t=text: self._on_partial_result(t))
-        except Exception as e:
-            logger.debug("Partial transcription failed: %s", e)
+            self._call_in_ui(
+                lambda value=text, sid=session_id, gen=generation, src=source: (
+                    self._on_partial_result(value, src)
+                    if self._realtime_session_active(sid) and gen == self._partial_generation
+                    else None
+                )
+            )
+        except Exception as exc:
+            logger.debug("Partial transcription failed: %s", exc)
 
     def _asr_for_source(self, source: str):
-        if source == DESKTOP_SOURCE and self._listen_asr is not None:
-            return self._listen_asr
-        return self._asr
+        listen_asr = getattr(self, "_listen_asr", None)
+        if source == DESKTOP_SOURCE and listen_asr is not None:
+            return listen_asr
+        return getattr(self, "_asr", None)
+
+    def _asr_streaming_settings(self) -> dict[str, int | float]:
+        """Return defensive, runtime-safe partial-ASR cadence settings."""
+
+        asr_cfg = self._config.get("asr", {})
+        if not isinstance(asr_cfg, Mapping):
+            asr_cfg = {}
+        streaming_cfg = asr_cfg.get("streaming", {})
+        if not isinstance(streaming_cfg, Mapping):
+            streaming_cfg = {}
+
+        def bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+            try:
+                value = int(streaming_cfg.get(name, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(minimum, min(value, maximum))
+
+        def bounded_float(
+            name: str,
+            default: float,
+            minimum: float,
+            maximum: float,
+        ) -> float:
+            try:
+                value = float(streaming_cfg.get(name, default))
+            except (TypeError, ValueError):
+                value = default
+            return max(minimum, min(value, maximum))
+
+        interval_ms = bounded_int("chunk_interval_ms", 250, 100, 5000)
+        window_s = max(
+            bounded_float("chunk_window_s", 1.6, 0.25, 30.0),
+            interval_ms / 1000.0,
+        )
+        ring_buffer_s = max(
+            bounded_float("ring_buffer_s", 4.0, 0.25, 60.0),
+            window_s,
+        )
+        return {
+            "chunk_interval_ms": interval_ms,
+            "chunk_window_s": window_s,
+            "ring_buffer_s": ring_buffer_s,
+            "recent_speech_hold_s": bounded_float(
+                "recent_speech_hold_s",
+                0.8,
+                0.0,
+                5.0,
+            ),
+            "partial_stability_hits": bounded_int(
+                "partial_stability_hits",
+                2,
+                1,
+                10,
+            ),
+        }
 
     def _asr_runtime_device_for_source(self, source: str) -> str:
         try:
@@ -3409,6 +4491,12 @@ class MainWindow(QMainWindow):
             return ""
 
     def _should_process_partial_asr(self, source: str) -> bool:
+        # Desktop partials had no isolated presentation lane and could overwrite
+        # the microphone source text while consuming the same ASR model.  Keep
+        # partial UI feedback microphone-only; desktop finals remain fully
+        # concurrent in the staged scheduler.
+        if source != MIC_SOURCE:
+            return False
         asr = self._asr_for_source(source)
         if not bool(getattr(asr, "supports_partial", True)):
             return False
@@ -3418,10 +4506,10 @@ class MainWindow(QMainWindow):
 
     def _refresh_asr_transcribe_locks(self) -> None:
         guard = threading.Lock()
-        locks: dict[int, threading.Lock] = {}
-        for asr in (self._asr, self._listen_asr):
+        locks: dict[Any, threading.Lock] = {}
+        for asr in (getattr(self, "_asr", None), getattr(self, "_listen_asr", None)):
             if asr is not None:
-                locks.setdefault(id(asr), threading.Lock())
+                locks.setdefault(self._asr_provider_key(asr), threading.Lock())
         self._asr_transcribe_lock_guard = guard
         self._asr_transcribe_locks = locks
 
@@ -3433,30 +4521,69 @@ class MainWindow(QMainWindow):
             locks = {}
             self._asr_transcribe_lock_guard = guard
             self._asr_transcribe_locks = locks
+        provider_key = self._asr_provider_key(asr)
         with guard:
-            lock = locks.get(id(asr))
+            lock = locks.get(provider_key)
             if lock is None:
                 lock = threading.Lock()
-                locks[id(asr)] = lock
+                locks[provider_key] = lock
             return lock
 
     def _desktop_listen_should_yield_to_mic(self) -> bool:
+        """Partial desktop ASR yields; accepted final desktop sentences never do."""
+
         mic_asr = getattr(self, "_asr", None)
         listen_asr = getattr(self, "_listen_asr", None)
-        if mic_asr is None or listen_asr is not mic_asr:
+        if mic_asr is None or listen_asr is None:
+            return False
+        if self._asr_provider_key(mic_asr) != self._asr_provider_key(listen_asr):
             return False
         if self._mic_in_speech:
             return True
-        for task_queue in (
-            self._final_task_queues.get(MIC_SOURCE),
-            self._partial_task_queues.get(MIC_SOURCE),
-        ):
-            try:
-                if task_queue is not None and task_queue.qsize() > 0:
-                    return True
-            except Exception:
-                continue
-        return False
+        scheduler = getattr(self, "_realtime_scheduler", None)
+        return bool(
+            scheduler is not None
+            and scheduler.should_yield_partial(self._asr_provider_key(mic_asr))
+        )
+
+    def _transcribe_with_provider(
+        self,
+        asr: Any,
+        source: str,
+        audio: Any,
+        asr_language: str | None,
+        *,
+        is_final: bool,
+    ) -> str:
+        if asr is None:
+            raise RuntimeError("ASR is not ready")
+        if self._asr_provider_concurrency(asr) > 1:
+            return str(
+                asr.transcribe(
+                    audio,
+                    language=asr_language,
+                    is_final=is_final,
+                )
+                or ""
+            ).strip()
+        lock = self._asr_transcribe_lock_for(asr)
+        if is_final:
+            lock.acquire()
+        else:
+            scheduler = getattr(self, "_realtime_scheduler", None)
+            if (
+                scheduler is not None
+                and scheduler.should_yield_partial(self._asr_provider_key(asr))
+            ):
+                return ""
+            if not lock.acquire(blocking=False):
+                return ""
+        try:
+            return str(
+                asr.transcribe(audio, language=asr_language, is_final=is_final) or ""
+            ).strip()
+        finally:
+            lock.release()
 
     def _transcribe_for_source(
         self,
@@ -3469,19 +4596,13 @@ class MainWindow(QMainWindow):
     ) -> str:
         if asr_lang is None:
             asr_lang = language
-        asr = self._asr_for_source(source)
-        if asr is None:
-            raise RuntimeError("ASR is not ready")
-        lock = self._asr_transcribe_lock_for(asr)
-        if not lock.acquire(blocking=False):
-            if source == DESKTOP_SOURCE and asr is self._asr:
-                logger.debug("Dropping desktop ASR because shared microphone ASR is busy")
-                return ""
-            lock.acquire()
-        try:
-            return asr.transcribe(audio, language=asr_lang, is_final=is_final)
-        finally:
-            lock.release()
+        return self._transcribe_with_provider(
+            self._asr_for_source(source),
+            source,
+            audio,
+            asr_lang,
+            is_final=is_final,
+        )
 
     @staticmethod
     def _format_listen_translation(original: str, translated: str) -> str:
@@ -3507,10 +4628,10 @@ class MainWindow(QMainWindow):
             result, translator = pipeline.translate_plan(plan, self._translator)
             self._translator = translator
             if result.api_translation_used:
-                self._record_translation_success()
+                self._record_source_translation_success(DESKTOP_SOURCE)
         except Exception as exc:
             friendly = self._format_translation_error(exc)
-            self._record_translation_failure(friendly)
+            self._record_source_translation_failure(DESKTOP_SOURCE, friendly)
             raise
         if not self._running or session_id != self._listen_session:
             return
@@ -3551,8 +4672,6 @@ class MainWindow(QMainWindow):
             return
         if source == DESKTOP_SOURCE and self._listen_tts_echo_suppress_active():
             return
-        if source == DESKTOP_SOURCE and self._desktop_listen_should_yield_to_mic():
-            return
         try:
             if source == MIC_SOURCE:
                 self._call_in_ui(lambda: self._set_runtime_status("status_translating", "accent"))
@@ -3580,7 +4699,7 @@ class MainWindow(QMainWindow):
             if not self._running or session_id != self._listen_session:
                 return
             if result.api_translation_used:
-                self._record_translation_success()
+                self._record_source_translation_success(source)
             output_message = result.output_message
 
             def update_translation_ui() -> None:
@@ -3604,12 +4723,23 @@ class MainWindow(QMainWindow):
             logger.debug("Final transcription failed: %s", e)
             if source == DESKTOP_SOURCE:
                 friendly = self._format_translation_error(e)
-                self._call_in_ui(lambda message=friendly.short_message: self._set_bottom(message))
+                self._call_in_ui(
+                    lambda message=friendly.short_message: self._set_bottom(
+                        message,
+                        key="translation_error",
+                    )
+                )
                 self._call_in_ui(lambda message=friendly.inline_message: self._show_listen_translation(message, source="error"))
             else:
                 friendly = self._format_translation_error(e)
-                self._record_translation_failure(friendly)
-                self._call_in_ui(lambda message=friendly.short_message: self._set_bottom(message, "danger"))
+                self._record_source_translation_failure(source, friendly)
+                self._call_in_ui(
+                    lambda message=friendly.short_message: self._set_bottom(
+                        message,
+                        "danger",
+                        key="translation_error",
+                    )
+                )
                 self._call_in_ui(self._pulse_avatar_error)
         finally:
             if source == MIC_SOURCE:
@@ -3620,8 +4750,39 @@ class MainWindow(QMainWindow):
             elif source == DESKTOP_SOURCE:
                 self._call_in_ui(self._restore_floating_window_waiting_if_idle)
 
-    def _on_partial_result(self, text: str) -> None:
-        self._set_source_text(text)
+    def _on_partial_result(self, text: str, source: str = MIC_SOURCE) -> None:
+        if source != MIC_SOURCE:
+            return
+        clean = str(text or "").strip()
+        if not clean:
+            return
+
+        required_hits = int(
+            self._asr_streaming_settings()["partial_stability_hits"]
+        )
+        lock = self.__dict__.get("_partial_result_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._partial_result_lock = lock
+        with lock:
+            candidate = str(self.__dict__.get("_partial_result_candidate", "") or "")
+            hits = int(self.__dict__.get("_partial_result_hits", 0) or 0)
+            if not candidate:
+                candidate = clean
+                hits = 1
+            elif clean == candidate:
+                hits += 1
+            elif clean.startswith(candidate) or candidate.startswith(clean):
+                candidate = clean
+                hits += 1
+            else:
+                candidate = clean
+                hits = 1
+            self._partial_result_candidate = candidate
+            self._partial_result_hits = hits
+            stable = hits >= required_hits
+        if stable:
+            self._set_source_text(clean)
 
     def _on_final_result(self, text: str, src_lang: str | None, source: str) -> None:
         if source == MIC_SOURCE:
@@ -3792,7 +4953,10 @@ class MainWindow(QMainWindow):
         friendly = error.friendly_error
         self._show_tgt(friendly.short_message, is_error=True)
         self._pulse_avatar_error()
-        self._finish_manual_translation(success=False)
+        self._finish_manual_translation(
+            success=False,
+            error_message=friendly.short_message,
+        )
 
     def _finish_manual_translate_worker(self, generation: int) -> None:
         if not self._manual_generation_is_current(generation):
@@ -3820,10 +4984,19 @@ class MainWindow(QMainWindow):
         )
         self._show_tgt(friendly.short_message, is_error=True)
         self._pulse_avatar_error()
-        self._finish_manual_translation(success=False)
+        self._finish_manual_translation(
+            success=False,
+            error_message=friendly.short_message,
+        )
         self._refresh_translate_button()
 
-    def _finish_manual_translation(self, *, success: bool = True, output_message: OutputMessage | None = None) -> None:
+    def _finish_manual_translation(
+        self,
+        *,
+        success: bool = True,
+        output_message: OutputMessage | None = None,
+        error_message: str | None = None,
+    ) -> None:
         send_after = self._manual_send_after_translate
         self._manual_send_after_translate = False
         callback = self._manual_done_callback
@@ -3844,6 +5017,12 @@ class MainWindow(QMainWindow):
             )
         else:
             self._set_status(self._t("status_error"), "danger", key="status_error")
+            if error_message:
+                self._set_bottom(
+                    error_message,
+                    "danger",
+                    key="translation_error",
+                )
         if callable(callback):
             callback(bool(success and (sent or not send_after)))
 
@@ -4062,44 +5241,6 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             return 0.8
 
-    def _ensure_tts_manager(self):
-        if self._tts_manager is not None:
-            return self._tts_manager
-        from src.tts.manager import TTSManager
-
-        tts_cfg = self._tts_config()
-        perf_cfg = self._performance_config()
-        manager = TTSManager(
-            engine_name=self._current_tts_engine(),
-            cache_enabled=True,
-            allow_fallback=bool(tts_cfg.get("allow_fallback", True)),
-            output_device=tts_cfg.get("output_device"),
-            output_device_name=str(tts_cfg.get("output_device_name") or ""),
-            prefer_virtual_output=bool(tts_cfg.get("output_to_vrchat", False)),
-            monitor_output=bool(tts_cfg.get("monitor_enabled", False)),
-            sbv2_device=str(tts_cfg.get("style_bert_vits2", {}).get("device", "cpu")),
-            sbv2_bert_language=str(tts_cfg.get("style_bert_vits2", {}).get("bert_language", "jp")),
-            engine_config=self._current_tts_engine_config(),
-            max_cache_size_mb=int(perf_cfg.get("tts_cache_max_mb", 24)),
-            max_cache_items=int(perf_cfg.get("tts_cache_max_items", 60)),
-        )
-        if not manager.is_available():
-            return None
-        manager.start()
-        self._tts_manager = manager
-        return manager
-
-    def _reset_tts_manager(self) -> None:
-        manager = getattr(self, "_tts_manager", None)
-        if manager is None:
-            return
-        self._tts_manager = None
-        try:
-            stop = getattr(manager, "stop", None)
-            if callable(stop):
-                stop()
-        except Exception:
-            logger.debug("Failed to stop TTS manager", exc_info=True)
 
     def _tts_voice_for_engine(self, manager) -> str:
         engine_cfg = self._current_tts_engine_config()
@@ -4290,6 +5431,38 @@ class MainWindow(QMainWindow):
     def _on_started(self) -> None:
         self._refresh_start_button()
         self._set_status(self._t("status_running"), "accent", key="status_running")
+        self._schedule_tts_prewarm()
+
+    def _schedule_tts_prewarm(self) -> None:
+        tts_cfg = self._tts_config()
+        engine = self._current_tts_engine().lower()
+        engine_cfg = tts_cfg.get(engine, {})
+        if not isinstance(engine_cfg, Mapping):
+            engine_cfg = {}
+        if (
+            not bool(tts_cfg.get("enabled", False))
+            or not bool(tts_cfg.get("auto_read", True))
+            or engine not in {"xtts", "xtts_v2", "xtts-v2", "xttsts"}
+            or not bool(engine_cfg.get("prewarm", True))
+            or self._performance_profile() == "low_power"
+        ):
+            return
+        session_id = self._listen_session
+        QTimer.singleShot(
+            250,
+            lambda sid=session_id: self._prewarm_tts_for_session(sid),
+        )
+
+    def _prewarm_tts_for_session(self, session_id: int) -> None:
+        if not self._realtime_session_active(session_id):
+            return
+        manager = self._ensure_tts_manager()
+        if manager is None:
+            return
+        voice = self._tts_voice_for_engine(manager)
+        prewarm = getattr(manager, "prewarm", None)
+        if callable(prewarm):
+            prewarm(voice)
 
     def _on_start_error(self, msg: str) -> None:
         self._set_status(self._t("status_error"), "danger", key="status_error")
@@ -4522,14 +5695,19 @@ class MainWindow(QMainWindow):
             return self._copy("report_request_limited")
         if any(token in lowered for token in ("api key", "apikey", "unauthorized", "401", "403", "配置", "密钥")):
             return self._copy("report_config_error")
-        if color == "danger" and (len(value) > 52 or ":" in value or "：" in value):
+        if (
+            color == "danger"
+            and key != "translation_error"
+            and (len(value) > 52 or ":" in value or "：" in value)
+        ):
             return self._copy("report_runtime_error")
         for separator in ("。", ".", "，", ",", "；", ";", "\n"):
             if separator in value and len(value) > 42:
                 value = value.split(separator, 1)[0].strip()
                 break
-        if len(value) > 52:
-            value = value[:49].rstrip() + "..."
+        max_length = 80 if key == "translation_error" else 52
+        if len(value) > max_length:
+            value = value[: max_length - 3].rstrip() + "..."
         return value
 
     def _show_tgt(self, text: str, *, is_error: bool = False) -> None:
@@ -4568,17 +5746,6 @@ class MainWindow(QMainWindow):
             self._mute_btn.style().unpolish(self._mute_btn)
             self._mute_btn.style().polish(self._mute_btn)
 
-    def _refresh_tweaks_button(self) -> None:
-        if not self._tweaks_btn:
-            return
-        self._tweaks_btn.setText(self._t("realtime_button"))
-        self._tweaks_btn.setToolTip(self._t("realtime_tooltip"))
-        self._tweaks_btn.setFixedSize(HEADER_ACTION_WIDTH, 40)
-        icon = ui_icon("activity.svg", 18, icon_tint(self._main_theme, strong=True))
-        self._tweaks_btn.setIcon(icon)
-        self._tweaks_btn.setIconSize(QSize(18, 18))
-        self._tweaks_btn.style().unpolish(self._tweaks_btn)
-        self._tweaks_btn.style().polish(self._tweaks_btn)
 
     def _refresh_theme_button(self) -> None:
         palette = _main_theme_palette(self._main_theme)
@@ -4747,14 +5914,40 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
     # UI thread dispatch
     # ----------------------------------------------------------------
-    def _call_in_ui(self, callback, delay_ms: int = 0) -> bool:
+    def _call_in_ui(
+        self,
+        callback,
+        delay_ms: int = 0,
+        *,
+        priority: bool = False,
+    ) -> bool:
         if self._destroying:
             return False
         if threading.get_ident() != self._ui_thread_id:
+            work_queue = (
+                getattr(self, "_ui_priority_callback_queue", None)
+                if priority
+                else self._ui_callback_queue
+            )
+            if work_queue is None:
+                work_queue = self._ui_callback_queue
             try:
-                self._ui_callback_queue.put_nowait((delay_ms, callback))
+                work_queue.put_nowait((delay_ms, callback))
                 self.sig_ui_callback.emit()
                 return True
+            except queue.Full:
+                self._ui_callback_drop_count = (
+                    getattr(self, "_ui_callback_drop_count", 0) + 1
+                )
+                dropped = self._ui_callback_drop_count
+                if priority or dropped == 1 or dropped & (dropped - 1) == 0:
+                    logger.warning(
+                        "UI callback backpressure dropped callback priority=%s "
+                        "dropped_total=%d",
+                        priority,
+                        dropped,
+                    )
+                return False
             except Exception:
                 return False
         QTimer.singleShot(delay_ms, lambda cb=callback: self._run_ui_callback(cb))
@@ -4779,14 +5972,23 @@ class MainWindow(QMainWindow):
         if self._destroying:
             return
         processed = 0
+        priority_queue = getattr(self, "_ui_priority_callback_queue", None)
         while processed < UI_CALLBACK_DRAIN_LIMIT:
-            try:
-                delay_ms, callback = self._ui_callback_queue.get_nowait()
-            except queue.Empty:
-                break
+            item = None
+            if priority_queue is not None:
+                try:
+                    item = priority_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            if item is None:
+                try:
+                    item = self._ui_callback_queue.get_nowait()
+                except queue.Empty:
+                    break
+            delay_ms, callback = item
             QTimer.singleShot(delay_ms, lambda cb=callback: self._run_ui_callback(cb))
             processed += 1
-        # Re-arm only if queue still has items (event-driven, no constant ticking)
+        # Re-arm only after doing work; producers also emit a wake-up signal.
         if processed > 0 and not self._destroying and self._callback_drain_timer is not None:
             self._callback_drain_timer.start(UI_CALLBACK_DRAIN_MS)
 
@@ -4869,32 +6071,33 @@ class MainWindow(QMainWindow):
         mode = str(audio_cfg.get("input_device_mode", "")).strip()
         if not mode:
             mode = "fixed" if str(audio_cfg.get("input_device") or "").strip() else "auto"
+        devices = []
+        if refresh or not self._devices:
+            try:
+                devices = _list_microphone_devices()
+            except Exception:
+                logger.debug("Failed to enumerate microphone devices", exc_info=True)
+                devices = []
+            self._devices = {
+                str(d.get("name", "")).strip(): int(d.get("index", -1))
+                for d in devices
+                if str(d.get("name", "")).strip()
+            }
+        if not devices and self._devices:
+            devices = [
+                {"name": name, "index": index}
+                for name, index in self._devices.items()
+            ]
         if mode == "auto":
-            devices = []
-            if refresh or not self._devices:
-                try:
-                    devices = _list_microphone_devices()
-                except Exception:
-                    logger.debug("Failed to enumerate microphone devices", exc_info=True)
-                    devices = []
-                self._devices = {
-                    str(d.get("name", "")).strip(): int(d.get("index", -1))
-                    for d in devices
-                    if str(d.get("name", "")).strip()
-                }
-            if not devices and self._devices:
-                devices = [
-                    {"name": name, "index": index}
-                    for name, index in self._devices.items()
-                ]
             default_name = self._current_default_input_device_name(devices)
             if default_name:
-                return default_name
+                return self._match_mic_input_device_name(default_name) or default_name
             for name in self._devices:
                 if name:
                     return name
             return None
-        return str(audio_cfg.get("input_device") or "").strip() or None
+        configured_name = str(audio_cfg.get("input_device") or "").strip() or None
+        return self._match_mic_input_device_name(configured_name) or configured_name
 
     def _load_devices(self) -> None:
         try:
@@ -4921,7 +6124,12 @@ class MainWindow(QMainWindow):
 
     def _load_desktop_devices(self) -> None:
         devices: dict[str, int] = {}
-        for device in _list_desktop_output_devices():
+        try:
+            enumerated = _list_desktop_output_devices()
+        except Exception:
+            logger.exception("Desktop output device enumeration failed")
+            enumerated = []
+        for device in enumerated:
             name = str(device.get("name", "")).strip()
             if name and name not in devices:
                 devices[name] = int(device.get("index", -1))
@@ -4929,6 +6137,16 @@ class MainWindow(QMainWindow):
             logger.warning("Desktop loopback device refresh returned empty; keeping cached devices")
             return
         self._desktop_devices = devices
+        if not devices:
+            try:
+                from src.audio.desktop_recorder import loopback_device_diagnostics
+
+                logger.error(
+                    "No desktop output device detected; diagnostics=%s",
+                    loopback_device_diagnostics(),
+                )
+            except Exception:
+                logger.debug("Failed to collect desktop output diagnostics", exc_info=True)
 
     def _apply_loaded_devices(self, devices: list[dict]) -> None:
         self._devices_loading = False
@@ -4968,6 +6186,13 @@ class MainWindow(QMainWindow):
         if source is None or source == MIC_SOURCE:
             self._mic_in_speech = False
             self._partial_generation += 1
+            lock = self.__dict__.get("_partial_result_lock")
+            if lock is None:
+                lock = threading.Lock()
+                self._partial_result_lock = lock
+            with lock:
+                self._partial_result_candidate = ""
+                self._partial_result_hits = 0
         if source is None or source == DESKTOP_SOURCE:
             self._desktop_in_speech = False
             self._listen_in_speech = False
@@ -5110,18 +6335,35 @@ class MainWindow(QMainWindow):
         ui_language = getattr(self, "_ui_lang", "zh_CN")
         return format_translation_error(error, backend=backend, ui_language=ui_language)
 
-    def _reset_translation_failure_backoff(self) -> None:
-        with self._translation_state_lock:
+    def _reset_translation_failure_backoff(self, source: str | None = None) -> None:
+        lock = self.__dict__.get("_translation_state_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._translation_state_lock = lock
+        with lock:
+            states = self.__dict__.setdefault("_translation_backoff_by_source", {})
+            if source is not None:
+                states.pop(str(source), None)
+                return
+            states.clear()
             self._translation_failure_streak = 0
             self._translation_cooldown_until = 0.0
             self._translation_cooldown_category = None
 
-    def _translation_cooldown_remaining(self) -> float:
+    def _translation_cooldown_remaining(self, source: str | None = None) -> float:
         with self._translation_state_lock:
+            if source is not None:
+                states = self.__dict__.get("_translation_backoff_by_source", {})
+                state = states.get(str(source)) if isinstance(states, dict) else None
+                if isinstance(state, dict):
+                    return max(
+                        0.0,
+                        float(state.get("until", 0.0) or 0.0) - time.monotonic(),
+                    )
             return max(0.0, self._translation_cooldown_until - time.monotonic())
 
     def _translation_cooldown_active(self, source: str) -> bool:
-        remaining = self._translation_cooldown_remaining()
+        remaining = self._translation_cooldown_remaining(source)
         if remaining <= 0:
             return False
         logger.debug(
@@ -5131,15 +6373,32 @@ class MainWindow(QMainWindow):
         )
         return True
 
-    def _record_translation_success(self) -> None:
-        self._reset_translation_failure_backoff()
+    def _record_translation_success(self, source: str | None = None) -> None:
+        self._reset_translation_failure_backoff(source)
 
-    def _record_translation_failure(self, friendly) -> float:
+    def _record_translation_failure(self, friendly, source: str | None = None) -> float:
         base_cooldown = TRANSLATION_FAILURE_COOLDOWN_S.get(friendly.category, 0.0)
         if base_cooldown <= 0:
             return 0.0
         now = time.monotonic()
         with self._translation_state_lock:
+            if source is not None:
+                states = self.__dict__.setdefault("_translation_backoff_by_source", {})
+                state = states.setdefault(
+                    str(source),
+                    {"streak": 0, "until": 0.0, "category": None},
+                )
+                if now > float(state.get("until", 0.0) or 0.0) + TRANSLATION_FAILURE_MAX_COOLDOWN_S:
+                    state["streak"] = 0
+                state["streak"] = int(state.get("streak", 0) or 0) + 1
+                multiplier = 2 ** min(int(state["streak"]) - 1, 3)
+                cooldown_s = min(
+                    base_cooldown * multiplier,
+                    TRANSLATION_FAILURE_MAX_COOLDOWN_S,
+                )
+                state["until"] = now + cooldown_s
+                state["category"] = friendly.category
+                return cooldown_s
             if now > self._translation_cooldown_until + TRANSLATION_FAILURE_MAX_COOLDOWN_S:
                 self._translation_failure_streak = 0
             self._translation_failure_streak += 1
@@ -5148,6 +6407,20 @@ class MainWindow(QMainWindow):
             self._translation_cooldown_until = now + cooldown_s
             self._translation_cooldown_category = friendly.category
             return cooldown_s
+
+    def _record_source_translation_success(self, source: str) -> None:
+        try:
+            self._record_translation_success(source)
+        except TypeError:
+            # Compatibility with embedding/test shims that replace the legacy
+            # no-argument callback.
+            self._record_translation_success()
+
+    def _record_source_translation_failure(self, source: str, friendly) -> float:
+        try:
+            return float(self._record_translation_failure(friendly, source) or 0.0)
+        except TypeError:
+            return float(self._record_translation_failure(friendly) or 0.0)
 
     # ----------------------------------------------------------------
     # Card / shadow utilities
@@ -5858,6 +7131,7 @@ class MainWindow(QMainWindow):
             if default != "" and not backend_cfg.get(key):
                 backend_cfg[key] = default
         self._clear_cached_translator()
+        self._reset_translation_failure_backoff()
 
     def _set_quick_translation_model(self, model: object) -> None:
         trans_cfg = self._config.setdefault("translation", {})
@@ -5870,9 +7144,15 @@ class MainWindow(QMainWindow):
             trans_cfg[backend] = backend_cfg
         backend_cfg["model"] = str(model or "").strip()
         self._clear_cached_translator()
+        self._reset_translation_failure_backoff()
 
     def _set_quick_output_format(self, value: object) -> None:
         self._config.setdefault("translation", {})["output_format"] = normalize_output_format(str(value or ""))
+
+    def _set_quick_asr_rewrite_style(self, value: object) -> None:
+        self._config.setdefault("translation", {})["asr_rewrite_style"] = (
+            normalize_asr_rewrite_style(value)
+        )
 
     def _set_quick_tts_language(self, value: object) -> None:
         tts_cfg = self._config.setdefault("tts", {})
@@ -5939,6 +7219,7 @@ class MainWindow(QMainWindow):
             "translation_provider": self._set_quick_translation_provider,
             "translation_model": self._set_quick_translation_model,
             "output_format": self._set_quick_output_format,
+            "asr_rewrite_style": self._set_quick_asr_rewrite_style,
             "tts_language": self._set_quick_tts_language,
             "tts_voice": self._set_quick_tts_voice,
             "roleplay_profile": self._set_quick_roleplay_profile,
@@ -5948,40 +7229,76 @@ class MainWindow(QMainWindow):
         if handler is None:
             return
         handler(value)
+        if key in {
+            "translation_provider",
+            "translation_model",
+            "output_format",
+            "asr_rewrite_style",
+            "roleplay_profile",
+        }:
+            self._refresh_realtime_config_snapshot()
         self._schedule_config_save()
         self._set_bottom(self._t("quick_switch_updated"))
+
+    def _refresh_realtime_config_snapshot(self) -> None:
+        """Atomically publish configuration for future admitted sentences.
+
+        Existing payloads retain their immutable old snapshot, so a provider,
+        model, output-format, or persona change never mutates work already in
+        flight. Translation workers rebuild their private client state when the
+        first task carrying the new snapshot reaches them.
+        """
+
+        if not getattr(self, "_running", False):
+            return
+        try:
+            self._realtime_config_snapshot = _freeze_snapshot_value(
+                copy.deepcopy(self._config)
+            )
+        except Exception:
+            logger.exception("Failed to publish realtime configuration snapshot")
 
     def _tts_runtime_signature(self) -> tuple:
         tts_cfg = self._tts_config()
         engine = self._current_tts_engine()
-        engine_cfg = tts_cfg.get(engine, {})
-        engine_cfg = engine_cfg if isinstance(engine_cfg, dict) else {}
-        if engine == "xtts":
-            return (
-                engine,
-                str(engine_cfg.get("device", "cpu")),
-                str(engine_cfg.get("language", "auto")),
-                bool(tts_cfg.get("allow_fallback", True)),
-                str(tts_cfg.get("output_device_name", "")),
-                bool(tts_cfg.get("output_to_vrchat", False)),
-                bool(tts_cfg.get("monitor_enabled", False)),
+        engine_cfg = self._current_tts_engine_config()
+        runtime_engine_cfg = {
+            str(key): value
+            for key, value in engine_cfg.items()
+            if str(key) not in _TTS_REQUEST_SCOPED_CONFIG_KEYS
+        }
+        try:
+            serialized_engine_cfg = json.dumps(
+                runtime_engine_cfg,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=repr,
+            ).encode("utf-8")
+        except Exception:
+            serialized_engine_cfg = repr(runtime_engine_cfg).encode(
+                "utf-8",
+                errors="backslashreplace",
             )
-        if engine == "style_bert_vits2":
-            style_cfg = tts_cfg.get("style_bert_vits2", {})
-            style_cfg = style_cfg if isinstance(style_cfg, dict) else {}
-            return (
-                engine,
-                str(style_cfg.get("device", "cpu")),
-                str(style_cfg.get("bert_language", "jp")),
-                bool(tts_cfg.get("allow_fallback", True)),
-                str(tts_cfg.get("output_device_name", "")),
-            )
+        engine_config_digest = hashlib.sha256(serialized_engine_cfg).hexdigest()
+        perf_cfg = self._performance_config()
+
+        def performance_int(name: str, default: int) -> int:
+            try:
+                return int(perf_cfg.get(name, default))
+            except (TypeError, ValueError):
+                return default
+
         return (
             engine,
+            engine_config_digest,
             bool(tts_cfg.get("allow_fallback", True)),
+            str(tts_cfg.get("output_device", "")),
             str(tts_cfg.get("output_device_name", "")),
             bool(tts_cfg.get("output_to_vrchat", False)),
             bool(tts_cfg.get("monitor_enabled", False)),
+            performance_int("tts_cache_max_mb", 24),
+            performance_int("tts_cache_max_items", 60),
         )
 
     def _ensure_tts_manager(self):
@@ -6010,6 +7327,13 @@ class MainWindow(QMainWindow):
             max_cache_items=int(perf_cfg.get("tts_cache_max_items", 60)),
         )
         if not manager.is_available():
+            close = getattr(manager, "close", None)
+            if callable(close):
+                close()
+            else:
+                stop = getattr(manager, "stop", None)
+                if callable(stop):
+                    stop()
             return None
         manager.start()
         self._tts_manager = manager
@@ -6023,9 +7347,13 @@ class MainWindow(QMainWindow):
         if manager is None:
             return
         try:
-            stop = getattr(manager, "stop", None)
-            if callable(stop):
-                stop()
+            close = getattr(manager, "close", None)
+            if callable(close):
+                close()
+            else:
+                stop = getattr(manager, "stop", None)
+                if callable(stop):
+                    stop()
         except Exception:
             logger.debug("Failed to stop TTS manager", exc_info=True)
 

@@ -1,5 +1,8 @@
+import ast
+import inspect
 import threading
 
+import pytest
 from PySide6.QtWidgets import QDialog
 
 from src.core.mode_manager import AppMode
@@ -10,8 +13,50 @@ from src.ui_qt.main_window import (
     MIC_SOURCE,
     MainWindow,
     UI_CALLBACK_DRAIN_MS,
+    _freeze_snapshot_value,
 )
 from src.utils.i18n import tr
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config_writes(monkeypatch):
+    monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
+
+
+def test_main_window_has_no_shadowed_method_definitions():
+    tree = ast.parse(inspect.getsource(MainWindow))
+    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+    definitions: dict[str, list[int]] = {}
+    for node in class_node.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.setdefault(node.name, []).append(node.lineno)
+
+    duplicates = {
+        name: line_numbers
+        for name, line_numbers in definitions.items()
+        if len(line_numbers) > 1
+    }
+    assert duplicates == {}
+
+
+def test_bottom_report_preserves_actionable_translation_error():
+    window = MainWindow.__new__(MainWindow)
+    window._copy = lambda key, **_kwargs: {
+        "report_runtime_error": "Runtime error",
+    }.get(key, key)
+    message = "Translation failed: Claude Compatible returned an error"
+
+    assert MainWindow._bottom_report_text(
+        window,
+        message,
+        color="danger",
+        key="translation_error",
+    ) == message
+    assert MainWindow._bottom_report_text(
+        window,
+        "Internal worker failed: private implementation detail",
+        color="danger",
+    ) == "Runtime error"
 
 
 def _has_ancestor(widget, ancestor) -> bool:
@@ -29,6 +74,7 @@ def test_drain_ui_callback_queue_reschedules_callbacks(qtbot):
     window._ui_thread_id = threading.get_ident()
     from queue import Queue
     window._ui_callback_queue = Queue()
+    window._ui_priority_callback_queue = Queue()
     called: list[str] = []
 
     class FakeTimer:
@@ -38,12 +84,18 @@ def test_drain_ui_callback_queue_reschedules_callbacks(qtbot):
 
     timer = FakeTimer()
     window._callback_drain_timer = timer
+    window._ui_priority_callback_queue.put_nowait(
+        (0, lambda: called.append("priority"))
+    )
     window._ui_callback_queue.put_nowait((0, lambda: called.append("now")))
     window._ui_callback_queue.put_nowait((15, lambda: called.append("later")))
 
     MainWindow._drain_ui_callback_queue(window)
 
-    qtbot.waitUntil(lambda: called == ["now", "later"], timeout=500)
+    qtbot.waitUntil(
+        lambda: called == ["priority", "now", "later"],
+        timeout=500,
+    )
     assert timer.started is True
 
 
@@ -66,6 +118,34 @@ def test_call_in_ui_from_worker_wakes_callback_drain():
     assert MainWindow._call_in_ui(window, lambda: None) is True
     assert window._ui_callback_queue.qsize() == 1
     assert signal.emitted is True
+
+
+def test_call_in_ui_bounds_normal_backlog_and_preserves_priority_lane():
+    from queue import Queue
+
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._ui_thread_id = -1
+    window._ui_callback_queue = Queue(maxsize=1)
+    window._ui_priority_callback_queue = Queue(maxsize=1)
+    window._ui_callback_drop_count = 0
+    window._ui_callback_queue.put_nowait((0, lambda: None))
+
+    class FakeSignal:
+        emitted = 0
+
+        def emit(self):
+            self.emitted += 1
+
+    signal = FakeSignal()
+    window.sig_ui_callback = signal
+
+    assert MainWindow._call_in_ui(window, lambda: None) is False
+    assert MainWindow._call_in_ui(window, lambda: None, priority=True) is True
+    assert window._ui_callback_queue.qsize() == 1
+    assert window._ui_priority_callback_queue.qsize() == 1
+    assert window._ui_callback_drop_count == 1
+    assert signal.emitted == 1
 
 
 def test_call_in_ui_from_worker_runs_on_qt_thread(qtbot, monkeypatch):
@@ -342,6 +422,205 @@ def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch
     assert window._tts_manager is None
 
 
+def test_qwen_tts_runtime_rebuilds_for_derived_language_and_persona_not_voice(monkeypatch):
+    created = []
+    stopped = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(self)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            stopped.append(self)
+
+    monkeypatch.setattr("src.tts.manager.TTSManager", FakeManager)
+    window = MainWindow.__new__(MainWindow)
+    window._current_tgt_lang = "ja"
+    window._config = {
+        "translation": {
+            "output_format": "translated_only",
+            "target_language": "ja",
+            "social": {"mode": "standard"},
+        },
+        "tts": {
+            "enabled": True,
+            "engine": "qwen_tts",
+            "allow_fallback": False,
+            "output_device": None,
+            "output_device_name": "",
+            "output_to_vrchat": False,
+            "monitor_enabled": False,
+            "qwen_tts": {
+                "model": "qwen3-tts-instruct-flash",
+                "base_url": "https://example.invalid/v1",
+                "voice": "Cherry",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+        "performance": {
+            "tts_cache_max_mb": 24,
+            "tts_cache_max_items": 60,
+        },
+    }
+    window._tts_manager = None
+    window._tts_manager_signature = None
+
+    first = MainWindow._ensure_tts_manager(window)
+    window._config["tts"]["qwen_tts"]["voice"] = "Serena"
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert window._tts_manager is first
+    assert stopped == []
+
+    window._current_tgt_lang = "en"
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert window._tts_manager is None
+    assert stopped == [first]
+    second = MainWindow._ensure_tts_manager(window)
+    assert second.kwargs["engine_config"]["language_type"] == "English"
+
+    window._config["translation"]["social"] = {
+        "mode": "roleplay",
+        "tone": "playful",
+        "persona_name": "VR Friend",
+    }
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert window._tts_manager is None
+    assert stopped == [first, second]
+
+
+def test_tts_runtime_rebuilds_when_cache_limits_change(monkeypatch):
+    stopped = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            pass
+
+        def stop(self):
+            stopped.append(self)
+
+    monkeypatch.setattr("src.tts.manager.TTSManager", FakeManager)
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "translation": {"output_format": "translated_only"},
+        "tts": {
+            "engine": "edge",
+            "edge": {"voice": "en-US-AriaNeural", "rate": 1.0, "volume": 0.8},
+        },
+        "performance": {
+            "tts_cache_max_mb": 24,
+            "tts_cache_max_items": 60,
+        },
+    }
+    window._tts_manager = None
+    window._tts_manager_signature = None
+
+    first = MainWindow._ensure_tts_manager(window)
+    window._config["performance"]["tts_cache_max_items"] = 80
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+
+    assert stopped == [first]
+    assert window._tts_manager is None
+
+
+def test_realtime_session_prewarm_queues_selected_xtts_voice():
+    calls = []
+
+    class FakeManager:
+        def prewarm(self, voice):
+            calls.append(voice)
+
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = True
+    window._listen_session = 7
+    window._ensure_tts_manager = lambda: FakeManager()
+    window._tts_voice_for_engine = lambda _manager: "sample-voice"
+
+    MainWindow._prewarm_tts_for_session(window, 7)
+    MainWindow._prewarm_tts_for_session(window, 6)
+
+    assert calls == ["sample-voice"]
+
+
+def test_style_bert_tts_manager_rebuilds_when_vrchat_route_changes(monkeypatch):
+    created = []
+    stopped = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(self)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            stopped.append(self)
+
+    monkeypatch.setattr("src.tts.manager.TTSManager", FakeManager)
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "tts": {
+            "enabled": True,
+            "engine": "style_bert_vits2",
+            "allow_fallback": False,
+            "output_device": None,
+            "output_device_name": "",
+            "output_to_vrchat": False,
+            "monitor_enabled": False,
+            "style_bert_vits2": {
+                "device": "cpu",
+                "bert_language": "jp",
+                "voice": "sample",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+        "performance": {
+            "tts_cache_max_mb": 24,
+            "tts_cache_max_items": 60,
+        },
+    }
+    window._tts_manager = None
+    window._tts_manager_signature = None
+
+    first = MainWindow._ensure_tts_manager(window)
+
+    window._config["tts"]["output_to_vrchat"] = True
+    window._config["tts"]["output_device"] = 12
+    window._config["tts"]["output_device_name"] = "Speakers (MIXLINE Stream)"
+    window._config["tts"]["monitor_enabled"] = True
+    MainWindow._reset_tts_manager_if_runtime_changed(window)
+    second = MainWindow._ensure_tts_manager(window)
+
+    assert first is not second
+    assert stopped == [first]
+    assert second.kwargs["output_device"] == 12
+    assert second.kwargs["output_device_name"] == "Speakers (MIXLINE Stream)"
+    assert second.kwargs["prefer_virtual_output"] is True
+    assert second.kwargs["monitor_output"] is True
+
+
 def _quick_switch_window(config: dict):
     window = MainWindow.__new__(MainWindow)
     window._config = config
@@ -369,6 +648,25 @@ def test_quick_switch_output_format_persists_without_settings_window():
     assert bottom == ["Quick switch updated"]
 
 
+def test_quick_switch_asr_rewrite_style_is_normalized_and_published():
+    config = {"translation": {"asr_rewrite_style": "off"}}
+    window, saved, _bottom = _quick_switch_window(config)
+    window._running = True
+
+    MainWindow._on_quick_switch_changed(
+        window,
+        "asr_rewrite_style",
+        "catgirl",
+    )
+
+    assert config["translation"]["asr_rewrite_style"] == "catgirl"
+    assert (
+        window._realtime_config_snapshot["translation"]["asr_rewrite_style"]
+        == "catgirl"
+    )
+    assert saved == [True]
+
+
 def test_quick_switch_translation_model_resets_cached_translator():
     config = {
         "translation": {
@@ -381,6 +679,9 @@ def test_quick_switch_translation_model_resets_cached_translator():
     controller = type("_Controller", (), {})()
     controller.translator = object()
     window._manual_translation_controller = controller
+    window._translation_failure_streak = 3
+    window._translation_cooldown_until = 999999.0
+    window._translation_cooldown_category = "auth"
 
     MainWindow._on_quick_switch_changed(window, "translation_model", "new-model")
 
@@ -388,6 +689,35 @@ def test_quick_switch_translation_model_resets_cached_translator():
     assert config["translation"]["qianwen"]["model"] == "new-model"
     assert window._translator is None
     assert controller.translator is None
+    assert window._translation_failure_streak == 0
+    assert window._translation_cooldown_until == 0.0
+    assert window._translation_cooldown_category is None
+    assert saved == [True]
+
+
+def test_quick_switch_publishes_immutable_config_for_future_realtime_tasks():
+    config = {
+        "translation": {
+            "backend": "qianwen",
+            "backend_source": "manual",
+            "qianwen": {"model": "old-model"},
+        }
+    }
+    window, saved, _bottom = _quick_switch_window(config)
+    window._running = True
+    previous_snapshot = _freeze_snapshot_value(
+        {"translation": {"qianwen": {"model": "old-model"}}}
+    )
+    window._realtime_config_snapshot = previous_snapshot
+
+    MainWindow._on_quick_switch_changed(window, "translation_model", "new-model")
+
+    assert previous_snapshot["translation"]["qianwen"]["model"] == "old-model"
+    assert (
+        window._realtime_config_snapshot["translation"]["qianwen"]["model"]
+        == "new-model"
+    )
+    assert window._realtime_config_snapshot is not previous_snapshot
     assert saved == [True]
 
 
@@ -573,6 +903,25 @@ def test_auto_microphone_resolves_current_default_device(monkeypatch):
     assert window._devices["Razer Seiren V2 X"] == 1
 
 
+def test_fixed_microphone_matches_stable_parenthesized_hardware_identity(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "audio": {
+            "input_device_mode": "fixed",
+            "input_device": "??? (Razer Seiren V2 X)",
+        }
+    }
+    window._devices = {}
+    actual_name = "Microphone (Razer Seiren V2 X)"
+    monkeypatch.setattr(
+        "src.ui_qt.main_window._list_microphone_devices",
+        lambda: [{"index": 3, "name": actual_name}],
+    )
+
+    assert MainWindow._resolve_mic_input_device_name(window, refresh=True) == actual_name
+    assert window._devices[actual_name] == 3
+
+
 def test_start_microphone_capture_resolves_fixed_device_index(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._config = {
@@ -604,6 +953,106 @@ def test_start_microphone_capture_resolves_fixed_device_index(monkeypatch):
 
     assert captured["input_device"] == 1
     assert window._active_mic_input_device_name == "Razer Seiren V2 X"
+
+
+def test_microphone_watch_keeps_healthy_fallback_for_missing_fixed_device():
+    window = MainWindow.__new__(MainWindow)
+    fallback_name = "Microphone (PicoStreamingMicrophone)"
+    configured_name = "??? (Razer Seiren V2 X)"
+    signature = (
+        (fallback_name,),
+        fallback_name,
+        "fixed",
+        configured_name,
+        configured_name,
+    )
+    window._destroying = False
+    window._running = True
+    window._mic_recovery_in_progress = False
+    window._recorder = type("Recorder", (), {"is_running": True})()
+    window._active_mic_input_device_name = fallback_name
+    window._last_mic_device_signature = signature
+    window._microphone_device_signature = lambda: signature
+    window._maybe_log_mic_diagnostics = lambda: None
+    window._schedule_mic_audio_watch = lambda: None
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+
+    MainWindow._poll_mic_audio_watch(window)
+
+    assert restarted == []
+
+
+def test_microphone_watch_switches_back_when_fixed_device_appears():
+    window = MainWindow.__new__(MainWindow)
+    fallback_name = "Microphone (PicoStreamingMicrophone)"
+    configured_name = "??? (Razer Seiren V2 X)"
+    actual_name = "Microphone (Razer Seiren V2 X)"
+    previous = (
+        (fallback_name,),
+        fallback_name,
+        "fixed",
+        configured_name,
+        configured_name,
+    )
+    current = (
+        tuple(sorted((fallback_name, actual_name))),
+        fallback_name,
+        "fixed",
+        configured_name,
+        actual_name,
+    )
+    window._destroying = False
+    window._running = True
+    window._mic_recovery_in_progress = False
+    window._recorder = type("Recorder", (), {"is_running": True})()
+    window._active_mic_input_device_name = fallback_name
+    window._last_mic_device_signature = previous
+    window._microphone_device_signature = lambda: current
+    window._maybe_log_mic_diagnostics = lambda: None
+    window._schedule_mic_audio_watch = lambda: None
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+
+    MainWindow._poll_mic_audio_watch(window)
+
+    assert restarted == ["configured microphone became available"]
+
+
+def test_microphone_watch_tracks_default_changes_while_using_fallback():
+    window = MainWindow.__new__(MainWindow)
+    old_default = "Microphone (PicoStreamingMicrophone)"
+    new_default = "Microphone (USB Audio Device)"
+    configured_name = "Missing Microphone"
+    previous = (
+        (old_default,),
+        old_default,
+        "fixed",
+        configured_name,
+        configured_name,
+    )
+    current = (
+        tuple(sorted((old_default, new_default))),
+        new_default,
+        "fixed",
+        configured_name,
+        configured_name,
+    )
+    window._destroying = False
+    window._running = True
+    window._mic_recovery_in_progress = False
+    window._recorder = type("Recorder", (), {"is_running": True})()
+    window._active_mic_input_device_name = old_default
+    window._last_mic_device_signature = previous
+    window._microphone_device_signature = lambda: current
+    window._maybe_log_mic_diagnostics = lambda: None
+    window._schedule_mic_audio_watch = lambda: None
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+
+    MainWindow._poll_mic_audio_watch(window)
+
+    assert restarted == ["fallback default microphone changed"]
 
 
 def test_main_device_combo_restarts_microphone_while_running(monkeypatch):

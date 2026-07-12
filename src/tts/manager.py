@@ -8,6 +8,8 @@ import logging
 import math
 import os
 import queue
+import re
+import secrets
 import threading
 import time
 from collections import OrderedDict
@@ -18,10 +20,18 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+from src.audio.device_inventory import (
+    default_output_device_index as inventory_default_output_device_index,
+    get_device_inventory,
+)
 from .base import BaseTTS
 from .factory import create_tts_engine, create_tts_engine_with_fallback
 from .wav_utils import decode_wav_bytes
-from src.utils.app_paths import app_temp_dir
+from src.utils.app_paths import (
+    app_temp_dir,
+    atomic_write_bytes,
+    require_real_directory,
+)
 from src.utils.input_validation import validate_tts_text, ValidationError
 
 logger = logging.getLogger(__name__)
@@ -32,8 +42,12 @@ MAX_CACHE_ITEMS = 100
 CACHE_TTL_SECONDS = 900.0
 TTS_FAILURE_SUSPEND_THRESHOLD = 3
 TTS_FAILURE_SUSPEND_SECONDS = 30.0
-TTS_PLAYBACK_TAIL_PADDING_MS = 180
+TTS_PLAYBACK_TAIL_PADDING_MS = 80
+TTS_PLAYBACK_BLOCKSIZE = 1024
 TTS_DEBUG_AUDIO_ENV = "MIO_TTS_DEBUG_AUDIO"
+TTS_REQUEST_QUEUE_MAXSIZE = 10
+TTS_PIPELINE_MAX_OUTSTANDING = 12
+TTS_CLOUD_SYNTHESIS_CONCURRENCY = 2
 OutputDeviceRef = int | str | None
 
 _VIRTUAL_OUTPUT_KEYWORDS = (
@@ -43,6 +57,21 @@ _VIRTUAL_OUTPUT_KEYWORDS = (
 
 _RECOVERABLE_MIXLINE_PORTAUDIO_ERRORS = {-9999, -9996, -9992}
 _SCIPY_RESAMPLE_FALLBACK_LOGGED = False
+_SOXR_RESAMPLE_FALLBACK_LOGGED = False
+_CONCURRENT_SYNTHESIS_ENGINES = {
+    "edge",
+    "gtts",
+    "google",
+    "voicevox",
+    "aivis",
+    "aivis_speech",
+    "mimo",
+    "mimo_tts",
+    "xiaomi_tts",
+    "qwen_tts",
+    "qwen3_tts",
+    "qwen-tts",
+}
 
 
 def _portaudio_error_code(exc: Exception) -> int | None:
@@ -107,6 +136,25 @@ class TTSRequest:
     rate: float
     volume: float
     callback: Optional[Callable[[bool, str], None]] = None
+    sequence: int = -1
+    generation: int = 0
+    submitted_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class _TTSPrewarmRequest:
+    voice: str = ""
+
+
+@dataclass
+class _TTSSynthesisResult:
+    request: TTSRequest
+    audio_data: bytes = b""
+    decoded_audio: np.ndarray | None = None
+    decoded_sample_rate: int = 0
+    error: Exception | None = None
+    synthesis_started_at: float = 0.0
+    synthesis_finished_at: float = 0.0
 
 
 class TTSManager:
@@ -128,6 +176,8 @@ class TTSManager:
         engine_config: Optional[dict[str, object]] = None,
         max_cache_size_mb: Optional[int] = None,
         max_cache_items: Optional[int] = None,
+        synthesis_concurrency: Optional[int] = None,
+        max_outstanding: int = TTS_PIPELINE_MAX_OUTSTANDING,
     ):
         self._engine: Optional[BaseTTS] = None
         self._engine_name = engine_name
@@ -180,14 +230,35 @@ class TTSManager:
         self._cache: OrderedDict[str, tuple[bytes, float]] = OrderedDict()
         self._cache_size_bytes = 0
         self._cache_lock = threading.Lock()
+        self._cache_inflight: dict[str, threading.Event] = {}
 
-        self._request_queue: queue.Queue[TTSRequest | None] = queue.Queue(maxsize=10)
+        self._request_queue: queue.Queue[TTSRequest | _TTSPrewarmRequest | None] = queue.Queue(
+            maxsize=TTS_REQUEST_QUEUE_MAXSIZE
+        )
         self._worker_thread: Optional[threading.Thread] = None
+        self._synthesis_threads: list[threading.Thread] = []
+        self._playback_thread: Optional[threading.Thread] = None
         self._running = False
+        self._closed = False
+        self._lifecycle_lock = threading.RLock()
+        self._pipeline_lock = threading.RLock()
+        self._result_available = threading.Condition(self._pipeline_lock)
+        self._completed_synthesis: dict[int, _TTSSynthesisResult] = {}
+        self._next_sequence = 0
+        self._next_playback_sequence = 0
+        self._generation = 0
+        self._outstanding_requests: set[tuple[int, int]] = set()
+        self._max_outstanding = max(1, min(int(max_outstanding), 64))
+        self._prewarm_queued = False
+        self._synthesis_concurrency = self._resolve_synthesis_concurrency(
+            synthesis_concurrency
+        )
         self._current_playback: Optional[sd.OutputStream] = None
         self._current_playbacks: list[sd.OutputStream] = []
         self._current_playback_done: Optional[threading.Event] = None
         self._playback_lock = threading.Lock()
+        self._playback_context = threading.local()
+        self._playback_activity_event: threading.Event | None = None
 
         self._device_sample_rates_cache: dict[OutputDeviceRef, list[int]] = {}
         self._device_cache_lock = threading.Lock()
@@ -198,6 +269,33 @@ class TTSManager:
         # Initialize engine eagerly so is_available() and get_available_voices()
         # return correct values before start() is called.
         self._initialize_engine()
+        try:
+            engine_limit = max(
+                1,
+                min(int(getattr(self._engine, "max_concurrent_synthesis", 1)), 4),
+            )
+        except (TypeError, ValueError):
+            engine_limit = 1
+        self._synthesis_concurrency = min(
+            self._synthesis_concurrency,
+            engine_limit,
+        )
+
+    def _resolve_synthesis_concurrency(self, configured: Optional[int]) -> int:
+        if configured is None:
+            configured = self._engine_config.get("synthesis_concurrency")
+        if configured is None:
+            normalized_engine = str(self._engine_name or "").strip().lower()
+            return (
+                TTS_CLOUD_SYNTHESIS_CONCURRENCY
+                if normalized_engine in _CONCURRENT_SYNTHESIS_ENGINES
+                else 1
+            )
+        try:
+            parsed = int(configured)
+        except (TypeError, ValueError):
+            parsed = 1
+        return max(1, min(parsed, 4))
 
     @staticmethod
     def _normalize_cache_limit(
@@ -242,35 +340,85 @@ class TTSManager:
 
     def start(self) -> None:
         """Start TTS manager."""
-        if self._running:
-            return
+        with self._lifecycle_lock:
+            if self._closed:
+                logger.warning("Cannot start TTS manager after it has been closed")
+                return
+            if self._running:
+                return
+            if not self.is_available():
+                logger.warning("Cannot start TTS manager: no engine available")
+                return
 
-        if not self.is_available():
-            logger.warning("Cannot start TTS manager: no engine available")
-            return
+            self._running = True
+            synthesis_threads = [
+                threading.Thread(
+                    target=self._synthesis_worker_loop,
+                    args=(index,),
+                    daemon=True,
+                    name=f"tts-synthesis-{index + 1}",
+                )
+                for index in range(self._synthesis_concurrency)
+            ]
+            playback_thread = threading.Thread(
+                target=self._playback_worker_loop,
+                daemon=True,
+                name="tts-playback",
+            )
+            self._synthesis_threads = synthesis_threads
+            self._worker_thread = synthesis_threads[0]
+            self._playback_thread = playback_thread
 
-        self._running = True
-        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self._worker_thread.start()
+        for thread in synthesis_threads:
+            thread.start()
+        playback_thread.start()
         logger.info("TTS manager started")
 
     def stop(self) -> None:
         """Stop TTS manager."""
-        if self._worker_thread is None:
-            self.stop_playback()
-            return
-
-        self._running = False
-        self.clear_queue()
-        if self._worker_thread is not None:
-            self._signal_worker_stop()
-
-        if self._worker_thread:
-            self._worker_thread.join(timeout=2.0)
-            self._worker_thread = None
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            synthesis_threads = tuple(getattr(self, "_synthesis_threads", ()))
+            playback_thread = getattr(self, "_playback_thread", None)
+            if not synthesis_threads and self._worker_thread is not None:
+                synthesis_threads = (self._worker_thread,)
+            self._running = False
+            self.clear_queue(message="TTS manager stopped.")
+            for _thread in synthesis_threads:
+                self._signal_worker_stop()
+            condition = getattr(self, "_result_available", None)
+            if condition is not None:
+                with condition:
+                    condition.notify_all()
 
         self.stop_playback()
+        deadline = time.monotonic() + 2.0
+        current = threading.current_thread()
+        for thread in (*synthesis_threads, playback_thread):
+            if thread is None or thread is current:
+                continue
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        self._worker_thread = None
+        self._synthesis_threads = []
+        self._playback_thread = None
         logger.info("TTS manager stopped")
+
+    def close(self) -> None:
+        """Permanently stop the manager and release engine/network resources."""
+
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            if getattr(self, "_closed", False):
+                return
+            self._closed = True
+
+        self.stop()
+        engine = self._engine
+        self._engine = None
+        close_engine = getattr(engine, "close", None)
+        if callable(close_engine):
+            try:
+                close_engine()
+            except Exception:
+                logger.debug("Failed to close TTS engine", exc_info=True)
 
     def _signal_worker_stop(self) -> None:
         """Wake the worker without blocking the UI thread if the queue is full."""
@@ -280,9 +428,18 @@ class TTSManager:
                 return
             except queue.Full:
                 try:
-                    self._request_queue.get_nowait()
+                    dropped = self._request_queue.get_nowait()
                 except queue.Empty:
                     return
+                if isinstance(dropped, TTSRequest):
+                    self._finish_request_identity(dropped)
+                    self._notify_request_callback(
+                        dropped,
+                        False,
+                        "TTS manager stopped.",
+                    )
+                elif isinstance(dropped, _TTSPrewarmRequest):
+                    self._prewarm_queued = False
 
     def speak(
         self,
@@ -328,20 +485,66 @@ class TTSManager:
                 callback(False, str(e))
             return False
 
-        request = TTSRequest(
-            text=text,
-            voice=voice,
-            rate=rate,
-            volume=volume,
-            callback=callback,
-        )
-
-        try:
-            self._request_queue.put_nowait(request)
+        pipeline_lock = getattr(self, "_pipeline_lock", None)
+        if pipeline_lock is None:
+            pipeline_lock = threading.RLock()
+            self._pipeline_lock = pipeline_lock
+        with pipeline_lock:
+            outstanding = getattr(self, "_outstanding_requests", set())
+            if len(outstanding) >= getattr(
+                self,
+                "_max_outstanding",
+                TTS_PIPELINE_MAX_OUTSTANDING,
+            ):
+                logger.warning("TTS pipeline full, dropping newest request")
+                if callback:
+                    callback(False, "TTS pipeline is full.")
+                return False
+            sequence = int(getattr(self, "_next_sequence", 0))
+            generation = int(getattr(self, "_generation", 0))
+            request = TTSRequest(
+                text=text,
+                voice=voice,
+                rate=rate,
+                volume=volume,
+                callback=callback,
+                sequence=sequence,
+                generation=generation,
+                submitted_at=time.monotonic(),
+            )
+            try:
+                self._request_queue.put_nowait(request)
+            except queue.Full:
+                logger.warning("TTS synthesis queue full, dropping newest request")
+                if callback:
+                    callback(False, "TTS synthesis queue is full.")
+                return False
+            self._next_sequence = sequence + 1
+            outstanding.add((generation, sequence))
+            self._outstanding_requests = outstanding
             return True
-        except queue.Full:
-            logger.warning("TTS queue full, dropping request")
+
+    def prewarm(self, voice: str = "") -> bool:
+        """Queue heavy engine initialization before the first utterance."""
+
+        engine = self._engine
+        if (
+            not self._running
+            or engine is None
+            or type(engine).prewarm is BaseTTS.prewarm
+        ):
             return False
+        with self._pipeline_lock:
+            if self._prewarm_queued:
+                return True
+            try:
+                self._request_queue.put_nowait(
+                    _TTSPrewarmRequest(str(voice or "").strip())
+                )
+            except queue.Full:
+                return False
+            self._prewarm_queued = True
+            return True
 
     def stop_playback(self) -> None:
         """Stop current playback."""
@@ -391,10 +594,14 @@ class TTSManager:
         """Decode supported TTS audio bytes into float PCM samples."""
         if audio_data.startswith(b"RIFF"):
             return self._decode_wav(audio_data)
-        if audio_data.startswith(b"ID3") or (
+        if (
+            audio_data.startswith((b"ID3", b"OggS", b"fLaC", b"\x1aE\xdf\xa3"))
+            or (len(audio_data) >= 12 and audio_data[4:8] == b"ftyp")
+            or (
             len(audio_data) >= 2
             and audio_data[0] == 0xFF
             and (audio_data[1] & 0xE0) == 0xE0
+            )
         ):
             return self._decode_mp3(audio_data)
         raise RuntimeError("Unknown audio format")
@@ -438,6 +645,7 @@ class TTSManager:
             raise RuntimeError("Maximum retry depth exceeded for device fallback")
 
         playback_done = threading.Event()
+        completion_signal = getattr(self, "_playback_activity_event", None)
         audio_index = [0]
         natural_end_reached = [False]
         completion_reported = [False]
@@ -451,6 +659,8 @@ class TTSManager:
                     audio_index[0],
                 )
             playback_done.set()
+            if completion_signal is not None:
+                completion_signal.set()
 
         def audio_callback(outdata, frames, time_info, status):
             if status:
@@ -493,7 +703,7 @@ class TTSManager:
                 device=playback_device,
                 callback=audio_callback,
                 finished_callback=mark_finished,
-                blocksize=2048,
+                blocksize=TTS_PLAYBACK_BLOCKSIZE,
             )
             return playback, playback_done
         except sd.PortAudioError as exc:
@@ -579,26 +789,271 @@ class TTSManager:
                 self._current_playback_done = None
             return list(playbacks)
 
-    def clear_queue(self) -> None:
-        """Clear pending TTS requests."""
-        while True:
+    def clear_queue(self, message: str = "TTS request was cancelled.") -> int:
+        """Cancel queued/synthesized work without disturbing current playback."""
+
+        cancelled: list[TTSRequest] = []
+        saw_stop_signal = False
+        pipeline_lock = getattr(self, "_pipeline_lock", None)
+        if pipeline_lock is None:
+            pipeline_lock = threading.RLock()
+            self._pipeline_lock = pipeline_lock
+        with pipeline_lock:
+            self._generation = int(getattr(self, "_generation", 0)) + 1
+            self._next_playback_sequence = int(getattr(self, "_next_sequence", 0))
+            while True:
+                try:
+                    pending = self._request_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if pending is None:
+                    saw_stop_signal = True
+                    continue
+                if isinstance(pending, _TTSPrewarmRequest):
+                    self._prewarm_queued = False
+                    continue
+                cancelled.append(pending)
+
+            completed = getattr(self, "_completed_synthesis", {})
+            cancelled.extend(result.request for result in completed.values())
+            completed.clear()
+            self._completed_synthesis = completed
+            for request in cancelled:
+                self._finish_request_identity(request)
+
+            condition = getattr(self, "_result_available", None)
+            if condition is not None:
+                condition.notify_all()
+
+        if saw_stop_signal:
             try:
-                self._request_queue.get_nowait()
-            except queue.Empty:
-                break
+                self._request_queue.put_nowait(None)
+            except queue.Full:
+                pass
+        for request in cancelled:
+            self._notify_request_callback(request, False, message)
+        return len(cancelled)
 
     def _worker_loop(self) -> None:
-        """Worker thread loop."""
-        while self._running:
+        """Compatibility entry point for the first synthesis worker."""
+        self._synthesis_worker_loop(0)
+
+    def _synthesis_worker_loop(self, worker_index: int) -> None:
+        while True:
             try:
                 request = self._request_queue.get(timeout=0.1)
             except queue.Empty:
+                if not self._running:
+                    self._close_synthesis_thread_context()
+                    return
                 continue
 
             if request is None:
-                break
+                self._close_synthesis_thread_context()
+                return
 
-            self._process_request(request)
+            if isinstance(request, _TTSPrewarmRequest):
+                try:
+                    if self._running and self._engine is not None:
+                        started_at = time.monotonic()
+                        self._engine.prewarm(request.voice)
+                        logger.info(
+                            "TTS engine prewarm finished (engine=%s elapsed_ms=%.0f)",
+                            self._engine_name,
+                            (time.monotonic() - started_at) * 1000.0,
+                        )
+                except Exception as exc:
+                    logger.warning("TTS engine prewarm failed: %s", exc)
+                finally:
+                    with self._pipeline_lock:
+                        self._prewarm_queued = False
+                continue
+
+            result = self._synthesize_request(request)
+            if not self._publish_synthesis_result(result):
+                self._finish_request_identity(request)
+                self._notify_request_callback(
+                    request,
+                    False,
+                    "TTS request was cancelled.",
+                )
+            logger.debug(
+                "TTS synthesis worker finished (worker=%d sequence=%d generation=%d)",
+                worker_index,
+                request.sequence,
+                request.generation,
+            )
+
+    def _close_synthesis_thread_context(self) -> None:
+        cleanup = getattr(self._engine, "close_thread_context", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:
+                logger.debug("Failed to close TTS worker context", exc_info=True)
+
+    def _synthesize_request(self, request: TTSRequest) -> _TTSSynthesisResult:
+        started_at = time.monotonic()
+        try:
+            audio_data = self._get_audio(
+                request.text,
+                request.voice,
+                request.rate,
+                request.volume,
+            )
+            decoded_audio: np.ndarray | None = None
+            decoded_sample_rate = 0
+            try:
+                decoded_audio, decoded_sample_rate = self._decode_audio_data(audio_data)
+                decoded_audio = np.ascontiguousarray(decoded_audio, dtype=np.float32)
+            except Exception as exc:
+                # Keep malformed engine output as a playback-stage failure, as
+                # before. Valid WAV/MP3 output is decoded here so this CPU work
+                # overlaps playback of the preceding sentence.
+                logger.debug(
+                    "TTS worker could not predecode audio; deferring to playback: %s",
+                    exc,
+                )
+            return _TTSSynthesisResult(
+                request=request,
+                audio_data=audio_data,
+                decoded_audio=decoded_audio,
+                decoded_sample_rate=int(decoded_sample_rate or 0),
+                synthesis_started_at=started_at,
+                synthesis_finished_at=time.monotonic(),
+            )
+        except Exception as exc:
+            return _TTSSynthesisResult(
+                request=request,
+                error=exc,
+                synthesis_started_at=started_at,
+                synthesis_finished_at=time.monotonic(),
+            )
+
+    def _publish_synthesis_result(self, result: _TTSSynthesisResult) -> bool:
+        condition = self._result_available
+        request = result.request
+        with condition:
+            if (
+                not self._running
+                or request.generation != self._generation
+                or (request.generation, request.sequence)
+                not in self._outstanding_requests
+            ):
+                return False
+            self._completed_synthesis[request.sequence] = result
+            condition.notify_all()
+            return True
+
+    def _playback_worker_loop(self) -> None:
+        while True:
+            with self._result_available:
+                result = self._completed_synthesis.pop(
+                    self._next_playback_sequence,
+                    None,
+                )
+                while result is None:
+                    if not self._running:
+                        return
+                    self._result_available.wait(timeout=0.1)
+                    result = self._completed_synthesis.pop(
+                        self._next_playback_sequence,
+                        None,
+                    )
+                self._next_playback_sequence += 1
+
+            request = result.request
+            if request.generation != self._generation:
+                self._finish_request_identity(request)
+                self._notify_request_callback(
+                    request,
+                    False,
+                    "TTS request was cancelled.",
+                )
+                continue
+
+            queue_wait_ms = max(
+                0.0,
+                result.synthesis_started_at - request.submitted_at,
+            ) * 1000.0
+            synthesis_ms = max(
+                0.0,
+                result.synthesis_finished_at - result.synthesis_started_at,
+            ) * 1000.0
+            logger.info(
+                "TTS ordered playback ready (sequence=%d queue_wait_ms=%.0f synthesis_ms=%.0f)",
+                request.sequence,
+                queue_wait_ms,
+                synthesis_ms,
+            )
+            self._process_synthesis_result(result)
+            self._finish_request_identity(request)
+
+    def _process_synthesis_result(self, result: _TTSSynthesisResult) -> None:
+        request = result.request
+        if result.error is not None:
+            message = str(result.error)
+            self._record_request_failure(message)
+            logger.error("TTS synthesis failed: %s", result.error)
+            self._notify_request_callback(request, False, message)
+            return
+        try:
+            playback_context = getattr(self, "_playback_context", None)
+            if playback_context is None:
+                playback_context = threading.local()
+                self._playback_context = playback_context
+            playback_context.decoded_audio = (
+                result.decoded_audio,
+                result.decoded_sample_rate,
+            )
+            try:
+                # Keep the one-argument playback contract used by plugins and
+                # tests. The default implementation reads worker-decoded PCM
+                # from this playback thread's local context.
+                self._play_audio(result.audio_data)
+            finally:
+                try:
+                    del playback_context.decoded_audio
+                except AttributeError:
+                    pass
+            if request.generation != self._generation:
+                self._notify_request_callback(
+                    request,
+                    False,
+                    "TTS request was cancelled.",
+                )
+                return
+            self._consecutive_failures = 0
+            self._last_failure_message = ""
+            self._suspended_until = 0.0
+            self._notify_request_callback(request, True, "")
+        except Exception as exc:
+            message = str(exc)
+            self._record_request_failure(message)
+            logger.error("TTS playback failed: %s", exc)
+            self._notify_request_callback(request, False, message)
+
+    def _finish_request_identity(self, request: TTSRequest) -> None:
+        pipeline_lock = getattr(self, "_pipeline_lock", None)
+        if pipeline_lock is None:
+            return
+        with pipeline_lock:
+            outstanding = getattr(self, "_outstanding_requests", None)
+            if outstanding is not None:
+                outstanding.discard((request.generation, request.sequence))
+
+    @staticmethod
+    def _notify_request_callback(
+        request: TTSRequest,
+        success: bool,
+        message: str,
+    ) -> None:
+        if request.callback is None:
+            return
+        try:
+            request.callback(bool(success), str(message or ""))
+        except Exception as exc:
+            logger.error("TTS callback error: %s", exc)
 
     def _process_request(self, request: TTSRequest) -> None:
         """Process TTS request."""
@@ -618,21 +1073,13 @@ class TTSManager:
             self._consecutive_failures = 0
             self._last_failure_message = ""
             self._suspended_until = 0.0
-            if request.callback:
-                try:
-                    request.callback(True, "")
-                except Exception as exc:
-                    logger.error("TTS callback error: %s", exc)
+            self._notify_request_callback(request, True, "")
 
         except Exception as exc:
             message = str(exc)
             self._record_request_failure(message)
             logger.error("TTS request failed: %s", exc)
-            if request.callback:
-                try:
-                    request.callback(False, message)
-                except Exception:
-                    pass
+            self._notify_request_callback(request, False, message)
 
     def _record_request_failure(self, message: str) -> None:
         clean_message = str(message or "").strip() or "Unknown TTS error"
@@ -659,24 +1106,7 @@ class TTSManager:
         )
 
     def _drop_pending_requests(self, message: str) -> int:
-        dropped = 0
-        while True:
-            try:
-                pending = self._request_queue.get_nowait()
-            except queue.Empty:
-                return dropped
-            if pending is None:
-                try:
-                    self._request_queue.put_nowait(None)
-                except queue.Full:
-                    pass
-                return dropped
-            if pending.callback:
-                try:
-                    pending.callback(False, message)
-                except Exception:
-                    pass
-            dropped += 1
+        return self.clear_queue(message=message)
 
     def _get_audio(
         self,
@@ -694,56 +1124,71 @@ class TTSManager:
             volume,
         )
 
-        # Try cache first
+        cache_owner = False
+        cache_event: threading.Event | None = None
+        # Try cache first and coalesce duplicate concurrent synthesis requests.
         if self._cache_enabled:
-            with self._cache_lock:
-                now = time.monotonic()
-                # Evict expired entries (LRU + TTL)
-                expired: list[str] = []
-                for k, (_, timestamp) in list(self._cache.items()):
-                    if now - timestamp > CACHE_TTL_SECONDS:
-                        expired.append(k)
-                for k in expired:
-                    data = self._cache.pop(k)
-                    self._cache_size_bytes -= len(data[0])
+            while True:
+                with self._cache_lock:
+                    now = time.monotonic()
+                    expired = [
+                        key
+                        for key, (_data, timestamp) in self._cache.items()
+                        if now - timestamp > CACHE_TTL_SECONDS
+                    ]
+                    for key in expired:
+                        data = self._cache.pop(key)
+                        self._cache_size_bytes -= len(data[0])
 
-                if cache_key in self._cache:
-                    logger.debug("TTS cache hit")
-                    # Move to end to mark as recently used (LRU)
-                    self._cache.move_to_end(cache_key)
-                    return self._cache[cache_key][0]
+                    cached = self._cache.get(cache_key)
+                    if cached is not None:
+                        logger.debug("TTS cache hit")
+                        self._cache.move_to_end(cache_key)
+                        return cached[0]
 
-        # Synthesize
-        if self._engine is None:
-            raise RuntimeError("TTS engine not available")
+                    cache_event = self._cache_inflight.get(cache_key)
+                    if cache_event is None:
+                        cache_event = threading.Event()
+                        self._cache_inflight[cache_key] = cache_event
+                        cache_owner = True
+                        break
+                if not cache_event.wait(timeout=120.0):
+                    logger.warning("Timed out waiting for duplicate TTS synthesis")
+                    break
 
-        logger.info(
-            "TTS synthesis stage started (engine=%s voice=%s text_chars=%d)",
-            self._engine_name,
-            voice,
-            len(text),
-        )
-        audio_data = self._engine.synthesize(text, voice, rate, volume)
-        if isinstance(audio_data, (bytearray, memoryview)):
-            audio_data = bytes(audio_data)
-        if not isinstance(audio_data, bytes):
-            raise RuntimeError(
-                "TTS engine returned invalid audio data "
-                f"({type(audio_data).__name__}); expected audio bytes"
+        try:
+            if self._engine is None:
+                raise RuntimeError("TTS engine not available")
+            logger.info(
+                "TTS synthesis stage started (engine=%s voice=%s text_chars=%d)",
+                self._engine_name,
+                voice,
+                len(text),
             )
-        if not audio_data:
-            raise RuntimeError("TTS engine returned empty audio")
-        logger.info(
-            "TTS synthesis stage finished (engine=%s output_size=%d bytes)",
-            self._engine_name,
-            len(audio_data),
-        )
+            audio_data = self._engine.synthesize(text, voice, rate, volume)
+            if isinstance(audio_data, (bytearray, memoryview)):
+                audio_data = bytes(audio_data)
+            if not isinstance(audio_data, bytes):
+                raise RuntimeError(
+                    "TTS engine returned invalid audio data "
+                    f"({type(audio_data).__name__}); expected audio bytes"
+                )
+            if not audio_data:
+                raise RuntimeError("TTS engine returned empty audio")
+            logger.info(
+                "TTS synthesis stage finished (engine=%s output_size=%d bytes)",
+                self._engine_name,
+                len(audio_data),
+            )
 
-        # Store in cache
-        if self._cache_enabled:
-            self._add_to_cache(cache_key, audio_data)
-
-        return audio_data
+            if self._cache_enabled:
+                self._add_to_cache(cache_key, audio_data)
+            return audio_data
+        finally:
+            if self._cache_enabled and cache_owner and cache_event is not None:
+                with self._cache_lock:
+                    self._cache_inflight.pop(cache_key, None)
+                    cache_event.set()
 
     def _generate_cache_key(
         self,
@@ -758,7 +1203,10 @@ class TTSManager:
             f"{self._engine_name}|{self._device}|{self._bert_language}|"
             f"{self._engine_cache_signature()}"
         )
-        return hashlib.md5(key_str.encode("utf-8")).hexdigest()
+        return hashlib.md5(
+            key_str.encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
 
     def _engine_cache_signature(self) -> str:
         def scrub(value: object) -> object:
@@ -826,8 +1274,10 @@ class TTSManager:
         devices = _iter_output_devices()
         primary_id = _coerce_device_id(primary_device)
         try:
-            default_out = sd.default.device[1]
-            default_id = int(default_out) if default_out is not None and int(default_out) >= 0 else None
+            default_id = inventory_default_output_device_index(
+                force_refresh=False,
+                sounddevice_module=sd,
+            )
         except Exception:
             default_id = None
 
@@ -866,26 +1316,31 @@ class TTSManager:
             len(audio_data),
         )
 
-        # Wait briefly so the audio device is fully released before starting the next stream
-        # (avoids brief audio overlap/duplicate playback). Use the existing done event from
-        # the prior playback so we don't wait longer than necessary — it fires as soon as
-        # the stream finishes. Fall back to a short sleep if the event is already gone.
-        done_event = self._current_playback_done
-        with self._playback_lock:
-            active_streams = list(getattr(self, "_current_playbacks", []))
-        if done_event is not None:
-            released = done_event.wait(timeout=0.05)
-            del done_event
-        elif active_streams:
-            time.sleep(0.05)
-
+        # Ordered playback is serialized, so the previous stream has already
+        # been closed and no fixed inter-sentence delay is necessary.
         stream_records: list[
             tuple[sd.OutputStream, threading.Event, str, bool, OutputDeviceRef]
         ] = []
         registered_playback = False
+        activity_event = threading.Event()
+        self._playback_activity_event = activity_event
 
         try:
-            audio_array, sample_rate = self._decode_audio_data(audio_data)
+            predecoded = getattr(
+                getattr(self, "_playback_context", None),
+                "decoded_audio",
+                None,
+            )
+            if (
+                isinstance(predecoded, tuple)
+                and len(predecoded) == 2
+                and isinstance(predecoded[0], np.ndarray)
+                and int(predecoded[1] or 0) > 0
+            ):
+                audio_array = predecoded[0]
+                sample_rate = int(predecoded[1])
+            else:
+                audio_array, sample_rate = self._decode_audio_data(audio_data)
             logger.info(
                 "Decoded TTS playback audio (%s, shape=%s, dtype=%s)",
                 _audio_stats(audio_array, sample_rate),
@@ -1054,17 +1509,26 @@ class TTSManager:
                 raise RuntimeError("Audio playback failed: no output stream started")
 
             playbacks = [record[0] for record in stream_records]
-            stop_event = threading.Event()
             with self._playback_lock:
                 self._current_playbacks = playbacks
                 self._current_playback = playbacks[0]
-                self._current_playback_done = stop_event
+                self._current_playback_done = activity_event
                 registered_playback = True
 
             logger.debug("Waiting for playback to complete...")
             deadline = time.monotonic() + 30.0
             while True:
-                if stop_event.is_set():
+                activity_event.clear()
+                with self._playback_lock:
+                    current_playbacks = list(
+                        getattr(self, "_current_playbacks", [])
+                    )
+                    still_registered = any(
+                        current is playback
+                        for current in current_playbacks
+                        for playback in playbacks
+                    )
+                if not still_registered:
                     logger.debug("Playback interrupted")
                     break
                 if all(record[1].is_set() for record in stream_records):
@@ -1074,7 +1538,7 @@ class TTSManager:
                 if remaining <= 0:
                     logger.warning("Audio playback timeout")
                     break
-                time.sleep(min(0.05, remaining))
+                activity_event.wait(timeout=remaining)
 
         except sd.PortAudioError as exc:
             logger.error("PortAudio error during playback: %s", exc)
@@ -1087,6 +1551,8 @@ class TTSManager:
             if registered_playback:
                 playbacks = self._release_current_playbacks(playbacks)
             self._close_playbacks(playbacks)
+            if getattr(self, "_playback_activity_event", None) is activity_event:
+                self._playback_activity_event = None
 
     def _probe_supported_sample_rates(self, device: OutputDeviceRef) -> list[int]:
         """Probe which sample rates the device supports.
@@ -1143,7 +1609,7 @@ class TTSManager:
         Returns:
             List of alternative device IDs, sorted by priority.
         """
-        devices = _iter_output_devices()
+        devices = _iter_raw_output_devices()
         failed_device_id = _coerce_device_id(failed_device)
         if failed_device_id is None:
             return []
@@ -1260,62 +1726,64 @@ class TTSManager:
 
     @staticmethod
     def _decode_mp3(data: bytes) -> tuple[np.ndarray, int]:
-        """Decode MP3 audio data using PyAV."""
+        """Decode compressed/container audio data using PyAV."""
         try:
             import av
         except ImportError:
             raise RuntimeError(
-                "PyAV is required for MP3 playback. Install with: pip install av"
+                "PyAV is required for compressed TTS playback. Install with: pip install av"
             )
 
-        # Open MP3 data as a container
+        # PyAV detects MP3, AAC, Ogg, FLAC, WebM, and MP4 from the byte stream.
         container = av.open(io.BytesIO(data))
+        try:
+            if not container.streams.audio:
+                raise RuntimeError("Compressed TTS response contains no audio stream")
+            audio_stream = container.streams.audio[0]
 
-        # Get audio stream
-        audio_stream = container.streams.audio[0]
+            audio_frames = [
+                frame.to_ndarray()
+                for frame in container.decode(audio_stream)
+            ]
+            if not audio_frames:
+                raise RuntimeError("No audio data decoded from TTS response")
 
-        # Decode all frames
-        audio_frames = []
-        for frame in container.decode(audio_stream):
-            # Convert frame to numpy array
-            array = frame.to_ndarray()
-            audio_frames.append(array)
+            audio_data = np.concatenate(audio_frames, axis=1)
+            if audio_data.shape[0] == 1:
+                audio_data = audio_data[0]
+            else:
+                audio_data = audio_data.T
 
-        if not audio_frames:
-            raise RuntimeError("No audio data decoded from MP3")
+            if np.issubdtype(audio_data.dtype, np.integer):
+                limits = np.iinfo(audio_data.dtype)
+                scale = float(max(abs(limits.min), abs(limits.max)))
+                audio_data = audio_data.astype(np.float32) / scale
+            else:
+                audio_data = audio_data.astype(np.float32, copy=False)
 
-        # Concatenate all frames
-        audio_data = np.concatenate(audio_frames, axis=1)
-
-        # PyAV returns shape (channels, samples), we need (samples,) or (samples, channels)
-        if audio_data.shape[0] == 1:
-            # Mono: shape (1, samples) -> (samples,)
-            audio_data = audio_data[0]
-        else:
-            # Stereo: shape (2, samples) -> (samples, 2)
-            audio_data = audio_data.T
-
-        # Convert to float32 and normalize to [-1, 1]
-        if audio_data.dtype != np.float32:
-            audio_data = audio_data.astype(np.float32) / 32768.0
-
-        sample_rate = audio_stream.rate
-
-        container.close()
-
-        return audio_data, sample_rate
+            return audio_data, int(audio_stream.rate)
+        finally:
+            container.close()
 
     @staticmethod
     def _maybe_save_debug_audio(audio_data: bytes, label: str) -> None:
         if os.environ.get(TTS_DEBUG_AUDIO_ENV) != "1":
             return
         try:
-            debug_dir = app_temp_dir() / "tts_debug_audio"
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            debug_dir = require_real_directory(
+                app_temp_dir() / "tts_debug_audio"
+            )
+            safe_label = re.sub(
+                r"[^A-Za-z0-9_.-]+",
+                "_",
+                str(label or "audio"),
+            ).strip("._-")
+            safe_label = (safe_label[:48] or "audio").rstrip(" .")
             suffix = "wav" if audio_data.startswith(b"RIFF") else "audio"
-            path = debug_dir / f"{timestamp}-{label}.{suffix}"
-            path.write_bytes(bytes(audio_data))
+            path = debug_dir / (
+                f"{time.time_ns()}-{safe_label}-{secrets.token_hex(6)}.{suffix}"
+            )
+            atomic_write_bytes(path, audio_data, overwrite=False)
             logger.info("Saved debug TTS audio: %s", path)
         except Exception as exc:
             logger.warning("Failed to save debug TTS audio: %s", exc)
@@ -1341,6 +1809,11 @@ class TTSManager:
 
     def _resolve_playback_device(self) -> tuple[OutputDeviceRef, str]:
         """Resolve the configured output device shortly before playback."""
+        follows_system_default = (
+            self._output_device is None
+            and not str(self._output_device_name or "").strip()
+            and not self._prefer_virtual_output
+        )
         resolved = resolve_output_device(
             self._output_device,
             self._output_device_name,
@@ -1349,7 +1822,10 @@ class TTSManager:
         if resolved is None:
             return None, ""
         device_id, device_name = resolved
-        if device_id != self._output_device or device_name != self._output_device_name:
+        if (
+            not follows_system_default
+            and (device_id != self._output_device or device_name != self._output_device_name)
+        ):
             self._update_device_config(device_id, device_name)
         return device_id, device_name
 
@@ -1379,47 +1855,64 @@ class TTSManager:
         if source_rate <= 0 or target_rate <= 0 or source_rate == target_rate:
             return np.asarray(audio_array, dtype=np.float32)
 
-        audio_float = np.asarray(audio_array, dtype=np.float32)
+        audio_float = np.ascontiguousarray(audio_array, dtype=np.float32)
         try:
-            from scipy.signal import resample_poly
+            import soxr
 
-            divisor = math.gcd(source_rate, target_rate)
-            up = target_rate // divisor
-            down = source_rate // divisor
-            resampled = resample_poly(audio_float, up, down, axis=0)
-        except Exception as exc:
-            global _SCIPY_RESAMPLE_FALLBACK_LOGGED
-            is_missing_scipy = isinstance(exc, ModuleNotFoundError) and (
-                getattr(exc, "name", None) == "scipy"
-                or "No module named 'scipy'" in str(exc)
+            resampled = soxr.resample(
+                audio_float,
+                source_rate,
+                target_rate,
+                quality="HQ",
             )
-            if is_missing_scipy:
-                if not _SCIPY_RESAMPLE_FALLBACK_LOGGED:
-                    logger.info(
-                        "scipy is not bundled; using numpy interpolation for audio resampling"
-                    )
-                    _SCIPY_RESAMPLE_FALLBACK_LOGGED = True
-                else:
-                    logger.debug("Using numpy interpolation for audio resampling")
-            else:
+        except Exception as soxr_exc:
+            global _SOXR_RESAMPLE_FALLBACK_LOGGED
+            if not _SOXR_RESAMPLE_FALLBACK_LOGGED:
                 logger.warning(
-                    "scipy resample failed, falling back to numpy interpolation: %s",
-                    exc,
+                    "soxr resample unavailable; using scipy fallback: %s",
+                    soxr_exc,
                 )
-            source_len = len(audio_float)
-            if source_len <= 1:
-                return audio_float
-            target_len = max(1, int(round(source_len * target_rate / source_rate)))
-            source_x = np.linspace(0.0, 1.0, source_len, endpoint=False)
-            target_x = np.linspace(0.0, 1.0, target_len, endpoint=False)
-            if audio_float.ndim == 1:
-                resampled = np.interp(target_x, source_x, audio_float)
-            else:
-                channels = [
-                    np.interp(target_x, source_x, audio_float[:, channel])
-                    for channel in range(audio_float.shape[1])
-                ]
-                resampled = np.stack(channels, axis=1)
+                _SOXR_RESAMPLE_FALLBACK_LOGGED = True
+            try:
+                from scipy.signal import resample_poly
+
+                divisor = math.gcd(source_rate, target_rate)
+                up = target_rate // divisor
+                down = source_rate // divisor
+                resampled = resample_poly(audio_float, up, down, axis=0)
+            except Exception as exc:
+                global _SCIPY_RESAMPLE_FALLBACK_LOGGED
+                is_missing_scipy = isinstance(exc, ModuleNotFoundError) and (
+                    getattr(exc, "name", None) == "scipy"
+                    or "No module named 'scipy'" in str(exc)
+                )
+                if is_missing_scipy:
+                    if not _SCIPY_RESAMPLE_FALLBACK_LOGGED:
+                        logger.info(
+                            "scipy is not bundled; using numpy interpolation for audio resampling"
+                        )
+                        _SCIPY_RESAMPLE_FALLBACK_LOGGED = True
+                    else:
+                        logger.debug("Using numpy interpolation for audio resampling")
+                else:
+                    logger.warning(
+                        "scipy resample failed, falling back to numpy interpolation: %s",
+                        exc,
+                    )
+                source_len = len(audio_float)
+                if source_len <= 1:
+                    return audio_float
+                target_len = max(1, int(round(source_len * target_rate / source_rate)))
+                source_x = np.linspace(0.0, 1.0, source_len, endpoint=False)
+                target_x = np.linspace(0.0, 1.0, target_len, endpoint=False)
+                if audio_float.ndim == 1:
+                    resampled = np.interp(target_x, source_x, audio_float)
+                else:
+                    channels = [
+                        np.interp(target_x, source_x, audio_float[:, channel])
+                        for channel in range(audio_float.shape[1])
+                    ]
+                    resampled = np.stack(channels, axis=1)
 
         resampled = np.asarray(resampled, dtype=np.float32)
         return np.clip(resampled, -1.0, 1.0)
@@ -1556,7 +2049,10 @@ def resolve_output_device(
     saved_name = str(output_device_name or "").strip()
     if saved_name:
         matched_saved_id = (
-            _find_output_device_by_id(configured_device_id, devices)
+            (
+                _find_output_device_by_id(configured_device_id, devices)
+                or _find_raw_output_device_by_id(configured_device_id)
+            )
             if configured_device_id is not None
             else None
         )
@@ -1630,7 +2126,10 @@ def resolve_output_device(
     # Priority 2: Validate saved device ID
     device_id = configured_device_id
     if device_id is not None:
-        matched_by_id = _find_output_device_by_id(device_id, devices)
+        matched_by_id = (
+            _find_output_device_by_id(device_id, devices)
+            or _find_raw_output_device_by_id(device_id)
+        )
         if matched_by_id is not None:
             _matched_id, matched_name, _matched_hostapi = matched_by_id
 
@@ -1698,29 +2197,77 @@ def resolve_output_device(
             return fallback
 
     # Priority 5: Use default device
-    logger.info("No specific device matched, using default output device")
+    if not prefer_virtual:
+        try:
+            default_id = inventory_default_output_device_index(
+                force_refresh=False,
+                sounddevice_module=sd,
+            )
+        except Exception:
+            default_id = None
+        if default_id is not None:
+            matched_default = _find_output_device_by_id(default_id, devices)
+            if matched_default is not None:
+                resolved_id, resolved_name, _hostapi_name = matched_default
+                logger.info(
+                    "No specific device matched; using resolved default output %s (%s)",
+                    resolved_id,
+                    resolved_name,
+                )
+                return resolved_id, resolved_name
+    logger.info("No specific device matched, using PortAudio default output device")
     return None
 
 
 def _iter_output_devices() -> list[tuple[int, str, str]]:
-    devices: list[tuple[int, str, str]] = []
     try:
-        device_list = sd.query_devices()
-        hostapis = sd.query_hostapis()
-        for i, device in enumerate(device_list):
+        snapshot = get_device_inventory(
+            force_refresh=False,
+            sounddevice_module=sd,
+        )
+        return [
+            (endpoint.index, endpoint.name, endpoint.hostapi)
+            for endpoint in snapshot.outputs
+        ]
+    except Exception as exc:
+        logger.error("Failed to list audio devices: %s", exc)
+        return []
+
+
+def _iter_raw_output_devices() -> list[tuple[int, str, str]]:
+    """Return backend-specific aliases for playback failover, not UI display."""
+
+    try:
+        raw_devices = list(sd.query_devices())
+        try:
+            hostapis = list(sd.query_hostapis())
+        except Exception:
+            hostapis = []
+        result: list[tuple[int, str, str]] = []
+        for index, device in enumerate(raw_devices):
             try:
                 if int(device.get("max_output_channels", 0) or 0) <= 0:
+                    continue
+                name = str(device.get("name", "") or "").strip()
+                normalized = _normalize_device_name(name)
+                if not normalized or re.search(r"\(\s*\)\s*$", normalized):
+                    continue
+                if normalized in {
+                    "microsoft sound mapper - output",
+                    "primary sound driver",
+                }:
                     continue
                 hostapi_name = ""
                 hostapi_index = int(device.get("hostapi", -1))
                 if 0 <= hostapi_index < len(hostapis):
                     hostapi_name = str(hostapis[hostapi_index].get("name", "") or "")
-                devices.append((i, str(device.get("name", "") or ""), hostapi_name))
+                result.append((index, name, hostapi_name))
             except Exception:
-                logger.debug("Skipping malformed audio device entry: %r", device, exc_info=True)
+                logger.debug("Skipping malformed raw output endpoint", exc_info=True)
+        return result
     except Exception as exc:
-        logger.error("Failed to list audio devices: %s", exc)
-    return devices
+        logger.debug("Failed to enumerate raw output aliases: %s", exc)
+        return _iter_output_devices()
 
 
 def _coerce_device_id(value: object) -> int | None:
@@ -1751,6 +2298,34 @@ def _find_output_device_by_id(
     return None
 
 
+def _find_raw_output_device_by_id(
+    device_id: int,
+) -> tuple[int, str, str] | None:
+    """Validate an explicitly saved backend endpoint omitted by UI deduplication."""
+
+    try:
+        try:
+            device = sd.query_devices(int(device_id))
+        except TypeError:
+            device = list(sd.query_devices())[int(device_id)]
+        if int(device.get("max_output_channels", 0) or 0) <= 0:
+            return None
+        name = str(device.get("name", "") or "").strip()
+        if not name or re.search(r"\(\s*\)\s*$", name):
+            return None
+        hostapi_name = ""
+        try:
+            hostapis = sd.query_hostapis()
+            hostapi_index = int(device.get("hostapi", -1))
+            if 0 <= hostapi_index < len(hostapis):
+                hostapi_name = str(hostapis[hostapi_index].get("name", "") or "")
+        except Exception:
+            pass
+        return int(device_id), name, hostapi_name
+    except Exception:
+        return None
+
+
 def _find_output_device_by_name(
     target_name: str,
     devices: list[tuple[int, str, str]],
@@ -1777,11 +2352,13 @@ def _default_output_device_names(
     devices: list[tuple[int, str, str]],
 ) -> tuple[str, ...]:
     try:
-        default_out = sd.default.device[1]
-        if default_out is None or int(default_out) < 0:
-            return ()
-        default_id = int(default_out)
+        default_id = inventory_default_output_device_index(
+            force_refresh=False,
+            sounddevice_module=sd,
+        )
     except Exception:
+        return ()
+    if default_id is None:
         return ()
     matched = _find_output_device_by_id(default_id, devices)
     if matched is None:

@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import locale
 import os
-import urllib.request
 from collections.abc import Mapping
 
+from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 from src.utils.ui_config import DEFAULT_UI_LANGUAGE, UI_LANGUAGE_LABELS
 
 
 _IP_LOOKUP_URL = "https://ipapi.co/json/"
+_IP_LOOKUP_HOSTS = frozenset({"ipapi.co"})
+_MAX_IP_LOOKUP_BYTES = 64 * 1024
 _REQUEST_HEADERS = {
     "User-Agent": "MioTranslator/desktop",
     "Accept": "application/json",
@@ -56,13 +58,27 @@ def _language_from_locale() -> str:
 
 
 def _language_from_ip() -> str | None:
-    request = urllib.request.Request(_IP_LOOKUP_URL, headers=_REQUEST_HEADERS)
     try:
-        with urllib.request.urlopen(request, timeout=1.2) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with open_trusted_https_url(
+            _IP_LOOKUP_URL,
+            trusted_hosts=_IP_LOOKUP_HOSTS,
+            timeout=1.2,
+            label="IP language lookup",
+            headers=_REQUEST_HEADERS,
+            max_redirects=2,
+        ) as response:
+            payload = json.loads(
+                read_bounded_response(
+                    response,
+                    limit=_MAX_IP_LOOKUP_BYTES,
+                    label="IP language lookup response",
+                ).decode("utf-8")
+            )
     except Exception:
         return None
 
+    if not isinstance(payload, Mapping):
+        return None
     country_code = payload.get("country_code")
     if not country_code:
         return None

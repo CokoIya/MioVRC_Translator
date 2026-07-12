@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.tts import edge_tts_engine as edge_module
 from src.tts.edge_tts_engine import EDGE_FALLBACK_VOICES, EdgeTTS
 
 
@@ -51,7 +52,7 @@ def test_edge_tts_raises_when_safe_retry_still_has_no_audio():
         engine.synthesize("hello", "en-US-JennyNeural")
 
 
-def test_edge_tts_uses_static_voice_catalog_when_online_listing_fails():
+def test_edge_tts_uses_static_voice_catalog_when_online_listing_fails(monkeypatch):
     class FakeEdgeTts:
         @staticmethod
         async def list_voices():
@@ -60,8 +61,39 @@ def test_edge_tts_uses_static_voice_catalog_when_online_listing_fails():
     engine = EdgeTTS.__new__(EdgeTTS)
     engine._edge_tts = FakeEdgeTts
     engine._voices_cache = None
+    monkeypatch.setattr(edge_module, "_EDGE_VOICES_CACHE", None)
 
     voices = engine.get_available_voices()
 
     assert voices == list(EDGE_FALLBACK_VOICES)
     assert engine.get_voice_by_language("ja").id == "ja-JP-NanamiNeural"
+
+
+def test_edge_voice_catalog_is_shared_across_engine_instances(monkeypatch):
+    calls = 0
+
+    class FakeEdgeTts:
+        @staticmethod
+        async def list_voices():
+            nonlocal calls
+            calls += 1
+            return [
+                {
+                    "ShortName": "en-US-TestNeural",
+                    "Locale": "en-US",
+                    "FriendlyName": "Test Voice",
+                    "Gender": "Female",
+                }
+            ]
+
+    monkeypatch.setattr(edge_module, "_EDGE_VOICES_CACHE", None)
+    first = EdgeTTS.__new__(EdgeTTS)
+    first._edge_tts = FakeEdgeTts
+    first._voices_cache = None
+    second = EdgeTTS.__new__(EdgeTTS)
+    second._edge_tts = FakeEdgeTts
+    second._voices_cache = None
+
+    assert first.get_available_voices()[0].id == "en-US-TestNeural"
+    assert second.get_available_voices()[0].id == "en-US-TestNeural"
+    assert calls == 1

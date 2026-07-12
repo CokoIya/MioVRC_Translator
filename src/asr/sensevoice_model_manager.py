@@ -72,7 +72,9 @@ def _resolve_spec(model_id: str, model_revision: str = MODEL_REVISION):
         label=_SPEC.label,
         config_key=_SPEC.config_key,
         model_id=model_id,
-        model_revision=model_revision,
+        model_revision=(
+            _SPEC.model_revision if model_id == _SPEC.model_id else model_revision
+        ),
         bundled_dir_names=_SPEC.bundled_dir_names,
         required_files=_SPEC.required_files,
         required_file_sha256=required_file_sha256,

@@ -1,8 +1,8 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "v1.3.7.8"
-#define AppNumericVersion "1.3.7.8"
+#define AppVersion "v1.3.7.9"
+#define AppNumericVersion "1.3.7.9"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
@@ -37,7 +37,6 @@ CloseApplications=yes
 RestartApplications=yes
 AppMutex=MioTranslatorRuntimeMutex
 ; ウィザードの外観設定
-WizardResizable=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
 ShowLanguageDialog=yes
@@ -51,7 +50,7 @@ VersionInfoTextVersion={#AppVersion}
 VersionInfoVersion={#AppNumericVersion}
 #ifdef SignPfx
 #if SignPfx != ""
-SignTool=signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f "{#SignPfx}" /p "{#SignPass}" $f
+SignTool=signtool sign /fd sha256 /tr https://timestamp.digicert.com /td sha256 /f "{#SignPfx}" /p "{#SignPass}" $f
 SignedUninstaller=yes
 #endif
 #endif
@@ -91,9 +90,6 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; F
 
 [CustomMessages]
 AdditionalTasks=Additional tasks:
-
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}"
 
 [Code]
 var
@@ -188,20 +184,8 @@ begin
 end;
 
 function FreshInstallDefaultDir(): String;
-var
-  DriveCode: Integer;
-  DriveRoot: String;
 begin
-  for DriveCode := Ord('D') to Ord('Z') do
-  begin
-    DriveRoot := Chr(DriveCode) + ':\';
-    if DirExists(DriveRoot) then
-    begin
-      Result := DriveRoot + '{#AppName}';
-      Exit;
-    end;
-  end;
-  Result := 'C:\{#AppName}';
+  Result := ExpandConstant('{localappdata}\Programs\{#AppName}');
 end;
 
 function GetDefaultDirName(Param: String): String;
@@ -226,7 +210,6 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigPath: String;
-  ConfigContent: AnsiString;
   LanguageCode: String;
   JsonTemplate: String;
 begin
@@ -245,7 +228,8 @@ begin
     Log('Installer language detected: ' + ActiveLanguage + ', mapping to: ' + LanguageCode);
 
     // Check if config.json already exists
-    ConfigPath := ExpandConstant('{app}\config.json');
+    ConfigPath := ExpandConstant('{localappdata}\Mio RealTime Translator\config.json');
+    ForceDirectories(ExtractFileDir(ConfigPath));
     if not FileExists(ConfigPath) then
     begin
       // Create minimal config with selected language

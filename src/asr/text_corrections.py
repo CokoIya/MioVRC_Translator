@@ -5,12 +5,21 @@ import json
 import re
 import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.utils.app_paths import resource_base_dirs, writable_app_dir
+from src.utils.app_paths import (
+    atomic_write_bytes,
+    atomic_write_text,
+    read_secure_bytes,
+    read_secure_text,
+    require_real_directory,
+    resource_base_dirs,
+    secure_file_path,
+    writable_app_dir,
+)
+from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 
 DEFAULT_MANIFEST_URL = "https://78hejiu.top/dictionaries/asr_dictionary_manifest.json"
 LEGACY_MANIFEST_URLS = {
@@ -18,6 +27,13 @@ LEGACY_MANIFEST_URLS = {
     "assets/dictionaries/asr_dictionary_manifest.json",
 }
 TRUSTED_DICTIONARY_DOMAINS = frozenset({"78hejiu.top", "raw.githubusercontent.com"})
+_MAX_MANIFEST_BYTES = 1024 * 1024
+_MAX_DICTIONARY_BYTES = 16 * 1024 * 1024
+_MAX_LOCAL_DICTIONARY_BYTES = 16 * 1024 * 1024
+_REMOTE_HEADERS = {
+    "Accept": "application/json, application/octet-stream;q=0.9",
+    "User-Agent": "MioTranslator-Dictionary/1.0",
+}
 BUNDLED_FILENAME = "asr_terms.base.json"
 OFFICIAL_FILENAME = "asr_terms.official.json"
 USER_FILENAME = "asr_terms.user.json"
@@ -31,17 +47,15 @@ USER_DICTIONARY_TEMPLATE = {
 
 
 def dictionaries_dir() -> Path:
-    path = writable_app_dir() / "dictionaries"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return require_real_directory(writable_app_dir() / "dictionaries")
 
 
 def official_dictionary_path() -> Path:
-    return dictionaries_dir() / OFFICIAL_FILENAME
+    return secure_file_path(dictionaries_dir() / OFFICIAL_FILENAME)
 
 
 def user_dictionary_path() -> Path:
-    return dictionaries_dir() / USER_FILENAME
+    return secure_file_path(dictionaries_dir() / USER_FILENAME)
 
 
 def bundled_dictionary_paths() -> list[Path]:
@@ -52,10 +66,16 @@ def bundled_dictionary_paths() -> list[Path]:
 def ensure_user_dictionary() -> Path:
     path = user_dictionary_path()
     if not path.exists():
-        path.write_text(
-            json.dumps(USER_DICTIONARY_TEMPLATE, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        try:
+            atomic_write_text(
+                path,
+                json.dumps(USER_DICTIONARY_TEMPLATE, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+                overwrite=False,
+            )
+        except FileExistsError:
+            # Another process created the private dictionary first.
+            secure_file_path(path, must_exist=True)
     return path
 
 
@@ -105,18 +125,18 @@ def _normalize_rule_mode(value: Any) -> str:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.name}.tmp")
-    temp_path.write_text(
+    atomic_write_text(
+        secure_file_path(path),
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    temp_path.replace(path)
 
 
 def _load_user_dictionary_payload(path: Path) -> dict[str, Any]:
     try:
-        raw_text = path.read_text(encoding="utf-8")
+        raw_text = read_secure_text(
+            path, encoding="utf-8", max_bytes=_MAX_LOCAL_DICTIONARY_BYTES
+        )
     except OSError as exc:
         raise RuntimeError(f"Failed to read user dictionary: {exc}") from exc
 
@@ -226,9 +246,12 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, json.JSONDecodeError, ValueError):
+        data = json.loads(
+            read_secure_text(
+                path, encoding="utf-8", max_bytes=_MAX_LOCAL_DICTIONARY_BYTES
+            )
+        )
+    except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -404,10 +427,38 @@ class LayeredASRCorrector:
         return corrected
 
 
+def _validate_trusted_dictionary_url(url: str, *, label: str) -> str:
+    candidate = str(url or "").strip()
+    parsed = urllib.parse.urlsplit(candidate)
+    host = (parsed.hostname or "").rstrip(".").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError(f"{label} URL has an invalid port") from exc
+    if (
+        parsed.scheme.lower() != "https"
+        or host not in TRUSTED_DICTIONARY_DOMAINS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        raise RuntimeError(f"{label} URL is not from a trusted HTTPS source: {candidate}")
+    return candidate
+
+
 def _read_remote_json(url: str) -> dict[str, Any]:
-    with urllib.request.urlopen(url, timeout=15) as response:
+    requested_url = _validate_trusted_dictionary_url(url, label="Dictionary manifest")
+    with open_trusted_https_url(
+        requested_url,
+        trusted_hosts=TRUSTED_DICTIONARY_DOMAINS,
+        timeout=15,
+        label="Dictionary manifest",
+        headers=_REMOTE_HEADERS,
+    ) as response:
         charset = response.headers.get_content_charset("utf-8")
-        payload = response.read().decode(charset)
+        payload = read_bounded_response(
+            response, limit=_MAX_MANIFEST_BYTES, label="Dictionary manifest"
+        ).decode(charset)
     data = json.loads(payload)
     if not isinstance(data, dict):
         raise RuntimeError("Dictionary manifest is not a JSON object")
@@ -415,8 +466,17 @@ def _read_remote_json(url: str) -> dict[str, Any]:
 
 
 def _read_remote_bytes(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=20) as response:
-        return response.read()
+    requested_url = _validate_trusted_dictionary_url(url, label="Dictionary")
+    with open_trusted_https_url(
+        requested_url,
+        trusted_hosts=TRUSTED_DICTIONARY_DOMAINS,
+        timeout=20,
+        label="Dictionary",
+        headers=_REMOTE_HEADERS,
+    ) as response:
+        return read_bounded_response(
+            response, limit=_MAX_DICTIONARY_BYTES, label="Dictionary"
+        )
 
 
 def update_official_dictionary(config: dict | None = None) -> dict[str, Any]:
@@ -432,11 +492,9 @@ def update_official_dictionary(config: dict | None = None) -> dict[str, Any]:
     if not dictionary_url:
         raise RuntimeError("Dictionary manifest is missing dictionary_url")
 
-    parsed_url = urllib.parse.urlparse(dictionary_url)
-    if parsed_url.scheme != "https" or parsed_url.netloc not in TRUSTED_DICTIONARY_DOMAINS:
-        raise RuntimeError(
-            f"Dictionary URL is not from a trusted source: {dictionary_url}"
-        )
+    dictionary_url = _validate_trusted_dictionary_url(
+        dictionary_url, label="Dictionary"
+    )
 
     try:
         payload = _read_remote_bytes(dictionary_url)
@@ -460,11 +518,14 @@ def update_official_dictionary(config: dict | None = None) -> dict[str, Any]:
         raise RuntimeError("Downloaded dictionary is missing a valid entries list")
 
     target_path = official_dictionary_path()
-    existing = target_path.read_bytes() if target_path.exists() else b""
+    existing = (
+        read_secure_bytes(target_path, max_bytes=_MAX_LOCAL_DICTIONARY_BYTES)
+        if target_path.exists()
+        else b""
+    )
     changed = existing != payload
     if changed:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_bytes(payload)
+        atomic_write_bytes(target_path, payload)
 
     return {
         "changed": changed,

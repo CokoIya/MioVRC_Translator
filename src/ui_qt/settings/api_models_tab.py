@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.utils.i18n import tr as _base_tr
+from src.utils.ui_config import get_backend_model_options
 
 
 def tr(language: str | None, key: str, **kwargs) -> str:
@@ -302,16 +303,18 @@ class APIModelsTab(QWidget):
         self._qwen_group.setVisible(index == 4)
 
         # Update model options
-        models = {
-            0: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            1: ["claude-sonnet-4", "claude-opus-4", "claude-haiku-4"],
-            2: ["deepseek-chat", "deepseek-coder"],
-            3: ["gemini-2.0-flash", "gemini-1.5-pro"],
-            4: ["qwen-max", "qwen-plus", "qwen-turbo"],
+        provider_ids = {
+            0: "openai",
+            1: "anthropic",
+            2: "deepseek",
+            3: "gemini",
+            4: "qianwen",
         }
+        backend = provider_ids.get(index)
+        models = list(get_backend_model_options(backend)) if backend else []
 
         self._model_combo.clear()
-        self._model_combo.addItems(models.get(index, []))
+        self._model_combo.addItems(models)
 
         self.config_changed.emit()
 

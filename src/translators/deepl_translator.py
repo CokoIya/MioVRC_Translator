@@ -5,6 +5,8 @@ import time
 
 import requests
 
+from src.utils.secure_http import validate_api_base_url
+
 from .base import BaseTranslator
 from src.utils.input_validation import ValidationError, validate_translation_text
 
@@ -70,7 +72,10 @@ class DeepLTranslator(BaseTranslator):
         self._api_key = str(api_key or "").strip()
         if not self._api_key:
             raise ValueError("DeepL API Key is not configured")
-        self._base_url = str(base_url or "https://api-free.deepl.com/v2").strip().rstrip("/")
+        self._base_url = validate_api_base_url(
+            base_url or "https://api-free.deepl.com/v2",
+            label="DeepL API",
+        )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
         self._session = requests.Session()

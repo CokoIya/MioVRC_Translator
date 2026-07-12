@@ -23,6 +23,19 @@ def test_online_asr_specs_do_not_require_local_models():
     assert spec.requires_local_model is False
 
 
+def test_qwen3_latest_flash_alias_remains_selectable():
+    config = {
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {"model": "qwen3-asr-flash"},
+        }
+    }
+
+    spec = get_asr_runtime_spec(config)
+
+    assert spec.model_id == "qwen3-asr-flash"
+
+
 def test_qwen3_region_base_url_helpers():
     assert normalize_qwen3_asr_region("intl") == "singapore"
     assert normalize_qwen3_asr_region("china") == "china_mainland"
@@ -46,15 +59,21 @@ def test_unknown_legacy_engine_normalizes_to_default_local_asr():
     assert spec.requires_local_model is True
 
 
-def test_sensevoice_spec_includes_tokenizer_and_cmvn_files():
+def test_sensevoice_spec_is_pinned_and_all_required_files_are_hashed():
     spec = get_asr_runtime_spec({"asr": {"engine": "sensevoice-small"}})
 
-    assert "model.pt" in spec.required_files
-    assert "chn_jpn_yue_eng_ko_spectok.bpe.model" in spec.required_files
-    assert "am.mvn" in spec.required_files
+    assert spec.model_revision == "70514a3da51f1160f51d18449dab6128bbd4928b"
+    assert set(spec.required_files) == {
+        "am.mvn",
+        "chn_jpn_yue_eng_ko_spectok.bpe.model",
+        "config.yaml",
+        "configuration.json",
+        "model.pt",
+    }
+    assert set(dict(spec.required_file_sha256)) == set(spec.required_files)
 
 
-def test_whisper_asr_spec_is_local_user_selectable_model():
+def test_whisper_asr_spec_remains_internal_but_is_not_user_selectable():
     config = {"asr": {"engine": "whisper-large-v3-turbo"}}
 
     spec = get_asr_runtime_spec(config)
@@ -64,5 +83,5 @@ def test_whisper_asr_spec_is_local_user_selectable_model():
     assert spec.model_revision == "master"
     assert spec.requires_local_model is True
     assert spec.required_files == ("small.en.pb",)
-    assert "whisper-large-v3-turbo" in USER_SELECTABLE_ASR_ENGINES
-    assert "whisper-large-v3-turbo" in LISTEN_SELECTABLE_ASR_ENGINES
+    assert "whisper-large-v3-turbo" not in USER_SELECTABLE_ASR_ENGINES
+    assert "whisper-large-v3-turbo" not in LISTEN_SELECTABLE_ASR_ENGINES

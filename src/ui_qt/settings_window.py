@@ -8,8 +8,9 @@ from __future__ import annotations
 import copy
 import importlib.util
 import logging
+import os
 import queue
-import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Callable
@@ -100,15 +101,23 @@ from src.tts.style_bert_vits2_models import (
     style_bert_voice_id,
 )
 from src.ui_qt.icon_utils import ui_icon
+from src.ui_qt.installer_repair import build_runtime_repair_update_info, show_installer_download_fallback
 from src.ui_qt.pytorch_cuda_install_dialog import PytorchCudaInstallDialog
 from src.ui_qt.styles import build_settings_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme_preference, resolve_theme, theme_tokens
 from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
-from src.updater.update_checker import UpdateInfo, check_for_update
+from src.updater.update_checker import UpdateInfo, check_for_update, fetch_latest_installer_info
 from src.utils import config_manager
 from src.utils.config_manager import normalize_style_bert_bert_language
-from src.utils.app_paths import backgrounds_dir
+from src.utils.app_paths import (
+    atomic_copy_secure_file,
+    atomic_write_bytes,
+    backgrounds_dir,
+    secure_file_path,
+    secure_file_size,
+    secure_unlink,
+)
 from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
 from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
@@ -228,6 +237,9 @@ SETTINGS_UPDATE_BUTTON_PADDING = 46
 SETTINGS_HINT_WRAP = 640
 TTS_TEST_TIMEOUT_MS = 60_000
 STYLE_BERT_TTS_TEST_TIMEOUT_MS = 240_000
+_BACKGROUND_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".webp"})
+_MAX_BACKGROUND_IMAGE_BYTES = 64 * 1024 * 1024
+_MAX_XTTS_RECORDED_AUDIO_BYTES = 256 * 1024 * 1024
 TTS_TEST_TEXT_BY_LANGUAGE = {
     "jp": "こんにちは、これは読み上げテストです。",
     "ja": "こんにちは、これは読み上げテストです。",
@@ -1610,8 +1622,9 @@ _SETTINGS_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
 
 _VOICE_CLONING_SETTINGS_COPY = {
     "xtts_runtime_missing": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
-    "xtts_runtime_missing_details": "Voice Cloning is missing bundled runtime components: {components}. Install the latest full release, then restart Mio Translator.",
-    "xtts_runtime_reinstall": "Open Release Page",
+    "xtts_runtime_missing_details": "Voice Cloning is missing bundled runtime components: {components}. Download the full installer in Mio, then use Install & Restart to repair the app.",
+    "xtts_runtime_reinstall": "Download Full Installer",
+    "xtts_runtime_repair_checking": "Preparing installer...",
     "xtts_model_missing": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
     "xtts_ready": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
     "xtts_reference_missing": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
@@ -1639,6 +1652,19 @@ QT_SETTINGS_COPY.setdefault("xtts_runtime_reinstall", {}).update(
         "ja": "ダウンロードページを開く",
         "ru": "Открыть страницу релиза",
         "ko": "릴리스 페이지 열기",
+    }
+)
+
+QT_SETTINGS_COPY.setdefault("xtts_runtime_reinstall", {}).update(
+    {language: "Download Full Installer" for language in _SETTINGS_LANGUAGES}
+)
+QT_SETTINGS_COPY.setdefault("xtts_runtime_missing_details", {}).update(
+    {
+        language: (
+            "Voice Cloning is missing bundled runtime components: {components}. "
+            "Download the full installer in Mio, then use Install & Restart to repair the app."
+        )
+        for language in _SETTINGS_LANGUAGES
     }
 )
 
@@ -2302,6 +2328,8 @@ class SettingsWindow(QDialog):
         self._tts_device_combo: QComboBox | None = None
         self._xtts_device_combo: QComboBox | None = None
         self._asr_device_combo: QComboBox | None = None
+        self._input_device_combo: QComboBox | None = None
+        self._loopback_device_combo: QComboBox | None = None
         self._dictionary_status_label: QLabel | None = None
         self._dictionary_update_button: QPushButton | None = None
         self._dictionary_custom_patterns_edit: QTextEdit | None = None
@@ -2335,6 +2363,12 @@ class SettingsWindow(QDialog):
         self._init_from_config()
         self._fmt_codes = {l: c for l, c in get_output_format_options(self._ui_lang)}
         self._build_ui()
+        self._audio_device_refresh_timer = QTimer(self)
+        self._audio_device_refresh_timer.setInterval(3000)
+        self._audio_device_refresh_timer.timeout.connect(
+            self._refresh_audio_device_choices
+        )
+        self._audio_device_refresh_timer.start()
         self.bert_refresh_requested.connect(self._refresh_bert_model_prompt)
         self.dictionary_update_finished.connect(self._on_dictionary_update_finished)
         self.dictionary_update_failed.connect(self._on_dictionary_update_failed)
@@ -3657,7 +3691,17 @@ class SettingsWindow(QDialog):
         self._section_title(layout, self._copy("input_device_mode"))
         self._row_layout(layout, self._copy("input_device_mode"), self._combo("input_mode", self._input_device_mode_var, list(self._input_mode_codes.keys()), self._on_input_device_mode_changed))
         self._field_hint(layout, "input_device_mode")
-        self._row_layout(layout, self._copy("input_device"), self._combo("input_device", self._input_device_var, self._input_device_choices(), self._on_input_device_changed))
+        self._input_device_combo = self._combo(
+            "input_device",
+            self._input_device_var,
+            self._input_device_choices(),
+            self._on_input_device_changed,
+        )
+        self._row_layout(
+            layout,
+            self._copy("input_device"),
+            self._input_device_combo,
+        )
         self._field_hint(layout, "input_device")
 
         # Streaming Settings Section
@@ -3722,7 +3766,16 @@ class SettingsWindow(QDialog):
 
         # Desktop Audio & ASR Section
         self._section_title(layout, self._copy("audio_device_asr_section"))
-        self._row_layout(layout, self._copy("vrc_listen_device"), self._combo("loopback_device", self._loopback_device_var, self._loopback_device_choices()))
+        self._loopback_device_combo = self._combo(
+            "loopback_device",
+            self._loopback_device_var,
+            self._loopback_device_choices(),
+        )
+        self._row_layout(
+            layout,
+            self._copy("vrc_listen_device"),
+            self._loopback_device_combo,
+        )
         self._field_hint(layout, "vrc_listen_device")
         self._row_layout(layout, self._copy("asr_listen"), self._combo("listen_asr", self._listen_asr_engine_var, list(self._listen_asr_engine_codes.keys())))
         self._field_hint(layout, "asr_listen")
@@ -4332,6 +4385,14 @@ class SettingsWindow(QDialog):
         logs_hint.setObjectName("hintLabel")
         logs_hint.setWordWrap(True)
         layout.addWidget(logs_hint)
+        logs_path = QLabel(str(logs_dir() / "mio.log"))
+        logs_path.setObjectName("pathLabel")
+        logs_path.setWordWrap(True)
+        logs_path.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        layout.addWidget(logs_path)
         logs_row = QHBoxLayout()
         logs_row.addWidget(self._icon_button(self._copy("open_logs_folder"), "folder-open.svg", self._open_logs_folder, width=160))
         logs_row.addStretch(1)
@@ -4710,6 +4771,15 @@ class SettingsWindow(QDialog):
         if configured and configured not in names:
             names.append(configured)
         if len(names) == 1:
+            try:
+                from src.audio.device_inventory import device_inventory_diagnostics
+
+                logger.warning(
+                    "No microphone detected in settings; diagnostics=%s",
+                    device_inventory_diagnostics(),
+                )
+            except Exception:
+                logger.debug("Failed to collect microphone diagnostics", exc_info=True)
             names.append(missing)
         if not configured:
             self._input_device_var.set(default)
@@ -4727,10 +4797,55 @@ class SettingsWindow(QDialog):
         if configured and configured not in names:
             names.append(configured)
         if len(names) == 1:
+            try:
+                from src.audio.desktop_recorder import loopback_device_diagnostics
+
+                logger.warning(
+                    "No playback/loopback device detected in settings; diagnostics=%s",
+                    loopback_device_diagnostics(),
+                )
+            except Exception:
+                logger.debug("Failed to collect playback diagnostics", exc_info=True)
             names.append(missing)
         if not configured:
             self._loopback_device_var.set(default)
         return names
+
+    def _refresh_audio_device_choices(self) -> None:
+        if not self.isVisible() or self._closing:
+            return
+
+        def refresh_combo(
+            combo: QComboBox | None,
+            choices: list[str],
+            current_value: str,
+        ) -> None:
+            if combo is None:
+                return
+            existing = [combo.itemText(index) for index in range(combo.count())]
+            if existing == choices:
+                return
+            selected = current_value if current_value in choices else choices[0]
+            blocked = combo.blockSignals(True)
+            try:
+                combo.clear()
+                combo.addItems(choices)
+                combo.setCurrentText(selected)
+            finally:
+                combo.blockSignals(blocked)
+
+        if self._input_device_combo is not None:
+            refresh_combo(
+                self._input_device_combo,
+                self._input_device_choices(),
+                self._input_device_var.value(),
+            )
+        if self._loopback_device_combo is not None:
+            refresh_combo(
+                self._loopback_device_combo,
+                self._loopback_device_choices(),
+                self._loopback_device_var.value(),
+            )
 
     def _on_input_device_mode_changed(self, _label: str) -> None:
         if self._input_mode_codes.get(self._input_device_mode_var.value()) == "auto":
@@ -4879,6 +4994,22 @@ class SettingsWindow(QDialog):
         self._tts_virtual_device_id = None
         self._tts_virtual_device_name = None
         return self._copy("tts_no_virtual_device")
+
+    def _selected_tts_output_route(self) -> tuple[object, str, bool, bool]:
+        output_to_vrchat = bool(self._tts_output_to_vrchat_var.value())
+        monitor_output = bool(self._tts_monitor_var.value())
+        if not output_to_vrchat:
+            return None, "", False, monitor_output
+
+        resolved = resolve_output_device(
+            self._tts_virtual_device_id,
+            self._tts_virtual_device_name,
+            prefer_virtual=True,
+        ) or find_best_virtual_output_device()
+        if resolved is None:
+            return None, "", True, monitor_output
+        device_id, device_name = resolved
+        return device_id, str(device_name or ""), True, monitor_output
 
     def _selected_tts_bert_language(self) -> str:
         return self._tts_bert_language_codes.get(self._tts_bert_language_var.value(), "jp")
@@ -5297,18 +5428,44 @@ class SettingsWindow(QDialog):
 
     def _on_voice_recorded_for_xtts(self, audio_data: bytes, voice_name: str) -> None:
         """Handle recorded voice data for XTTS-v2."""
+        tmp_path: Path | None = None
+        tmp_stat: os.stat_result | None = None
         try:
-            ref_audio_dir = xtts_reference_audio_dir()
-            ref_audio_dir.mkdir(parents=True, exist_ok=True)
+            if len(audio_data) > _MAX_XTTS_RECORDED_AUDIO_BYTES:
+                raise ValueError("Recorded voice audio exceeds the 256 MiB safety limit.")
 
-            output_path = ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
-            tmp_path = output_path.with_suffix(".tmp.wav")
-            with open(tmp_path, 'wb') as f:
-                f.write(audio_data)
+            ref_audio_dir = xtts_reference_audio_dir()
+            output_path = secure_file_path(
+                ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
+            )
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{output_path.stem}.recording.",
+                suffix=".wav",
+                dir=ref_audio_dir,
+            )
+            try:
+                tmp_stat = os.fstat(fd)
+            finally:
+                os.close(fd)
+            tmp_path = Path(tmp_name)
+            atomic_write_bytes(tmp_path, audio_data)
+            tmp_stat = os.lstat(tmp_path)
             try:
                 normalize_xtts_reference_audio_file(tmp_path, output_path)
             finally:
-                tmp_path.unlink(missing_ok=True)
+                try:
+                    secure_unlink(
+                        tmp_path,
+                        missing_ok=True,
+                        expected_stat=tmp_stat,
+                    )
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Refused unsafe XTTS recording temporary-file cleanup %s: %s",
+                        tmp_path,
+                        cleanup_exc,
+                    )
+                tmp_path = None
 
             logger.info("Saved XTTS reference audio: %s", output_path)
 
@@ -5323,6 +5480,19 @@ class SettingsWindow(QDialog):
             self._load_tts_voices()
 
         except Exception as exc:
+            if tmp_path is not None:
+                try:
+                    secure_unlink(
+                        tmp_path,
+                        missing_ok=True,
+                        expected_stat=tmp_stat,
+                    )
+                except Exception as cleanup_exc:
+                    logger.warning(
+                        "Refused unsafe XTTS recording temporary-file cleanup %s: %s",
+                        tmp_path,
+                        cleanup_exc,
+                    )
             logger.error("Failed to save voice: %s", exc)
             QMessageBox.critical(
                 self,
@@ -5661,17 +5831,40 @@ class SettingsWindow(QDialog):
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
         )
-        if path:
-            dest = backgrounds_dir() / Path(path).name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest)
-            self._background_image_path = str(dest)
-            self._bg_path_label.setText(str(dest))
-            ui_cfg = self._config.setdefault("ui", {})
-            ui_cfg["background_image_path"] = str(dest)
-            if self._background_widget is not None:
-                self._background_widget.set_background_path(str(dest))
-                self._applied_background_path = str(dest)
+        if not path:
+            return
+
+        try:
+            source = Path(path)
+            if source.suffix.casefold() not in _BACKGROUND_IMAGE_SUFFIXES:
+                raise ValueError("Unsupported background image file type.")
+            source = secure_file_path(source, must_exist=True)
+            dest = secure_file_path(backgrounds_dir() / source.name)
+            if os.path.normcase(os.fspath(source)) == os.path.normcase(os.fspath(dest)):
+                if secure_file_size(source) > _MAX_BACKGROUND_IMAGE_BYTES:
+                    raise ValueError("Background image exceeds the 64 MiB safety limit.")
+            else:
+                atomic_copy_secure_file(
+                    source,
+                    dest,
+                    max_bytes=_MAX_BACKGROUND_IMAGE_BYTES,
+                )
+        except Exception as exc:
+            logger.error("Failed to import background image: %s", exc)
+            QMessageBox.critical(
+                self,
+                self._copy("error") or "Error",
+                str(exc),
+            )
+            return
+
+        self._background_image_path = str(dest)
+        self._bg_path_label.setText(str(dest))
+        ui_cfg = self._config.setdefault("ui", {})
+        ui_cfg["background_image_path"] = str(dest)
+        if self._background_widget is not None:
+            self._background_widget.set_background_path(str(dest))
+            self._applied_background_path = str(dest)
 
     def _on_clear_background(self) -> None:
         self._background_image_path = ""
@@ -5788,14 +5981,14 @@ class SettingsWindow(QDialog):
             from src.tts.xtts_downloader import xtts_models_ready
 
             button.setVisible(False)
-            status = xtts_runtime_status()
+            status = xtts_runtime_status(require_api=True)
             if not status.ready:
-                label.setText(self._xtts_runtime_missing_message())
+                label.setText(self._xtts_runtime_missing_message(require_api=True))
                 button.setText(self._copy("xtts_runtime_reinstall"))
                 button.setVisible(True)
                 self._set_tts_runtime_button_action(
                     button,
-                    lambda: self._open_external_url(MIO_RELEASE_DOWNLOAD_URL),
+                    lambda: self._open_xtts_runtime_repair(self._xtts_runtime_missing_message(require_api=True)),
                 )
             elif not xtts_models_ready():
                 label.setText(self._copy("xtts_model_missing"))
@@ -5867,6 +6060,68 @@ class SettingsWindow(QDialog):
 
     def _open_aivis_download(self) -> None:
         self._open_external_url(AIVIS_SPEECH_DOWNLOAD_URL)
+
+    def _set_xtts_runtime_repair_fetching(self, fetching: bool) -> None:
+        button = getattr(self, "_tts_runtime_action_btn", None)
+        if button is None or self._selected_tts_engine() != "xtts":
+            return
+        button.setEnabled(not fetching)
+        button.setText(
+            self._copy("xtts_runtime_repair_checking")
+            if fetching
+            else self._copy("xtts_runtime_reinstall")
+        )
+        text_width = button.fontMetrics().horizontalAdvance(button.text()) + 30
+        button.setFixedWidth(max(104, text_width))
+
+    def _open_xtts_runtime_repair(self, detail: str | None = None) -> None:
+        message = str(detail or self._xtts_runtime_missing_message(require_api=True)).strip()
+        self._refresh_tts_runtime_card()
+        self._set_xtts_runtime_repair_fetching(True)
+
+        def on_info(info: UpdateInfo) -> None:
+            self._call_in_ui(lambda update_info=info: self._open_xtts_runtime_repair_update(update_info, message))
+
+        def on_error(error: str) -> None:
+            self._call_in_ui(lambda err=str(error or "unknown error"): self._show_xtts_runtime_repair_fallback(message, err))
+
+        try:
+            fetch_latest_installer_info(
+                on_info,
+                on_error=on_error,
+                max_retries=2,
+                retry_delays=(2,),
+            )
+        except Exception as exc:
+            self._show_xtts_runtime_repair_fallback(message, str(exc))
+
+    def _open_xtts_runtime_repair_update(self, info: UpdateInfo, detail: str) -> None:
+        self._set_xtts_runtime_repair_fetching(False)
+        self._open_update_window(build_runtime_repair_update_info(info, self._ui_lang, detail))
+
+    def _show_xtts_runtime_repair_fallback(self, detail: str, error: str = "") -> None:
+        self._set_xtts_runtime_repair_fetching(False)
+        show_installer_download_fallback(self, self._ui_lang, detail=detail, error=error)
+
+    @staticmethod
+    def _is_xtts_runtime_error_message(message: str) -> bool:
+        text = str(message or "").casefold()
+        return any(
+            token in text
+            for token in (
+                "coqui tts import error",
+                "no module named",
+                "scikit-learn",
+                "sklearn",
+                "mp3/audio decoder",
+                "av.audio",
+                "tts library",
+                "tts.api",
+                "voice cloning runtime",
+                "xtts runtime",
+                "bundled runtime components",
+            )
+        )
 
     def _set_tts_runtime_button_action(self, button: QPushButton, action: Callable[[], None] | None) -> None:
         previous = self._tts_runtime_button_action
@@ -5949,6 +6204,8 @@ class SettingsWindow(QDialog):
         self._load_tts_voices_async()
 
     def _load_tts_voices_async(self) -> None:
+        if getattr(self, "_closing", False):
+            return
         engine = self._selected_tts_engine()
         combo = getattr(self, "_tts_voice_combo", None)
         if engine in self._tts_voices_loaded:
@@ -5969,7 +6226,7 @@ class SettingsWindow(QDialog):
         generation = self._tts_voice_load_generation
         self._tts_voices_loading = True
         self._tts_voices_loading_engine = engine
-        if combo is not None:
+        if self._qt_widget_is_alive(combo):
             combo.blockSignals(True)
             try:
                 combo.clear()
@@ -6018,6 +6275,16 @@ class SettingsWindow(QDialog):
         if engine == self._selected_tts_engine():
             self._apply_tts_voices(engine, entries)
 
+    @staticmethod
+    def _qt_widget_is_alive(widget: QWidget | None) -> bool:
+        if widget is None:
+            return False
+        try:
+            widget.objectName()
+        except (RuntimeError, ReferenceError):
+            return False
+        return True
+
     def _apply_tts_voices(self, engine: str, entries: list) -> None:
         preferred = self._tts_voice_var.value().strip()
         choices = [e[0] for e in entries] if entries else [self._copy("tts_voice_none")]
@@ -6039,13 +6306,18 @@ class SettingsWindow(QDialog):
         self._tts_voice_display_to_id.update(display_to_id)
         self._tts_voice_var.set(selected_display)
         combo = getattr(self, "_tts_voice_combo", None)
-        if combo is None:
+        if not self._qt_widget_is_alive(combo):
+            if combo is getattr(self, "_tts_voice_combo", None):
+                self._tts_voice_combo = None
             return
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(choices)
-        combo.setCurrentText(selected_display)
-        combo.blockSignals(False)
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(choices)
+            combo.setCurrentText(selected_display)
+        finally:
+            if self._qt_widget_is_alive(combo):
+                combo.blockSignals(blocked)
 
     def _xtts_reference_preflight_error(self) -> str | None:
         first_reference = first_xtts_reference_audio_path()
@@ -6120,7 +6392,7 @@ class SettingsWindow(QDialog):
                     message = self._xtts_runtime_missing_message(require_api=True)
                     logger.warning("XTTS test blocked: Coqui TTS runtime is not importable")
                     self.tts_test_finished.emit(generation, False, message)
-                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                    self._open_xtts_runtime_repair(message)
                     return
                 if not xtts_models_ready():
                     message = self._copy("xtts_model_missing")
@@ -6128,7 +6400,7 @@ class SettingsWindow(QDialog):
                     self._refresh_xtts_options_visibility()
                     self._refresh_tts_runtime_card()
                     self.tts_test_finished.emit(generation, False, message)
-                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                    self._on_download_xtts_models()
                     return
                 reference_error = self._xtts_reference_preflight_error()
                 if reference_error:
@@ -6137,10 +6409,20 @@ class SettingsWindow(QDialog):
                     self.tts_test_finished.emit(generation, False, message)
                     QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
                     return
+            (
+                output_device,
+                output_device_name,
+                prefer_virtual_output,
+                monitor_output,
+            ) = self._selected_tts_output_route()
             self._tts_test_manager = TTSManager(
                 engine_name=engine,
                 cache_enabled=False,
                 allow_fallback=False,
+                output_device=output_device,
+                output_device_name=output_device_name,
+                prefer_virtual_output=prefer_virtual_output,
+                monitor_output=monitor_output,
                 sbv2_device=self._tts_device_codes.get(self._tts_device_var.value(), "cpu"),
                 sbv2_bert_language=sbv2_bert_language,
                 engine_config=self._current_tts_engine_config(engine),
@@ -6153,6 +6435,12 @@ class SettingsWindow(QDialog):
                     sbv2_bert_language,
                 )
                 self.tts_test_finished.emit(generation, False, message)
+                if engine == "xtts":
+                    status = xtts_runtime_status(require_api=True)
+                    if not status.ready:
+                        message = self._xtts_runtime_missing_message(require_api=True)
+                    self._open_xtts_runtime_repair(message)
+                    return
                 QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
                 return
             self._tts_test_manager.start()
@@ -6189,8 +6477,11 @@ class SettingsWindow(QDialog):
             if not accepted:
                 self.tts_test_finished.emit(generation, False, self._copy("tts_test_not_accepted"))
         except Exception as e:
+            message = str(e)
             logger.warning("TTS test failed: %s", e)
-            self.tts_test_finished.emit(generation, False, str(e))
+            self.tts_test_finished.emit(generation, False, message)
+            if engine == "xtts" and self._is_xtts_runtime_error_message(message):
+                self._open_xtts_runtime_repair(message)
 
     def _on_tts_stop(self) -> None:
         if self._tts_test_manager:
@@ -6228,11 +6519,18 @@ class SettingsWindow(QDialog):
             return
         self._tts_test_timeout_timer.stop()
         self._set_tts_testing(False)
+        manager_was_active = self._tts_test_manager is not None
         self._stop_tts_test_manager()
         if success:
             logger.info("TTS test finished successfully")
         else:
             logger.warning("TTS test finished without playback success: %s", message or "unknown error")
+            if (
+                manager_was_active
+                and self._selected_tts_engine() == "xtts"
+                and self._is_xtts_runtime_error_message(message)
+            ):
+                self._open_xtts_runtime_repair(message)
 
     def _stop_tts_test_manager(self) -> None:
         manager = self._tts_test_manager
@@ -6543,9 +6841,28 @@ class SettingsWindow(QDialog):
             backend_timeout_s = self._parse_float_range(self._backend_timeout_var.value(), self._copy("request_timeout"), 3.0, 120.0)
             backend_retries = int(self._parse_float_range(self._backend_retries_var.value(), self._copy("request_retries"), 0.0, 3.0))
             vad_threshold = self._parse_positive_float(self._vad_var.value(), self._copy("vad_seconds"))
-            chunk_interval_ms = self._parse_positive_int(self._chunk_interval_var.value(), self._copy("partial_interval"))
-            chunk_window_s = self._parse_positive_float(self._chunk_window_var.value(), self._copy("recognition_window"))
-            partial_hits = self._parse_positive_int(self._partial_hits_var.value(), self._copy("partial_hits"))
+            chunk_interval_ms = int(
+                self._parse_float_range(
+                    self._chunk_interval_var.value(),
+                    self._copy("partial_interval"),
+                    100.0,
+                    5000.0,
+                )
+            )
+            chunk_window_s = self._parse_float_range(
+                self._chunk_window_var.value(),
+                self._copy("recognition_window"),
+                0.25,
+                30.0,
+            )
+            partial_hits = int(
+                self._parse_float_range(
+                    self._partial_hits_var.value(),
+                    self._copy("partial_hits"),
+                    1.0,
+                    10.0,
+                )
+            )
             listen_self_suppress_seconds = self._parse_positive_float(self._listen_self_suppress_seconds_var.value(), self._copy("self_suppress_seconds"))
             listen_segment_duration_s = self._parse_positive_float(self._listen_segment_duration_var.value(), self._copy("segment_duration"))
             listen_tail_silence_s = self._parse_positive_float(self._listen_tail_silence_var.value(), self._copy("tail_silence"))
@@ -6630,18 +6947,16 @@ class SettingsWindow(QDialog):
         if isinstance(xtts_cfg, dict):
             xtts_cfg["device"] = self._selected_xtts_device()
             xtts_cfg["language"] = self._selected_xtts_language_code()
-        tts_cfg["output_to_vrchat"] = self._tts_output_to_vrchat_var.value()
-        if self._tts_output_to_vrchat_var.value():
-            resolved = resolve_output_device(
-                self._tts_virtual_device_id,
-                self._tts_virtual_device_name,
-                prefer_virtual=True,
-            ) or find_best_virtual_output_device()
-            if resolved is not None:
-                tts_cfg["output_device"], tts_cfg["output_device_name"] = resolved
-            else:
-                tts_cfg["output_device"] = None
-                tts_cfg["output_device_name"] = ""
+        (
+            output_device,
+            output_device_name,
+            output_to_vrchat,
+            _monitor_output,
+        ) = self._selected_tts_output_route()
+        tts_cfg["output_to_vrchat"] = output_to_vrchat
+        if output_to_vrchat:
+            tts_cfg["output_device"] = output_device
+            tts_cfg["output_device_name"] = output_device_name
         else:
             tts_cfg["output_device"] = None
             tts_cfg["output_device_name"] = ""
@@ -6779,6 +7094,13 @@ class SettingsWindow(QDialog):
         if self._tts_test_timeout_timer.isActive():
             self._tts_test_timeout_timer.stop()
         super().reject()
+
+    def done(self, result: int) -> None:
+        self._closing = True
+        self._tts_voice_load_generation += 1
+        self._tts_voices_loading = False
+        self._tts_voices_loading_engine = None
+        super().done(result)
 
     def _on_cancel(self) -> None:
         if callable(self._on_close):

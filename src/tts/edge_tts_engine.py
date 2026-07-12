@@ -9,11 +9,15 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import threading
 from typing import Optional
 
 from .base import BaseTTS, TTSVoice
 
 logger = logging.getLogger(__name__)
+
+_EDGE_VOICES_CACHE: tuple[TTSVoice, ...] | None = None
+_EDGE_VOICES_LOCK = threading.Lock()
 
 
 # Recommended voices for each language. Keep this list static so the settings
@@ -147,9 +151,12 @@ def _edge_retry_text(text: str) -> str:
 class EdgeTTS(BaseTTS):
     """Edge TTS engine using Microsoft Edge Read Aloud."""
 
+    max_concurrent_synthesis = 2
+
     def __init__(self):
         self._voices_cache: Optional[list[TTSVoice]] = None
         self._edge_tts = None
+        self._loop_local = threading.local()
         try:
             import edge_tts
 
@@ -157,55 +164,85 @@ class EdgeTTS(BaseTTS):
         except ImportError:
             logger.warning("edge-tts not installed, Edge TTS unavailable")
 
+    def _thread_event_loop(self) -> asyncio.AbstractEventLoop:
+        loop_local = getattr(self, "_loop_local", None)
+        if loop_local is None:
+            loop_local = threading.local()
+            self._loop_local = loop_local
+        loop = getattr(loop_local, "loop", None)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            loop_local.loop = loop
+        asyncio.set_event_loop(loop)
+        return loop
+
+    def close_thread_context(self) -> None:
+        loop_local = getattr(self, "_loop_local", None)
+        loop = getattr(loop_local, "loop", None) if loop_local is not None else None
+        if loop is not None and not loop.is_closed() and not loop.is_running():
+            loop.close()
+        if loop_local is not None and hasattr(loop_local, "loop"):
+            del loop_local.loop
+
     def is_available(self) -> bool:
         """Check if Edge TTS is available."""
         return self._edge_tts is not None
 
     def get_available_voices(self) -> list[TTSVoice]:
         """Get list of available voices from Edge TTS."""
+        global _EDGE_VOICES_CACHE
         if not self.is_available():
             return []
 
         if self._voices_cache is not None:
             return self._voices_cache
-
-        try:
-            # Run async function in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        with _EDGE_VOICES_LOCK:
+            if _EDGE_VOICES_CACHE is not None:
+                self._voices_cache = list(_EDGE_VOICES_CACHE)
+                return self._voices_cache
             try:
-                voices_data = loop.run_until_complete(self._edge_tts.list_voices())
-            finally:
-                loop.close()
+                # Run async function in sync context. The module-level lock
+                # coalesces concurrent settings/runtime lookups so only one
+                # network request and TLS handshake are paid per process.
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    voices_data = loop.run_until_complete(self._edge_tts.list_voices())
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
 
-            voices = []
-            for voice_data in voices_data:
-                # Extract language code (e.g., "zh-CN" from "zh-CN-XiaoxiaoNeural")
-                voice_id = voice_data["ShortName"]
-                locale = voice_data["Locale"]
-                language = locale.split("-")[0] if "-" in locale else locale
+                voices = []
+                for voice_data in voices_data:
+                    # Extract language code (e.g., "zh-CN" from "zh-CN-XiaoxiaoNeural")
+                    voice_id = voice_data["ShortName"]
+                    locale = voice_data["Locale"]
+                    language = locale.split("-")[0] if "-" in locale else locale
 
-                voices.append(
-                    TTSVoice(
-                        id=voice_id,
-                        name=voice_data["FriendlyName"],
-                        language=language,
-                        gender=voice_data["Gender"],
-                        locale=locale,
+                    voices.append(
+                        TTSVoice(
+                            id=voice_id,
+                            name=voice_data["FriendlyName"],
+                            language=language,
+                            gender=voice_data["Gender"],
+                            locale=locale,
+                        )
                     )
+
+                _EDGE_VOICES_CACHE = tuple(voices)
+                self._voices_cache = list(_EDGE_VOICES_CACHE)
+                logger.info("Loaded %d voices from Edge TTS", len(voices))
+                return self._voices_cache
+
+            except Exception as exc:
+                logger.warning(
+                    "Failed to get Edge TTS voices from Microsoft; using bundled voice catalog: %s",
+                    exc,
                 )
-
-            self._voices_cache = voices
-            logger.info("Loaded %d voices from Edge TTS", len(voices))
-            return voices
-
-        except Exception as exc:
-            logger.warning(
-                "Failed to get Edge TTS voices from Microsoft; using bundled voice catalog: %s",
-                exc,
-            )
-            self._voices_cache = list(EDGE_FALLBACK_VOICES)
-            return self._voices_cache
+                # Keep the fallback instance-local so a later settings window
+                # can recover after a transient network failure.
+                self._voices_cache = list(EDGE_FALLBACK_VOICES)
+                return self._voices_cache
 
     def synthesize(
         self,
@@ -248,19 +285,15 @@ class EdgeTTS(BaseTTS):
 
         try:
             # Run async synthesis in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                audio_data = loop.run_until_complete(
-                    self._synthesize_with_retry_async(
-                        text.strip(),
-                        voice,
-                        rate_str,
-                        volume_str,
-                    )
+            loop = self._thread_event_loop()
+            audio_data = loop.run_until_complete(
+                self._synthesize_with_retry_async(
+                    text.strip(),
+                    voice,
+                    rate_str,
+                    volume_str,
                 )
-            finally:
-                loop.close()
+            )
 
             return audio_data
 
