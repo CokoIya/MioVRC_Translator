@@ -129,6 +129,7 @@ class AudioRecorder:
         self._frame_queue: queue.Queue[np.ndarray | None] = queue.Queue(
             maxsize=FRAME_QUEUE_MAXSIZE
         )
+        self._lifecycle_lock = threading.RLock()
         self._running = False
         self._stream: Optional[sd.InputStream] = None
         self._worker_thread: Optional[threading.Thread] = None
@@ -161,9 +162,17 @@ class AudioRecorder:
         self._denoiser.set_strength(strength)
 
     def start(self):
-        if self._running:
-            return
-        self._running = True
+        with self._lifecycle_lock:
+            if self._running:
+                return
+            previous_worker = self._worker_thread
+            if previous_worker is not None:
+                if previous_worker.is_alive():
+                    raise RuntimeError(
+                        "Previous audio processing thread is still stopping"
+                    )
+                self._worker_thread = None
+            self._running = True
         self.vad.reset()
         self._buffer.clear()
         self._pre_speech_buffer.clear()
@@ -189,7 +198,11 @@ class AudioRecorder:
             self._active_device_name = None
             self._clear_frame_queue()
             raise
-        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._worker_thread = threading.Thread(
+            target=self._worker_main,
+            daemon=True,
+            name="audio-recorder-worker",
+        )
         self._worker_thread.start()
         logger.info(
             "AudioRecorder started (input_device=%s active_device=%s capture_rate=%s target_rate=%s)",
@@ -479,27 +492,70 @@ class AudioRecorder:
         raise last_err
 
     def stop(self):
-        self._running = False
-        self._enqueue_frame(None)
-        if self._stream:
-            try:
-                self._stream.stop()
-            except Exception:
-                pass
-            try:
-                self._stream.close()
-            except Exception:
-                pass
+        with self._lifecycle_lock:
+            self._running = False
+            stream = self._stream
             self._stream = None
-        if self._worker_thread:
-            self._worker_thread.join(timeout=2)
-            self._worker_thread = None
+            worker = self._worker_thread
+        self._enqueue_frame(None)
+        if stream:
+            stopped = False
+            abort = getattr(stream, "abort", None)
+            if callable(abort):
+                try:
+                    abort()
+                    stopped = True
+                except Exception:
+                    pass
+            try:
+                if not stopped:
+                    stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+        worker_stopped = worker is None
+        if worker is not None:
+            if worker is not threading.current_thread():
+                worker.join(timeout=2)
+            worker_stopped = not worker.is_alive()
+            with self._lifecycle_lock:
+                if worker_stopped and self._worker_thread is worker:
+                    self._worker_thread = None
+            if not worker_stopped:
+                logger.warning(
+                    "Audio processing thread did not stop in time; retaining it until exit"
+                )
         self._clear_frame_queue()
+        if worker_stopped:
+            self._release_processing_state()
+        logger.info("AudioRecorder stopped (active_device=%s)", self._active_device_name)
+        self._active_device_name = None
+
+    def _worker_main(self) -> None:
+        try:
+            self._process_loop()
+        finally:
+            if not self._running:
+                self._release_processing_state()
+
+    def _release_processing_state(self) -> None:
+        """Drop queued/partial audio once no processing callback is using it."""
+
+        self._buffer.clear()
+        self._pre_speech_buffer.clear()
+        self._speech_samples = 0
+        self._was_in_speech = False
+        try:
+            self.vad.reset()
+        except Exception:
+            logger.debug("Failed to reset VAD during recorder shutdown", exc_info=True)
+        self._denoiser.reset()
         self._reset_streaming_resampler()
         if self._chunk_streamer is not None:
             self._chunk_streamer.reset()
-        logger.info("AudioRecorder stopped (active_device=%s)", self._active_device_name)
-        self._active_device_name = None
 
     def _sd_callback(self, indata, frames, time_info, status):
         del frames

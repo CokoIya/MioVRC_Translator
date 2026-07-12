@@ -8,9 +8,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -21,21 +20,21 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QGroupBox,
     QScrollArea,
-    QCheckBox,
 )
 
-from src.utils.i18n import tr as _base_tr
-from src.utils.ui_config import get_backend_model_options
+from src.utils.ui_config import (
+    get_backend_model_options,
+    normalize_backend,
+    normalize_qwen_translation_region,
+    qwen_translation_region_for_ui_language,
+)
 
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class APIModelsTab(QWidget):
+class APIModelsTab(LocalizedSettingsTab):
     """API & Models configuration tab."""
 
     config_changed = Signal()
@@ -48,12 +47,9 @@ class APIModelsTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
 
         self._init_ui()
-
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
 
     def _init_ui(self) -> None:
         """Initialize the API & Models UI."""
@@ -94,7 +90,7 @@ class APIModelsTab(QWidget):
 
         scroll.setWidget(container)
 
-        main_layout = QVBoxLayout(self)
+        main_layout = self._root_layout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
@@ -109,13 +105,14 @@ class APIModelsTab(QWidget):
         provider_layout.addWidget(provider_label)
 
         self._provider_combo = QComboBox()
-        self._provider_combo.addItems([
-            self._t("provider_openai"),
-            self._t("provider_anthropic"),
-            self._t("provider_deepseek"),
-            self._t("provider_gemini"),
-            self._t("provider_qwen"),
-        ])
+        for label_key, backend in (
+            ("provider_openai", "openai"),
+            ("provider_anthropic", "anthropic"),
+            ("provider_deepseek", "deepseek"),
+            ("provider_gemini", "gemini"),
+            ("provider_qwen", "qianwen"),
+        ):
+            self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         provider_layout.addWidget(self._provider_combo, 1)
 
@@ -279,7 +276,8 @@ class APIModelsTab(QWidget):
         region_layout.addWidget(region_label)
 
         self._qwen_region_combo = QComboBox()
-        self._qwen_region_combo.addItems([self._t("region_china"), self._t("region_international")])
+        self._qwen_region_combo.addItem(self._t("region_china"), "china_mainland")
+        self._qwen_region_combo.addItem(self._t("region_international"), "singapore")
         region_layout.addWidget(self._qwen_region_combo, 1)
 
         group_layout.addLayout(region_layout)
@@ -303,14 +301,7 @@ class APIModelsTab(QWidget):
         self._qwen_group.setVisible(index == 4)
 
         # Update model options
-        provider_ids = {
-            0: "openai",
-            1: "anthropic",
-            2: "deepseek",
-            3: "gemini",
-            4: "qianwen",
-        }
-        backend = provider_ids.get(index)
+        backend = str(self._provider_combo.itemData(index) or "")
         models = list(get_backend_model_options(backend)) if backend else []
 
         self._model_combo.clear()
@@ -330,17 +321,15 @@ class APIModelsTab(QWidget):
 
     def get_config(self) -> dict:
         """Get current configuration from UI."""
-        provider_map = {
-            0: "openai",
-            1: "anthropic",
-            2: "deepseek",
-            3: "gemini",
-            4: "qwen",
-        }
+        backend = normalize_backend(self._provider_combo.currentData())
+        selected_model = self._model_combo.currentText().strip()
+        selected_region = normalize_qwen_translation_region(
+            self._qwen_region_combo.currentData()
+        )
 
         config = {
             "translation": {
-                "backend": provider_map.get(self._provider_combo.currentIndex(), "openai"),
+                "backend": backend or "openai",
                 "openai": {
                     "api_key": self._openai_key_input.text().strip(),
                     "base_url": self._openai_url_input.text().strip(),
@@ -354,11 +343,14 @@ class APIModelsTab(QWidget):
                 "gemini": {
                     "api_key": self._gemini_key_input.text().strip(),
                 },
-                "qwen": {
+                "qianwen": {
                     "api_key": self._qwen_key_input.text().strip(),
+                    "region": selected_region,
                 },
             }
         }
+        if selected_model:
+            config["translation"].setdefault(backend, {})["model"] = selected_model
 
         return config
 
@@ -380,8 +372,14 @@ class APIModelsTab(QWidget):
         gemini_cfg = trans_cfg.get("gemini", {})
         self._gemini_key_input.setText(gemini_cfg.get("api_key", ""))
 
-        qwen_cfg = trans_cfg.get("qwen", {})
+        qwen_cfg = trans_cfg.get("qianwen", trans_cfg.get("qwen", {}))
         self._qwen_key_input.setText(qwen_cfg.get("api_key", ""))
+        region = normalize_qwen_translation_region(
+            qwen_cfg.get("region")
+            or qwen_translation_region_for_ui_language(self._ui_language)
+        )
+        region_index = self._qwen_region_combo.findData(region)
+        self._qwen_region_combo.setCurrentIndex(max(0, region_index))
 
         # Set provider
         backend = trans_cfg.get("backend", "openai")
@@ -390,6 +388,16 @@ class APIModelsTab(QWidget):
             "anthropic": 1,
             "deepseek": 2,
             "gemini": 3,
+            "qianwen": 4,
             "qwen": 4,
         }
-        self._provider_combo.setCurrentIndex(provider_map_reverse.get(backend, 0))
+        self._provider_combo.setCurrentIndex(provider_map_reverse.get(normalize_backend(backend), 0))
+        selected_backend = normalize_backend(backend)
+        backend_cfg = trans_cfg.get(selected_backend, {})
+        selected_model = str(backend_cfg.get("model", "") or "").strip()
+        if selected_model:
+            model_index = self._model_combo.findText(selected_model)
+            if model_index < 0:
+                self._model_combo.insertItem(0, selected_model)
+                model_index = 0
+            self._model_combo.setCurrentIndex(model_index)

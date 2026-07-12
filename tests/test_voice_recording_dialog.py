@@ -94,3 +94,31 @@ def test_voice_recording_dialog_import_rejects_silent_reference(qtbot, monkeypat
     assert dialog._recorded_audio is None
     assert warnings
     assert warnings[0][0] == "Import Not Usable"
+
+
+def test_voice_recording_dialog_reject_stops_native_capture(qtbot):
+    class Stream:
+        def __init__(self):
+            self.stop_calls = 0
+            self.close_calls = 0
+
+        def stop(self):
+            self.stop_calls += 1
+
+        def close(self):
+            self.close_calls += 1
+
+    dialog = VoiceRecordingDialog()
+    qtbot.addWidget(dialog)
+    stream = Stream()
+    dialog._stream = stream
+    dialog._recording = True
+    dialog._recording_timer.start(1000)
+
+    dialog.reject()
+
+    assert dialog._recording is False
+    assert dialog._recording_timer.isActive() is False
+    assert dialog._stream is None
+    assert stream.stop_calls == 1
+    assert stream.close_calls == 1

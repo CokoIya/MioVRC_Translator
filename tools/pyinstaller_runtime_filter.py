@@ -83,6 +83,12 @@ _UNUSED_PACKAGED_ASSETS = {
     "assets/icons/mio_1.png",
 }
 
+_SOUNDCARD_CFFI_DECLARATION_FILES = {
+    "coreaudio.py.h",
+    "mediafoundation.py.h",
+    "pulseaudio.py.h",
+}
+
 
 def _normalize_path(path: object) -> str:
     return str(path or "").replace("\\", "/").strip("/")
@@ -109,6 +115,17 @@ def _is_development_path(path: str) -> bool:
 
 def _is_torch_header_path(parts: Sequence[str]) -> bool:
     return len(parts) >= 2 and parts[0] == "torch" and parts[1] == "include"
+
+
+def _is_soundcard_cffi_declaration(parts: Sequence[str]) -> bool:
+    # SoundCard loads these declarations with ``open(..., 'rt')`` while its
+    # platform backend is imported.  They look like development headers, but
+    # are runtime data and therefore must remain next to the packaged module.
+    return (
+        len(parts) == 2
+        and parts[0] == "soundcard"
+        and parts[1] in _SOUNDCARD_CFFI_DECLARATION_FILES
+    )
 
 
 def _is_qt_debug_or_devtools_resource(parts: Sequence[str]) -> bool:
@@ -189,6 +206,9 @@ def should_keep_runtime_entry(dest_name: str, source_name: str = "") -> bool:
         return False
     if _is_unneeded_qt_translation(parts):
         return False
+
+    if _is_soundcard_cffi_declaration(parts):
+        return True
 
     for path in (dest, source):
         if _has_development_suffix(path):

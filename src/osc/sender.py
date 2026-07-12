@@ -17,6 +17,7 @@ CHATBOX_DYNAMIC_INTERVAL_BASE_S = 0.55
 CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND = 180.0
 CHATBOX_DYNAMIC_INTERVAL_MAX_S = 1.5
 SEND_QUEUE_MAXSIZE = 32
+MAX_AVATAR_STATE_ENTRIES = 256
 logger = logging.getLogger(__name__)
 
 
@@ -56,12 +57,18 @@ class VRCOSCSender:
         self._avatar_state: dict[str, object] = {}
         self._chatbox_generation = 0
         self._worker: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._last_error = ""
         self._closed = False
         self._start_worker()
 
     def _start_worker(self) -> None:
-        self._worker = threading.Thread(target=self._send_loop, daemon=True)
+        self._stop_event.clear()
+        self._worker = threading.Thread(
+            target=self._send_loop,
+            daemon=True,
+            name="vrc-osc-sender",
+        )
         self._worker.start()
 
     def _ensure_worker_running(self) -> bool:
@@ -106,9 +113,10 @@ class VRCOSCSender:
         return max(self._min_send_interval_s, dynamic)
 
     def _send_loop(self) -> None:
+        stop_event = getattr(self, "_stop_event", None)
         while True:
             payload = self._queue.get()
-            if payload is None:
+            if payload is None or (stop_event is not None and stop_event.is_set()):
                 return
 
             dequeued_at = time.monotonic()
@@ -126,10 +134,18 @@ class VRCOSCSender:
                     wait_s = min_interval_s - (dequeued_at - self._last_sent_at)
                     if wait_s > 0:
                         rate_wait_s = wait_s
-                        time.sleep(wait_s)
+                        if stop_event is not None:
+                            if stop_event.wait(wait_s):
+                                return
+                        else:
+                            time.sleep(wait_s)
                     with self._state_lock:
-                        if payload.generation != self._chatbox_generation:
+                        if self._closed or payload.generation != self._chatbox_generation:
                             continue
+
+                with self._state_lock:
+                    if self._closed:
+                        return
 
                 send_started_at = time.monotonic()
                 self._client.send_message(payload.address, list(payload.arguments))
@@ -356,7 +372,11 @@ class VRCOSCSender:
         )
         if queued:
             with self._state_lock:
+                self._avatar_state.pop(param_name, None)
                 self._avatar_state[param_name] = value
+                while len(self._avatar_state) > MAX_AVATAR_STATE_ENTRIES:
+                    oldest = next(iter(self._avatar_state))
+                    self._avatar_state.pop(oldest, None)
         return queued
 
     def send_avatar_bool(self, name: str, value: bool, *, force: bool = False) -> bool:
@@ -375,9 +395,39 @@ class VRCOSCSender:
             if self._closed:
                 return
             self._closed = True
+        stop_event = getattr(self, "_stop_event", None)
+        if stop_event is not None:
+            stop_event.set()
         worker = self._worker
         if worker is not None and worker.is_alive():
             self.clear_pending_chatbox()
             self._enqueue_payload(None)
             worker.join(timeout=1.0)
+            if worker.is_alive():
+                logger.warning("OSC sender worker did not stop within the shutdown timeout")
         self._worker = None
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        with self._state_lock:
+            self._avatar_state.clear()
+        self._close_client()
+
+    def _close_client(self) -> None:
+        client = getattr(self, "_client", None)
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+                return
+            except Exception:
+                logger.debug("Failed to close OSC client", exc_info=True)
+        sock = getattr(client, "_sock", None)
+        close_socket = getattr(sock, "close", None)
+        if callable(close_socket):
+            try:
+                close_socket()
+            except Exception:
+                logger.debug("Failed to close OSC UDP socket", exc_info=True)

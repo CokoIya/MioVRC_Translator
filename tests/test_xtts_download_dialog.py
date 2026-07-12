@@ -3,6 +3,8 @@ from __future__ import annotations
 from src.asr.hf_model_downloader import DownloadProgress, DownloadState
 from src.updater.update_checker import UpdateInfo
 from src.ui_qt import xtts_download_dialog
+from src.ui_qt.installer_repair import build_runtime_repair_update_info
+from src.ui_qt.xtts_runtime_localization import localized_xtts_runtime_components
 
 
 def test_xtts_download_dialog_uses_shared_progress_widget(qtbot, monkeypatch):
@@ -37,8 +39,9 @@ def test_xtts_download_dialog_uses_shared_progress_widget(qtbot, monkeypatch):
     dialog = xtts_download_dialog.XTTSDownloadDialog()
     qtbot.addWidget(dialog)
 
-    assert dialog.maximumWidth() == 500
     assert dialog.minimumWidth() == 500
+    assert dialog.width() >= 500
+    assert dialog.maximumWidth() > dialog.minimumWidth()
     assert dialog._progress_widget._downloader is dialog._downloader
     assert dialog.windowTitle() == "Download Voice Cloning Model"
 
@@ -86,7 +89,8 @@ def test_xtts_download_dialog_surfaces_downloader_errors(qtbot, monkeypatch):
     dialog._auto_start()
 
     assert dialog._progress_widget._retry_btn.isHidden() is False
-    assert "404 Client Error" in dialog._progress_widget._speed_label.text()
+    assert dialog._progress_widget._speed_label.text() == "Download Failed"
+    assert "404 Client Error" not in dialog._progress_widget._speed_label.text()
 
 
 def test_xtts_download_dialog_offers_full_installer_when_runtime_component_missing(qtbot, monkeypatch):
@@ -254,4 +258,81 @@ def test_xtts_download_dialog_requires_api_runtime_preflight(qtbot, monkeypatch)
     assert requested == [{"require_api": True}]
     assert not dialog._release_btn.isHidden()
     assert not dialog._close_btn.isHidden()
-    assert "scikit-learn runtime" in dialog._runtime_label.text()
+    assert xtts_download_dialog.tr(
+        dialog._ui_lang, "xtts_runtime_component_sklearn"
+    ) in dialog._runtime_label.text()
+
+
+def test_xtts_runtime_components_are_localized(qtbot, monkeypatch):
+    class FakeDownloader:
+        state = DownloadState.IDLE
+        progress = DownloadProgress()
+
+        def add_listener(self, _cb):
+            pass
+
+        def cancel(self):
+            pass
+
+    monkeypatch.setattr(xtts_download_dialog, "XTTSDownloader", FakeDownloader)
+    monkeypatch.setattr(xtts_download_dialog, "xtts_models_ready", lambda: False)
+    monkeypatch.setattr(
+        xtts_download_dialog,
+        "xtts_runtime_status",
+        lambda **_kwargs: type(
+            "Status",
+            (),
+            {
+                "ready": False,
+                "missing_modules": ("av", "pypinyin"),
+                "missing_component_names": (),
+                "import_error": None,
+            },
+        )(),
+    )
+    monkeypatch.setattr(xtts_download_dialog.QTimer, "singleShot", lambda _ms, _cb: None)
+
+    dialog = xtts_download_dialog.XTTSDownloadDialog(ui_lang="zh-CN")
+    qtbot.addWidget(dialog)
+
+    assert "MP3/音频解码组件" in dialog._runtime_label.text()
+    assert "中文文本处理组件" in dialog._runtime_label.text()
+    assert "MP3/audio decoder runtime" not in dialog._runtime_label.text()
+
+
+def test_xtts_runtime_import_error_details_are_not_exposed_to_users():
+    status = type(
+        "Status",
+        (),
+        {
+            "missing_modules": (),
+            "missing_component_names": (
+                "Coqui TTS import error: No module named 'transformers'",
+            ),
+            "import_error": "No module named 'transformers'",
+        },
+    )()
+
+    message = localized_xtts_runtime_components(status, "ru")
+
+    assert message == xtts_download_dialog.tr("ru", "xtts_runtime_component_coqui")
+    assert "No module named" not in message
+
+
+def test_runtime_repair_notes_do_not_mix_languages():
+    info = UpdateInfo(
+        version="v9.9.9",
+        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        sha256="a" * 64,
+    )
+
+    repaired = build_runtime_repair_update_info(
+        info,
+        "zh-CN",
+        "缺少 MP3/音频解码组件。",
+    )
+
+    assert "缺少 MP3/音频解码组件" in repaired.localized_notes["zh-cn"]
+    assert "缺少 MP3/音频解码组件" not in repaired.localized_notes["en"]
+    assert "Detected issue" in repaired.localized_notes["en"]
+    assert "Обнаруженная проблема" in repaired.localized_notes["ru"]

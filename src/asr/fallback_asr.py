@@ -51,6 +51,7 @@ class FallbackASR(ASRProvider):
         self.auto_fallback = bool(auto_fallback)
         self._using_fallback = False
         self._lock = threading.RLock()
+        self._closed = False
 
     @property
     def provider_id(self) -> str:
@@ -70,12 +71,16 @@ class FallbackASR(ASRProvider):
 
     @property
     def supports_partial(self) -> bool:
+        if self._closed:
+            return False
         if self._using_fallback:
             return bool(getattr(self._ensure_fallback(), "supports_partial", True))
         return bool(getattr(self.primary, "supports_partial", True))
 
     @property
     def max_concurrent_transcriptions(self) -> int:
+        if self._closed:
+            return 1
         active = self._ensure_fallback() if self._using_fallback else self.primary
         try:
             return max(
@@ -87,6 +92,8 @@ class FallbackASR(ASRProvider):
 
     @property
     def is_loaded(self) -> bool:
+        if self._closed:
+            return False
         active = self._ensure_fallback() if self._using_fallback else self.primary
         return bool(getattr(active, "is_loaded", True))
 
@@ -101,11 +108,17 @@ class FallbackASR(ASRProvider):
         return str(getattr(active, "runtime_device", getattr(active, "device", "")))
 
     def _ensure_fallback(self) -> ASRProvider:
-        fallback = self._fallback
-        if fallback is None:
-            fallback = self._fallback_factory()
-            self._fallback = fallback
-        return fallback
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Fallback ASR provider is closed")
+            fallback = self._fallback
+            if fallback is None:
+                factory = self._fallback_factory
+                if factory is None:
+                    raise RuntimeError("Fallback ASR factory is unavailable")
+                fallback = factory()
+                self._fallback = fallback
+            return fallback
 
     def _fallback_allowed(self, exc: BaseException) -> bool:
         return self.auto_fallback and isinstance(exc, _FALLBACK_ERRORS)
@@ -145,6 +158,8 @@ class FallbackASR(ASRProvider):
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Fallback ASR provider is closed")
             try:
                 self.primary.load(progress_callback=progress_callback)
             except _FALLBACK_ERRORS as exc:
@@ -158,6 +173,8 @@ class FallbackASR(ASRProvider):
         is_final: bool = True,
     ) -> str:
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Fallback ASR provider is closed")
             active = self._ensure_fallback() if self._using_fallback else self.primary
         try:
             return active.transcribe(
@@ -180,13 +197,25 @@ class FallbackASR(ASRProvider):
             raise
 
     def close(self) -> None:
-        self.primary.close()
-        if self._fallback is not None:
-            self._fallback.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._fallback_factory = None
+            providers = [self.primary]
+            if self._fallback is not None and self._fallback is not self.primary:
+                providers.append(self._fallback)
+        for provider in providers:
+            try:
+                provider.close()
+            except Exception:
+                logger.debug("Failed to close nested ASR provider", exc_info=True)
 
     def set_capture_enabled(self, enabled: bool) -> None:
         """Forward optional capture control to browser-owned ASR providers."""
 
+        if self._closed:
+            return
         providers = [self.primary]
         if self._fallback is not None:
             providers.append(self._fallback)

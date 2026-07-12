@@ -5,6 +5,8 @@ from typing import Callable, Mapping
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
+from src.utils.localization import format_locale_number, normalize_ui_language
+
 
 _COPY = {
     "zh-CN": {
@@ -21,6 +23,7 @@ _COPY = {
         "segments": "已切出的句子",
         "rate": "声音采样速度",
         "error": "最近的问题",
+        "error_detected": "音频捕获发生错误。技术详情已写入日志。",
         "close": "关闭",
         "yes": "是",
         "no": "否",
@@ -42,6 +45,7 @@ _COPY = {
         "segments": "Segments",
         "rate": "Sample Rate",
         "error": "Last Error",
+        "error_detected": "Audio capture failed. Technical details were written to the log.",
         "close": "Close",
         "yes": "Yes",
         "no": "No",
@@ -63,6 +67,7 @@ _COPY = {
         "segments": "切り出した文",
         "rate": "サンプルレート",
         "error": "直近の問題",
+        "error_detected": "音声取得エラーが発生しました。技術的な詳細はログに記録されています。",
         "close": "閉じる",
         "yes": "はい",
         "no": "いいえ",
@@ -84,6 +89,7 @@ _COPY = {
         "segments": "Сегменты",
         "rate": "Частота",
         "error": "Последняя ошибка",
+        "error_detected": "Произошла ошибка захвата звука. Технические сведения записаны в журнал.",
         "close": "Закрыть",
         "yes": "Да",
         "no": "Нет",
@@ -105,6 +111,7 @@ _COPY = {
         "segments": "세그먼트",
         "rate": "샘플 레이트",
         "error": "최근 오류",
+        "error_detected": "오디오 캡처 오류가 발생했습니다. 기술 세부 정보는 로그에 기록되었습니다.",
         "close": "닫기",
         "yes": "예",
         "no": "아니요",
@@ -116,19 +123,7 @@ _COPY = {
 
 
 def _lang(ui_language: str) -> str:
-    normalized = str(ui_language or "").strip()
-    if normalized in _COPY:
-        return normalized
-    lowered = normalized.lower()
-    if lowered.startswith("zh"):
-        return "zh-CN"
-    if lowered.startswith("ja") or lowered.startswith("jp"):
-        return "ja"
-    if lowered.startswith("ru"):
-        return "ru"
-    if lowered.startswith("ko"):
-        return "ko"
-    return "en"
+    return normalize_ui_language(ui_language, default="en")
 
 
 def _to_float(value: object, default: float = 0.0) -> float:
@@ -138,9 +133,9 @@ def _to_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-def _fmt_float(value: object, digits: int = 4) -> str:
+def _fmt_float(value: object, language: str = "en", digits: int = 4) -> str:
     try:
-        return f"{float(value):.{digits}f}"
+        return format_locale_number(float(value), language, decimals=digits)
     except (TypeError, ValueError):
         return "—"
 
@@ -157,8 +152,11 @@ class AudioDiagnosticsWindow(QDialog):
         super().__init__(parent)
         self._target = "vrc_listen" if target == "vrc_listen" else "mic"
         self._snapshot_provider = snapshot_provider
-        self._copy = _COPY[_lang(ui_language)]
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
         self._labels: dict[str, QLabel] = {}
+        self._name_labels: dict[str, QLabel] = {}
+        self._meter_labels: dict[str, QLabel] = {}
         self._rms_bar: QProgressBar | None = None
         self._peak_bar: QProgressBar | None = None
         self._timer = QTimer(self)
@@ -176,14 +174,14 @@ class AudioDiagnosticsWindow(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        title = QLabel(self.windowTitle())
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        self._title_label = QLabel(self.windowTitle())
+        self._title_label.setObjectName("sectionTitle")
+        layout.addWidget(self._title_label)
 
-        subtitle = QLabel(self._copy["subtitle"])
-        subtitle.setObjectName("hintLabel")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        self._subtitle_label = QLabel(self._copy["subtitle"])
+        self._subtitle_label.setObjectName("hintLabel")
+        self._subtitle_label.setWordWrap(True)
+        layout.addWidget(self._subtitle_label)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -194,27 +192,30 @@ class AudioDiagnosticsWindow(QDialog):
         for key in ("running", "device", "vad", "threshold", "frames", "segments", "rate", "error"):
             name = QLabel(self._copy[key])
             name.setObjectName("fieldLabel")
+            name.setWordWrap(True)
             value = QLabel(self._copy["none"])
             value.setObjectName("hintLabel")
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self._labels[key] = value
+            self._name_labels[key] = name
             grid.addWidget(name, row, 0)
             grid.addWidget(value, row, 1)
             row += 1
 
-        self._rms_bar = self._meter_row(layout, self._copy["rms"])
-        self._peak_bar = self._meter_row(layout, self._copy["peak"])
+        self._rms_bar = self._meter_row(layout, "rms")
+        self._peak_bar = self._meter_row(layout, "peak")
 
         actions = QHBoxLayout()
         actions.addStretch(1)
-        close_btn = QPushButton(self._copy["close"])
-        close_btn.clicked.connect(self.close)
-        actions.addWidget(close_btn)
+        self._close_btn = QPushButton(self._copy["close"])
+        self._close_btn.clicked.connect(self.close)
+        actions.addWidget(self._close_btn)
         layout.addLayout(actions)
 
-    def _meter_row(self, layout: QVBoxLayout, title: str) -> QProgressBar:
-        label = QLabel(title)
+    def _meter_row(self, layout: QVBoxLayout, key: str) -> QProgressBar:
+        label = QLabel(self._copy[key])
         label.setObjectName("fieldLabel")
+        self._meter_labels[key] = label
         layout.addWidget(label)
         bar = QProgressBar()
         bar.setRange(0, 100)
@@ -233,18 +234,55 @@ class AudioDiagnosticsWindow(QDialog):
         device = snapshot.get("active_device") or snapshot.get("active_output_device") or snapshot.get("configured_device") or none
         self._labels["device"].setText(str(device or none))
         self._labels["vad"].setText(self._copy["speech"] if bool(snapshot.get("vad_in_speech")) else self._copy["silence"])
-        self._labels["threshold"].setText(_fmt_float(snapshot.get("vad_min_rms")))
-        self._labels["frames"].setText(str(snapshot.get("frames_processed") or snapshot.get("total_frames") or 0))
-        self._labels["segments"].setText(str(snapshot.get("segments_emitted") or 0))
+        self._labels["threshold"].setText(_fmt_float(snapshot.get("vad_min_rms"), self._ui_lang))
+        frames = int(snapshot.get("frames_processed") or snapshot.get("total_frames") or 0)
+        segments = int(snapshot.get("segments_emitted") or 0)
+        self._labels["frames"].setText(format_locale_number(frames, self._ui_lang, grouping=True))
+        self._labels["segments"].setText(format_locale_number(segments, self._ui_lang, grouping=True))
         rate = snapshot.get("capture_rate") or snapshot.get("target_rate") or none
-        self._labels["rate"].setText(str(rate or none))
-        self._labels["error"].setText(str(snapshot.get("last_error") or none))
+        try:
+            rendered_rate = format_locale_number(int(rate), self._ui_lang, grouping=True)
+        except (TypeError, ValueError):
+            rendered_rate = str(rate or none)
+        self._labels["rate"].setText(rendered_rate)
+        self._labels["error"].setText(
+            self._copy["error_detected"] if snapshot.get("last_error") else none
+        )
 
         rms = _to_float(snapshot.get("last_frame_rms") or snapshot.get("last_prepared_rms") or snapshot.get("last_rms") or 0.0)
         peak = _to_float(snapshot.get("peak_frame_rms"), rms)
         if self._rms_bar is not None:
             self._rms_bar.setValue(min(int(rms * 2500), 100))
-            self._rms_bar.setFormat(_fmt_float(rms))
+            self._rms_bar.setFormat(_fmt_float(rms, self._ui_lang))
         if self._peak_bar is not None:
             self._peak_bar.setValue(min(int(peak * 2500), 100))
-            self._peak_bar.setFormat(_fmt_float(peak))
+            self._peak_bar.setFormat(_fmt_float(peak, self._ui_lang))
+
+    def update_language(self, ui_language: str) -> None:
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
+        title_key = "title_listen" if self._target == "vrc_listen" else "title_mic"
+        self.setWindowTitle(self._copy[title_key])
+        self._title_label.setText(self._copy[title_key])
+        self._subtitle_label.setText(self._copy["subtitle"])
+        for key, label in self._name_labels.items():
+            label.setText(self._copy[key])
+        for key, label in self._meter_labels.items():
+            label.setText(self._copy[key])
+        self._close_btn.setText(self._copy["close"])
+        self.refresh()
+        self.adjustSize()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        if not self._timer.isActive():
+            self.refresh()
+            self._timer.start(250)
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._timer.stop()
+        super().closeEvent(event)

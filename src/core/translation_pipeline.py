@@ -28,7 +28,11 @@ class TranslationPipeline(QObject):
         self._config = config
         self._translator = None
         self._busy = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._closed = False
+        self._generation = 0
+        self._active_operations = 0
+        self._threads: set[threading.Thread] = set()
 
     def set_output_format(self, output_format: str) -> None:
         trans_cfg = self._config.setdefault("translation", {})
@@ -45,16 +49,30 @@ class TranslationPipeline(QObject):
         tgt_lang = str(trans_cfg.get("target_language") or "ja")
         if src_lang == tgt_lang or self.output_format() == "original_only":
             return text
-        if self._translator is None:
-            self._translator = create_translator(self._config)
-        return self._translator.translate(text, src_lang, tgt_lang, context_source="manual")
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Translation pipeline is closed")
+            self._active_operations += 1
+            try:
+                if self._translator is None:
+                    self._translator = create_translator(self._config)
+                translator = self._translator
+            except BaseException:
+                self._active_operations = max(0, self._active_operations - 1)
+                raise
+        try:
+            return translator.translate(text, src_lang, tgt_lang, context_source="manual")
+        finally:
+            self._finish_operation()
 
     def translate_async(self, text: str) -> None:
         with self._lock:
-            if self._busy:
+            if self._closed or self._busy:
                 return
             self._busy = True
-        self.busy_changed.emit(True)
+            self._generation += 1
+            generation = self._generation
+        self._emit_if_current(generation, self.busy_changed, True)
 
         def run() -> None:
             try:
@@ -67,15 +85,76 @@ class TranslationPipeline(QObject):
                     ui_language=self._config.get("ui", {}).get("language", "zh-CN"),
                 )
                 logger.warning("Manual translation failed: %s", exc)
-                self.error.emit(friendly.inline_message)
+                self._emit_if_current(generation, self.error, friendly.inline_message)
             else:
-                self.translation_ready.emit(result, text)
+                self._emit_if_current(generation, self.translation_ready, result, text)
             finally:
                 with self._lock:
-                    self._busy = False
-                self.busy_changed.emit(False)
+                    current = threading.current_thread()
+                    self._threads.discard(current)
+                    should_emit = not self._closed and generation == self._generation
+                    if should_emit:
+                        self._busy = False
+                if should_emit:
+                    self._emit_if_current(generation, self.busy_changed, False)
 
-        threading.Thread(target=run, daemon=True, name="qt-manual-translate").start()
+        thread = threading.Thread(target=run, daemon=True, name="qt-manual-translate")
+        with self._lock:
+            if self._closed or generation != self._generation:
+                self._busy = False
+                return
+            self._threads.add(thread)
+        try:
+            thread.start()
+        except BaseException:
+            with self._lock:
+                self._threads.discard(thread)
+                if generation == self._generation:
+                    self._busy = False
+            self._emit_if_current(generation, self.busy_changed, False)
+            raise
+
+    def _emit_if_current(self, generation: int, signal, *args: object) -> bool:
+        with self._lock:
+            if self._closed or generation != self._generation:
+                return False
+            try:
+                signal.emit(*args)
+                return True
+            except RuntimeError:
+                logger.debug("Suppressed signal delivery from a disposed translation pipeline")
+                return False
+
+    def _finish_operation(self) -> None:
+        close_now = None
+        with self._lock:
+            self._active_operations = max(0, self._active_operations - 1)
+            if self._closed and self._active_operations == 0:
+                close_now = self._translator
+                self._translator = None
+        self._close_translator(close_now)
+
+    @staticmethod
+    def _close_translator(translator) -> None:
+        close = getattr(translator, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.debug("Failed to close translation pipeline client", exc_info=True)
+
+    def close(self) -> None:
+        close_now = None
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._generation += 1
+            self._busy = False
+            if self._active_operations == 0:
+                close_now = self._translator
+                self._translator = None
+        self._close_translator(close_now)
 
     def format_output(self, translated: str, original: str, translated_2: str = "") -> str:
         fmt = normalize_output_format(self._config.get("translation", {}).get("output_format"))

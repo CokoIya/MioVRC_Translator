@@ -1,8 +1,8 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
-#define AppVersion "v1.3.8"
-#define AppNumericVersion "1.3.8.0"
+#define AppVersion "v1.3.8.1"
+#define AppNumericVersion "1.3.8.1"
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
@@ -39,7 +39,11 @@ AppMutex=MioTranslatorRuntimeMutex
 ; ウィザードの外観設定
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
-ShowLanguageDialog=yes
+; Select the current Windows display language without requiring a prompt.
+; Existing installations retain the language used by their previous setup.
+LanguageDetectionMethod=uilanguage
+ShowLanguageDialog=no
+UsePreviousLanguage=yes
 VersionInfoCompany={#AppPublisher}
 VersionInfoCopyright=Copyright (C) 2026 {#AppPublisher}
 VersionInfoDescription={#AppName} Installer
@@ -56,11 +60,11 @@ SignedUninstaller=yes
 #endif
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "zhcn"; MessagesFile: "compiler:Default.isl,installer\i18n\ChineseSimplified.isl"
-Name: "japanese"; MessagesFile: "compiler:Default.isl,installer\i18n\Japanese.isl"
-Name: "russian"; MessagesFile: "compiler:Default.isl,installer\i18n\Russian.isl"
-Name: "korean"; MessagesFile: "compiler:Default.isl,installer\i18n\Korean.isl"
+Name: "english"; MessagesFile: "installer\i18n\English.isl"
+Name: "zhcn"; MessagesFile: "installer\i18n\ChineseSimplified.isl"
+Name: "japanese"; MessagesFile: "installer\i18n\Japanese.isl"
+Name: "russian"; MessagesFile: "installer\i18n\Russian.isl"
+Name: "korean"; MessagesFile: "installer\i18n\Korean.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalTasks}"
@@ -87,9 +91,6 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
-
-[CustomMessages]
-AdditionalTasks=Additional tasks:
 
 [Code]
 var
@@ -236,7 +237,7 @@ begin
       JsonTemplate := '{' + #13#10 +
                      '  "ui": {' + #13#10 +
                      '    "language": "' + LanguageCode + '",' + #13#10 +
-                     '    "language_source": "manual",' + #13#10 +
+                     '    "language_source": "auto",' + #13#10 +
                      '    "theme": "dark"' + #13#10 +
                      '  }' + #13#10 +
                      '}';

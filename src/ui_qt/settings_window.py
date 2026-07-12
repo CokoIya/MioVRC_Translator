@@ -12,6 +12,7 @@ import os
 import queue
 import tempfile
 import threading
+import weakref
 from pathlib import Path
 from typing import Callable
 
@@ -74,10 +75,10 @@ from src.tts.api_tts_config import (
     resolve_tts_api_config,
 )
 from src.tts.factory import create_tts_engine
+from src.tts.error_utils import is_tts_authentication_error, is_tts_network_error
 from src.tts.manager import TTSManager, find_best_virtual_output_device, resolve_output_device
 from src.tts.base import TTSVoice
 from src.tts.xtts_engine import (
-    XTTS_REFERENCE_AUDIO_NAME_FILTER,
     XTTS_SUPPORTED_LANGUAGES,
     first_usable_xtts_reference_audio_path,
     first_xtts_reference_audio_path,
@@ -89,7 +90,6 @@ from src.tts.xtts_engine import (
     safe_xtts_voice_name,
     validate_xtts_reference_audio_file,
     xtts_language_from_target_language,
-    xtts_reference_import_error_message,
     xtts_reference_audio_dir,
     xtts_runtime_status,
 )
@@ -103,6 +103,7 @@ from src.tts.style_bert_vits2_models import (
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.installer_repair import build_runtime_repair_update_info, show_installer_download_fallback
 from src.ui_qt.pytorch_cuda_install_dialog import PytorchCudaInstallDialog
+from src.ui_qt.qt_localization import configure_file_dialog
 from src.ui_qt.styles import build_settings_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme_preference, resolve_theme, theme_tokens
 from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
@@ -155,6 +156,13 @@ from src.utils.ui_config import (
     normalize_ui_font_preference,
 )
 from src.utils.translation_config_validation import missing_required_translation_api_key
+from src.utils.localization import (
+    SUPPORTED_UI_LANGUAGES,
+    format_locale_number,
+    format_locale_percent,
+    normalize_ui_language,
+    translate_key_catalog,
+)
 from src.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
@@ -231,15 +239,64 @@ XTTS_LANGUAGE_OPTIONS: tuple[tuple[str, str], ...] = (
 XTTS_LANGUAGE_LABEL_TO_CODE = dict(XTTS_LANGUAGE_OPTIONS)
 XTTS_LANGUAGE_CODE_TO_LABEL = {code: label for label, code in XTTS_LANGUAGE_OPTIONS}
 XTTS_LANGUAGE_SUPPORTED_CODES = {"auto", *XTTS_SUPPORTED_LANGUAGES}
+XTTS_LANGUAGE_KEY_BY_CODE = {
+    "auto": "xtts_language_auto",
+    "en": "xtts_language_english",
+    "zh-cn": "xtts_language_chinese",
+    "ja": "xtts_language_japanese",
+    "ko": "xtts_language_korean",
+    "es": "xtts_language_spanish",
+    "fr": "xtts_language_french",
+    "de": "xtts_language_german",
+    "it": "xtts_language_italian",
+    "pt": "xtts_language_portuguese",
+    "pl": "xtts_language_polish",
+    "tr": "xtts_language_turkish",
+    "ru": "xtts_language_russian",
+    "nl": "xtts_language_dutch",
+    "cs": "xtts_language_czech",
+    "ar": "xtts_language_arabic",
+    "hu": "xtts_language_hungarian",
+    "hi": "xtts_language_hindi",
+}
+
+
+def xtts_language_options(ui_language: str | None) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (tr(ui_language, XTTS_LANGUAGE_KEY_BY_CODE[code]), code)
+        for _label, code in XTTS_LANGUAGE_OPTIONS
+    )
 
 SETTINGS_WINDOW_WIDTH = 1180
 SETTINGS_WINDOW_HEIGHT = 740
 SETTINGS_NAV_WIDTH = 250
+SETTINGS_NAV_MAX_WIDTH = 420
 SETTINGS_UPDATE_BUTTON_MIN_WIDTH = 136
 SETTINGS_UPDATE_BUTTON_PADDING = 46
 SETTINGS_HINT_WRAP = 640
+SETTINGS_UI_CALLBACK_QUEUE_MAXSIZE = 256
 TTS_TEST_TIMEOUT_MS = 60_000
 STYLE_BERT_TTS_TEST_TIMEOUT_MS = 240_000
+_NUMERIC_INPUT_VAR_NAMES = (
+    "_backend_timeout_var",
+    "_backend_retries_var",
+    "_vad_var",
+    "_chunk_interval_var",
+    "_chunk_window_var",
+    "_partial_hits_var",
+    "_vad_sensitivity_var",
+    "_vad_speech_ratio_var",
+    "_vad_activation_threshold_var",
+    "_vad_min_rms_var",
+    "_min_segment_var",
+    "_max_segment_var",
+    "_partial_min_speech_var",
+    "_listen_self_suppress_seconds_var",
+    "_listen_segment_duration_var",
+    "_listen_tail_silence_var",
+    "_listen_vad_min_rms_var",
+    "_osc_receive_port_var",
+)
 _BACKGROUND_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".webp"})
 _MAX_BACKGROUND_IMAGE_BYTES = 64 * 1024 * 1024
 _MAX_XTTS_RECORDED_AUDIO_BYTES = 256 * 1024 * 1024
@@ -422,7 +479,7 @@ def _tts_engine_label(engine: str, ui_language: str | None) -> str:
 
 TTS_PLACEHOLDER_VOICE = "(\u65e0\u53ef\u7528\u58f0\u97f3)"
 
-ROLEPLAY_PRESETS: dict[str, dict[str, str]] = {
+ROLEPLAY_PRESETS: dict[str, dict[str, object]] = {
     "custom": {
         "labels": {"zh-CN": "自定义", "en": "Custom", "ja": "カスタム", "ru": "Свое", "ko": "사용자 정의"},
         "persona_name": "",
@@ -512,6 +569,217 @@ ROLEPLAY_PRESETS: dict[str, dict[str, str]] = {
         "tone": "cool",
     },
 }
+
+
+# Preset model instructions remain canonical English in configuration so
+# changing the application language cannot change translation behavior.  The
+# editable settings fields use this separate display catalog and convert an
+# untouched preset back to its canonical value when saving.
+ROLEPLAY_PRESET_DISPLAY_TEXTS: dict[str, dict[str, dict[str, str]]] = {
+    "frieren": {
+        "persona_prompt": {
+            "zh-CN": "采用受芙莉莲启发的冷静、克制、略显疏离的表达方式。保持原意，措辞简洁，避免夸张情绪。",
+            "en": "Use a calm, understated, slightly aloof style inspired by Frieren. Preserve meaning, keep phrasing concise, and avoid exaggerated emotion.",
+            "ja": "フリーレンを思わせる、落ち着いて控えめで、やや淡泊な話し方にします。意味を保ち、簡潔に表現し、感情を誇張しないでください。",
+            "ru": "Используйте спокойный, сдержанный и слегка отстранённый стиль, вдохновлённый Фрирен. Сохраняйте смысл, пишите кратко и избегайте чрезмерных эмоций.",
+            "ko": "프리렌에서 영감을 받은 차분하고 절제되며 살짝 무심한 말투를 사용합니다. 의미를 유지하고 간결하게 표현하며 감정을 과장하지 마세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "冷静克制\n简短朴素的措辞\n仅在合适时使用含蓄的冷幽默\n不要过度表演",
+            "en": "Calm and restrained\nShort, plain wording\nSubtle dry humor only when it fits\nDo not overact",
+            "ja": "落ち着いて控えめ\n短く素朴な言い回し\n合う場面だけで控えめな乾いたユーモア\n大げさに演じない",
+            "ru": "Спокойно и сдержанно\nКороткие и простые формулировки\nТонкий сухой юмор только к месту\nБез переигрывания",
+            "ko": "차분하고 절제된 표현\n짧고 담백한 문장\n어울릴 때만 은근한 건조한 유머\n과장해서 연기하지 않기",
+        },
+    },
+    "violet_evergarden": {
+        "persona_prompt": {
+            "zh-CN": "采用受薇尔莉特·伊芙加登启发的正式、优雅、真挚的表达方式。以准确而典雅的措辞保持原意，并克制情绪。",
+            "en": "Use a formal, graceful, sincere style inspired by Violet Evergarden. Preserve meaning with precise, elegant wording and restrained emotion.",
+            "ja": "ヴァイオレット・エヴァーガーデンを思わせる、丁寧で優雅かつ誠実な話し方にします。正確で品のある表現を使い、感情は控えめにしてください。",
+            "ru": "Используйте формальный, изящный и искренний стиль, вдохновлённый Вайолет Эвергарден. Точно сохраняйте смысл, выбирайте элегантные формулировки и сдерживайте эмоции.",
+            "ko": "바이올렛 에버가든에서 영감을 받은 격식 있고 우아하며 진솔한 말투를 사용합니다. 정확하고 품위 있는 표현으로 의미를 유지하고 감정은 절제하세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "礼貌沉着\n如书信般优雅清晰\n真挚但不煽情\n除非原文需要，否则避免俚语",
+            "en": "Polite and composed\nElegant, letter-like clarity\nSincere but not dramatic\nAvoid slang unless required",
+            "ja": "礼儀正しく落ち着いた表現\n手紙のように優雅で明瞭\n誠実だが芝居がかりすぎない\n必要でなければ俗語を避ける",
+            "ru": "Вежливо и собранно\nЭлегантная ясность, как в письме\nИскренне, но без драматизма\nИзбегать сленга без необходимости",
+            "ko": "예의 바르고 침착한 표현\n편지처럼 우아하고 명확하게\n진솔하되 극적으로 만들지 않기\n필요하지 않으면 속어 피하기",
+        },
+    },
+    "artoria_pendragon": {
+        "persona_prompt": {
+            "zh-CN": "采用受阿尔托莉雅·潘德拉贡启发的庄重、骑士般、坚持原则的表达方式。忠实保留原意，语气坚定且尊重对方。",
+            "en": "Use a dignified, knightly, principled style inspired by Artoria Pendragon. Keep the translation loyal to the source, firm, and respectful.",
+            "ja": "アルトリア・ペンドラゴンを思わせる、威厳があり騎士らしく、信念を持った話し方にします。原文に忠実で、毅然としつつ礼節を保ってください。",
+            "ru": "Используйте достойный, рыцарский и принципиальный стиль, вдохновлённый Арторией Пендрагон. Сохраняйте верность исходному смыслу, твёрдость и уважение.",
+            "ko": "아르토리아 펜드래곤에서 영감을 받은 품위 있고 기사답고 원칙적인 말투를 사용합니다. 원문의 의미를 충실히 유지하며 단호하고 예의 있게 표현하세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "庄重直接\n尊重原则的措辞\n略带高贵感，但不傲慢\n不改变原意",
+            "en": "Dignified and direct\nRespectful, principled wording\nA little noble, never pompous\nKeep intent unchanged",
+            "ja": "威厳があり率直\n礼節と信念のある言葉選び\n少し高貴だが尊大にはしない\n意図を変えない",
+            "ru": "Достойно и прямо\nУважительные и принципиальные формулировки\nНемного благородства, без высокомерия\nНе менять намерение",
+            "ko": "품위 있고 직접적인 표현\n존중과 원칙이 담긴 어휘\n조금 고귀하되 거만하지 않게\n의도를 바꾸지 않기",
+        },
+    },
+    "marin_kitagawa": {
+        "persona_prompt": {
+            "zh-CN": "采用受喜多川海梦启发的开朗、友好、充满活力的表达方式。保持意思自然随和，带有热情，但不要凭空添加内容。",
+            "en": "Use a bright, friendly, energetic style inspired by Marin Kitagawa. Keep meaning natural and casual, with expressive warmth but no random additions.",
+            "ja": "喜多川海夢を思わせる、明るく親しみやすく元気な話し方にします。自然でカジュアルに意味を保ち、温かさを出しつつ勝手な内容は加えないでください。",
+            "ru": "Используйте яркий, дружелюбный и энергичный стиль, вдохновлённый Марин Китагавой. Передавайте смысл естественно и непринуждённо, с теплотой, но без лишних добавлений.",
+            "ko": "키타가와 마린에서 영감을 받은 밝고 친근하며 활기찬 말투를 사용합니다. 의미를 자연스럽고 편하게 유지하고 따뜻함을 살리되 임의의 내용을 덧붙이지 마세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "开朗随和\n友好的宅文化活力\n自然的口语表达\n不要把中性内容说得幼稚",
+            "en": "Cheerful and casual\nFriendly otaku energy\nNatural spoken phrasing\nDo not make neutral text childish",
+            "ja": "明るくカジュアル\n親しみやすいオタクらしい活気\n自然な話し言葉\n中立的な文を幼くしない",
+            "ru": "Весело и непринуждённо\nДружелюбная увлечённость отаку\nЕстественная разговорная речь\nНе делать нейтральный текст детским",
+            "ko": "밝고 편안한 표현\n친근한 오타쿠 감성\n자연스러운 구어체\n중립적인 문장을 유치하게 만들지 않기",
+        },
+    },
+    "maomao": {
+        "persona_prompt": {
+            "zh-CN": "采用受猫猫启发的敏锐、善于观察、理性的表达方式。保持原意，带有冷静分析和含蓄的冷嘲，但尽量少用甜腻语气。",
+            "en": "Use a sharp, observant, rational style inspired by Maomao. Preserve meaning with cool analysis, subtle dry sarcasm, and minimal sweetness.",
+            "ja": "猫猫を思わせる、鋭く観察力があり理性的な話し方にします。冷静な分析と控えめな皮肉を交えつつ意味を保ち、甘い表現は最小限にしてください。",
+            "ru": "Используйте проницательный, наблюдательный и рациональный стиль, вдохновлённый Маомао. Сохраняйте смысл, добавляя спокойный анализ и тонкий сухой сарказм, без излишней мягкости.",
+            "ko": "마오마오에서 영감을 받은 날카롭고 관찰력 있으며 이성적인 말투를 사용합니다. 차분한 분석과 은근한 냉소를 살리되 의미를 유지하고 지나치게 다정하게 만들지 마세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "善于观察且理性\n适合时使用含蓄的冷嘲\n避免过度兴奋\n不做多余的奉承",
+            "en": "Observant and rational\nDry, subtle sarcasm when suitable\nAvoid overexcitement\nNo unnecessary flattery",
+            "ja": "観察力があり理性的\n合う場面では控えめな乾いた皮肉\n過度にはしゃがない\n不要なお世辞を加えない",
+            "ru": "Наблюдательно и рационально\nТонкий сухой сарказм, когда уместно\nБез чрезмерного восторга\nБез лишней лести",
+            "ko": "관찰력 있고 이성적으로\n어울릴 때 은근하고 건조한 냉소\n지나치게 들뜨지 않기\n불필요한 아첨 금지",
+        },
+    },
+    "kurisu_makise": {
+        "persona_prompt": {
+            "zh-CN": "采用受牧濑红莉栖启发的聪明、机敏、略显尖锐的表达方式。用准确措辞保持原意，仅在合适时加入轻微的傲娇式反驳。",
+            "en": "Use an intelligent, quick-witted, slightly sharp style inspired by Kurisu Makise. Preserve meaning with precise wording and mild tsundere-like pushback only when appropriate.",
+            "ja": "牧瀬紅莉栖を思わせる、知的で頭の回転が速く、少し鋭い話し方にします。正確な言葉で意味を保ち、適切な場面だけで軽いツンデレ風の反応を加えてください。",
+            "ru": "Используйте умный, остроумный и слегка резкий стиль, вдохновлённый Курису Макисэ. Точно сохраняйте смысл и добавляйте лёгкую реакцию в духе цундэрэ только когда это уместно.",
+            "ko": "마키세 크리스에서 영감을 받은 지적이고 재치 있으며 살짝 날카로운 말투를 사용합니다. 정확한 표현으로 의미를 유지하고 어울릴 때만 가벼운 츤데레식 반응을 더하세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "聪明准确\n反应迅速，略带锋芒\n仅在原文支持时轻微调侃\n不要改写成敌意",
+            "en": "Smart and precise\nQuick, lightly sharp reactions\nMild teasing only when the source supports it\nNo hostile rewrites",
+            "ja": "知的で正確\n素早く、少し鋭い反応\n原文に合う時だけ軽くからかう\n敵意のある表現に変えない",
+            "ru": "Умно и точно\nБыстрые, слегка резкие реакции\nЛёгкое поддразнивание только по смыслу оригинала\nНе превращать текст во враждебный",
+            "ko": "똑똑하고 정확하게\n빠르고 살짝 날카로운 반응\n원문이 뒷받침할 때만 가볍게 놀리기\n적대적인 표현으로 바꾸지 않기",
+        },
+    },
+    "rem_rezero": {
+        "persona_prompt": {
+            "zh-CN": "采用受雷姆启发的温柔、忠诚、支持性的表达方式。以温暖细致的措辞保持原意，但不要让台词显得过分顺从。",
+            "en": "Use a gentle, loyal, supportive style inspired by Rem. Preserve meaning with warm, careful wording and avoid making the line overly submissive.",
+            "ja": "レムを思わせる、優しく誠実で支えになる話し方にします。温かく丁寧な言葉で意味を保ち、過度に従順な台詞にはしないでください。",
+            "ru": "Используйте мягкий, преданный и поддерживающий стиль, вдохновлённый Рем. Сохраняйте смысл тёплыми и аккуратными формулировками, не делая реплику чрезмерно покорной.",
+            "ko": "렘에서 영감을 받은 다정하고 충실하며 응원하는 말투를 사용합니다. 따뜻하고 세심한 표현으로 의미를 유지하되 지나치게 순종적인 대사로 만들지 마세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "温柔支持\n温暖但不过分煽情\n尊重且细致的措辞\n原文未表达时不要擅自增加忠诚宣言",
+            "en": "Gentle and supportive\nWarm but not melodramatic\nRespectful, careful phrasing\nDo not add devotion unless implied",
+            "ja": "優しく支える表現\n温かいが感傷的にしすぎない\n礼儀正しく丁寧な言葉選び\n示唆がなければ献身を付け加えない",
+            "ru": "Мягко и с поддержкой\nТепло, но без мелодрамы\nУважительные и аккуратные формулировки\nНе добавлять преданность без намёка в оригинале",
+            "ko": "다정하고 응원하는 표현\n따뜻하되 지나치게 감상적이지 않게\n존중하며 세심한 문장\n원문에 없으면 헌신을 덧붙이지 않기",
+        },
+    },
+    "holo": {
+        "persona_prompt": {
+            "zh-CN": "采用受赫萝启发的睿智、俏皮、成熟的表达方式。保持原意，带有优雅自信和轻微调侃，只在自然时加入少许古典韵味。",
+            "en": "Use a wise, playful, mature style inspired by Holo. Preserve meaning with elegant confidence, light teasing, and a slightly old-fashioned flavor only when natural.",
+            "ja": "ホロを思わせる、賢く茶目っ気があり成熟した話し方にします。優雅な自信と軽いからかいを交えて意味を保ち、自然な時だけ少し古風な味わいを加えてください。",
+            "ru": "Используйте мудрый, игривый и зрелый стиль, вдохновлённый Холо. Сохраняйте смысл с элегантной уверенностью и лёгким поддразниванием; старомодный оттенок добавляйте только естественно.",
+            "ko": "호로에서 영감을 받은 현명하고 장난기 있으며 성숙한 말투를 사용합니다. 우아한 자신감과 가벼운 놀림으로 의미를 유지하고 자연스러울 때만 약간 고풍스러운 느낌을 더하세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "睿智俏皮\n成熟自信\n可以轻微调侃\n少量使用古典语气",
+            "en": "Wise and playful\nMature confidence\nLight teasing is okay\nUse old-fashioned flavor sparingly",
+            "ja": "賢く茶目っ気がある\n成熟した自信\n軽いからかいは可\n古風な表現は控えめに",
+            "ru": "Мудро и игриво\nЗрелая уверенность\nДопустимо лёгкое поддразнивание\nСтаромодный оттенок использовать умеренно",
+            "ko": "현명하고 장난스럽게\n성숙한 자신감\n가벼운 놀림은 가능\n고풍스러운 표현은 조금만 사용",
+        },
+    },
+    "yor_forger": {
+        "persona_prompt": {
+            "zh-CN": "采用受约尔·福杰启发的温柔、认真、礼貌的表达方式。以柔和真挚的措辞保持原意，合适时略显笨拙，但不要额外加入暴力或黑色幽默。",
+            "en": "Use a gentle, earnest, polite style inspired by Yor Forger. Preserve meaning with soft sincerity, slight awkwardness when suitable, and no extra violence or dark jokes.",
+            "ja": "ヨル・フォージャーを思わせる、優しく真面目で丁寧な話し方にします。柔らかな誠実さで意味を保ち、合う場面では少し不器用にしつつ、暴力的な表現や黒い冗談は加えないでください。",
+            "ru": "Используйте мягкий, серьёзный и вежливый стиль, вдохновлённый Йор Форджер. Сохраняйте смысл с искренней мягкостью и уместной неловкостью, не добавляя насилия или мрачных шуток.",
+            "ko": "요르 포저에서 영감을 받은 다정하고 성실하며 예의 바른 말투를 사용합니다. 부드러운 진심으로 의미를 유지하고 어울릴 때 약간 서툰 느낌을 주되 폭력이나 어두운 농담을 덧붙이지 마세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "温柔认真\n礼貌真挚的措辞\n合适时略带笨拙的魅力\n不要添加暴力色彩",
+            "en": "Gentle and earnest\nPolite, sincere wording\nSlight awkward charm when it fits\nDo not add violent flavor",
+            "ja": "優しく真面目\n丁寧で誠実な言葉選び\n合う場面では少し不器用な魅力\n暴力的な味付けを加えない",
+            "ru": "Мягко и серьёзно\nВежливые и искренние формулировки\nНемного неловкого обаяния, когда уместно\nНе добавлять оттенок насилия",
+            "ko": "다정하고 성실하게\n예의 바르고 진솔한 표현\n어울릴 때 약간 서툰 매력\n폭력적인 느낌을 덧붙이지 않기",
+        },
+    },
+    "mikasa_ackerman": {
+        "persona_prompt": {
+            "zh-CN": "采用受三笠·阿克曼启发的冷静、直接、保护性的表达方式。以简短坚定的措辞保持原意，尽量减少情绪修饰。",
+            "en": "Use a calm, direct, protective style inspired by Mikasa Ackerman. Preserve meaning with short, firm wording and minimal emotional decoration.",
+            "ja": "ミカサ・アッカーマンを思わせる、冷静で率直、守る意志のある話し方にします。短く毅然とした言葉で意味を保ち、感情的な装飾は最小限にしてください。",
+            "ru": "Используйте спокойный, прямой и защищающий стиль, вдохновлённый Микасой Аккерман. Сохраняйте смысл короткими и твёрдыми формулировками, почти без эмоциональных украшений.",
+            "ko": "미카사 아커만에서 영감을 받은 차분하고 직접적이며 보호하려는 말투를 사용합니다. 짧고 단호한 표현으로 의미를 유지하고 감정적인 수식은 최소화하세요.",
+        },
+        "persona_glossary": {
+            "zh-CN": "简短直接\n冷静且有保护感\n坚定但不粗鲁\n避免不必要的情绪",
+            "en": "Short and direct\nCalm, protective feeling\nFirm but not rude\nAvoid unnecessary emotion",
+            "ja": "短く率直\n冷静で守る意志を感じる表現\n毅然としているが無礼にはしない\n不要な感情を避ける",
+            "ru": "Коротко и прямо\nСпокойное ощущение защиты\nТвёрдо, но не грубо\nИзбегать лишних эмоций",
+            "ko": "짧고 직접적으로\n차분하고 보호하는 느낌\n단호하되 무례하지 않게\n불필요한 감정 피하기",
+        },
+    },
+}
+
+
+def _roleplay_preset_display_text(
+    preset_id: str,
+    field: str,
+    ui_language: str,
+) -> str:
+    profile = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS["custom"])
+    canonical = str(profile.get(field, "") or "")
+    translations = ROLEPLAY_PRESET_DISPLAY_TEXTS.get(preset_id, {}).get(field, {})
+    language = normalize_ui_language(ui_language)
+    return str(translations.get(language) or translations.get("en") or canonical)
+
+
+def _roleplay_preset_editor_text(
+    preset_id: str,
+    field: str,
+    configured_value: object,
+    ui_language: str,
+) -> str:
+    configured = str(configured_value or "")
+    if preset_id == "custom":
+        return configured
+    profile = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS["custom"])
+    canonical = str(profile.get(field, "") or "")
+    translations = ROLEPLAY_PRESET_DISPLAY_TEXTS.get(preset_id, {}).get(field, {})
+    if not configured or configured == canonical or configured in translations.values():
+        return _roleplay_preset_display_text(preset_id, field, ui_language)
+    return configured
+
+
+def _roleplay_preset_config_text(
+    preset_id: str,
+    field: str,
+    editor_value: object,
+) -> str:
+    value = str(editor_value or "")
+    if preset_id == "custom":
+        return value
+    profile = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS["custom"])
+    canonical = str(profile.get(field, "") or "")
+    translations = ROLEPLAY_PRESET_DISPLAY_TEXTS.get(preset_id, {}).get(field, {})
+    return canonical if value == canonical or value in translations.values() else value
 
 
 def _roleplay_preset_label(preset_id: str, ui_language: str) -> str:
@@ -631,12 +899,96 @@ QT_SETTINGS_COPY = {
     },
     "settings_up_to_date": {"zh-CN": "当前已是最新版本。", "en": "You are up to date.", "ja": "最新バージョンです。"},
     "settings_check_update_failed": {"zh-CN": "检查更新失败", "en": "Update check failed", "ja": "更新確認に失敗しました"},
-    "settings_check_update_failed_detail": {
-        "zh-CN": "无法获取更新信息：{message}",
-        "en": "Could not fetch update information: {message}",
-        "ja": "更新情報を取得できませんでした: {message}",
-        "ru": "Не удалось получить сведения об обновлении: {message}",
-        "ko": "업데이트 정보를 가져올 수 없습니다: {message}",
+    "settings_check_update_failed_generic": {
+        "zh-CN": "无法获取更新信息。请检查网络连接后重试。",
+        "en": "Could not fetch update information. Check your network connection and try again.",
+        "ja": "更新情報を取得できませんでした。ネットワーク接続を確認して、もう一度お試しください。",
+        "ru": "Не удалось получить сведения об обновлении. Проверьте подключение к сети и повторите попытку.",
+        "ko": "업데이트 정보를 가져오지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도하세요.",
+    },
+    "unknown_error": {
+        "zh-CN": "未知错误",
+        "en": "Unknown error",
+        "ja": "不明なエラー",
+        "ru": "Неизвестная ошибка",
+        "ko": "알 수 없는 오류",
+    },
+    "notice": {
+        "zh-CN": "提示",
+        "en": "Notice",
+        "ja": "お知らせ",
+        "ru": "Уведомление",
+        "ko": "알림",
+    },
+    "model_download_open_failed": {
+        "zh-CN": "无法打开模型下载窗口。请查看日志了解详情。",
+        "en": "Could not open the model download window. Check the logs for details.",
+        "ja": "モデルのダウンロード画面を開けませんでした。詳しくはログを確認してください。",
+        "ru": "Не удалось открыть окно загрузки модели. Подробности приведены в журнале.",
+        "ko": "모델 다운로드 창을 열지 못했습니다. 자세한 내용은 로그를 확인하세요.",
+    },
+    "background_import_failed": {
+        "zh-CN": "无法导入背景图片。请确认文件可读且磁盘空间充足。",
+        "en": "Could not import the background image. Check that the file is readable and disk space is available.",
+        "ja": "背景画像を取り込めませんでした。ファイルを読み取れることと空き容量を確認してください。",
+        "ru": "Не удалось импортировать фоновое изображение. Проверьте доступ к файлу и свободное место на диске.",
+        "ko": "배경 이미지를 가져오지 못했습니다. 파일을 읽을 수 있는지와 디스크 여유 공간을 확인하세요.",
+    },
+    "background_unsupported_format": {
+        "zh-CN": "不支持这种背景图片格式。",
+        "en": "This background image format is not supported.",
+        "ja": "この背景画像形式には対応していません。",
+        "ru": "Этот формат фонового изображения не поддерживается.",
+        "ko": "지원하지 않는 배경 이미지 형식입니다.",
+    },
+    "background_too_large": {
+        "zh-CN": "背景图片不能超过 64 MiB。",
+        "en": "The background image must not exceed 64 MiB.",
+        "ja": "背景画像は 64 MiB 以下にしてください。",
+        "ru": "Размер фонового изображения не должен превышать 64 МиБ.",
+        "ko": "배경 이미지는 64 MiB 이하여야 합니다.",
+    },
+    "xtts_recording_too_large": {
+        "zh-CN": "录制的音频超过 256 MiB 安全限制。",
+        "en": "The recorded audio exceeds the 256 MiB safety limit.",
+        "ja": "録音データが安全上限の 256 MiB を超えています。",
+        "ru": "Записанное аудио превышает безопасный предел 256 МиБ.",
+        "ko": "녹음 오디오가 256 MiB 안전 제한을 초과했습니다.",
+    },
+    "hotkey_invalid": {
+        "zh-CN": "{field} 的格式无效或无法使用。请换一个快捷键。",
+        "en": "{field} is invalid or unavailable. Choose a different hotkey.",
+        "ja": "{field} の形式が無効か使用できません。別のホットキーを選んでください。",
+        "ru": "Недопустимое или недоступное сочетание для поля «{field}». Выберите другую горячую клавишу.",
+        "ko": "{field} 형식이 잘못되었거나 사용할 수 없습니다. 다른 단축키를 선택하세요.",
+    },
+    "settings_validation_failed": {
+        "zh-CN": "请修正以下设置：\n{message}",
+        "en": "Correct the following setting:\n{message}",
+        "ja": "次の設定を修正してください：\n{message}",
+        "ru": "Исправьте следующий параметр:\n{message}",
+        "ko": "다음 설정을 수정하세요:\n{message}",
+    },
+    "dictionary_update_failed_message": {
+        "zh-CN": "无法更新官方词典。请检查网络连接后重试。",
+        "en": "Could not update the official dictionary. Check your network connection and try again.",
+        "ja": "公式辞書を更新できませんでした。ネットワーク接続を確認して、もう一度お試しください。",
+        "ru": "Не удалось обновить официальный словарь. Проверьте сеть и повторите попытку.",
+        "ko": "공식 사전을 업데이트하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도하세요.",
+    },
+    "dictionary_version_latest": {
+        "zh-CN": "最新版本",
+        "en": "latest",
+        "ja": "最新版",
+        "ru": "последняя версия",
+        "ko": "최신 버전",
+    },
+    "xtts_runtime_component_default": {
+        "zh-CN": "Coqui TTS 运行组件",
+        "en": "Coqui TTS runtime",
+        "ja": "Coqui TTS 実行コンポーネント",
+        "ru": "компонент Coqui TTS",
+        "ko": "Coqui TTS 실행 구성 요소",
     },
     "settings_update_available_message": {
         "zh-CN": "发现新版本：{version}\n\n{notes}",
@@ -666,8 +1018,8 @@ QT_SETTINGS_COPY = {
     "browse": {"zh-CN": "浏览...", "en": "Browse...", "ja": "参照..."},
     "translation_provider": {"zh-CN": "用哪个翻译服务", "en": "Translation Backend", "ja": "翻訳バックエンド"},
     "translation_provider_params": {"zh-CN": "翻译服务账号", "en": "Backend Parameters", "ja": "バックエンド設定"},
-    "api_key": {"zh-CN": "翻译服务密钥（API Key）", "en": "API Key", "ja": "API Key"},
-    "base_url": {"zh-CN": "服务地址（Base URL）", "en": "Base URL", "ja": "Base URL"},
+    "api_key": {"zh-CN": "翻译服务密钥（API Key）", "en": "API Key", "ja": "API キー"},
+    "base_url": {"zh-CN": "服务地址（Base URL）", "en": "Base URL", "ja": "ベース URL"},
     "request_timeout": {"zh-CN": "等多久算超时（秒）", "en": "Request Timeout (s)", "ja": "リクエストタイムアウト（秒）"},
     "request_retries": {"zh-CN": "失败重试次数", "en": "Retry Count", "ja": "リトライ回数"},
     "source_language": {"zh-CN": "我输入的语言", "en": "Source Language", "ja": "ソース言語"},
@@ -677,7 +1029,7 @@ QT_SETTINGS_COPY = {
     "text_input_hotkey": {"zh-CN": "打开打字翻译的快捷键", "en": "Text Input Hotkey", "ja": "手動入力ホットキー"},
     "asr_backend": {"zh-CN": "Mio 怎么听懂你说话", "en": "Speech Model", "ja": "音声認識モデル"},
     "asr_provider_config": {"zh-CN": "在线听写账号", "en": "Online ASR Settings", "ja": "オンライン ASR 設定"},
-    "asr_api_key": {"zh-CN": "在线听写密钥（API Key）", "en": "ASR API Key", "ja": "ASR API Key"},
+    "asr_api_key": {"zh-CN": "在线听写密钥（API Key）", "en": "ASR API Key", "ja": "ASR API キー"},
     "asr_region": {"zh-CN": "服务区域", "en": "Service Region", "ja": "サービス地域"},
     "asr_listen": {"zh-CN": "听别人时用哪个听写服务", "en": "Reverse Translation Speech Model", "ja": "逆翻訳音声モデル"},
     "input_device_mode": {"zh-CN": "麦克风选择方式", "en": "Microphone Mode", "ja": "マイクモード"},
@@ -729,7 +1081,7 @@ QT_SETTINGS_COPY = {
     "roleplay_enabled": {"zh-CN": "启用角色扮演", "en": "Enable roleplay", "ja": "ロールプレイを有効化"},
     "roleplay_preset": {"zh-CN": "预设", "en": "Preset", "ja": "プリセット"},
     "persona_name": {"zh-CN": "角色名", "en": "Persona Name", "ja": "キャラクター名"},
-    "persona_prompt": {"zh-CN": "Mio 说话风格说明", "en": "BERT Prompt / Persona Prompt", "ja": "BERT Prompt / ペルソナ"},
+    "persona_prompt": {"zh-CN": "Mio 说话风格说明", "en": "Persona Style Instructions", "ja": "ペルソナの話し方"},
     "persona_glossary": {"zh-CN": "词汇提示", "en": "Glossary Hints", "ja": "用語ヒント"},
     "save_failed": {"zh-CN": "保存失败", "en": "Save Failed", "ja": "保存失敗"},
     "settings_save_failed_message": {
@@ -760,28 +1112,28 @@ QT_SETTINGS_COPY.update({
     "chatbox_template": {
         "zh-CN": "自定义聊天框内容",
         "en": "Chatbox Template",
-        "ja": "Chatbox Template",
+        "ja": "Chatbox テンプレート",
         "ru": "Шаблон Chatbox",
         "ko": "Chatbox 템플릿",
     },
     "fallback_backends": {
         "zh-CN": "备用翻译服务",
         "en": "Fallback Backends",
-        "ja": "Fallback Backends",
+        "ja": "予備サービス",
         "ru": "Резервные бэкенды",
         "ko": "예비 번역 백엔드",
     },
     "target_language_3": {
         "zh-CN": "第三种翻译语言",
         "en": "Target Language 3",
-        "ja": "Target Language 3",
+        "ja": "第 3 目標言語",
         "ru": "Целевой язык 3",
         "ko": "대상 언어 3",
     },
     "target_language_disabled": {
         "zh-CN": "关闭",
         "en": "Disabled",
-        "ja": "Disabled",
+        "ja": "無効",
         "ru": "Отключено",
         "ko": "끄기",
     },
@@ -869,11 +1221,6 @@ QT_SETTINGS_COPY.update({
         "zh-CN": "导入失败：{message}",
         "en": "Import failed: {message}",
         "ja": "読み込みに失敗しました: {message}",
-    },
-    "tts_voice_loading": {
-        "zh-CN": "正在加载音色...",
-        "en": "Loading voices...",
-        "ja": "ボイスを読み込み中...",
     },
     "tts_voice_none": {
         "zh-CN": "未找到可用音色",
@@ -1089,19 +1436,19 @@ QT_SETTINGS_COPY.update({
         "ja": "翻訳特化の品質寄りモデルです。速度と自然さのバランスが良く、既定に向きます。",
     },
     "self_hosted_free": {
-        "zh-CN": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
+        "zh-CN": "自建 LibreTranslate 不受服务商配额限制；公共实例可能会限流。",
         "en": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
-        "ja": "Self-hosted LibreTranslate can run without provider-side quota; public instances may rate-limit.",
+        "ja": "自前の LibreTranslate はプロバイダー側の割り当てなしで動作します。公開インスタンスには利用制限がある場合があります。",
     },
     "no_key_simple": {
-        "zh-CN": "No API key required. Fast and simple when this web service is reachable in the player's region.",
+        "zh-CN": "无需 API Key。所在地区能访问该服务时，速度快且设置简单。",
         "en": "No API key required. Fast and simple when this web service is reachable in the player's region.",
-        "ja": "No API key required. Fast and simple when this web service is reachable in the player's region.",
+        "ja": "API Key は不要です。お住まいの地域からサービスに接続できる場合、手軽で高速です。",
     },
     "no_key_fallback": {
-        "zh-CN": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
+        "zh-CN": "无需 API Key，可作为零配置备用方案；公共配额和质量可能波动。",
         "en": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
-        "ja": "No API key required. Useful as a zero-setup fallback, with public quota and variable quality.",
+        "ja": "API Key は不要です。設定なしの予備手段として使えますが、公開枠と品質は変動します。",
     },
     "legacy_mt": {
         "zh-CN": "旧兼容档：能用但不是首选，新用户建议直接选 plus 或 flash。",
@@ -1168,29 +1515,6 @@ QT_SETTINGS_COPY.update({
         "en": "{engine} local service is detected. Voices can be loaded for interpretation.",
         "ja": "{engine} のローカルサービスを検出しました。ボイスを読み込んで同時通訳に使えます。",
     },
-    "xtts_runtime_missing": {
-        "zh-CN": "XTTS-v2 需要可选的 Coqui TTS 运行库。当前环境没有安装它，所以只能管理参考音频，不能合成或测试朗读。",
-        "en": "XTTS-v2 needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
-        "ja": "XTTS-v2 には任意の Coqui TTS ランタイムが必要です。未インストールのため、参照音声の管理のみ可能で、合成とテストは無効です。",
-    },
-    "xtts_model_missing": {
-        "zh-CN": "XTTS-v2 运行库已检测到，但本地模型文件还没准备好。请先下载模型。",
-        "en": "XTTS-v2 runtime is detected, but local model files are not ready. Download the model first.",
-        "ja": "XTTS-v2 ランタイムは検出されましたが、ローカルモデルが未準備です。先にモデルをダウンロードしてください。",
-    },
-    "xtts_ready": {
-        "zh-CN": "XTTS-v2 模型文件已准备好。录制或导入参考音频后即可测试声音克隆。",
-        "en": "XTTS-v2 model files are ready. Record or import reference audio, then test voice cloning.",
-        "ja": "XTTS-v2 モデルは準備済みです。参照音声を録音またはインポートして、音声クローンをテストできます。",
-    },
-    "xtts_reference_missing": {
-        "zh-CN": "XTTS-v2 需要一段参考音频。请先录制或导入一个声音样本。",
-        "en": "XTTS-v2 needs reference audio. Record or import one voice sample first.",
-        "ja": "XTTS-v2 には参照音声が必要です。先に音声サンプルを録音またはインポートしてください。",
-    },
-    "xtts_reference_invalid": {
-        "en": "XTTS-v2 cannot use the selected reference audio.",
-    },
     "tts_custom_voice_picker": {
         "zh-CN": "自定义音色包",
         "en": "Custom voice pack",
@@ -1224,7 +1548,6 @@ QT_SETTINGS_COPY.update({
     "open_listen_diagnostics": {"zh-CN": "查看别人声音情况", "en": "Open listen diagnostics", "ja": "リスン診断を開く"},
     "open_mic_calibration": {"zh-CN": "校准我的麦克风断句", "en": "Calibrate mic VAD", "ja": "マイク VAD を調整"},
     "open_listen_calibration": {"zh-CN": "校准听别人时的断句", "en": "Calibrate listen VAD", "ja": "リスン VAD を調整"},
-    "osc_listener_section": {"zh-CN": "VRChat 控制 Mio（OSC）", "en": "OSC Listener / Control", "ja": "OSC 受信 / 制御"},
     "osc_listener_enabled": {
         "zh-CN": "启用 OSC 接收（需要时自动开启）",
         "en": "Enable OSC receiver (automatic when needed)",
@@ -1269,71 +1592,71 @@ QT_SETTINGS_COPY.update({
     "qwen_region_custom": {
         "zh-CN": "自定义服务地址（高级）",
         "en": "Custom Base URL",
-        "ja": "カスタム Base URL",
-        "ru": "Пользовательский Base URL",
+        "ja": "カスタムのベース URL",
+        "ru": "Пользовательский базовый URL",
         "ko": "사용자 지정 Base URL",
     },
     "deepseek_region_official": {
         "zh-CN": "DeepSeek 官方（推荐）",
         "en": "DeepSeek official (recommended)",
         "ja": "DeepSeek 公式（推奨）",
-        "ru": "DeepSeek official (рекомендуется)",
+        "ru": "Официальный DeepSeek (рекомендуется)",
         "ko": "DeepSeek 공식(권장)",
     },
     "deepseek_region_custom": {
         "zh-CN": "第三方转发地址（高级）",
         "en": "Custom proxy / relay Base URL",
-        "ja": "カスタム proxy / relay Base URL",
-        "ru": "Свой proxy / relay Base URL",
+        "ja": "カスタムのプロキシ／中継ベース URL",
+        "ru": "Пользовательский прокси или адрес ретранслятора",
         "ko": "사용자 지정 프록시 / 중계 Base URL",
     },
     "xiaomi_region_global": {
         "zh-CN": "按量付费（全球）",
         "en": "Pay-as-you-go (Global)",
-        "ja": "従量課金（グローバル）",
-        "ru": "Pay-as-you-go (глобальный)",
+        "ja": "従量課金（全世界）",
+        "ru": "Оплата по мере использования (весь мир)",
         "ko": "종량제(글로벌)",
     },
     "xiaomi_region_china_cluster": {
         "zh-CN": "Token Plan（中国集群）",
         "en": "Token Plan (China cluster)",
         "ja": "Token Plan（中国クラスター）",
-        "ru": "Token Plan (кластер Китай)",
+        "ru": "Token Plan (кластер в Китае)",
         "ko": "Token Plan(중국 클러스터)",
     },
     "xiaomi_region_singapore_cluster": {
         "zh-CN": "Token Plan（新加坡集群）",
         "en": "Token Plan (Singapore cluster)",
         "ja": "Token Plan（シンガポールクラスター）",
-        "ru": "Token Plan (кластер Сингапур)",
+        "ru": "Token Plan (кластер в Сингапуре)",
         "ko": "Token Plan(싱가포르 클러스터)",
     },
     "xiaomi_region_europe_cluster": {
         "zh-CN": "Token Plan（欧洲集群）",
         "en": "Token Plan (Europe cluster)",
         "ja": "Token Plan（ヨーロッパクラスター）",
-        "ru": "Token Plan (кластер Европа)",
+        "ru": "Token Plan (кластер в Европе)",
         "ko": "Token Plan(유럽 클러스터)",
     },
     "xiaomi_region_custom": {
         "zh-CN": "自定义服务地址（高级）",
         "en": "Custom Base URL",
-        "ja": "カスタム Base URL",
-        "ru": "Пользовательский Base URL",
+        "ja": "カスタムのサービス URL",
+        "ru": "Пользовательский адрес сервиса",
         "ko": "사용자 지정 Base URL",
     },
     "nvidia_region_global": {
         "zh-CN": "NVIDIA 官方在线服务（全球）",
         "en": "Hosted API (Global)",
-        "ja": "ホスト API（グローバル）",
-        "ru": "Hosted API (глобальный)",
+        "ja": "NVIDIA 公式ホスト API（全世界）",
+        "ru": "Официальный размещённый API NVIDIA (весь мир)",
         "ko": "호스팅 API(글로벌)",
     },
     "nvidia_region_custom": {
         "zh-CN": "自己的 NVIDIA 服务地址（高级）",
         "en": "Custom NIM / proxy Base URL",
-        "ja": "カスタム NIM / プロキシ Base URL",
-        "ru": "Свой NIM / proxy Base URL",
+        "ja": "カスタムの NIM／プロキシ URL",
+        "ru": "Пользовательский адрес NIM или прокси",
         "ko": "사용자 지정 NIM / 프록시 Base URL",
     },
     "qwen_translation_region_hint": {
@@ -1507,12 +1830,172 @@ QT_SETTINGS_COPY.update({
         "en": "CUDA support not detected. Please ensure NVIDIA GPU drivers and CUDA are installed.",
         "ja": "CUDAサポートが検出されませんでした。NVIDIA GPUドライバーとCUDAがインストールされていることを確認してください。",
     },
-    "xtts_device_change_notice": {
-        "zh-CN": "设备更改将在下次使用XTTS时生效。",
-        "en": "Device change will take effect the next time XTTS is used.",
-        "ja": "デバイスの変更は、次回XTTSを使用するときに有効になります。",
-    },
 })
+
+_SETTINGS_COMPLETE_RU_KO_COPY = {
+    "translation_domain_section": {"ru": "Перевод", "ko": "번역"},
+    "vr_integration_section": {"ru": "Интеграция с VR", "ko": "VR 연동"},
+    "hotkey_voice_section": {"ru": "Горячие клавиши / Голосовое управление", "ko": "단축키 / 음성 제어"},
+    "updates_models_section": {"ru": "Обновления / Модели", "ko": "업데이트 / 모델"},
+    "advanced_section": {"ru": "Дополнительно", "ko": "고급"},
+    "mode_wizard_section": {"ru": "Первый запуск / Выбор режима", "ko": "첫 실행 / 모드 안내"},
+    "mode_wizard_hint": {
+        "ru": "Снова откройте мастер режима, чтобы применить рекомендуемые параметры Chatbox, прослушивания, TTS, ручного ввода или VR-субтитров.",
+        "ko": "모드 안내를 다시 열어 Chatbox, 듣기, TTS, 수동 입력 또는 VR 자막에 권장되는 설정을 적용합니다.",
+    },
+    "open_mode_wizard": {"ru": "Открыть мастер режима", "ko": "모드 안내 열기"},
+    "voice_control_placeholder": {
+        "ru": "Голосовое управление пока не реализовано. Здесь настраиваются глобальные горячие клавиши; команды и слова активации появятся позднее.",
+        "ko": "음성 제어는 아직 구현되지 않았습니다. 현재 이 페이지에서는 전역 단축키를 관리하며, 호출어와 명령 동작은 추후 추가됩니다.",
+    },
+    "advanced_runtime_hint": {
+        "ru": "После смены устройства, языка или формата вывода сохранение перезапускает связанные слушатели; активная запись останавливается и восстанавливается.",
+        "ko": "장치, 언어 또는 출력 형식을 바꾼 뒤 저장하면 관련 수신기가 다시 시작되며 진행 중인 녹음은 중지 후 복원됩니다.",
+    },
+    "api_key": {"ru": "Ключ API", "ko": "API 키"},
+    "base_url": {"ru": "Базовый URL", "ko": "기본 URL"},
+    "vad_sensitivity": {"ru": "Чувствительность VAD (0–3)", "ko": "VAD 민감도(0~3)"},
+    "vad_speech_ratio": {"ru": "Доля речи (0–1)", "ko": "음성 비율(0~1)"},
+    "vad_activation": {"ru": "Порог активации (с)", "ko": "활성화 임계값(초)"},
+    "vad_min_rms": {"ru": "Минимальный RMS", "ko": "최소 RMS"},
+    "min_segment": {"ru": "Мин. длительность сегмента (с)", "ko": "최소 구간 길이(초)"},
+    "max_segment": {"ru": "Макс. длительность сегмента (с)", "ko": "최대 구간 길이(초)"},
+    "partial_min_speech": {"ru": "Мин. речь для промежуточного результата (с)", "ko": "중간 결과 최소 음성 길이(초)"},
+    "self_suppress": {"ru": "Подавлять эхо собственного TTS", "ko": "내 TTS 에코 억제"},
+    "self_suppress_seconds": {"ru": "Время подавления своего звука (с)", "ko": "자기 음성 억제 시간(초)"},
+    "segment_duration": {"ru": "Длительность сегмента (с)", "ko": "구간 길이(초)"},
+    "tail_silence": {"ru": "Конечная тишина (с)", "ko": "끝 무음 시간(초)"},
+    "tts_no_virtual_device": {"ru": "Виртуальный микрофон MixLine не обнаружен.", "ko": "MixLine 가상 마이크를 찾지 못했습니다."},
+    "settings_dictionary": {"ru": "Словарь исправлений", "ko": "교정 사전"},
+    "settings_dictionary_hint": {
+        "ru": "Используется только для исправления ошибок распознавания речи. Словарь работает офлайн и выходит в сеть лишь при обновлении.",
+        "ko": "음성 인식 오류를 교정할 때만 사용합니다. 업데이트를 누르기 전까지 오프라인으로 동작합니다.",
+    },
+    "settings_dictionary_update": {"ru": "Обновить словарь", "ko": "사전 업데이트"},
+    "settings_dictionary_custom": {"ru": "Пользовательский словарь", "ko": "사용자 사전"},
+    "settings_dictionary_custom_hint": {
+        "ru": "Сначала укажите правильное слово, затем варианты ошибок ASR. Разделяйте их запятыми, точками с запятой или новыми строками.",
+        "ko": "먼저 올바른 단어를 입력한 뒤 바꿀 ASR 오인식 단어를 입력하세요. 여러 단어는 쉼표, 세미콜론 또는 줄바꿈으로 구분합니다.",
+    },
+    "settings_dictionary_custom_replacement": {"ru": "Правильное слово", "ko": "올바른 단어"},
+    "settings_dictionary_custom_patterns": {"ru": "Ошибочные варианты", "ko": "잘못 인식한 단어"},
+    "settings_dictionary_custom_patterns_hint": {
+        "ru": "Повторное сохранение того же правильного слова добавляет варианты в существующую запись, а не создаёт дубликат.",
+        "ko": "같은 올바른 단어를 다시 저장하면 중복 항목을 만들지 않고 기존 항목에 오인식 단어를 추가합니다.",
+    },
+    "settings_dictionary_custom_save": {"ru": "Сохранить запись", "ko": "항목 저장"},
+    "settings_dictionary_custom_missing_replacement": {"ru": "Сначала введите правильное слово.", "ko": "먼저 올바른 단어를 입력하세요."},
+    "settings_dictionary_custom_missing_patterns": {"ru": "Введите хотя бы один ошибочный вариант.", "ko": "잘못 인식한 단어를 하나 이상 입력하세요."},
+    "settings_dictionary_custom_saved": {
+        "ru": "«{replacement}» сохранено в пользовательский словарь; всего ошибочных вариантов: {total}.",
+        "ko": "‘{replacement}’을 사용자 사전에 저장했습니다. 잘못 인식한 단어는 총 {total}개입니다.",
+    },
+    "settings_dictionary_custom_failed": {"ru": "Не удалось сохранить пользовательский словарь: {message}", "ko": "사용자 사전을 저장하지 못했습니다: {message}"},
+    "tts_import_custom_voice": {"ru": "Импортировать папку голоса", "ko": "음색 폴더 가져오기"},
+    "tts_custom_voice_count": {"ru": "Импортировано папок голосов: {count}", "ko": "가져온 음색 폴더: {count}개"},
+    "tts_custom_voice_import_done": {"ru": "Импортировано пользовательских папок голосов: {count}.", "ko": "사용자 음색 폴더 {count}개를 가져왔습니다."},
+    "tts_custom_voice_import_failed": {"ru": "Не удалось импортировать: {message}", "ko": "가져오지 못했습니다: {message}"},
+    "tts_output_device_hint": {
+        "ru": "Установите MixLine, чтобы направлять голос перевода в микрофон VRChat. Затем добавьте реальный микрофон в MixLine и выберите виртуальный микрофон MixLine в VRChat.",
+        "ko": "통역 음성을 VRChat 마이크로 보내려면 MixLine을 설치하세요. 설치 후 MixLine에 실제 마이크를 추가하고 VRChat에서 MixLine 가상 마이크를 선택합니다.",
+    },
+    "tts_install_virtual_device": {
+        "ru": "Чтобы VRChat слышал голос перевода, установите MixLine.\n\nПорядок настройки:\n1. Установите и запустите MixLine\n2. Добавьте реальный микрофон в MixLine\n3. В Mio включите вывод в VRChat и направьте TTS во виртуальный вход MixLine\n4. В VRChat выберите виртуальный микрофон MixLine",
+        "ko": "VRChat에서 통역 음성을 들으려면 MixLine을 설치하세요.\n\n설정 순서:\n1. MixLine 설치 및 실행\n2. MixLine에 실제 마이크 추가\n3. Mio에서 VRChat 출력 사용 후 TTS를 MixLine 가상 입력으로 전송\n4. VRChat에서 MixLine 가상 마이크 선택",
+    },
+    "tts_download_mixline": {"ru": "Скачать MixLine", "ko": "MixLine 다운로드"},
+    "tts_show_guide": {"ru": "Настроить MixLine", "ko": "MixLine 설정"},
+    "close": {"ru": "Закрыть", "ko": "닫기"},
+    "hotkey_section": {"ru": "Горячие клавиши", "ko": "단축키"},
+    "model_section": {"ru": "Состояние моделей", "ko": "모델 상태"},
+    "model_ready": {"ru": "Модель готова: {model_id}", "ko": "모델 준비 완료: {model_id}"},
+    "model_pending": {"ru": "Модель не загружена: {model_id} (загрузится при первом использовании)", "ko": "모델이 없음: {model_id}(처음 사용할 때 다운로드)"},
+    "model_download": {"ru": "Скачать модель", "ko": "모델 다운로드"},
+    "model_check_hint": {
+        "ru": "Локальные модели загружаются встроенным ускоренным загрузчиком с резервными зеркалами. После загрузки они работают без сети.",
+        "ko": "로컬 모델은 미러 대체 기능이 있는 내장 고속 다운로더를 사용합니다. 다운로드 후에는 오프라인으로 동작합니다.",
+    },
+    "model_current_section": {"ru": "Текущая модель микрофона", "ko": "현재 마이크 모델"},
+    "model_picker_hint": {
+        "ru": "Загружайте только нужное. SenseVoice лучше для китайского и кантонского; Whisper полезен для английского, японского и других языков.",
+        "ko": "필요한 모델만 다운로드하세요. SenseVoice는 중국어와 광둥어에 적합하고, Whisper는 영어·일본어 및 기타 언어에 유용합니다.",
+    },
+    "model_download_desc_sensevoice": {"ru": "Лучший выбор для китайского и кантонского. После загрузки Mio распознаёт речь локально.", "ko": "중국어와 광둥어에 가장 적합합니다. 다운로드 후 Mio가 로컬에서 음성을 인식합니다."},
+    "model_download_desc_whisper": {"ru": "Подходит для английского, японского и других языков. После загрузки онлайн-сервис распознавания не нужен.", "ko": "영어, 일본어 및 기타 언어에 적합합니다. 다운로드 후 온라인 음성 서비스 없이 동작합니다."},
+    "model_file_id": {"ru": "Файл: {model_id}", "ko": "파일: {model_id}"},
+    "model_status_ready": {"ru": "Загружено", "ko": "다운로드됨"},
+    "model_status_pending": {"ru": "Не загружено", "ko": "다운로드 안 됨"},
+    "logs_section": {"ru": "Журналы ошибок", "ko": "문제 로그"},
+    "open_logs_folder": {"ru": "Открыть папку журналов", "ko": "로그 폴더 열기"},
+    "logs_folder_hint": {"ru": "Используйте при обращении за помощью: отправьте разработчику файл mio.log из папки журналов.", "ko": "문제를 제보할 때 로그 폴더의 mio.log 파일을 개발자에게 보내세요."},
+    "recommendation": {"ru": "Рекомендация", "ko": "추천도"},
+    "recommended_high": {"ru": "★★★★★ Рекомендуется", "ko": "★★★★★ 권장"},
+    "recommended_medium": {"ru": "★★★★ Для отдельных случаев", "ko": "★★★★ 특정 상황에 적합"},
+    "recommended_low": {"ru": "★★★ Резервный вариант", "ko": "★★★ 대체 옵션"},
+    "model_title": {"ru": "Выбор модели", "ko": "모델 선택"},
+    "model_score": {"ru": "Оценка для реального времени", "ko": "실시간 점수"},
+    "speed": {"ru": "Скорость", "ko": "속도"},
+    "quality": {"ru": "Качество", "ko": "품질"},
+    "fit": {"ru": "Соответствие", "ko": "적합도"},
+    "very_fast": {"ru": "Очень быстро", "ko": "매우 빠름"},
+    "fast": {"ru": "Быстро", "ko": "빠름"},
+    "balanced": {"ru": "Сбалансировано", "ko": "균형"},
+    "slow": {"ru": "Медленнее", "ko": "느림"},
+    "basic": {"ru": "Базовое", "ko": "기본"},
+    "high": {"ru": "Высокое", "ko": "높음"},
+    "very_recommended": {"ru": "Настоятельно рекомендуется", "ko": "매우 권장"},
+    "recommended": {"ru": "Рекомендуется", "ko": "권장"},
+    "general": {"ru": "Общее назначение", "ko": "일반"},
+    "conditional": {"ru": "Для отдельных случаев", "ko": "조건부"},
+    "not_recommended": {"ru": "Не рекомендуется", "ko": "권장하지 않음"},
+    "live_default": {"ru": "Лучший выбор для большинства: достаточно быстро, стабильно и без заметного замедления живого чата.", "ko": "대부분의 플레이어에게 적합합니다. 충분히 빠르고 품질이 안정적이며 실시간 채팅을 크게 늦추지 않습니다."},
+    "balanced_quality": {"ru": "Больше качества без сильной задержки. Выбирайте для более плавных фраз при сохранении скорости.", "ko": "너무 느려지지 않으면서 품질을 높입니다. 지연도 중요하지만 더 자연스러운 문장을 원할 때 선택하세요."},
+    "quality_first": {"ru": "Высокое качество, но медленнее. Лучше для ручного перевода и длинных фраз, чем для постоянных субтитров.", "ko": "품질 상한은 높지만 느립니다. 상시 자막보다 수동 번역이나 다듬어진 긴 문장에 적합합니다."},
+    "economy_first": {"ru": "Недорого и быстро. Подходит для коротких фраз, но хуже передаёт оттенки и тон.", "ko": "저렴하고 지연이 낮습니다. 짧은 문장에는 괜찮지만 뉘앙스와 말투 표현은 약합니다."},
+    "reasoning": {"ru": "Дольше обдумывает ответ. Это полезно для сложного текста, но задерживает голосовые субтитры.", "ko": "더 오래 추론합니다. 복잡한 문장에는 도움이 될 수 있지만 실시간 음성 자막이 늦어집니다."},
+    "ultra_fast": {"ru": "Приоритет скорости. Хорошо для шумных комнат и короткого чата, но качество менее стабильно.", "ko": "속도 우선입니다. 사람이 많은 방과 짧은 채팅에 좋지만 상위 모델보다 품질이 덜 안정적입니다."},
+    "flash_mt": {"ru": "Быстрая модель перевода. При низкой задержке подходит для живых субтитров лучше обычной чат-модели.", "ko": "빠른 번역 모델입니다. 지연이 중요할 때 일반 채팅 모델보다 실시간 자막에 적합합니다."},
+    "mt_quality": {"ru": "Качественная модель перевода с хорошей скоростью и естественными формулировками; надёжный вариант по умолчанию.", "ko": "속도와 자연스러운 표현이 강점인 고품질 번역 모델로 실시간 번역의 좋은 기본값입니다."},
+    "self_hosted_free": {"ru": "Собственный LibreTranslate работает без квоты провайдера; публичные серверы могут ограничивать частоту запросов.", "ko": "직접 호스팅한 LibreTranslate는 서비스 할당량 없이 사용할 수 있지만 공개 서버는 요청을 제한할 수 있습니다."},
+    "no_key_simple": {"ru": "API-ключ не нужен. Быстрый и простой вариант, если сервис доступен в вашем регионе.", "ko": "API 키가 필요 없습니다. 해당 지역에서 서비스에 접속할 수 있다면 빠르고 간단합니다."},
+    "no_key_fallback": {"ru": "API-ключ не нужен. Удобный резерв без настройки, но с общей квотой и переменным качеством.", "ko": "API 키가 필요 없습니다. 설정 없는 대체 수단으로 유용하지만 공개 할당량과 품질 변동이 있습니다."},
+    "legacy_mt": {"ru": "Устаревший совместимый вариант. Он работает, но новым пользователям лучше выбрать plus или flash.", "ko": "이전 호환 옵션입니다. 사용할 수 있지만 신규 사용자는 보통 plus 또는 flash를 선택하는 편이 좋습니다."},
+    "general_high_quality": {"ru": "Универсальная модель высокого качества. Лучше формулирует сложные фразы, но обычно медленнее специализированных и flash-моделей.", "ko": "범용 고품질 모델입니다. 복잡한 문장 표현은 좋지만 번역 전용 또는 flash 모델보다 대체로 느립니다."},
+    "custom": {"ru": "Пользовательская модель без встроенной оценки. Сначала проверьте скорость и стабильность на коротких фразах.", "ko": "내장 평가가 없는 사용자 지정 모델입니다. 먼저 짧은 문장으로 속도와 안정성을 테스트하세요."},
+    "qwen_model_recommendation": {"ru": "Рекомендация · ★★★★★ · Низкая задержка онлайн-ASR без установки локальных моделей.", "ko": "추천도 · ★★★★★ 권장 · 로컬 모델이 없을 때도 지연이 낮은 온라인 ASR입니다."},
+    "gemini_model_recommendation": {"ru": "Рекомендация · ★★★★ · Подходит, если уже используется поток Gemini Live.", "ko": "추천도 · ★★★★ 특정 상황 · Gemini Live 흐름을 이미 사용할 때 적합합니다."},
+    "missing_model_prompt_title": {"ru": "Нужна локальная модель", "ko": "로컬 모델 필요"},
+    "missing_model_prompt_body": {
+        "ru": "Для выбранного движка {engine_label} нужна локальная модель: {model_id}\n\nОткрыть встроенный загрузчик? Файлы сохраняются в папке Mio, а после разрыва сети загрузка по возможности продолжится.",
+        "ko": "선택한 {engine_label} 엔진에는 로컬 모델이 필요합니다: {model_id}\n\n내장 다운로더를 여시겠습니까? 파일은 Mio 폴더에 저장되며 네트워크가 끊긴 뒤 다시 시도하면 가능한 경우 이어서 다운로드합니다.",
+    },
+    "open_downloader": {"ru": "Открыть загрузчик", "ko": "다운로더 열기"},
+    "later": {"ru": "Позже", "ko": "나중에"},
+    "download_voicevox": {"ru": "Скачать VOICEVOX", "ko": "VOICEVOX 다운로드"},
+    "download_aivis": {"ru": "Скачать AivisSpeech", "ko": "AivisSpeech 다운로드"},
+    "local_tts_unavailable": {"ru": "{engine} не обнаружен. Запустите локальное приложение, затем вернитесь сюда и обновите список голосов.", "ko": "{engine}을 찾지 못했습니다. 로컬 앱을 실행한 뒤 돌아와 음색 목록을 새로 고치세요."},
+    "local_tts_ready": {"ru": "Локальный сервис {engine} обнаружен. Голоса можно загрузить для озвучивания.", "ko": "{engine} 로컬 서비스를 감지했습니다. 통역용 음색을 불러올 수 있습니다."},
+    "tts_custom_voice_picker": {"ru": "Пользовательский пакет голоса", "ko": "사용자 음색 팩"},
+    "tts_choose_voice_folder": {"ru": "Выбрать папку", "ko": "폴더 선택"},
+    "audio_diagnostics": {"ru": "Диагностика звука", "ko": "오디오 진단"},
+    "vad_calibration": {"ru": "Калибровка VAD", "ko": "VAD 보정"},
+    "open_mic_diagnostics": {"ru": "Открыть диагностику микрофона", "ko": "마이크 진단 열기"},
+    "open_listen_diagnostics": {"ru": "Открыть диагностику прослушивания", "ko": "듣기 진단 열기"},
+    "open_mic_calibration": {"ru": "Калибровать VAD микрофона", "ko": "마이크 VAD 보정"},
+    "open_listen_calibration": {"ru": "Калибровать VAD прослушивания", "ko": "듣기 VAD 보정"},
+    "osc_receive_host": {"ru": "Адрес приёма", "ko": "수신 호스트"},
+    "osc_receive_port": {"ru": "Порт приёма", "ko": "수신 포트"},
+    "osc_sync_mute_self": {"ru": "Синхронизировать VRChat MuteSelf", "ko": "VRChat MuteSelf 동기화"},
+    "osc_allow_avatar_control": {"ru": "Разрешить управление с аватара", "ko": "아바타 제어 허용"},
+    "osc_control_prefix": {"ru": "Префикс параметров управления", "ko": "제어 매개변수 접두사"},
+    "osc_param_toggle_mic": {"ru": "Параметр переключения микрофона", "ko": "마이크 전환 매개변수"},
+    "osc_param_toggle_listen": {"ru": "Параметр переключения прослушивания", "ko": "듣기 전환 매개변수"},
+    "osc_param_toggle_tts": {"ru": "Параметр переключения TTS", "ko": "TTS 전환 매개변수"},
+    "osc_param_toggle_overlay": {"ru": "Параметр переключения оверлея", "ko": "오버레이 전환 매개변수"},
+    "listen_vad_min_rms": {"ru": "Минимальный RMS прослушивания", "ko": "듣기 최소 RMS"},
+}
+for _key, _values in _SETTINGS_COMPLETE_RU_KO_COPY.items():
+    QT_SETTINGS_COPY.setdefault(_key, {}).update(_values)
 
 _SETTINGS_RU_KO_COPY = {
     "header_title": {"ru": "Настройки", "ko": "설정"},
@@ -1543,10 +2026,6 @@ _SETTINGS_RU_KO_COPY = {
     "xtts_cuda_not_available": {
         "ru": "Поддержка CUDA не обнаружена. Убедитесь, что установлены драйверы NVIDIA GPU и CUDA.",
         "ko": "CUDA 지원이 감지되지 않았습니다. NVIDIA GPU 드라이버와 CUDA가 설치되어 있는지 확인하세요.",
-    },
-    "xtts_device_change_notice": {
-        "ru": "Изменение устройства вступит в силу при следующем использовании XTTS.",
-        "ko": "장치 변경은 다음에 XTTS를 사용할 때 적용됩니다.",
     },
     "translation_section": {"ru": "Общее / Перевод", "ko": "일반 / 번역"},
     "voice_section": {"ru": "Настройки речи", "ko": "음성 설정"},
@@ -1595,7 +2074,7 @@ _SETTINGS_RU_KO_COPY = {
     "text_input_hotkey": {"ru": "Горячая клавиша ввода", "ko": "텍스트 입력 단축키"},
     "asr_backend": {"ru": "Бэкенд распознавания", "ko": "음성 인식 백엔드"},
     "asr_provider_config": {"ru": "Параметры ASR", "ko": "ASR 설정"},
-    "asr_api_key": {"ru": "ASR API Key", "ko": "ASR API Key"},
+    "asr_api_key": {"ru": "Ключ API для ASR", "ko": "ASR API 키"},
     "asr_region": {"ru": "Регион сервиса", "ko": "서비스 지역"},
     "asr_listen": {"ru": "ASR для обратного перевода", "ko": "역번역 ASR"},
     "input_device_mode": {"ru": "Режим микрофона", "ko": "마이크 모드"},
@@ -1640,7 +2119,7 @@ _SETTINGS_RU_KO_COPY = {
     "roleplay_enabled": {"ru": "Включить ролевой стиль", "ko": "롤플레이 스타일 켜기"},
     "roleplay_preset": {"ru": "Пресет", "ko": "프리셋"},
     "persona_name": {"ru": "Имя персонажа", "ko": "페르소나 이름"},
-    "persona_prompt": {"ru": "BERT Prompt / персона", "ko": "BERT Prompt / 페르소나"},
+    "persona_prompt": {"ru": "Инструкция для роли", "ko": "페르소나 말투 안내"},
     "persona_glossary": {"ru": "Глоссарий", "ko": "용어 힌트"},
     "save_failed": {"ru": "Не удалось сохранить", "ko": "저장 실패"},
     "hotkey_error": {"ru": "Ошибка горячей клавиши", "ko": "단축키 오류"},
@@ -1649,55 +2128,40 @@ _SETTINGS_RU_KO_COPY = {
 for _key, _values in _SETTINGS_RU_KO_COPY.items():
     QT_SETTINGS_COPY.setdefault(_key, {}).update(_values)
 
-_SETTINGS_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
+_SETTINGS_LANGUAGES = SUPPORTED_UI_LANGUAGES
 
 _VOICE_CLONING_SETTINGS_COPY = {
-    "xtts_runtime_missing": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
-    "xtts_runtime_missing_details": "Voice Cloning is missing bundled runtime components: {components}. Download the full installer in Mio, then use Install & Restart to repair the app.",
-    "xtts_runtime_reinstall": "Download Full Installer",
-    "xtts_runtime_repair_checking": "Preparing installer...",
-    "xtts_model_missing": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
-    "xtts_ready": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
-    "xtts_reference_missing": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
-    "xtts_reference_invalid": "Voice Cloning cannot use the selected reference audio.",
-    "xtts_device_change_notice": "Device change will take effect the next time Voice Cloning is used.",
-    "xtts_voice_cloning_hint": "Voice Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want.",
+    "xtts_runtime_missing_details": {
+        "zh-CN": "声音克隆缺少完整安装包附带的运行组件：{components}。请在 Mio 中下载完整安装包，然后使用“安装并重启”修复应用。",
+        "en": "Voice Cloning is missing bundled runtime components: {components}. Download the full installer in Mio, then use Install & Restart to repair the app.",
+        "ja": "音声クローンの同梱実行コンポーネントが不足しています：{components}。Mio で完全版インストーラーをダウンロードし、「インストールして再起動」で修復してください。",
+        "ru": "Не хватает компонентов Voice Cloning из установщика: {components}. Загрузите полный установщик в Mio и выберите «Установить и перезапустить».",
+        "ko": "음성 클로닝 실행 구성 요소가 없습니다: {components}. Mio에서 전체 설치 파일을 다운로드한 뒤 ‘설치 후 재시작’으로 복구하세요.",
+    },
+    "xtts_runtime_reinstall": {
+        "zh-CN": "下载完整安装包",
+        "en": "Download Full Installer",
+        "ja": "完全版インストーラーをダウンロード",
+        "ru": "Скачать полный установщик",
+        "ko": "전체 설치 파일 다운로드",
+    },
+    "xtts_runtime_repair_checking": {
+        "zh-CN": "正在准备安装包…",
+        "en": "Preparing installer…",
+        "ja": "インストーラーを準備しています…",
+        "ru": "Подготовка установщика…",
+        "ko": "설치 파일 준비 중…",
+    },
+    "xtts_device_change_notice": {
+        "zh-CN": "设备更改将在下次使用声音克隆时生效。",
+        "en": "Device change will take effect the next time Voice Cloning is used.",
+        "ja": "デバイスの変更は次回の音声クローン使用時に反映されます。",
+        "ru": "Смена устройства вступит в силу при следующем запуске Voice Cloning.",
+        "ko": "장치 변경은 다음 음성 클로닝 사용 시 적용됩니다.",
+    },
 }
-for _key, _text in _VOICE_CLONING_SETTINGS_COPY.items():
-    QT_SETTINGS_COPY.setdefault(_key, {}).update(
-        {language: _text for language in _SETTINGS_LANGUAGES}
-    )
-QT_SETTINGS_COPY.setdefault("xtts_runtime_missing_details", {}).update(
-    {
-        "zh-CN": "声音克隆缺少随完整安装包附带的运行组件：{components}。请安装最新完整安装包并重启 Mio Translator；模型下载不能补齐这些程序组件。",
-        "en": "Voice Cloning is missing bundled runtime components: {components}. Install the latest full release, then restart Mio Translator.",
-        "ja": "Voice Cloning の同梱実行コンポーネントが不足しています: {components}。最新の完全版をインストールし直して Mio Translator を再起動してください。",
-        "ru": "Voice Cloning не хватает компонентов из установщика: {components}. Установите последнюю полную версию и перезапустите Mio Translator.",
-        "ko": "음성 클로닝 실행 구성 요소가 없습니다: {components}. 최신 전체 설치 파일을 설치한 뒤 Mio Translator를 재시작하세요.",
-    }
-)
-QT_SETTINGS_COPY.setdefault("xtts_runtime_reinstall", {}).update(
-    {
-        "zh-CN": "打开官方下载页",
-        "en": "Open Release Page",
-        "ja": "ダウンロードページを開く",
-        "ru": "Открыть страницу релиза",
-        "ko": "릴리스 페이지 열기",
-    }
-)
-
-QT_SETTINGS_COPY.setdefault("xtts_runtime_reinstall", {}).update(
-    {language: "Download Full Installer" for language in _SETTINGS_LANGUAGES}
-)
-QT_SETTINGS_COPY.setdefault("xtts_runtime_missing_details", {}).update(
-    {
-        language: (
-            "Voice Cloning is missing bundled runtime components: {components}. "
-            "Download the full installer in Mio, then use Install & Restart to repair the app."
-        )
-        for language in _SETTINGS_LANGUAGES
-    }
-)
+for _key, _values in _VOICE_CLONING_SETTINGS_COPY.items():
+    QT_SETTINGS_COPY.setdefault(_key, {}).update(_values)
 
 QT_SETTINGS_COPY.update({
     "success": {
@@ -1777,6 +2241,20 @@ QT_SETTINGS_COPY.update({
         "ru": "Тест TTS превысил время ожидания",
         "ko": "TTS 테스트 시간이 초과되었습니다",
     },
+    "qwen_tts_auth_failed": {
+        "zh-CN": "Qwen TTS 拒绝了 {region} 区域的凭据。API Key 可能无效、已被撤销，或属于其他服务区域。请选择创建该 Key 的区域，或更换 Key 后重新测试。",
+        "en": "Qwen TTS rejected the credential for {region}. The API key may be invalid, revoked, or belong to another service region. Choose the region where the key was created, or replace the key, then test again.",
+        "ja": "Qwen TTS は {region} の認証情報を拒否しました。API Key が無効、失効済み、または別のサービス地域用である可能性があります。Key を作成した地域を選ぶか、Key を変更して再テストしてください。",
+        "ru": "Qwen TTS отклонил учетные данные для региона {region}. API-ключ может быть недействительным, отозванным или относиться к другому региону сервиса. Выберите регион, где создан ключ, либо замените ключ и повторите тест.",
+        "ko": "Qwen TTS가 {region} 지역의 인증 정보를 거부했습니다. API Key가 유효하지 않거나 취소되었거나 다른 서비스 지역에 속할 수 있습니다. Key를 만든 지역을 선택하거나 Key를 교체한 뒤 다시 테스트하세요.",
+    },
+    "qwen_tts_network_failed": {
+        "zh-CN": "Qwen TTS 无法连接到服务。请检查网络及代理或 VPN 设置，然后重新测试。使用代理时，请确认其支持稳定的 HTTPS/TLS 连接。",
+        "en": "Qwen TTS could not reach the service. Check the network and proxy or VPN settings, then test again. If you use a proxy, make sure it supports stable HTTPS/TLS connections.",
+        "ja": "Qwen TTS はサービスに接続できませんでした。ネットワークとプロキシまたは VPN の設定を確認してから、再度テストしてください。プロキシを使用する場合は、安定した HTTPS/TLS 接続に対応していることを確認してください。",
+        "ru": "Qwen TTS не удалось подключиться к сервису. Проверьте сеть и настройки прокси или VPN, затем повторите тест. Если используется прокси, убедитесь, что он поддерживает стабильные соединения HTTPS/TLS.",
+        "ko": "Qwen TTS가 서비스에 연결하지 못했습니다. 네트워크와 프록시 또는 VPN 설정을 확인한 뒤 다시 테스트하세요. 프록시를 사용한다면 안정적인 HTTPS/TLS 연결을 지원하는지 확인하세요.",
+    },
     "xtts_runtime_missing": {
         "zh-CN": "声音克隆需要可选的 Coqui TTS 运行环境。当前尚未安装，因此可以管理参考音频，但暂时不能合成和测试。",
         "en": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
@@ -1820,13 +2298,215 @@ QT_SETTINGS_COPY.update({
         "ko": "음성 클로닝은 참조 샘플의 음색과 말투를 사용합니다. 감정을 더 넣고 싶다면 원하는 느낌이 담긴 깨끗하고 표현력 있는 샘플을 사용하세요.",
     },
 })
+_BACKEND_API_HINT_KEYS = {
+    backend: f"backend_api_hint_{backend}"
+    for backend in (
+        "openai_compatible",
+        "local_ai",
+        "deepl",
+        "libretranslate",
+        "qianwen",
+        "hunyuan",
+        "xiaomi",
+        "deepseek",
+        "nvidia",
+        "anthropic_compatible",
+    )
+}
+_BACKEND_MODEL_HINT_KEYS = {
+    backend: f"backend_model_hint_{backend}"
+    for backend in (
+        "openai_compatible",
+        "local_ai",
+        "google_web",
+        "mymemory",
+        "deepl",
+        "libretranslate",
+        "hunyuan",
+        "xiaomi",
+        "doubao",
+        "nvidia",
+        "anthropic_compatible",
+    )
+}
 
+for _backend, _key in _BACKEND_API_HINT_KEYS.items():
+    QT_SETTINGS_COPY.setdefault(_key, {})["en"] = get_backend_api_key_hint(_backend)
+for _backend, _key in _BACKEND_MODEL_HINT_KEYS.items():
+    QT_SETTINGS_COPY.setdefault(_key, {})["en"] = get_backend_model_hint(_backend)
+
+_BACKEND_HINT_TRANSLATIONS = {
+    "zh-CN": {
+        "backend_api_hint_openai_compatible": "用于兼容 OpenAI 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
+        "backend_api_hint_local_ai": "本地服务不需要密钥时请留空；只有服务器要求时才填写。",
+        "backend_api_hint_deepl": "请使用 DeepL API Free 密钥；付费密钥应改用 https://api.deepl.com/v2。",
+        "backend_api_hint_libretranslate": "可选。本地或自建 LibreTranslate 不需要密钥时请留空。",
+        "backend_api_hint_qianwen": "中国大陆使用 DashScope 大陆端点；海外优先使用国际端点或就近代理。",
+        "backend_api_hint_hunyuan": "填写腾讯混元 API Key。公共免密服务不稳定时，这是适合中国大陆的兼容方案。",
+        "backend_api_hint_xiaomi": "填写与所选区域匹配的 Xiaomi MiMo API Key；按量付费密钥不能与 Token Plan 集群混用。",
+        "backend_api_hint_deepseek": "填写 DeepSeek 开放平台 API Key；代理或第三方转发密钥请选择自定义区域并填写对应 Base URL。",
+        "backend_api_hint_nvidia": "托管端点使用 NVIDIA API Catalog 密钥；自建 NIM 或代理请选择自定义。",
+        "backend_api_hint_anthropic_compatible": "用于兼容 Claude 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
+        "backend_model_hint_openai_compatible": "选择代理公开的模型 ID；已保存的自定义模型会继续保留在列表中。",
+        "backend_model_hint_local_ai": "填写本地 OpenAI 兼容服务器公开的模型名称。",
+        "backend_model_hint_google_web": "无需 API Key。使用 Google 公共网页翻译；可访问地区质量较好，中国大陆连接可能不稳定。",
+        "backend_model_hint_mymemory": "无需 API Key。适合作为零配置备用方案，但公共配额和不同语种的质量会波动。",
+        "backend_model_hint_deepl": "DeepL 专用翻译 API；模型字段仅用于说明。",
+        "backend_model_hint_libretranslate": "自建 LibreTranslate 不受服务商配额限制；公共实例可能要求密钥或限制请求频率。",
+        "backend_model_hint_hunyuan": "hunyuan-turbos-latest 是实时翻译推荐的低延迟默认模型。",
+        "backend_model_hint_xiaomi": "mimo-v2.5-pro 默认质量更高；更重视延迟时可改用 mimo-v2-flash。",
+        "backend_model_hint_doubao": "请填写当前可用的方舟模型 ID，例如 doubao-seed-2-0-pro-260215。",
+        "backend_model_hint_nvidia": "托管 NIM 使用 provider/model 格式；自建 NIM 请填写该部署公开的模型 ID。",
+        "backend_model_hint_anthropic_compatible": "选择代理公开的 Claude 模型 ID；已保存的自定义模型会继续保留在列表中。",
+    },
+    "ja": {
+        "backend_api_hint_openai_compatible": "OpenAI 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
+        "backend_api_hint_local_ai": "ローカルサーバーが API キーを要求しない場合は空欄にしてください。",
+        "backend_api_hint_deepl": "DeepL API Free キーを使用します。有料キーでは https://api.deepl.com/v2 を指定してください。",
+        "backend_api_hint_libretranslate": "任意指定です。ローカル／自前の LibreTranslate がキー不要なら空欄にします。",
+        "backend_api_hint_qianwen": "中国本土では DashScope 中国本土、海外では国際エンドポイントまたは近隣プロキシを使用してください。",
+        "backend_api_hint_hunyuan": "Tencent Hunyuan API キーを使用します。公開のキー不要サービスが不安定な中国本土向けの選択肢です。",
+        "backend_api_hint_xiaomi": "選択地域に対応する Xiaomi MiMo API キーを使用し、従量課金キーと Token Plan を混在させないでください。",
+        "backend_api_hint_deepseek": "DeepSeek Open Platform の API キーを使用します。プロキシ／中継キーではカスタム地域と対応する Base URL を指定してください。",
+        "backend_api_hint_nvidia": "ホスト型は NVIDIA API Catalog キー、自前の NIM／プロキシはカスタムを使用します。",
+        "backend_api_hint_anthropic_compatible": "Claude 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
+        "backend_model_hint_openai_compatible": "プロキシが公開するモデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
+        "backend_model_hint_local_ai": "ローカルの OpenAI 互換サーバーが公開するモデル名を入力します。",
+        "backend_model_hint_google_web": "API キー不要の Google 公開翻訳です。利用可能地域では高品質ですが、中国本土では接続が不安定な場合があります。",
+        "backend_model_hint_mymemory": "API キー不要の予備手段です。公開枠と翻訳メモリの品質は言語ペアにより変動します。",
+        "backend_model_hint_deepl": "DeepL 専用翻訳 API です。モデル欄は情報表示用です。",
+        "backend_model_hint_libretranslate": "自前の LibreTranslate は提供元の割り当てなしで使えます。公開サーバーはキーや速度制限がある場合があります。",
+        "backend_model_hint_hunyuan": "hunyuan-turbos-latest はリアルタイム翻訳向けの低遅延な推奨モデルです。",
+        "backend_model_hint_xiaomi": "品質優先は mimo-v2.5-pro、遅延優先は mimo-v2-flash を使用します。",
+        "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 など、現在有効な Ark モデル ID を入力してください。",
+        "backend_model_hint_nvidia": "ホスト型 NIM は provider/model 形式、自前の NIM はその環境が公開するモデル ID を入力します。",
+        "backend_model_hint_anthropic_compatible": "プロキシが公開する Claude モデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
+    },
+    "ru": {
+        "backend_api_hint_openai_compatible": "Для прокси и шлюзов, совместимых с OpenAI. Укажите Base URL и идентификатор модели от провайдера.",
+        "backend_api_hint_local_ai": "Оставьте пустым, если локальный сервер не требует API-ключ.",
+        "backend_api_hint_deepl": "Используйте ключ DeepL API Free; для платного ключа задайте https://api.deepl.com/v2.",
+        "backend_api_hint_libretranslate": "Необязательно. Оставьте пустым для локального LibreTranslate без API-ключа.",
+        "backend_api_hint_qianwen": "В Китае используйте материковый DashScope; за рубежом — международный адрес или ближайший прокси.",
+        "backend_api_hint_hunyuan": "Укажите ключ Tencent Hunyuan. Это надёжный вариант для материкового Китая, когда публичные сервисы нестабильны.",
+        "backend_api_hint_xiaomi": "Используйте ключ Xiaomi MiMo выбранного региона; не смешивайте pay-as-you-go и кластеры Token Plan.",
+        "backend_api_hint_deepseek": "Используйте ключ DeepSeek Open Platform; для прокси выберите пользовательский регион и соответствующий Base URL.",
+        "backend_api_hint_nvidia": "Для хостинга используйте ключ NVIDIA API Catalog; для своего NIM или прокси выберите пользовательский адрес.",
+        "backend_api_hint_anthropic_compatible": "Для прокси и шлюзов, совместимых с Claude. Укажите Base URL и идентификатор модели от провайдера.",
+        "backend_model_hint_openai_compatible": "Выберите ID модели, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
+        "backend_model_hint_local_ai": "Введите имя модели, которое предоставляет локальный OpenAI-совместимый сервер.",
+        "backend_model_hint_google_web": "API-ключ не нужен. Используется публичный перевод Google; в Китае доступ может быть нестабильным.",
+        "backend_model_hint_mymemory": "API-ключ не нужен. Удобный резерв без настройки, но квота и качество зависят от языковой пары.",
+        "backend_model_hint_deepl": "Специализированный API DeepL; поле модели носит информационный характер.",
+        "backend_model_hint_libretranslate": "Свой LibreTranslate работает без квоты провайдера; публичные серверы могут требовать ключ или ограничивать запросы.",
+        "backend_model_hint_hunyuan": "hunyuan-turbos-latest — рекомендуемая низколатентная модель Hunyuan для живого перевода.",
+        "backend_model_hint_xiaomi": "mimo-v2.5-pro — вариант по качеству; приоритет скорости — mimo-v2-flash.",
+        "backend_model_hint_doubao": "Введите актуальный ID модели Ark, например doubao-seed-2-0-pro-260215.",
+        "backend_model_hint_nvidia": "Хостинговые NIM используют формат provider/model; для своего NIM введите ID, открытый этим развёртыванием.",
+        "backend_model_hint_anthropic_compatible": "Выберите ID модели Claude, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
+    },
+    "ko": {
+        "backend_api_hint_openai_compatible": "OpenAI 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
+        "backend_api_hint_local_ai": "로컬 서버가 API 키를 요구하지 않으면 비워 두세요.",
+        "backend_api_hint_deepl": "DeepL API Free 키를 사용합니다. 유료 키는 https://api.deepl.com/v2 를 지정하세요.",
+        "backend_api_hint_libretranslate": "선택 사항입니다. 로컬 또는 자체 LibreTranslate가 키를 요구하지 않으면 비워 두세요.",
+        "backend_api_hint_qianwen": "중국 본토는 DashScope 본토 엔드포인트, 해외는 국제 엔드포인트 또는 가까운 프록시를 사용하세요.",
+        "backend_api_hint_hunyuan": "Tencent Hunyuan API 키를 사용합니다. 공개 무키 서비스가 불안정한 중국 본토 환경에 적합합니다.",
+        "backend_api_hint_xiaomi": "선택 지역과 일치하는 Xiaomi MiMo API 키를 사용하고 pay-as-you-go 키와 Token Plan을 섞지 마세요.",
+        "backend_api_hint_deepseek": "DeepSeek Open Platform API 키를 사용합니다. 프록시 키는 사용자 지정 지역과 해당 Base URL을 선택하세요.",
+        "backend_api_hint_nvidia": "호스팅은 NVIDIA API Catalog 키를, 자체 NIM 또는 프록시는 사용자 지정을 사용합니다.",
+        "backend_api_hint_anthropic_compatible": "Claude 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
+        "backend_model_hint_openai_compatible": "프록시가 제공하는 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
+        "backend_model_hint_local_ai": "로컬 OpenAI 호환 서버가 제공하는 모델 이름을 입력합니다.",
+        "backend_model_hint_google_web": "API 키가 필요 없는 Google 공개 번역입니다. 사용 가능한 지역에서는 품질이 좋지만 중국 본토에서는 불안정할 수 있습니다.",
+        "backend_model_hint_mymemory": "API 키가 필요 없는 대체 수단입니다. 공개 할당량과 번역 메모리 품질은 언어 조합에 따라 달라집니다.",
+        "backend_model_hint_deepl": "DeepL 전용 번역 API이며 모델 필드는 정보용입니다.",
+        "backend_model_hint_libretranslate": "자체 LibreTranslate는 서비스 할당량 없이 동작합니다. 공개 서버는 키를 요구하거나 요청을 제한할 수 있습니다.",
+        "backend_model_hint_hunyuan": "hunyuan-turbos-latest는 실시간 번역에 권장되는 저지연 Hunyuan 모델입니다.",
+        "backend_model_hint_xiaomi": "품질 기본값은 mimo-v2.5-pro이며 지연이 더 중요하면 mimo-v2-flash를 사용합니다.",
+        "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 같은 현재 Ark 모델 ID를 입력하세요.",
+        "backend_model_hint_nvidia": "호스팅 NIM은 provider/model 형식을 사용합니다. 자체 NIM은 해당 배포가 제공하는 모델 ID를 입력하세요.",
+        "backend_model_hint_anthropic_compatible": "프록시가 제공하는 Claude 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
+    },
+}
+for _language, _texts in _BACKEND_HINT_TRANSLATIONS.items():
+    for _key, _text in _texts.items():
+        QT_SETTINGS_COPY.setdefault(_key, {})[_language] = _text
+
+QT_SETTINGS_COPY.update({
+    "settings_dictionary_layer_bundled": {
+        "zh-CN": "内置词典",
+        "en": "Bundled",
+        "ja": "同梱辞書",
+        "ru": "Встроенный словарь",
+        "ko": "기본 제공 사전",
+    },
+    "settings_dictionary_layer_official": {
+        "zh-CN": "官方词典",
+        "en": "Official",
+        "ja": "公式辞書",
+        "ru": "Официальный словарь",
+        "ko": "공식 사전",
+    },
+    "settings_dictionary_layer_user": {
+        "zh-CN": "用户词典",
+        "en": "User",
+        "ja": "ユーザー辞書",
+        "ru": "Пользовательский словарь",
+        "ko": "사용자 사전",
+    },
+    "settings_dictionary_layer_other": {
+        "zh-CN": "其他词典",
+        "en": "Other",
+        "ja": "その他の辞書",
+        "ru": "Другой словарь",
+        "ko": "기타 사전",
+    },
+    "xtts_import_audio_title": {
+        "zh-CN": "导入声音克隆参考音频",
+        "en": "Import Voice Cloning Reference Audio",
+        "ja": "音声クローンの参照音声を読み込む",
+        "ru": "Импорт эталонного аудио для клонирования голоса",
+        "ko": "음성 클로닝 참조 오디오 가져오기",
+    },
+    "xtts_reference_quality_too_short": {
+        "zh-CN": "参考音频太短。请录制或导入至少 5–10 秒的清晰语音。",
+        "en": "The reference audio is too short. Record or import at least 5–10 seconds of clear speech.",
+        "ja": "参照音声が短すぎます。5～10 秒以上の明瞭な音声を録音または読み込んでください。",
+        "ru": "Эталонная запись слишком короткая. Запишите или импортируйте не менее 5–10 секунд чистой речи.",
+        "ko": "참조 오디오가 너무 짧습니다. 선명한 음성을 최소 5~10초 녹음하거나 가져오세요.",
+    },
+    "xtts_reference_quality_quiet": {
+        "zh-CN": "参考音频太安静或大部分是静音。请靠近麦克风重新录制，或导入更清晰的人声。",
+        "en": "The reference audio is too quiet or mostly silent. Record closer to the microphone or import a clearer voice sample.",
+        "ja": "参照音声が小さすぎるか、ほとんど無音です。マイクに近づいて録音し直すか、より明瞭な音声を読み込んでください。",
+        "ru": "Эталонная запись слишком тихая или почти пустая. Запишите ближе к микрофону либо импортируйте более чистый голос.",
+        "ko": "참조 오디오가 너무 작거나 대부분 무음입니다. 마이크에 더 가까이 대고 다시 녹음하거나 더 선명한 음성을 가져오세요.",
+    },
+    "xtts_reference_quality_dc_offset": {
+        "zh-CN": "参考音频的直流偏移过大。请使用更干净的录音，或先进行归一化。",
+        "en": "The reference audio has excessive DC offset. Use a cleaner recording or normalize it first.",
+        "ja": "参照音声の DC オフセットが大きすぎます。よりきれいな録音を使うか、先に正規化してください。",
+        "ru": "В эталонной записи слишком большое смещение постоянной составляющей. Используйте более чистую запись или сначала нормализуйте её.",
+        "ko": "참조 오디오의 DC 오프셋이 너무 큽니다. 더 깨끗한 녹음을 사용하거나 먼저 정규화하세요.",
+    },
+    "xtts_reference_quality_clipped": {
+        "zh-CN": "参考音频有削波或失真。请降低输入增益后重新录制。",
+        "en": "The reference audio is clipped or distorted. Lower the input gain and record again.",
+        "ja": "参照音声がクリップまたは歪んでいます。入力ゲインを下げて録音し直してください。",
+        "ru": "Эталонная запись перегружена или искажена. Уменьшите входное усиление и запишите снова.",
+        "ko": "참조 오디오가 클리핑되었거나 왜곡되었습니다. 입력 게인을 낮추고 다시 녹음하세요.",
+    },
+})
 
 def _complete_localized_table(table: dict[str, dict[str, str]]) -> None:
-    for values in table.values():
-        fallback = values.get("en") or values.get("zh-CN") or next(iter(values.values()), "")
-        for language in _SETTINGS_LANGUAGES:
-            values.setdefault(language, fallback)
+    missing = {
+        key: tuple(language for language in _SETTINGS_LANGUAGES if not values.get(language))
+        for key, values in table.items()
+        if any(not values.get(language) for language in _SETTINGS_LANGUAGES)
+    }
+    if missing:
+        raise RuntimeError(f"Incomplete settings localization catalog: {missing}")
 
 
 _complete_localized_table(QT_SETTINGS_COPY)
@@ -1942,50 +2622,50 @@ FIELD_HINTS.update({
     "chatbox_template": {
         "zh-CN": "可选：{translatedText}、{translatedText2}、{text}。留空时使用输出格式。",
         "en": "Optional: {translatedText}, {translatedText2}, {text}. Leave empty to use Output Format.",
-        "ja": "Optional: {translatedText}, {translatedText2}, {text}. 空欄なら出力形式を使います。",
-        "ru": "Optional: {translatedText}, {translatedText2}, {text}. Leave empty to use Output Format.",
-        "ko": "Optional: {translatedText}, {translatedText2}, {text}. 비워 두면 출력 형식을 사용합니다.",
+        "ja": "任意指定です。{translatedText}、{translatedText2}、{text} を使用できます。空欄の場合は選択した出力形式を使います。",
+        "ru": "Необязательно. Можно использовать {translatedText}, {translatedText2} и {text}. Оставьте поле пустым, чтобы применить выбранный формат вывода.",
+        "ko": "선택 사항입니다. {translatedText}, {translatedText2}, {text}를 사용할 수 있습니다. 비워 두면 선택한 출력 형식을 사용합니다.",
     },
     "fallback_backends": {
         "zh-CN": "可选，用英文逗号分隔备用服务代号；主翻译服务失败时才会尝试。",
         "en": "Optional comma-separated backend ids. They are tried only after the primary backend fails.",
-        "ja": "Optional comma-separated backend ids. They are tried only after the primary backend fails.",
-        "ru": "Optional comma-separated backend ids. They are tried only after the primary backend fails.",
-        "ko": "Optional comma-separated backend ids. They are tried only after the primary backend fails.",
+        "ja": "任意指定です。予備サービスの ID を半角カンマで区切ります。メインサービスが失敗した場合のみ順に試します。",
+        "ru": "Необязательные ID резервных сервисов через запятую. Они используются только после сбоя основного сервиса.",
+        "ko": "선택 사항입니다. 대체 서비스 ID를 쉼표로 구분합니다. 기본 서비스가 실패한 경우에만 시도합니다.",
     },
     "target_language_3": {
         "zh-CN": "只有“自定义聊天框内容”里写了 {translatedText3} 时，才会翻译第三种语言。",
         "en": "Translated only when the Chatbox Template contains {translatedText3}.",
-        "ja": "Translated only when the Chatbox Template contains {translatedText3}.",
-        "ru": "Translated only when the Chatbox Template contains {translatedText3}.",
+        "ja": "Chatbox テンプレートに {translatedText3} が含まれる場合のみ翻訳します。",
+        "ru": "Переводится только при наличии {translatedText3} в шаблоне Chatbox.",
         "ko": "Chatbox 템플릿에 {translatedText3}가 있을 때만 번역합니다.",
     },
     "qwen_translation_region": {
         "zh-CN": "大陆玩家选中国大陆，海外玩家选国际站；只有在你有自己的转发地址或兼容服务地址时，才选自定义。",
         "en": "Mainland players should use Mainland China; overseas players should use International. Custom is for proxies, gateways, or compatible services.",
         "ja": "中国本土のプレイヤーは中国本土、海外では国際版を選びます。カスタムはプロキシや互換サービス向けです。",
-        "ru": "В Китае используйте материковый регион; за рубежом - международный. Custom подходит для прокси, шлюзов и совместимых сервисов.",
+        "ru": "В Китае используйте материковый регион; за рубежом — международный. Пользовательский адрес предназначен для прокси, шлюзов и совместимых сервисов.",
         "ko": "중국 본토 사용자는 중국 본토를, 해외 사용자는 국제 서비스를 선택하세요. 사용자 지정은 프록시, 게이트웨이, 호환 서비스에 적합합니다.",
     },
     "deepseek_translation_region": {
         "zh-CN": "DeepSeek 官方目前没有大陆/海外分站。普通玩家选官方；只有使用第三方转发地址或兼容账号时，才选自定义并填写对方给你的服务地址。",
         "en": "DeepSeek does not currently expose separate mainland/overseas official endpoints. Use Official for DeepSeek keys; choose Custom for proxy, relay, or third-party compatible keys.",
-        "ja": "DeepSeek 公式には現在、中国本土/海外の別エンドポイントはありません。DeepSeek のキーは公式、proxy・relay・第三者互換キーはカスタムを選んでください。",
-        "ru": "DeepSeek currently has no separate mainland/overseas official endpoint. Use Official for DeepSeek keys; use Custom for proxy, relay, or third-party compatible keys.",
+        "ja": "DeepSeek 公式には現在、中国本土／海外の別エンドポイントはありません。DeepSeek のキーは公式、プロキシ・中継・第三者互換キーはカスタムを選んでください。",
+        "ru": "У официального DeepSeek сейчас нет отдельных адресов для Китая и других стран. Для ключей DeepSeek выберите официальный сервис; для прокси, ретранслятора или совместимого стороннего ключа выберите пользовательский адрес.",
         "ko": "DeepSeek 공식은 현재 중국 본토/해외 별도 엔드포인트를 제공하지 않습니다. DeepSeek 키는 공식, 프록시/중계/타사 호환 키는 사용자 지정을 선택하세요.",
     },
     "xiaomi_translation_region": {
         "zh-CN": "按量付费通常使用 sk-xxxxx API Key；Token Plan 集群通常使用 tp-xxxxx API Key。区域和 Key 类型要匹配。",
         "en": "Pay-as-you-go usually uses sk-xxxxx keys; Token Plan clusters usually use tp-xxxxx keys. Match the region to the key type.",
         "ja": "従量課金は通常 sk-xxxxx、Token Plan クラスターは通常 tp-xxxxx の API Key を使います。Key 種別に合う地域を選んでください。",
-        "ru": "Pay-as-you-go обычно использует ключи sk-xxxxx, а Token Plan - tp-xxxxx. Регион должен соответствовать типу ключа.",
+        "ru": "При оплате по мере использования обычно применяются ключи sk-xxxxx, а в кластерах Token Plan — ключи tp-xxxxx. Выбранный регион должен соответствовать типу ключа.",
         "ko": "종량제는 보통 sk-xxxxx 키를, Token Plan 클러스터는 보통 tp-xxxxx 키를 사용합니다. 키 유형과 지역을 맞춰 주세요.",
     },
     "nvidia_translation_region": {
         "zh-CN": "普通玩家选 NVIDIA 官方在线服务；如果你用的是自己搭建、公司提供或第三方给的 NVIDIA 兼容地址，再选自定义。",
         "en": "Use the hosted NVIDIA API Catalog endpoint, or choose Custom for self-hosted NIM, proxies, or enterprise gateways.",
         "ja": "ホスト API は NVIDIA API Catalog のエンドポイントです。自前の NIM、プロキシ、企業ゲートウェイはカスタムを選びます。",
-        "ru": "Hosted API использует NVIDIA API Catalog. Для собственного NIM, proxy или корпоративного шлюза выберите Custom.",
+        "ru": "Используйте официальный размещённый API NVIDIA или выберите пользовательский адрес для собственного NIM, прокси либо корпоративного шлюза.",
         "ko": "호스팅 API는 NVIDIA API Catalog 주소를 사용합니다. 자체 NIM, 프록시, 엔터프라이즈 게이트웨이는 사용자 지정을 선택하세요.",
     },
 })
@@ -1995,7 +2675,7 @@ FIELD_HINTS["asr_backend"].update({
     "ko": "마이크 음성을 텍스트로 변환하는 방식을 정합니다. 중국어/광둥어는 SenseVoice, 외국어 듣기는 Whisper를 권장하며, 로컬 모델을 원하지 않으면 Qwen3-ASR 또는 Gemini를 선택하세요.",
 })
 FIELD_HINTS["asr_device"].update({
-    "ru": "По умолчанию CPU для слабых ПК. Локальные SenseVoice/Whisper могут использовать GPU support; рекомендуется NVIDIA RTX 4060 / laptop 4060 или лучше и минимум 8 GB VRAM.",
+    "ru": "Для менее мощных компьютеров по умолчанию используется CPU. Локальные SenseVoice и Whisper могут работать на видеокарте; рекомендуется NVIDIA RTX 4060, включая мобильную версию, или лучше и не менее 8 ГБ видеопамяти.",
     "ko": "기본값은 저사양 PC에 맞춘 CPU입니다. 로컬 SenseVoice/Whisper는 GPU 지원을 사용할 수 있으며, NVIDIA RTX 4060 / 노트북 4060 이상과 VRAM 8GB 이상을 권장합니다.",
 })
 FIELD_HINTS["translation_provider"].update({
@@ -2010,6 +2690,68 @@ FIELD_HINTS["tts_output_vrchat"].update({
     "ru": "Направляет озвучивание в микрофонную цепочку VRChat. Обычно требуется виртуальное устройство MixLine.",
     "ko": "동시통역 음성을 VRChat 마이크 경로로 보냅니다. 보통 MixLine 가상 장치가 필요합니다.",
 })
+_SETTINGS_HINT_RU_KO_COPY = {
+    "settings_app_language": {
+        "ru": "Изменяет только язык интерфейса Mio и не влияет на язык перевода.",
+        "ko": "Mio 인터페이스 언어만 바꾸며 번역 대상 언어에는 영향을 주지 않습니다.",
+    },
+    "settings_background": {
+        "ru": "Выберите изображение для главного окна и настроек. Элементы интерфейса останутся полупрозрачными поверх него.",
+        "ko": "메인 창과 설정의 배경 이미지를 선택합니다. HUD는 이미지 위에 반투명으로 표시됩니다.",
+    },
+    "source_language": {
+        "ru": "Исходный язык ручного текста и перевода. Язык речи по-прежнему задаётся в настройках ASR.",
+        "ko": "수동 텍스트와 번역의 원본 언어입니다. 음성 언어는 계속 ASR 설정에서 제어합니다.",
+    },
+    "target_language_2": {
+        "ru": "Второй целевой язык для трёхъязычного вывода. Перевод выполняется только при включённом формате вывода 2.",
+        "ko": "3개 언어 표시에 사용할 두 번째 대상 언어입니다. 출력 형식 2를 켠 경우에만 번역합니다.",
+    },
+    "send_to_chatbox": {
+        "ru": "Если включено, готовый перевод отправляется в VRChat Chatbox. Если выключено, он отображается только в Mio.",
+        "ko": "켜면 완료된 번역을 VRChat Chatbox로 보냅니다. 끄면 Mio에만 표시합니다.",
+    },
+    "input_device": {
+        "ru": "Выберите микрофон для распознавания вашей речи.",
+        "ko": "내 음성을 인식할 마이크를 선택합니다.",
+    },
+    "asr_listen": {
+        "ru": "Используется для обратного перевода голосов других игроков в VRChat. Можно следовать основному ASR или выбрать отдельную онлайн-модель.",
+        "ko": "다른 VRChat 플레이어의 음성을 역번역할 때 사용합니다. 기본 ASR을 따르거나 별도의 온라인 모델을 선택할 수 있습니다.",
+    },
+    "vrc_listen_device": {
+        "ru": "Выберите устройство, через которое воспроизводится звук VRChat. Если его нет, проверьте системный вывод и настройки звука VRChat.",
+        "ko": "VRChat 오디오가 재생되는 장치를 선택합니다. 장치가 없으면 시스템 재생 및 VRChat 출력 설정을 확인하세요.",
+    },
+    "tts_engine": {
+        "ru": "Выберите движок голоса перевода. MiMo/Qwen требуют API-ключ и регион; VOICEVOX, AivisSpeech и пользовательские голоса — локальное приложение или модель.",
+        "ko": "통역 음성 엔진을 선택합니다. MiMo/Qwen에는 API 키와 서비스 지역이 필요하고, VOICEVOX/AivisSpeech/사용자 음색에는 로컬 서비스나 모델이 필요합니다.",
+    },
+    "tts_device": {
+        "ru": "Для слабых ПК по умолчанию используется CPU. Для Style-Bert-VITS2 на GPU рекомендуется NVIDIA RTX 4060 или лучше и не менее 8 ГБ VRAM; с 6 ГБ возможна нестабильность вместе с VRChat и локальным ASR.",
+        "ko": "저사양 PC의 기본값은 CPU입니다. Style-Bert-VITS2 GPU 사용은 VRAM 8GB 이상의 NVIDIA RTX 4060급 이상을 권장합니다. 6GB에서도 시도할 수 있지만 VRChat 및 로컬 ASR과 함께 쓰면 불안정할 수 있습니다.",
+    },
+    "tts_bert_language": {
+        "ru": "Style-Bert-VITS2 нужна BERT-модель для выбранного языка. Если её нет, загрузите здесь.",
+        "ko": "Style-Bert-VITS2에는 선택한 언어의 BERT 모델이 필요합니다. 없으면 여기에서 다운로드하세요.",
+    },
+    "chatbox_template": {
+        "ru": "Необязательно: {translatedText}, {translatedText2}, {text}. Оставьте пустым, чтобы использовать формат вывода.",
+        "ko": "선택 사항: {translatedText}, {translatedText2}, {text}. 비워 두면 출력 형식을 사용합니다.",
+    },
+    "fallback_backends": {
+        "ja": "任意指定です。予備サービスの ID を半角カンマで区切ります。メインサービスが失敗した場合のみ順に試します。",
+        "ru": "Необязательные ID резервных сервисов через запятую. Они используются только после сбоя основного сервиса.",
+        "ko": "선택 사항입니다. 대체 서비스 ID를 쉼표로 구분합니다. 기본 서비스가 실패한 경우에만 시도합니다.",
+    },
+    "target_language_3": {
+        "ja": "Chatbox テンプレートに {translatedText3} が含まれる場合のみ翻訳します。",
+        "ru": "Переводится только при наличии {translatedText3} в шаблоне Chatbox.",
+        "ko": "Chatbox 템플릿에 {translatedText3}가 있을 때만 번역합니다.",
+    },
+}
+for _key, _values in _SETTINGS_HINT_RU_KO_COPY.items():
+    FIELD_HINTS.setdefault(_key, {}).update(_values)
 _complete_localized_table(FIELD_HINTS)
 
 
@@ -2199,6 +2941,7 @@ class SettingsWindow(QDialog):
         self.setMinimumSize(980, 620)
 
         self._nav_list: QListWidget | None = None
+        self._nav_panel: QFrame | None = None
         self._page_stack: QStackedWidget | None = None
         self._pages: dict[str, QWidget] = {}
         self._built_pages: set[str] = set()
@@ -2394,9 +3137,13 @@ class SettingsWindow(QDialog):
         self._save_thread: QThread | None = None
         self._closing = False
         self._saving = False
+        self._lifecycle_disposed = False
+        self._close_notified = False
         self._pending_save_rollback_config: dict | None = None
         self._ui_thread_id = threading.get_ident()
-        self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue()
+        self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue(
+            maxsize=SETTINGS_UI_CALLBACK_QUEUE_MAXSIZE
+        )
         self._applied_settings_stylesheet = ""
         self._applied_settings_theme = ""
         self._applied_background_path = self._background_image_path
@@ -2409,7 +3156,8 @@ class SettingsWindow(QDialog):
         self._audio_device_refresh_timer.timeout.connect(
             self._refresh_audio_device_choices
         )
-        self._audio_device_refresh_timer.start()
+        if not self._preloaded:
+            self._audio_device_refresh_timer.start()
         self.bert_refresh_requested.connect(self._refresh_bert_model_prompt)
         self.dictionary_update_finished.connect(self._on_dictionary_update_finished)
         self.dictionary_update_failed.connect(self._on_dictionary_update_failed)
@@ -2521,8 +3269,10 @@ class SettingsWindow(QDialog):
         self._fallback_backends_var.set(fallback_text)
 
         backend = normalize_backend(trans_cfg.get("backend", "openai"))
-        self._backend_var.set(get_backend_label(backend))
-        self._backend_codes = {get_backend_label(b): b for b in get_backend_order()}
+        self._backend_var.set(get_backend_label(backend, self._ui_lang))
+        self._backend_codes = {
+            get_backend_label(b, self._ui_lang): b for b in get_backend_order()
+        }
         self._set_backend_field_vars(backend)
 
         asr_opts = self._asr_engine_options()
@@ -2542,17 +3292,17 @@ class SettingsWindow(QDialog):
         self._input_device_mode_var.set(mode_fixed if input_mode == "fixed" else mode_auto)
         self._input_device_var.set(str(audio_cfg.get("input_device") or ""))
 
-        self._vad_var.set(str(audio_cfg.get("vad_silence_threshold", 0.65)))
-        self._chunk_interval_var.set(str(streaming_cfg.get("chunk_interval_ms", 250)))
-        self._chunk_window_var.set(str(streaming_cfg.get("chunk_window_s", 1.6)))
-        self._partial_hits_var.set(str(streaming_cfg.get("partial_stability_hits", 2)))
-        self._vad_sensitivity_var.set(str(audio_cfg.get("vad_sensitivity", 2)))
-        self._vad_speech_ratio_var.set(str(audio_cfg.get("vad_speech_ratio", 0.6)))
-        self._vad_activation_threshold_var.set(str(audio_cfg.get("vad_activation_threshold_s", 0.2)))
-        self._vad_min_rms_var.set(str(audio_cfg.get("vad_min_rms", 0.012)))
-        self._min_segment_var.set(str(audio_cfg.get("min_segment_s", 0.45)))
-        self._max_segment_var.set(str(audio_cfg.get("max_segment_s", 6.0)))
-        self._partial_min_speech_var.set(str(audio_cfg.get("partial_min_speech_s", 0.45)))
+        self._vad_var.set(self._format_numeric_input(audio_cfg.get("vad_silence_threshold", 0.65)))
+        self._chunk_interval_var.set(self._format_numeric_input(streaming_cfg.get("chunk_interval_ms", 250)))
+        self._chunk_window_var.set(self._format_numeric_input(streaming_cfg.get("chunk_window_s", 1.6)))
+        self._partial_hits_var.set(self._format_numeric_input(streaming_cfg.get("partial_stability_hits", 2)))
+        self._vad_sensitivity_var.set(self._format_numeric_input(audio_cfg.get("vad_sensitivity", 2)))
+        self._vad_speech_ratio_var.set(self._format_numeric_input(audio_cfg.get("vad_speech_ratio", 0.6)))
+        self._vad_activation_threshold_var.set(self._format_numeric_input(audio_cfg.get("vad_activation_threshold_s", 0.2)))
+        self._vad_min_rms_var.set(self._format_numeric_input(audio_cfg.get("vad_min_rms", 0.012)))
+        self._min_segment_var.set(self._format_numeric_input(audio_cfg.get("min_segment_s", 0.45)))
+        self._max_segment_var.set(self._format_numeric_input(audio_cfg.get("max_segment_s", 6.0)))
+        self._partial_min_speech_var.set(self._format_numeric_input(audio_cfg.get("partial_min_speech_s", 0.45)))
         self._init_denoise_var(audio_cfg)
 
         tts_engine = str(tts_cfg.get("engine", "edge")).strip() or "edge"
@@ -2577,38 +3327,17 @@ class SettingsWindow(QDialog):
         xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
         self._init_xtts_device_vars(tts_cfg)
         xtts_lang_code = str(xtts_cfg.get("language", "auto") or "auto").strip().lower()
-        # Map language code to display name
-        lang_code_to_display = {
-            "auto": "Auto-detect",
-            "en": "English",
-            "zh-cn": "中文 (Chinese)",
-            "ja": "日本語 (Japanese)",
-            "ko": "한국어 (Korean)",
-            "es": "Español (Spanish)",
-            "fr": "Français (French)",
-            "de": "Deutsch (German)",
-            "it": "Italiano (Italian)",
-            "pt": "Português (Portuguese)",
-            "pl": "Polski (Polish)",
-            "tr": "Türkçe (Turkish)",
-            "ru": "Русский (Russian)",
-            "nl": "Nederlands (Dutch)",
-            "cs": "Čeština (Czech)",
-            "ar": "العربية (Arabic)",
-            "hu": "Magyar (Hungarian)",
-            "hi": "Hindi",
-        }
-        xtts_lang_display = lang_code_to_display.get(xtts_lang_code, "Auto-detect")
-        self._xtts_language_var.set(xtts_lang_display)
+        options = xtts_language_options(self._ui_lang)
+        self._xtts_language_var.set(self._label_for_code(options, xtts_lang_code))
 
         self._vrc_listen_enabled_var.set(bool(vrc_cfg.get("enabled", False)))
         self._vrc_listen_overlay_var.set(bool(vrc_cfg.get("show_overlay", False)))
         self._vrc_listen_send_var.set(bool(vrc_cfg.get("send_to_chatbox", True)))
         self._listen_self_suppress_var.set(bool(vrc_cfg.get("self_suppress", False)))
-        self._listen_self_suppress_seconds_var.set(str(vrc_cfg.get("self_suppress_seconds", 0.65)))
-        self._listen_segment_duration_var.set(str(vrc_cfg.get("segment_duration_s", 2.0)))
-        self._listen_tail_silence_var.set(str(vrc_cfg.get("tail_silence_s", 0.65)))
-        self._listen_vad_min_rms_var.set(str(vrc_cfg.get("vad_min_rms", 0.02)))
+        self._listen_self_suppress_seconds_var.set(self._format_numeric_input(vrc_cfg.get("self_suppress_seconds", 0.65)))
+        self._listen_segment_duration_var.set(self._format_numeric_input(vrc_cfg.get("segment_duration_s", 2.0)))
+        self._listen_tail_silence_var.set(self._format_numeric_input(vrc_cfg.get("tail_silence_s", 0.65)))
+        self._listen_vad_min_rms_var.set(self._format_numeric_input(vrc_cfg.get("vad_min_rms", 0.02)))
         listen_src = str(vrc_cfg.get("source_language", "auto"))
         listen_tgt = str(vrc_cfg.get("target_language", "zh"))
         self._listen_src_codes = {label: code for label, code in src_opts}
@@ -2634,14 +3363,28 @@ class SettingsWindow(QDialog):
         default_preset_label = self._roleplay_preset_reverse.get(preset, roleplay_preset_options[0][0])
         self._roleplay_preset_var = _StrVar(default_preset_label)
         self._persona_name_var = _StrVar(str(social_cfg.get("persona_name", "") or ROLEPLAY_PRESETS[preset].get("persona_name", "")))
-        self._roleplay_prompt_var.set(str(social_cfg.get("persona_prompt", "") or ""))
-        self._roleplay_glossary_var.set(str(social_cfg.get("persona_glossary", "") or ""))
+        self._roleplay_prompt_var.set(
+            _roleplay_preset_editor_text(
+                preset,
+                "persona_prompt",
+                social_cfg.get("persona_prompt", ""),
+                self._ui_lang,
+            )
+        )
+        self._roleplay_glossary_var.set(
+            _roleplay_preset_editor_text(
+                preset,
+                "persona_glossary",
+                social_cfg.get("persona_glossary", ""),
+                self._ui_lang,
+            )
+        )
 
         control_params = osc_cfg.get("control_params", {}) if isinstance(osc_cfg.get("control_params", {}), dict) else {}
         prefix = str(osc_cfg.get("control_prefix", "Mio") or "Mio")
         self._osc_listener_enabled_var.set(bool(osc_cfg.get("listener_enabled", False)))
         self._osc_receive_host_var.set(str(osc_cfg.get("receive_host", "127.0.0.1") or "127.0.0.1"))
-        self._osc_receive_port_var.set(str(osc_cfg.get("receive_port", 9001) or 9001))
+        self._osc_receive_port_var.set(self._format_numeric_input(osc_cfg.get("receive_port", 9001) or 9001))
         self._osc_sync_mute_self_var.set(bool(osc_cfg.get("sync_mute_self", True)))
         self._osc_allow_avatar_control_var.set(bool(osc_cfg.get("allow_avatar_control", False)))
         self._osc_control_prefix_var.set(prefix)
@@ -2663,20 +3406,76 @@ class SettingsWindow(QDialog):
         return label
 
     def _copy(self, key: str, **kwargs) -> str:
-        table = QT_SETTINGS_COPY.get(key)
-        text = ""
-        if table:
-            text = (
-                table.get(self._ui_lang)
-                or table.get(self._ui_lang.split("-", 1)[0])
-                or table.get("en")
-                or table.get("zh-CN")
-                or next(iter(table.values()))
+        if key in QT_SETTINGS_COPY:
+            return translate_key_catalog(
+                QT_SETTINGS_COPY,
+                self._ui_lang,
+                key,
+                **kwargs,
             )
+        return tr(self._ui_lang, key, **kwargs)
+
+    @staticmethod
+    def _parse_locale_number_value(value: object, language: object) -> float:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("empty number")
+        text = (
+            text.replace("\u202f", "")
+            .replace("\u00a0", "")
+            .replace(" ", "")
+            .replace("'", "")
+        )
+        if normalize_ui_language(language) == "ru":
+            if "," in text:
+                text = text.replace(".", "").replace(",", ".")
         else:
-            text = tr(self._ui_lang, key, **kwargs)
-            kwargs = {}
-        return text.format(**kwargs) if kwargs else text
+            text = text.replace(",", "")
+        return float(text)
+
+    @staticmethod
+    def _numeric_input_decimals(value: object) -> int:
+        text = str(value or "").strip().lower()
+        if "e" in text:
+            return 6
+        separator = "," if "," in text else "." if "." in text else ""
+        if not separator:
+            return 0
+        return min(6, len(text.rsplit(separator, 1)[1]))
+
+    def _format_numeric_input(
+        self,
+        value: object,
+        *,
+        source_language: object | None = None,
+    ) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return raw
+        try:
+            parsed = self._parse_locale_number_value(
+                raw,
+                self._ui_lang if source_language is None else source_language,
+            )
+        except (TypeError, ValueError):
+            return raw
+        return format_locale_number(
+            parsed,
+            self._ui_lang,
+            decimals=self._numeric_input_decimals(raw),
+        )
+
+    def _relocalize_numeric_inputs(self, previous_language: object) -> None:
+        for attr_name in _NUMERIC_INPUT_VAR_NAMES:
+            variable = getattr(self, attr_name, None)
+            if variable is None:
+                continue
+            raw = variable.value()
+            formatted = self._format_numeric_input(
+                raw,
+                source_language=previous_language,
+            )
+            variable.set(formatted)
 
     def _theme_labels(self) -> dict[str, str]:
         return (
@@ -2732,6 +3531,35 @@ class SettingsWindow(QDialog):
         }
         return self._copy(copy_keys.get(page_id, page_id))
 
+    def _refresh_nav_width(self) -> None:
+        """Size the navigation rail for the active translation and font."""
+
+        nav = self._nav_list
+        panel = self._nav_panel
+        if nav is None or panel is None:
+            return
+        metrics = nav.fontMetrics()
+        text_widths = [
+            metrics.horizontalAdvance(nav.item(row).text())
+            for row in range(nav.count())
+        ]
+        if self._nav_title_label is not None:
+            title_metrics = self._nav_title_label.fontMetrics()
+            text_widths.append(
+                title_metrics.horizontalAdvance(self._nav_title_label.text())
+            )
+        desired = max(SETTINGS_NAV_WIDTH, max(text_widths, default=0) + 52)
+        available = max(
+            SETTINGS_NAV_WIDTH,
+            min(SETTINGS_NAV_MAX_WIDTH, int(max(self.width(), 980) * 0.45)),
+        )
+        width = min(desired, available)
+        panel.setFixedWidth(width)
+        for row in range(nav.count()):
+            item = nav.item(row)
+            item.setSizeHint(QSize(max(1, width - 16), 48))
+            item.setToolTip(item.text() if desired > available else "")
+
     def _capture_language_option_codes(self) -> dict[str, object]:
         if hasattr(self, "_roleplay_prompt_edit"):
             self._roleplay_prompt_var.set(self._roleplay_prompt_edit.toPlainText())
@@ -2754,6 +3582,7 @@ class SettingsWindow(QDialog):
             "denoise": self._denoise_codes.get(self._denoise_var.value(), 0.0),
             "tts_engine": self._selected_tts_engine(),
             "tts_voice": self._selected_tts_voice_id(),
+            "xtts_language": self._selected_xtts_language_code(),
             "tts_device": self._tts_device_codes.get(self._tts_device_var.value(), "cpu"),
             "tts_bert_language": self._tts_bert_language_codes.get(self._tts_bert_language_var.value(), "jp"),
             "roleplay_preset": self._roleplay_preset_codes.get(self._roleplay_preset_var.value(), "custom"),
@@ -2809,8 +3638,10 @@ class SettingsWindow(QDialog):
         self._denoise_var.set(denoise_labels[denoise_key])
 
         backend = str(codes.get("backend", normalize_backend(self._config.get("translation", {}).get("backend", "openai"))))
-        self._backend_codes = {get_backend_label(b): b for b in get_backend_order()}
-        self._backend_var.set(get_backend_label(backend))
+        self._backend_codes = {
+            get_backend_label(b, self._ui_lang): b for b in get_backend_order()
+        }
+        self._backend_var.set(get_backend_label(backend, self._ui_lang))
 
         asr_opts = self._asr_engine_options()
         self._asr_codes = {label: code for label, code in asr_opts}
@@ -2828,6 +3659,10 @@ class SettingsWindow(QDialog):
         self._tts_engine_codes = {_tts_engine_label(engine, self._ui_lang): engine for engine in TTS_ENGINE_IDS}
         self._tts_engine_var.set(_tts_engine_label(tts_engine, self._ui_lang))
         self._tts_voice_var.set(str(codes.get("tts_voice", "")))
+        xtts_options = xtts_language_options(self._ui_lang)
+        self._xtts_language_var.set(
+            self._label_for_code(xtts_options, str(codes.get("xtts_language", "auto")))
+        )
 
         device_options = self._tts_device_options()
         self._tts_device_codes = {label: code for label, code in device_options}
@@ -2844,7 +3679,26 @@ class SettingsWindow(QDialog):
         roleplay_options = _roleplay_preset_options(self._ui_lang)
         self._roleplay_preset_codes = {label: code for label, code in roleplay_options}
         self._roleplay_preset_reverse = {code: label for label, code in roleplay_options}
-        self._roleplay_preset_var.set(self._label_for_code(roleplay_options, str(codes.get("roleplay_preset", "custom"))))
+        roleplay_preset = str(codes.get("roleplay_preset", "custom"))
+        self._roleplay_preset_var.set(
+            self._label_for_code(roleplay_options, roleplay_preset)
+        )
+        self._roleplay_prompt_var.set(
+            _roleplay_preset_editor_text(
+                roleplay_preset,
+                "persona_prompt",
+                self._roleplay_prompt_var.value(),
+                self._ui_lang,
+            )
+        )
+        self._roleplay_glossary_var.set(
+            _roleplay_preset_editor_text(
+                roleplay_preset,
+                "persona_glossary",
+                self._roleplay_glossary_var.value(),
+                self._ui_lang,
+            )
+        )
 
     def _refresh_language_widgets(self) -> None:
         self.setWindowTitle(tr(self._ui_lang, "settings_window_title"))
@@ -2878,6 +3732,7 @@ class SettingsWindow(QDialog):
                 item.setText(self._nav_item_label(page_id))
         self._rebuild_pages()
         self._apply_style()
+        self._refresh_nav_width()
 
     def _rebuild_pages(self) -> None:
         if self._page_stack is None:
@@ -2915,8 +3770,16 @@ class SettingsWindow(QDialog):
         self._backend_api_key_var.set(get_backend_config_value(trans_cfg, backend, "api_key"))
         self._backend_base_url_var.set(get_backend_config_value(trans_cfg, backend, "base_url"))
         self._backend_model_var.set(get_backend_config_value(trans_cfg, backend, "model"))
-        self._backend_timeout_var.set(get_backend_config_value(trans_cfg, backend, "timeout_s"))
-        self._backend_retries_var.set(get_backend_config_value(trans_cfg, backend, "max_retries"))
+        self._backend_timeout_var.set(
+            self._format_numeric_input(
+                get_backend_config_value(trans_cfg, backend, "timeout_s")
+            )
+        )
+        self._backend_retries_var.set(
+            self._format_numeric_input(
+                get_backend_config_value(trans_cfg, backend, "max_retries")
+            )
+        )
         if backend_has_service_regions(backend):
             self._set_backend_region_vars(backend, trans_cfg)
         else:
@@ -3298,8 +4161,9 @@ class SettingsWindow(QDialog):
 
         nav_widget = QFrame()
         nav_widget.setObjectName("navPanel")
-        nav_widget.setFixedWidth(SETTINGS_NAV_WIDTH)
+        nav_widget.setMinimumWidth(SETTINGS_NAV_WIDTH)
         nav_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._nav_panel = nav_widget
         nav_layout = QVBoxLayout(nav_widget)
         nav_layout.setContentsMargins(8, 8, 8, 8)
         nav_layout.setSpacing(0)
@@ -3313,6 +4177,7 @@ class SettingsWindow(QDialog):
 
         self._nav_list = QListWidget()
         self._nav_list.setObjectName("navList")
+        self._nav_list.setWordWrap(False)
         self._nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._nav_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -3328,6 +4193,7 @@ class SettingsWindow(QDialog):
 
         self._nav_list.currentRowChanged.connect(self._on_nav_changed)
         nav_layout.addWidget(self._nav_list, 1)
+        self._refresh_nav_width()
 
         self._page_stack = QStackedWidget()
         self._page_stack.setObjectName("pageStack")
@@ -3929,7 +4795,12 @@ class SettingsWindow(QDialog):
         self._build_tts_runtime_card(layout)
         self._build_tts_api_config(layout)
 
-        self._tts_voice_combo = self._combo("tts_voice", self._tts_voice_var, [tr(self._ui_lang, "tts_voice_loading")], self._on_tts_voice_changed)
+        self._tts_voice_combo = self._combo(
+            "tts_voice",
+            self._tts_voice_var,
+            [self._copy("tts_voice_loading")],
+            self._on_tts_voice_changed,
+        )
         self._tts_voices_loading = False
         self._row_layout(layout, tr(self._ui_lang, "tts_voice"), self._tts_voice_combo)
         if not self._preloaded:
@@ -3942,10 +4813,7 @@ class SettingsWindow(QDialog):
         xtts_layout.setContentsMargins(0, 0, 0, 0)
         xtts_layout.setSpacing(8)
 
-        xtts_hint_text = (
-            self._copy("xtts_voice_cloning_hint")
-            or "Voice Cloning: record or import a clean, expressive reference sample."
-        )
+        xtts_hint_text = self._copy("xtts_voice_cloning_hint")
         xtts_hint = QLabel(xtts_hint_text)
         xtts_hint.setObjectName("hintLabel")
         xtts_hint.setWordWrap(True)
@@ -3954,22 +4822,19 @@ class SettingsWindow(QDialog):
         # Speaking language selection
         xtts_lang_layout = QHBoxLayout()
         xtts_lang_layout.setSpacing(10)
-        xtts_lang_label = QLabel(tr(self._ui_lang, "xtts_language") or "Speaking Language:")
+        xtts_lang_label = QLabel(tr(self._ui_lang, "xtts_language"))
         xtts_lang_layout.addWidget(xtts_lang_label)
 
         self._xtts_language_combo = self._combo(
             "xtts_language",
             self._xtts_language_var,
-            [label for label, _code in XTTS_LANGUAGE_OPTIONS],
+            [label for label, _code in xtts_language_options(self._ui_lang)],
             self._on_xtts_language_changed,
         )
         xtts_lang_layout.addWidget(self._xtts_language_combo, 1)
         xtts_layout.addLayout(xtts_lang_layout)
 
-        xtts_lang_hint = QLabel(
-            tr(self._ui_lang, "xtts_language_hint") or
-            "Auto-detect: Automatically detects language from text | Manual: Always use selected language"
-        )
+        xtts_lang_hint = QLabel(tr(self._ui_lang, "xtts_language_hint"))
         xtts_lang_hint.setObjectName("hintLabel")
         xtts_lang_hint.setWordWrap(True)
         xtts_layout.addWidget(xtts_lang_hint)
@@ -3983,17 +4848,17 @@ class SettingsWindow(QDialog):
         )
         self._row_layout(
             xtts_layout,
-            self._copy("xtts_device_label") or "Compute Device",
+            self._copy("xtts_device_label"),
             self._xtts_device_combo,
         )
 
         # Device info hints
-        cpu_info = QLabel(tr(self._ui_lang, "xtts_device_cpu_info") or "ℹ CPU mode works on all computers")
+        cpu_info = QLabel(self._copy("xtts_device_cpu_info"))
         cpu_info.setObjectName("hintLabel")
         cpu_info.setWordWrap(True)
         xtts_layout.addWidget(cpu_info)
 
-        cuda_info = QLabel(tr(self._ui_lang, "xtts_device_cuda_info") or "ℹ GPU mode requires NVIDIA GPU, 3-5x faster")
+        cuda_info = QLabel(self._copy("xtts_device_cuda_info"))
         cuda_info.setObjectName("hintLabel")
         cuda_info.setWordWrap(True)
         xtts_layout.addWidget(cuda_info)
@@ -4001,11 +4866,11 @@ class SettingsWindow(QDialog):
         voice_btn_row = QHBoxLayout()
         voice_btn_row.setSpacing(10)
 
-        record_voice_btn = QPushButton(tr(self._ui_lang, "record_voice") or "Record Voice")
+        record_voice_btn = QPushButton(tr(self._ui_lang, "record_voice"))
         record_voice_btn.clicked.connect(self._on_record_voice_for_xtts)
         voice_btn_row.addWidget(record_voice_btn)
 
-        import_voice_btn = QPushButton(tr(self._ui_lang, "import_voice") or "Import Voice")
+        import_voice_btn = QPushButton(tr(self._ui_lang, "import_voice"))
         import_voice_btn.clicked.connect(self._on_import_voice_for_xtts)
         voice_btn_row.addWidget(import_voice_btn)
 
@@ -4014,7 +4879,7 @@ class SettingsWindow(QDialog):
 
         model_btn_row = QHBoxLayout()
         model_btn_row.setSpacing(10)
-        self._download_xtts_btn = QPushButton(tr(self._ui_lang, "download_xtts_models") or "Download Voice Cloning Model")
+        self._download_xtts_btn = QPushButton(tr(self._ui_lang, "download_xtts_models"))
         self._download_xtts_btn.clicked.connect(self._on_download_xtts_models)
         model_btn_row.addWidget(self._download_xtts_btn)
 
@@ -4062,7 +4927,9 @@ class SettingsWindow(QDialog):
         rate_slider.setValue(int(self._tts_rate_var.value() * 100))
         rate_slider.valueChanged.connect(self._on_tts_rate_changed)
         rate_row.addWidget(rate_slider, 1)
-        self._tts_rate_label = QLabel(f"{self._tts_rate_var.value():.1f}x")
+        self._tts_rate_label = QLabel(
+            f"{format_locale_number(self._tts_rate_var.value(), self._ui_lang, decimals=1)}×"
+        )
         rate_row.addWidget(self._tts_rate_label)
         layout.addLayout(rate_row)
 
@@ -4075,7 +4942,9 @@ class SettingsWindow(QDialog):
         vol_slider.setValue(int(self._tts_volume_var.value() * 100))
         vol_slider.valueChanged.connect(self._on_tts_volume_changed)
         vol_row.addWidget(vol_slider, 1)
-        self._tts_vol_label = QLabel(f"{int(self._tts_volume_var.value() * 100)}%")
+        self._tts_vol_label = QLabel(
+            format_locale_percent(self._tts_volume_var.value() * 100, self._ui_lang)
+        )
         vol_row.addWidget(self._tts_vol_label)
         layout.addLayout(vol_row)
 
@@ -4386,7 +5255,7 @@ class SettingsWindow(QDialog):
         """Consolidated Advanced Page - merges VRChat, Hotkeys, Models, Roleplay, and Advanced"""
 
         # VRChat Integration Section
-        self._section_title(layout, "VRChat 集成")
+        self._section_title(layout, self._copy("vrchat_integration_section"))
 
         # Avatar OSC Sync
         subtitle = QLabel(self._copy("avatar_subtitle"))
@@ -4406,7 +5275,7 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("avatar_param_target_language"), self._line_edit("avatar_target_language", self._avatar_target_language_var, 260))
 
         # OSC Listener
-        self._section_title(layout, "OSC 监听器")
+        self._section_title(layout, self._copy("osc_listener_section"))
         self._build_switch_row(layout, self._copy("osc_listener_enabled"), self._osc_listener_enabled_var)
         self._field_hint(layout, "osc_listener_enabled")
         self._row_layout(layout, self._copy("osc_receive_host"), self._line_edit("osc_receive_host", self._osc_receive_host_var, 180))
@@ -4420,7 +5289,7 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("osc_param_toggle_overlay"), self._line_edit("osc_toggle_overlay", self._osc_toggle_overlay_var, 260))
 
         # Hotkeys Section
-        self._section_title(layout, "全局快捷键")
+        self._section_title(layout, self._copy("global_hotkeys_section"))
         self._row_layout(layout, self._copy("text_input_hotkey"), self._line_edit("text_input_hk", self._text_input_hotkey_var, 220))
         self._row_layout(layout, self._copy("mic_mute_hotkey"), self._line_edit("mic_mute_hk", self._mic_mute_hotkey_var, 220))
         hint = QLabel(self._copy("voice_control_placeholder"))
@@ -4429,7 +5298,7 @@ class SettingsWindow(QDialog):
         layout.addWidget(hint)
 
         # Roleplay / Persona Section
-        self._section_title(layout, "角色扮演与人格")
+        self._section_title(layout, self._copy("roleplay_persona_section"))
         self._build_switch_row(layout, self._copy("roleplay_enabled"), self._roleplay_enabled_var)
         self._row_layout(layout, self._copy("roleplay_preset"), self._combo("roleplay_preset", self._roleplay_preset_var, list(self._roleplay_preset_codes.keys()), self._on_roleplay_preset_changed))
         self._row_layout(layout, self._copy("persona_name"), self._line_edit("persona_name", self._persona_name_var, 260))
@@ -4457,11 +5326,11 @@ class SettingsWindow(QDialog):
         layout.addWidget(self._roleplay_glossary_edit)
 
         # Model Downloads Section
-        self._section_title(layout, "模型下载")
+        self._section_title(layout, self._copy("model_downloads_section"))
         self._build_model_page(layout, show_all=True)
 
         # Other Advanced Settings
-        self._section_title(layout, "其他高级设置")
+        self._section_title(layout, self._copy("other_advanced_section"))
 
         # Mode wizard
         wizard_hint = QLabel(self._copy("mode_wizard_hint"))
@@ -4587,7 +5456,8 @@ class SettingsWindow(QDialog):
             or bool(existing_api_key)
         )
         if show_api_key:
-            hint = get_backend_api_key_hint(backend)
+            hint_key = _BACKEND_API_HINT_KEYS.get(backend)
+            hint = self._copy(hint_key) if hint_key else ""
             api = self._line_edit("backend_api_key", self._backend_api_key_var)
             api.setEchoMode(QLineEdit.EchoMode.Password)
             self._row_layout(self._backend_fields_layout, self._copy("api_key"), api)
@@ -4634,7 +5504,8 @@ class SettingsWindow(QDialog):
             model_widget.textChanged.connect(lambda _text: self._refresh_backend_model_info())
             self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
 
-        model_hint = get_backend_model_hint(backend)
+        model_hint_key = _BACKEND_MODEL_HINT_KEYS.get(backend)
+        model_hint = self._copy(model_hint_key) if model_hint_key else ""
         if model_hint:
             model_hint_label = QLabel(model_hint)
             model_hint_label.setObjectName("hintLabel")
@@ -4681,9 +5552,17 @@ class SettingsWindow(QDialog):
         if self._backend_model_info_title_label is None or self._backend_model_info_note_label is None:
             return
         profile = get_backend_model_profile(self._backend_code(), self._backend_model_var.value())
+        try:
+            score = format_locale_number(
+                float(profile.get("score", 6.5)),
+                self._ui_lang,
+                decimals=1,
+            )
+        except (TypeError, ValueError):
+            score = format_locale_number(6.5, self._ui_lang, decimals=1)
         self._backend_model_info_title_label.setText(
             f"{self._copy('model_title')} · {profile['model']} · "
-            f"{self._copy('model_score')} {profile.get('score', '6.5')}/10"
+            f"{self._copy('model_score')} {score}/10"
         )
         for key, label in self._backend_model_badge_labels.items():
             value = profile.get(key, "balanced")
@@ -5038,16 +5917,21 @@ class SettingsWindow(QDialog):
     def _on_tts_rate_changed(self, value: int) -> None:
         self._tts_rate_var.set(value / 100.0)
         if hasattr(self, "_tts_rate_label"):
-            self._tts_rate_label.setText(f"{self._tts_rate_var.value():.1f}x")
+            self._tts_rate_label.setText(
+                f"{format_locale_number(self._tts_rate_var.value(), self._ui_lang, decimals=1)}×"
+            )
 
     def _on_tts_volume_changed(self, value: int) -> None:
         self._tts_volume_var.set(value / 100.0)
         if hasattr(self, "_tts_vol_label"):
-            self._tts_vol_label.setText(f"{int(self._tts_volume_var.value() * 100)}%")
+            self._tts_vol_label.setText(
+                format_locale_percent(self._tts_volume_var.value() * 100, self._ui_lang)
+            )
 
     def _on_xtts_language_changed(self, text: str) -> None:
         """Handle XTTS language selection change."""
-        lang_code = XTTS_LANGUAGE_LABEL_TO_CODE.get(text, normalize_xtts_language_code(text))
+        label_to_code = dict(xtts_language_options(self._ui_lang))
+        lang_code = label_to_code.get(text, normalize_xtts_language_code(text))
         self._xtts_language_var.set(text)
         logger.info("XTTS language changed to: %s (%s)", text, lang_code)
 
@@ -5074,9 +5958,8 @@ class SettingsWindow(QDialog):
         # Show notice
         QMessageBox.information(
             self,
-            self._copy("notice") or "Notice",
-            self._copy("xtts_device_change_notice") or
-            "Device change will take effect the next time XTTS is used."
+            self._copy("notice"),
+            self._copy("xtts_device_change_notice"),
         )
 
     def _tts_output_device_status_text(self) -> str:
@@ -5228,8 +6111,9 @@ class SettingsWindow(QDialog):
             index = combo.currentIndex()
             if 0 <= index < len(option_codes):
                 return option_codes[index]
-        text = str(self._xtts_language_var.value() or "").strip().lower()
-        return normalize_xtts_language_code(text)
+        text = str(self._xtts_language_var.value() or "").strip()
+        localized_codes = dict(xtts_language_options(self._ui_lang))
+        return localized_codes.get(text, normalize_xtts_language_code(text))
 
     def _selected_xtts_device(self) -> str:
         if getattr(self, "_xtts_device_codes", None):
@@ -5304,15 +6188,26 @@ class SettingsWindow(QDialog):
         if hasattr(self, "_roleplay_enabled_var"):
             social_cfg["mode"] = "roleplay" if self._roleplay_enabled_var.value() else "standard"
         if hasattr(self, "_roleplay_preset_codes") and hasattr(self, "_roleplay_preset_var"):
-            social_cfg["persona_preset"] = self._roleplay_preset_codes.get(
+            selected_preset = self._roleplay_preset_codes.get(
                 self._roleplay_preset_var.value(), "custom"
             )
+            social_cfg["persona_preset"] = selected_preset
+        else:
+            selected_preset = str(social_cfg.get("persona_preset", "custom") or "custom")
         if hasattr(self, "_persona_name_var"):
             social_cfg["persona_name"] = self._persona_name_var.value().strip()
         if hasattr(self, "_roleplay_prompt_var"):
-            social_cfg["persona_prompt"] = self._roleplay_prompt_var.value()
+            social_cfg["persona_prompt"] = _roleplay_preset_config_text(
+                selected_preset,
+                "persona_prompt",
+                self._roleplay_prompt_var.value(),
+            )
         if hasattr(self, "_roleplay_glossary_var"):
-            social_cfg["persona_glossary"] = self._roleplay_glossary_var.value()
+            social_cfg["persona_glossary"] = _roleplay_preset_config_text(
+                selected_preset,
+                "persona_glossary",
+                self._roleplay_glossary_var.value(),
+            )
         trans_cfg["social"] = social_cfg
         config["translation"] = trans_cfg
         return config
@@ -5414,7 +6309,12 @@ class SettingsWindow(QDialog):
                 button.setEnabled(True)
                 button.setText(tr(self._ui_lang, "tts_bert_download_btn"))
                 self._fit_button_to_text(button, min_width=132, height=34, padding=32)
-            QMessageBox.warning(self, self._copy("save_failed"), str(exc))
+            logger.warning("Failed to open BERT model download window: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("save_failed"),
+                self._copy("model_download_open_failed"),
+            )
 
     def _open_bert_download_window(self, model_id: str, language_label: str) -> None:
         from src.ui_qt.model_download_dialog import DownloadProgressWidget
@@ -5515,8 +6415,8 @@ class SettingsWindow(QDialog):
             logger.error("Failed to open voice recording dialog: %s", exc)
             QMessageBox.critical(
                 self,
-                self._copy("error") or "Error",
-                self._copy("voice_record_open_failed", error=exc)
+                self._copy("error"),
+                self._copy("voice_record_open_failed", error=self._copy("unknown_error")),
             )
 
     def _on_voice_recorded_for_xtts(self, audio_data: bytes, voice_name: str) -> None:
@@ -5525,7 +6425,7 @@ class SettingsWindow(QDialog):
         tmp_stat: os.stat_result | None = None
         try:
             if len(audio_data) > _MAX_XTTS_RECORDED_AUDIO_BYTES:
-                raise ValueError("Recorded voice audio exceeds the 256 MiB safety limit.")
+                raise ValueError(self._copy("xtts_recording_too_large"))
 
             ref_audio_dir = xtts_reference_audio_dir()
             output_path = secure_file_path(
@@ -5564,7 +6464,7 @@ class SettingsWindow(QDialog):
 
             QMessageBox.information(
                 self,
-                self._copy("success") or "Success",
+                self._copy("success"),
                 self._copy("xtts_voice_saved_message", voice=voice_name)
             )
 
@@ -5589,15 +6489,19 @@ class SettingsWindow(QDialog):
             logger.error("Failed to save voice: %s", exc)
             QMessageBox.critical(
                 self,
-                self._copy("save_failed") or "Save Failed",
-                self._copy("xtts_voice_save_failed", error=exc)
+                self._copy("save_failed"),
+                self._copy("xtts_voice_save_failed", error=self._copy("unknown_error")),
             )
 
     def _on_import_voice_for_xtts(self) -> None:
         """Import voice audio file for XTTS-v2."""
-        file_dialog = QFileDialog(self)
+        file_dialog = configure_file_dialog(
+            QFileDialog(self),
+            self._ui_lang,
+            title=self._copy("xtts_import_audio_title"),
+        )
         file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        file_dialog.setNameFilter(XTTS_REFERENCE_AUDIO_NAME_FILTER)
+        file_dialog.setNameFilter(tr(self._ui_lang, "settings_audio_file_filter"))
 
         if file_dialog.exec():
             files = file_dialog.selectedFiles()
@@ -5620,7 +6524,7 @@ class SettingsWindow(QDialog):
 
                     QMessageBox.information(
                         self,
-                        self._copy("success") or "Success",
+                        self._copy("success"),
                         self._copy("xtts_voice_imported_message", voice=voice_name)
                     )
 
@@ -5632,10 +6536,10 @@ class SettingsWindow(QDialog):
                     logger.error("Failed to import voice: %s", exc)
                     QMessageBox.critical(
                         self,
-                        self._copy("error") or "Error",
+                        self._copy("error"),
                         self._copy(
                             "xtts_voice_import_failed",
-                            error=xtts_reference_import_error_message(exc),
+                            error=self._copy("unknown_error"),
                         )
                     )
 
@@ -5652,8 +6556,8 @@ class SettingsWindow(QDialog):
             logger.error("Failed to open XTTS download dialog: %s", exc)
             QMessageBox.critical(
                 self,
-                self._copy("error") or "Error",
-                self._copy("xtts_download_open_failed", error=exc)
+                self._copy("error"),
+                self._copy("xtts_download_open_failed", error=self._copy("unknown_error")),
             )
 
     def _on_xtts_download_complete(self) -> None:
@@ -5674,7 +6578,12 @@ class SettingsWindow(QDialog):
             win.raise_()
             win.activateWindow()
         except Exception as exc:
-            QMessageBox.warning(self, self._copy("save_failed"), str(exc))
+            logger.warning("Failed to open ASR model download window: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("save_failed"),
+                self._copy("model_download_open_failed"),
+            )
 
     def _open_logs_folder(self) -> None:
         path = logs_dir()
@@ -5685,34 +6594,63 @@ class SettingsWindow(QDialog):
         if preset_id == "custom":
             return
         profile = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS["custom"])
-        self._persona_name_var.set(profile.get("persona_name", ""))
+        self._persona_name_var.set(str(profile.get("persona_name", "") or ""))
         if hasattr(self, "_roleplay_prompt_edit"):
-            self._roleplay_prompt_edit.setPlainText(profile.get("persona_prompt", ""))
+            self._roleplay_prompt_edit.setPlainText(
+                _roleplay_preset_display_text(
+                    preset_id,
+                    "persona_prompt",
+                    self._ui_lang,
+                )
+            )
         if hasattr(self, "_roleplay_glossary_edit"):
-            self._roleplay_glossary_edit.setPlainText(profile.get("persona_glossary", ""))
+            self._roleplay_glossary_edit.setPlainText(
+                _roleplay_preset_display_text(
+                    preset_id,
+                    "persona_glossary",
+                    self._ui_lang,
+                )
+            )
 
     def _parse_positive_float(self, value: str, field_name: str) -> float:
         try:
-            parsed = float(value)
-        except ValueError as exc:
-            raise ValueError(f"{field_name}: must be a number") from exc
+            parsed = self._parse_locale_number_value(value, self._ui_lang)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(tr(self._ui_lang, "must_be_number", field=field_name)) from exc
         if parsed <= 0:
-            raise ValueError(f"{field_name}: must be positive")
+            raise ValueError(tr(self._ui_lang, "must_be_positive", field=field_name))
         return parsed
 
     def _parse_positive_int(self, value: str, field_name: str) -> int:
         try:
-            parsed = int(value)
-        except ValueError as exc:
-            raise ValueError(f"{field_name}: must be an integer") from exc
+            numeric = self._parse_locale_number_value(value, self._ui_lang)
+            if not numeric.is_integer():
+                raise ValueError(value)
+            parsed = int(numeric)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(tr(self._ui_lang, "must_be_integer", field=field_name)) from exc
         if parsed <= 0:
-            raise ValueError(f"{field_name}: must be positive")
+            raise ValueError(tr(self._ui_lang, "must_be_positive", field=field_name))
         return parsed
 
     def _parse_float_range(self, value: str, field_name: str, min_val: float, max_val: float) -> float:
-        parsed = self._parse_positive_float(value, field_name) if min_val > 0 else float(value)
+        if min_val > 0:
+            parsed = self._parse_positive_float(value, field_name)
+        else:
+            try:
+                parsed = self._parse_locale_number_value(value, self._ui_lang)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(tr(self._ui_lang, "must_be_number", field=field_name)) from exc
         if parsed < min_val or parsed > max_val:
-            raise ValueError(f"{field_name}: must be between {min_val} and {max_val}")
+            raise ValueError(
+                tr(
+                    self._ui_lang,
+                    "must_be_between",
+                    field=field_name,
+                    minimum=format_locale_number(min_val, self._ui_lang, decimals=0 if min_val.is_integer() else 2),
+                    maximum=format_locale_number(max_val, self._ui_lang, decimals=0 if max_val.is_integer() else 2),
+                )
+            )
         return parsed
 
     def sync_vrc_listen_state(
@@ -5876,17 +6814,32 @@ class SettingsWindow(QDialog):
 
     def _on_ui_lang_changed(self, text: str) -> None:
         code = self._ui_lang_codes.get(text)
-        if not code or code == self._ui_lang:
+        if not code:
+            return
+        self._apply_ui_language(code, emit_signal=True)
+
+    def update_language(self, language: object) -> None:
+        """Apply an external application-language change without signal feedback."""
+
+        self._apply_ui_language(normalize_ui_language(language), emit_signal=False)
+
+    def set_ui_language(self, language: object) -> None:
+        """Public alias used by settings hosts that expose a generic language API."""
+
+        self.update_language(language)
+
+    def _apply_ui_language(self, code: str, *, emit_signal: bool) -> None:
+        if code == self._ui_lang:
             return
 
-        # Emit language changed signal for main window
-        self.language_changed.emit(code)
-
-        # Continue with existing logic
+        previous_language = self._ui_lang
         current_codes = self._capture_language_option_codes()
         self._apply_language_option_codes(current_codes, code)
+        self._relocalize_numeric_inputs(previous_language)
         self._fmt_codes = {l: c for l, c in get_output_format_options(self._ui_lang)}
         self._refresh_language_widgets()
+        if emit_signal:
+            self.language_changed.emit(code)
 
     def _on_theme_changed(self, _text: str) -> None:
         self._apply_theme_preference(self._theme_code_from_value(_text), notify=True, smooth=True)
@@ -5918,24 +6871,32 @@ class SettingsWindow(QDialog):
         label.update()
 
     def _on_browse_background(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            self._copy("settings_background"),
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+        dialog = configure_file_dialog(
+            QFileDialog(self),
+            self._ui_lang,
+            title=self._copy("settings_background"),
         )
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setNameFilter(tr(self._ui_lang, "settings_image_file_filter"))
+        path = ""
+        if dialog.exec():
+            selected = dialog.selectedFiles()
+            path = selected[0] if selected else ""
         if not path:
             return
 
+        user_message = self._copy("background_import_failed")
         try:
             source = Path(path)
             if source.suffix.casefold() not in _BACKGROUND_IMAGE_SUFFIXES:
-                raise ValueError("Unsupported background image file type.")
+                user_message = self._copy("background_unsupported_format")
+                raise ValueError(user_message)
             source = secure_file_path(source, must_exist=True)
             dest = secure_file_path(backgrounds_dir() / source.name)
             if os.path.normcase(os.fspath(source)) == os.path.normcase(os.fspath(dest)):
                 if secure_file_size(source) > _MAX_BACKGROUND_IMAGE_BYTES:
-                    raise ValueError("Background image exceeds the 64 MiB safety limit.")
+                    user_message = self._copy("background_too_large")
+                    raise ValueError(user_message)
             else:
                 atomic_copy_secure_file(
                     source,
@@ -5946,8 +6907,8 @@ class SettingsWindow(QDialog):
             logger.error("Failed to import background image: %s", exc)
             QMessageBox.critical(
                 self,
-                self._copy("error") or "Error",
-                str(exc),
+                self._copy("error"),
+                user_message,
             )
             return
 
@@ -6063,11 +7024,23 @@ class SettingsWindow(QDialog):
         self._refresh_tts_api_visibility()
 
     def _xtts_runtime_missing_message(self, *, require_api: bool = False) -> str:
+        from src.ui_qt.xtts_runtime_localization import (
+            localized_xtts_runtime_components,
+        )
+
         status = xtts_runtime_status(require_api=require_api)
-        components = ", ".join(status.missing_component_names)
+        components = localized_xtts_runtime_components(status, self._ui_lang)
         if not components:
-            components = "Coqui TTS runtime"
+            components = self._copy("xtts_runtime_component_default")
         return self._copy("xtts_runtime_missing_details", components=components)
+
+    def _xtts_runtime_error_message(self, error: object) -> str:
+        from src.ui_qt.xtts_runtime_localization import (
+            localized_xtts_runtime_error_component,
+        )
+
+        component = localized_xtts_runtime_error_component(error, self._ui_lang)
+        return self._copy("xtts_runtime_missing_details", components=component)
 
     def _refresh_tts_runtime_card(self) -> None:
         frame = getattr(self, "_tts_runtime_frame", None)
@@ -6098,7 +7071,7 @@ class SettingsWindow(QDialog):
                 )
             elif not xtts_models_ready():
                 label.setText(self._copy("xtts_model_missing"))
-                button.setText(tr(self._ui_lang, "download_xtts_models") or "Download Voice Cloning Model")
+                button.setText(tr(self._ui_lang, "download_xtts_models"))
                 button.setVisible(True)
                 self._set_tts_runtime_button_action(button, self._on_download_xtts_models)
             else:
@@ -6151,12 +7124,25 @@ class SettingsWindow(QDialog):
             self._refresh_tts_runtime_card()
 
     def _local_tts_engine_available(self, engine: str) -> bool:
+        tts = None
         try:
             tts = create_tts_engine(engine)
             available = getattr(tts, "is_available", None)
             return bool(available()) if callable(available) else bool(tts)
         except Exception:
             return False
+        finally:
+            self._close_tts_engine_resource(tts)
+
+    @staticmethod
+    def _close_tts_engine_resource(engine: object | None) -> None:
+        close = getattr(engine, "close", None)
+        if not callable(close):
+            return
+        try:
+            close()
+        except Exception:
+            logger.debug("Failed to close temporary TTS engine", exc_info=True)
 
     def _open_external_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
@@ -6180,16 +7166,61 @@ class SettingsWindow(QDialog):
         text_width = button.fontMetrics().horizontalAdvance(button.text()) + 30
         button.setFixedWidth(max(104, text_width))
 
+    def _safe_xtts_runtime_repair_detail(self, detail: object) -> str:
+        default_message = self._xtts_runtime_missing_message(require_api=True)
+        candidate = str(detail or "").strip()
+        if not candidate or candidate == default_message:
+            return default_message
+        localized_component_messages = {
+            self._xtts_runtime_error_message(probe)
+            for probe in (
+                "no module named 'TTS'",
+                "sklearn",
+                "no module named 'av'",
+                "av.audio.resampler",
+                "pypinyin",
+                "ko_speech_tools",
+                "num2words",
+                "fugashi",
+                "voice cloning runtime",
+            )
+        }
+        if candidate in localized_component_messages:
+            return candidate
+        if self._is_xtts_runtime_error_message(candidate):
+            return self._xtts_runtime_error_message(candidate)
+        logger.warning("Suppressing unlocalized XTTS repair detail: %s", candidate)
+        return self._copy("xtts_runtime_unknown_issue")
+
     def _open_xtts_runtime_repair(self, detail: str | None = None) -> None:
-        message = str(detail or self._xtts_runtime_missing_message(require_api=True)).strip()
+        message = self._safe_xtts_runtime_repair_detail(detail)
         self._refresh_tts_runtime_card()
         self._set_xtts_runtime_repair_fetching(True)
+        window_ref = weakref.ref(self)
+
+        def deliver_info(info: UpdateInfo) -> None:
+            window = window_ref()
+            if window is not None and not window._closing:
+                window._open_xtts_runtime_repair_update(info, message)
+
+        def deliver_error(error: str) -> None:
+            window = window_ref()
+            if window is not None and not window._closing:
+                window._show_xtts_runtime_repair_fallback(message, error)
 
         def on_info(info: UpdateInfo) -> None:
-            self._call_in_ui(lambda update_info=info: self._open_xtts_runtime_repair_update(update_info, message))
+            window = window_ref()
+            if window is None or window._closing:
+                return
+            window._call_in_ui(lambda update_info=info: deliver_info(update_info))
 
         def on_error(error: str) -> None:
-            self._call_in_ui(lambda err=str(error or "unknown error"): self._show_xtts_runtime_repair_fallback(message, err))
+            window = window_ref()
+            if window is None or window._closing:
+                return
+            window._call_in_ui(
+                lambda err=str(error or ""): deliver_error(err)
+            )
 
         try:
             fetch_latest_installer_info(
@@ -6199,7 +7230,8 @@ class SettingsWindow(QDialog):
                 retry_delays=(2,),
             )
         except Exception as exc:
-            self._show_xtts_runtime_repair_fallback(message, str(exc))
+            logger.warning("Failed to start XTTS runtime repair: %s", exc)
+            self._show_xtts_runtime_repair_fallback(message, self._copy("unknown_error"))
 
     def _open_xtts_runtime_repair_update(self, info: UpdateInfo, detail: str) -> None:
         self._set_xtts_runtime_repair_fetching(False)
@@ -6281,7 +7313,18 @@ class SettingsWindow(QDialog):
             QTimer.singleShot(0, self._drain_ui_callback_queue)
 
     def _import_style_bert_voice(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, self._copy("tts_import_custom_voice"))
+        dialog = configure_file_dialog(
+            QFileDialog(self),
+            self._ui_lang,
+            title=self._copy("tts_import_custom_voice"),
+            accept_action="select",
+        )
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        path = ""
+        if dialog.exec():
+            selected = dialog.selectedFiles()
+            path = selected[0] if selected else ""
         if not path:
             return
         try:
@@ -6290,16 +7333,20 @@ class SettingsWindow(QDialog):
             QMessageBox.information(
                 self,
                 self._copy("tts_import_custom_voice"),
-                self._copy("tts_custom_voice_import_done", count=count),
+                self._copy(
+                    "tts_custom_voice_import_done",
+                    count=format_locale_number(count, self._ui_lang, grouping=True),
+                ),
             )
             self._tts_voices_loaded.pop("style_bert_vits2", None)
             self._load_tts_voices()
             self._refresh_tts_runtime_card()
         except Exception as exc:
+            logger.warning("Failed to import Style-Bert voice: %s", exc)
             QMessageBox.warning(
                 self,
                 self._copy("tts_import_custom_voice"),
-                self._copy("tts_custom_voice_import_failed", message=str(exc)),
+                self._copy("tts_custom_voice_import_failed", message=self._copy("unknown_error")),
             )
 
     def _load_tts_voices_deferred(self) -> None:
@@ -6349,6 +7396,7 @@ class SettingsWindow(QDialog):
         ).start()
 
     def _load_tts_voices_worker(self, engine: str, generation: int, bert_language: str = "jp") -> None:
+        tts = None
         try:
             if engine == "style_bert_vits2":
                 available = list_style_bert_vits2_voices(bert_language)
@@ -6360,6 +7408,8 @@ class SettingsWindow(QDialog):
             entries = self._tts_voice_entries(available)
         except Exception:
             entries = []
+        finally:
+            self._close_tts_engine_resource(tts)
         self._call_in_ui(
             lambda e=entries, eng=engine, gen=generation: self._on_tts_voices_loaded(eng, e, gen)
         )
@@ -6425,6 +7475,93 @@ class SettingsWindow(QDialog):
             if self._qt_widget_is_alive(combo):
                 combo.blockSignals(blocked)
 
+    def _localized_xtts_reference_problem(
+        self,
+        reason: object,
+        stats: object | None,
+    ) -> str:
+        raw_reason = str(reason or "").strip()
+        lowered = raw_reason.casefold()
+        if raw_reason:
+            logger.warning("XTTS reference audio validation failed: %s", raw_reason)
+        if "too short" in lowered:
+            if stats is None:
+                return self._copy("xtts_reference_quality_too_short")
+            return tr(
+                self._ui_lang,
+                "voice_record_quality_too_short",
+                duration=format_locale_number(
+                    float(getattr(stats, "duration_seconds", 0.0)),
+                    self._ui_lang,
+                    decimals=1,
+                ),
+            )
+        if "too quiet" in lowered or "mostly silent" in lowered:
+            if stats is None:
+                return self._copy("xtts_reference_quality_quiet")
+            return tr(
+                self._ui_lang,
+                "voice_record_quality_quiet",
+                peak=format_locale_number(
+                    float(getattr(stats, "peak", 0.0)),
+                    self._ui_lang,
+                    decimals=3,
+                ),
+                rms=format_locale_number(
+                    float(getattr(stats, "rms", 0.0)),
+                    self._ui_lang,
+                    decimals=4,
+                ),
+                active=format_locale_number(
+                    float(getattr(stats, "active_duration_seconds", 0.0)),
+                    self._ui_lang,
+                    decimals=1,
+                ),
+            )
+        if "dc offset" in lowered:
+            if stats is None:
+                return self._copy("xtts_reference_quality_dc_offset")
+            return tr(
+                self._ui_lang,
+                "voice_record_quality_dc_offset",
+                offset=format_locale_number(
+                    float(getattr(stats, "dc_offset", 0.0)),
+                    self._ui_lang,
+                    decimals=3,
+                ),
+            )
+        if "clipped" in lowered or "distorted" in lowered:
+            if stats is None:
+                return self._copy("xtts_reference_quality_clipped")
+            return tr(
+                self._ui_lang,
+                "voice_record_quality_clipped",
+                clipped=format_locale_percent(
+                    float(getattr(stats, "clipped_ratio", 0.0)) * 100.0,
+                    self._ui_lang,
+                    decimals=1,
+                ),
+            )
+        if "not found" in lowered or "no such file" in lowered:
+            return self._copy("xtts_reference_missing")
+        if any(
+            token in lowered
+            for token in (
+                "no module named 'av'",
+                "pyav",
+                "ffmpeg",
+                "audio decoder",
+                "decoder runtime",
+            )
+        ):
+            return tr(self._ui_lang, "voice_record_import_decoder_missing")
+        if any(
+            token in lowered
+            for token in ("could not be decoded", "decode", "invalid wav", "wave error")
+        ):
+            return tr(self._ui_lang, "voice_record_import_decode_failed")
+        return self._copy("xtts_reference_invalid")
+
     def _xtts_reference_preflight_error(self) -> str | None:
         first_reference = first_xtts_reference_audio_path()
         if first_reference is None:
@@ -6437,28 +7574,36 @@ class SettingsWindow(QDialog):
             if candidate.exists():
                 selected_reference = candidate
 
-        prefix = self._copy("xtts_reference_invalid") or "Voice Cloning cannot use the selected reference audio."
+        prefix = self._copy("xtts_reference_invalid")
         if selected_reference is not None:
-            usable, reason, _stats = validate_xtts_reference_audio_file(selected_reference)
+            usable, reason, stats = validate_xtts_reference_audio_file(selected_reference)
             if not usable:
-                repaired, repair_reason, _repair_stats = repair_xtts_reference_audio_file(selected_reference)
+                repaired, repair_reason, repair_stats = repair_xtts_reference_audio_file(selected_reference)
                 if repaired:
                     return None
                 reason = repair_reason or reason
-                return f"{prefix}\n\n{reason}" if reason else prefix
+                detail = self._localized_xtts_reference_problem(
+                    reason,
+                    repair_stats or stats,
+                )
+                return detail if detail == prefix else f"{prefix}\n\n{detail}"
             return None
 
         usable_reference = first_usable_xtts_reference_audio_path()
         if usable_reference is not None:
             return None
 
-        repaired, repair_reason, _repair_stats = repair_xtts_reference_audio_file(first_reference)
+        repaired, repair_reason, repair_stats = repair_xtts_reference_audio_file(first_reference)
         if repaired:
             return None
 
-        _usable, reason, _stats = validate_xtts_reference_audio_file(first_reference)
+        _usable, reason, stats = validate_xtts_reference_audio_file(first_reference)
         reason = repair_reason or reason
-        return f"{prefix}\n\n{reason}" if reason else prefix
+        detail = self._localized_xtts_reference_problem(
+            reason,
+            repair_stats or stats,
+        )
+        return detail if detail == prefix else f"{prefix}\n\n{detail}"
 
     def _on_tts_test(self) -> None:
         if self._tts_testing:
@@ -6566,12 +7711,22 @@ class SettingsWindow(QDialog):
             )
             self._tts_test_timeout_timer.start(timeout_ms)
 
+            window_ref = weakref.ref(self)
+
             def on_done(success: bool, message: str, *, test_generation: int = generation) -> None:
-                self.tts_test_finished.emit(
-                    test_generation,
-                    bool(success),
-                    str(message or ""),
-                )
+                window = window_ref()
+                if window is None or getattr(window, "_closing", False):
+                    return
+                try:
+                    window.tts_test_finished.emit(
+                        test_generation,
+                        bool(success),
+                        str(message or ""),
+                    )
+                except RuntimeError:
+                    # The Qt object may have been deleted while native synthesis
+                    # was still finishing. Shutdown callbacks must be harmless.
+                    return
 
             accepted = self._tts_test_manager.speak(
                 test_text,
@@ -6585,8 +7740,13 @@ class SettingsWindow(QDialog):
         except Exception as e:
             message = str(e)
             logger.warning("TTS test failed: %s", e)
+            is_xtts_runtime_error = (
+                engine == "xtts" and self._is_xtts_runtime_error_message(message)
+            )
+            if is_xtts_runtime_error:
+                message = self._xtts_runtime_error_message(e)
             self.tts_test_finished.emit(generation, False, message)
-            if engine == "xtts" and self._is_xtts_runtime_error_message(message):
+            if is_xtts_runtime_error:
                 self._open_xtts_runtime_repair(message)
 
     def _on_tts_stop(self) -> None:
@@ -6631,12 +7791,31 @@ class SettingsWindow(QDialog):
             logger.info("TTS test finished successfully")
         else:
             logger.warning("TTS test finished without playback success: %s", message or "unknown error")
+            if manager_was_active and self._selected_tts_engine() == "qwen_tts":
+                if is_tts_authentication_error(message):
+                    region = (
+                        self._tts_api_region_var.value().strip()
+                        or self._selected_tts_api_region()
+                    )
+                    QMessageBox.warning(
+                        self,
+                        tr(self._ui_lang, "tts_test"),
+                        self._copy("qwen_tts_auth_failed", region=region),
+                    )
+                elif is_tts_network_error(message):
+                    QMessageBox.warning(
+                        self,
+                        tr(self._ui_lang, "tts_test"),
+                        self._copy("qwen_tts_network_failed"),
+                    )
             if (
                 manager_was_active
                 and self._selected_tts_engine() == "xtts"
                 and self._is_xtts_runtime_error_message(message)
             ):
-                self._open_xtts_runtime_repair(message)
+                self._open_xtts_runtime_repair(
+                    self._xtts_runtime_error_message(message)
+                )
 
     def _stop_tts_test_manager(self) -> None:
         manager = self._tts_test_manager
@@ -6649,6 +7828,27 @@ class SettingsWindow(QDialog):
                 stop_playback()
         except Exception:
             logger.debug("Failed to stop TTS test manager", exc_info=True)
+
+        close = getattr(manager, "close", None)
+        if not callable(close):
+            close = getattr(manager, "stop", None)
+        if not callable(close):
+            return
+
+        def close_manager() -> None:
+            try:
+                close()
+            except Exception:
+                logger.debug("Failed to close TTS test manager", exc_info=True)
+
+        # XTTS inference cannot be interrupted. Closing on a cleanup thread
+        # avoids freezing the Qt event loop for the manager's join timeout and
+        # does not retain this window.
+        threading.Thread(
+            target=close_manager,
+            daemon=True,
+            name="settings-tts-close",
+        ).start()
 
     def _set_update_checking(self, checking: bool) -> None:
         self._update_checking = bool(checking)
@@ -6668,16 +7868,31 @@ class SettingsWindow(QDialog):
         if self._update_checking:
             return
         self._set_update_checking(True)
+        window_ref = weakref.ref(self)
 
         def on_update(info: UpdateInfo | None) -> None:
-            if info is not None:
-                self.update_check_available.emit(info)
+            window = window_ref()
+            if info is not None and window is not None and not window._closing:
+                try:
+                    window.update_check_available.emit(info)
+                except RuntimeError:
+                    pass
 
         def on_no_update() -> None:
-            self.update_check_no_update.emit()
+            window = window_ref()
+            if window is not None and not window._closing:
+                try:
+                    window.update_check_no_update.emit()
+                except RuntimeError:
+                    pass
 
         def on_error(msg: str) -> None:
-            self.update_check_failed.emit(str(msg or "unknown error"))
+            window = window_ref()
+            if window is not None and not window._closing:
+                try:
+                    window.update_check_failed.emit(str(msg or "unknown error"))
+                except RuntimeError:
+                    pass
 
         try:
             check_for_update(
@@ -6688,11 +7903,12 @@ class SettingsWindow(QDialog):
                 retry_delays=(2,),
             )
         except Exception as exc:
+            logger.warning("Settings update check failed: %s", exc)
             self._set_update_checking(False)
             QMessageBox.warning(
                 self,
                 self._copy("settings_check_update_failed"),
-                self._copy("settings_check_update_failed_detail", message=exc),
+                self._copy("settings_check_update_failed_generic"),
             )
 
     def _on_update_check_available(self, info: object) -> None:
@@ -6712,22 +7928,54 @@ class SettingsWindow(QDialog):
         QMessageBox.information(self, self._copy("settings_check_update"), self._copy("settings_up_to_date"))
 
     def _on_update_check_failed(self, message: str) -> None:
+        logger.warning("Settings update check failed: %s", message)
         self._set_update_checking(False)
         QMessageBox.warning(
             self,
             self._copy("settings_check_update_failed"),
-            self._copy("settings_check_update_failed_detail", message=message),
+            self._copy("settings_check_update_failed_generic"),
         )
 
     def _open_update_window(self, info: UpdateInfo) -> None:
         from src.ui_qt.update_window import UpdateWindow
 
         parent = self.parent()
+        show_application_update = getattr(parent, "_show_update_window", None)
+        if callable(show_application_update):
+            show_application_update(info)
+            return
+
+        existing = self._update_win
+        if existing is not None and not bool(getattr(existing, "_destroying", False)):
+            try:
+                existing.show()
+                existing.raise_()
+                existing.activateWindow()
+                return
+            except RuntimeError:
+                self._update_win = None
+
         update_parent = parent if isinstance(parent, QWidget) else self
-        self._update_win = UpdateWindow(update_parent, info, self._ui_lang)
-        self._update_win.show()
-        self._update_win.raise_()
-        self._update_win.activateWindow()
+        dialog = UpdateWindow(update_parent, info, self._ui_lang)
+        set_attribute = getattr(dialog, "setAttribute", None)
+        if callable(set_attribute):
+            set_attribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog_ref = weakref.ref(dialog)
+        window_ref = weakref.ref(self)
+
+        def clear_update_window(_result: int) -> None:
+            window = window_ref()
+            if window is not None and window._update_win is dialog_ref():
+                window._update_win = None
+
+        finished = getattr(dialog, "finished", None)
+        connect = getattr(finished, "connect", None)
+        if callable(connect):
+            connect(clear_update_window)
+        self._update_win = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _set_dictionary_custom_status(self, message: str, *, error: bool = False) -> None:
         if self._dictionary_custom_status_label is None:
@@ -6754,7 +8002,11 @@ class SettingsWindow(QDialog):
         try:
             result = upsert_user_dictionary_entry(replacement, patterns_text)
         except Exception as exc:
-            message = self._copy("settings_dictionary_custom_failed", message=str(exc))
+            logger.warning("Failed to save custom dictionary entry: %s", exc)
+            message = self._copy(
+                "settings_dictionary_custom_failed",
+                message=self._copy("unknown_error"),
+            )
             self._set_dictionary_custom_status(message, error=True)
             QMessageBox.critical(self, tr(self._ui_lang, "error_title"), message)
             return
@@ -6762,7 +8014,11 @@ class SettingsWindow(QDialog):
             if self._dictionary_custom_save_button is not None:
                 self._dictionary_custom_save_button.setEnabled(True)
 
-        total = int(result.get("pattern_count", 0))
+        total = format_locale_number(
+            int(result.get("pattern_count", 0)),
+            self._ui_lang,
+            grouping=True,
+        )
         saved_replacement = str(result.get("replacement") or replacement)
         message = self._copy("settings_dictionary_custom_saved", replacement=saved_replacement, total=total)
         self._set_dictionary_custom_status(message)
@@ -6776,10 +8032,30 @@ class SettingsWindow(QDialog):
         if self._dictionary_status_label is None:
             return
         status = dictionary_status()
+        layer_order = {"bundled": 0, "official": 1, "user": 2}
+        layer_keys = {
+            "bundled": "settings_dictionary_layer_bundled",
+            "official": "settings_dictionary_layer_official",
+            "user": "settings_dictionary_layer_user",
+        }
         layer_bits: list[str] = []
-        for layer in status.get("layers", []):
-            name = str(layer.get("name", "")).capitalize()
-            count = int(layer.get("entry_count", 0))
+        layers = sorted(
+            status.get("layers", []),
+            key=lambda layer: (
+                layer_order.get(str(layer.get("name", "")).strip().lower(), 99),
+                str(layer.get("name", "")).casefold(),
+            ),
+        )
+        for layer in layers:
+            layer_id = str(layer.get("name", "")).strip().lower()
+            name = self._copy(
+                layer_keys.get(layer_id, "settings_dictionary_layer_other")
+            )
+            count = format_locale_number(
+                int(layer.get("entry_count", 0)),
+                self._ui_lang,
+                grouping=True,
+            )
             version = str(layer.get("version", "")).strip()
             layer_bits.append(f"{name}: {count} ({version})" if version else f"{name}: {count}")
         summary = " | ".join(layer_bits) if layer_bits else tr(self._ui_lang, "dictionary_status_empty")
@@ -6811,7 +8087,8 @@ class SettingsWindow(QDialog):
         try:
             result = update_official_dictionary(self._config)
         except Exception as exc:
-            self.dictionary_update_failed.emit(str(exc))
+            logger.warning("Failed to update official dictionary: %s", exc)
+            self.dictionary_update_failed.emit(self._copy("dictionary_update_failed_message"))
             return
         self.dictionary_update_finished.emit(result)
 
@@ -6825,8 +8102,12 @@ class SettingsWindow(QDialog):
                 tr(
                     self._ui_lang,
                     "dictionary_update_done_message",
-                    count=int(result.get("entry_count", 0)),
-                    version=str(result.get("version", "")).strip() or "latest",
+                    count=format_locale_number(
+                        int(result.get("entry_count", 0)),
+                        self._ui_lang,
+                        grouping=True,
+                    ),
+                    version=str(result.get("version", "")).strip() or self._copy("dictionary_version_latest"),
                 ),
             )
             return
@@ -6838,7 +8119,11 @@ class SettingsWindow(QDialog):
 
     def _on_dictionary_update_failed(self, message: str) -> None:
         self._set_dictionary_updating(False)
-        QMessageBox.critical(self, tr(self._ui_lang, "dictionary_update_failed_title"), message)
+        QMessageBox.critical(
+            self,
+            tr(self._ui_lang, "dictionary_update_failed_title"),
+            message or self._copy("dictionary_update_failed_message"),
+        )
 
     # ----------------------------------------------------------------
     # Save
@@ -6901,7 +8186,10 @@ class SettingsWindow(QDialog):
         fmt_code = self._fmt_codes.get(self._output_format_var.value(), "translated_with_original")
         trans_cfg["output_format"] = normalize_output_format(fmt_code)
         trans_cfg["chatbox_template"] = self._chatbox_template_var.value().strip()
-        missing_api_key, backend_label = missing_required_translation_api_key(cfg)
+        missing_api_key, backend_label = missing_required_translation_api_key(
+            cfg,
+            self._ui_lang,
+        )
         if missing_api_key:
             QMessageBox.warning(
                 self,
@@ -6979,7 +8267,15 @@ class SettingsWindow(QDialog):
             listen_vad_min_rms = self._parse_positive_float(self._listen_vad_min_rms_var.value(), self._copy("listen_vad_min_rms"))
             osc_receive_port = self._parse_positive_int(self._osc_receive_port_var.value(), self._copy("osc_receive_port"))
             if osc_receive_port > 65535:
-                raise ValueError(f"{self._copy('osc_receive_port')}: must be between 1 and 65535")
+                raise ValueError(
+                    tr(
+                        self._ui_lang,
+                        "must_be_between",
+                        field=self._copy("osc_receive_port"),
+                        minimum="1",
+                        maximum="65535",
+                    )
+                )
             vad_sensitivity = int(self._parse_float_range(self._vad_sensitivity_var.value(), self._copy("vad_sensitivity"), 0.0, 3.0))
             vad_speech_ratio = self._parse_float_range(self._vad_speech_ratio_var.value(), self._copy("vad_speech_ratio"), 0.0, 1.0)
             vad_activation = self._parse_positive_float(self._vad_activation_threshold_var.value(), self._copy("vad_activation"))
@@ -6988,7 +8284,11 @@ class SettingsWindow(QDialog):
             max_segment = self._parse_positive_float(self._max_segment_var.value(), self._copy("max_segment"))
             partial_min_speech = self._parse_positive_float(self._partial_min_speech_var.value(), self._copy("partial_min_speech"))
         except ValueError as exc:
-            QMessageBox.warning(self, self._copy("save_failed"), str(exc))
+            QMessageBox.warning(
+                self,
+                self._copy("save_failed"),
+                self._copy("settings_validation_failed", message=exc),
+            )
             return
 
         if isinstance(backend_cfg, dict):
@@ -7130,13 +8430,23 @@ class SettingsWindow(QDialog):
         try:
             hotkey_cfg["mic_mute"] = normalize_hotkey(self._mic_mute_hotkey_var.value())
         except HotkeyError as exc:
-            QMessageBox.warning(self, self._copy("hotkey_error"), f"{self._copy('mic_mute_hotkey')}: {exc}")
+            logger.warning("Invalid microphone mute hotkey: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("hotkey_error"),
+                self._copy("hotkey_invalid", field=self._copy("mic_mute_hotkey")),
+            )
             return
 
         try:
             text_input_cfg["hotkey"] = normalize_hotkey(self._text_input_hotkey_var.value())
         except HotkeyError as exc:
-            QMessageBox.warning(self, self._copy("hotkey_error"), f"{self._copy('text_input_hotkey')}: {exc}")
+            logger.warning("Invalid text input hotkey: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("hotkey_error"),
+                self._copy("hotkey_invalid", field=self._copy("text_input_hotkey")),
+            )
             return
 
         social_cfg = trans_cfg.setdefault("social", {})
@@ -7147,8 +8457,16 @@ class SettingsWindow(QDialog):
         social_cfg["politeness"] = preset_profile.get("politeness", "neutral")
         social_cfg["tone"] = preset_profile.get("tone", "natural")
         social_cfg["persona_name"] = self._persona_name_var.value().strip()
-        social_cfg["persona_prompt"] = self._roleplay_prompt_var.value()
-        social_cfg["persona_glossary"] = self._roleplay_glossary_var.value()
+        social_cfg["persona_prompt"] = _roleplay_preset_config_text(
+            selected_preset,
+            "persona_prompt",
+            self._roleplay_prompt_var.value(),
+        )
+        social_cfg["persona_glossary"] = _roleplay_preset_config_text(
+            selected_preset,
+            "persona_glossary",
+            self._roleplay_glossary_var.value(),
+        )
 
         ui_cfg.setdefault("osc_guide_seen", False)
 
@@ -7164,14 +8482,14 @@ class SettingsWindow(QDialog):
             try:
                 config_manager.save_config(cfg)
             except Exception as exc:
-                message = str(exc)
-                self._call_in_ui(lambda msg=message: self._on_save_error(msg))
+                logger.exception("Failed to save settings: %s", exc)
+                self._call_in_ui(self._on_save_error)
                 return
             self._call_in_ui(lambda saved_config=cfg: self._on_save_complete(saved_config))
 
         threading.Thread(target=do_save, daemon=True, name="settings-save").start()
 
-    def _on_save_error(self, error: str) -> None:
+    def _on_save_error(self) -> None:
         rollback_config = self._pending_save_rollback_config
         self._pending_save_rollback_config = None
         if rollback_config is not None:
@@ -7179,20 +8497,21 @@ class SettingsWindow(QDialog):
             self._config.update(rollback_config)
         self._saving = False
         self._set_save_controls_enabled(True)
-        QMessageBox.critical(self, self._copy("save_failed"), self._copy("settings_save_failed_message", error=error))
+        QMessageBox.critical(
+            self,
+            self._copy("save_failed"),
+            self._copy("settings_save_failed_message", error=self._copy("unknown_error")),
+        )
 
     def _on_save_complete(self, saved_config: dict | None = None) -> None:
         del saved_config
         self._pending_save_rollback_config = None
         self._saving = False
         self._set_save_controls_enabled(True)
-        self._stop_tts_test_manager()
-        if self._tts_test_timeout_timer.isActive():
-            self._tts_test_timeout_timer.stop()
         self.accept()
-        if callable(self._on_close):
-            self._on_close()
-        QTimer.singleShot(0, self._notify_save_complete)
+        # ``done()`` schedules deferred deletion, so callbacks can still be
+        # delivered here after the dialog result has changed to Accepted.
+        self._notify_save_complete()
 
     def _notify_save_complete(self) -> None:
         self.saved.emit()
@@ -7206,24 +8525,99 @@ class SettingsWindow(QDialog):
             self._cancel_btn.setEnabled(bool(enabled))
 
     def reject(self) -> None:
-        self._stop_tts_test_manager()
-        if self._tts_test_timeout_timer.isActive():
-            self._tts_test_timeout_timer.stop()
         super().reject()
 
     def done(self, result: int) -> None:
+        self._dispose_lifecycle()
+        super().done(result)
+        self._notify_close_once()
+        self._delete_if_parent_owned()
+
+    def _on_cancel(self) -> None:
+        self.reject()
+
+    def _notify_close_once(self) -> None:
+        if self._close_notified:
+            return
+        self._close_notified = True
+        callback = self._on_close
+        self._on_close = None
+        if callable(callback):
+            try:
+                callback()
+            except Exception:
+                logger.debug("Failed to notify settings window close", exc_info=True)
+
+    def _clear_ui_callback_queue(self) -> None:
+        while True:
+            try:
+                self._ui_callback_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def _delete_if_parent_owned(self) -> None:
+        # Production settings dialogs are parented by MainWindow, which keeps
+        # QObject children alive even after its Python reference is cleared.
+        # Unparented dialogs remain caller-owned (and pytest-qt closes them).
+        if self.parent() is not None:
+            self.deleteLater()
+
+    def _dispose_lifecycle(self) -> None:
+        if self._lifecycle_disposed:
+            return
+        self._lifecycle_disposed = True
         self._closing = True
+        self._tts_test_generation += 1
         self._tts_voice_load_generation += 1
         self._tts_voices_loading = False
         self._tts_voices_loading_engine = None
-        super().done(result)
 
-    def _on_cancel(self) -> None:
-        if callable(self._on_close):
-            self._on_close()
-        self.reject()
+        for timer_name in (
+            "_audio_device_refresh_timer",
+            "_tts_test_timeout_timer",
+        ):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
+
+        self._stop_tts_test_manager()
+        self._clear_ui_callback_queue()
+        self._page_prebuild_queue.clear()
+        self._local_tts_checking.clear()
+
+        update_window = self._update_win
+        self._update_win = None
+        if update_window is not None:
+            try:
+                shutdown = getattr(update_window, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+                else:
+                    close = getattr(update_window, "close", None)
+                    if callable(close):
+                        close()
+            except (RuntimeError, TypeError):
+                pass
+
+        for animation_name in (
+            "_page_fade_animation",
+            "_theme_fade_animation",
+        ):
+            animation = getattr(self, animation_name, None)
+            if animation is not None:
+                try:
+                    animation.stop()
+                except RuntimeError:
+                    pass
+                setattr(self, animation_name, None)
 
     def showEvent(self, event) -> None:  # noqa: N802
+        if self._lifecycle_disposed:
+            event.ignore()
+            return
         self._closing = False
         if not self._saving:
             self._set_save_controls_enabled(True)
@@ -7235,13 +8629,22 @@ class SettingsWindow(QDialog):
             QTimer.singleShot(150, self._load_tts_voices_deferred)
             QTimer.singleShot(300, self._maybe_prompt_missing_model_download)
         super().showEvent(event)
+        if not self._audio_device_refresh_timer.isActive():
+            self._audio_device_refresh_timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        timer = getattr(self, "_audio_device_refresh_timer", None)
+        if timer is not None:
+            timer.stop()
+        super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
-        """Stop pending timers and suppress Qt warnings when the window is closed."""
-        self._closing = True
-        if hasattr(self, "_tts_test_timeout_timer") and self._tts_test_timeout_timer.isActive():
-            self._tts_test_timeout_timer.stop()
+        """Release background resources before the parent drops its reference."""
+        self._dispose_lifecycle()
         super().closeEvent(event)
+        if event.isAccepted():
+            self._notify_close_once()
+            self._delete_if_parent_owned()
 
     # ----------------------------------------------------------------
     # Styling

@@ -106,3 +106,13 @@ def test_realtime_tweaks_panel_hot_switches_translation_provider(qtbot):
     provider_combo.setCurrentIndex(openai_index)
 
     assert changes[-1] == ("translation_provider", "openai")
+
+
+def test_realtime_tweaks_panel_localizes_backend_qualifiers(qtbot):
+    config = _quick_switch_config()
+    config["translation"]["backend"] = "openai_compatible"
+    panel = RealtimeTweaksPanel(None, config, "ru", "dark")
+    qtbot.addWidget(panel)
+
+    provider_combo = panel._combos["translation_provider"]
+    assert provider_combo.currentText() == "GPT-совместимый сервис"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 
@@ -24,9 +25,15 @@ from src.utils.gpu_support import (
     pytorch_cuda_verify_command,
 )
 from src.utils.i18n import tr
+from src.utils.localization import (
+    format_locale_number,
+    format_locale_percent,
+    normalize_ui_language,
+)
 
 
 _PERCENT_RE = re.compile(r"(\d{1,3})%")
+logger = logging.getLogger(__name__)
 
 
 class PytorchCudaInstallDialog(QDialog):
@@ -40,7 +47,7 @@ class PytorchCudaInstallDialog(QDialog):
 
     def __init__(self, ui_language: str, parent=None) -> None:
         super().__init__(parent)
-        self._ui_language = ui_language
+        self._ui_language = normalize_ui_language(ui_language)
         self._process: QProcess | None = None
         self._current_step = ""
         self._paused_step = ""
@@ -73,7 +80,7 @@ class PytorchCudaInstallDialog(QDialog):
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
-        self._progress_bar.setFormat("%p%")
+        self._progress_bar.setFormat(format_locale_percent(0, self._ui_language))
         layout.addWidget(self._progress_bar)
 
         self._elapsed_label = QLabel("")
@@ -100,7 +107,7 @@ class PytorchCudaInstallDialog(QDialog):
         self._retry_btn.hide()
         row.addWidget(self._retry_btn)
 
-        self._close_btn = QPushButton(tr(self._ui_language, "close"))
+        self._close_btn = QPushButton(tr(self._ui_language, "update_close"))
         self._close_btn.clicked.connect(self.close)
         row.addWidget(self._close_btn)
         layout.addLayout(row)
@@ -120,6 +127,9 @@ class PytorchCudaInstallDialog(QDialog):
     def _set_percent(self, value: int) -> None:
         self._percent = max(self._percent, max(0, min(100, int(value))))
         self._progress_bar.setValue(self._percent)
+        self._progress_bar.setFormat(
+            format_locale_percent(self._percent, self._ui_language)
+        )
 
     def _refresh_elapsed(self) -> None:
         elapsed = max(0, int(time.monotonic() - self._started_at))
@@ -128,7 +138,10 @@ class PytorchCudaInstallDialog(QDialog):
             tr(
                 self._ui_language,
                 "tts_gpu_install_elapsed",
-                percent=self._progress_bar.value(),
+                percent=format_locale_number(
+                    self._progress_bar.value(),
+                    self._ui_language,
+                ),
                 elapsed=f"{minutes:02d}:{seconds:02d}",
             )
         )
@@ -143,6 +156,7 @@ class PytorchCudaInstallDialog(QDialog):
         self._started_at = time.monotonic()
         self._percent = 0
         self._progress_bar.setValue(0)
+        self._progress_bar.setFormat(format_locale_percent(0, self._ui_language))
         self._retry_btn.hide()
         self._pause_btn.show()
         self._cancel_btn.show()
@@ -165,7 +179,7 @@ class PytorchCudaInstallDialog(QDialog):
         self._set_percent(self._STEP_PROGRESS.get(step, self._percent))
         self._status_label.setText(self._status_for_step(step))
         program, args = command
-        self._append_log(f"\n> {program} {' '.join(args)}\n")
+        self._append_log("\n" + self._status_for_step(step) + "\n")
         if step in {"bootstrap_pip", "upgrade_pip", "install_cuda"}:
             self._append_log(tr(self._ui_language, "tts_gpu_install_cache_hint") + "\n")
 
@@ -214,7 +228,14 @@ class PytorchCudaInstallDialog(QDialog):
             return
         stdout = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
         stderr = bytes(process.readAllStandardError()).decode("utf-8", errors="replace")
-        self._append_log(stdout + stderr)
+        output = stdout + stderr
+        self._update_progress_from_output(output)
+        if output.strip():
+            logger.debug(
+                "CUDA/PyTorch installer output for step %s:\n%s",
+                self._current_step,
+                output.rstrip(),
+            )
 
     def _on_step_finished(self, exit_code: int, _status: QProcess.ExitStatus) -> None:
         if self._paused or self._cancelled:

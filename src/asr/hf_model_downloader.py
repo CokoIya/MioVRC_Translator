@@ -32,10 +32,11 @@ import os
 import pathlib
 import re
 import socket
+import tempfile
 import threading
 import time
-import tempfile
-from collections import deque
+import weakref
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
@@ -278,7 +279,8 @@ _HF_MODEL_FILE_SHA256: dict[str, dict[str, str]] = {
     },
 }
 
-_VERIFIED_FILE_CACHE: dict[tuple[str, int, int, str], bool] = {}
+_VERIFIED_FILE_CACHE_MAX_ENTRIES = 512
+_VERIFIED_FILE_CACHE: OrderedDict[tuple[str, int, int, str], bool] = OrderedDict()
 _VERIFIED_FILE_CACHE_LOCK = threading.Lock()
 
 
@@ -335,6 +337,8 @@ def _secure_file_matches_sha256(path: pathlib.Path, expected_sha256: str) -> boo
         )
         with _VERIFIED_FILE_CACHE_LOCK:
             cached = _VERIFIED_FILE_CACHE.get(cache_key)
+            if cached is not None:
+                _VERIFIED_FILE_CACHE.move_to_end(cache_key)
         if cached is not None:
             return cached
         hasher = hashlib.sha256()
@@ -347,6 +351,9 @@ def _secure_file_matches_sha256(path: pathlib.Path, expected_sha256: str) -> boo
         matches = hasher.hexdigest() == expected_sha256
         with _VERIFIED_FILE_CACHE_LOCK:
             _VERIFIED_FILE_CACHE[cache_key] = matches
+            _VERIFIED_FILE_CACHE.move_to_end(cache_key)
+            while len(_VERIFIED_FILE_CACHE) > _VERIFIED_FILE_CACHE_MAX_ENTRIES:
+                _VERIFIED_FILE_CACHE.popitem(last=False)
         return matches
     except (FileNotFoundError, OSError, RuntimeError, ValueError):
         return False
@@ -671,7 +678,10 @@ class HFModelDownloader:
         self._cancel_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._progress = DownloadProgress()
-        self._listeners: list[ProgressCallback] = []
+        # UI widgets register bound methods here while downloader instances are
+        # process-wide singletons.  Keeping those methods strongly would retain
+        # every closed download window for the rest of the process.
+        self._listeners: list[ProgressCallback | weakref.WeakMethod] = []
         self._speed_samples: deque[tuple[float, int]] = deque()
         self._last_emit_t: float = 0.0
         self._session: requests.Session | None = None
@@ -680,12 +690,35 @@ class HFModelDownloader:
 
     def add_listener(self, cb: ProgressCallback) -> None:
         with self._lock:
-            if cb not in self._listeners:
-                self._listeners.append(cb)
+            live_listeners: list[ProgressCallback | weakref.WeakMethod] = []
+            already_registered = False
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None:
+                    continue
+                live_listeners.append(entry)
+                if target == cb:
+                    already_registered = True
+            self._listeners = live_listeners
+            if already_registered:
+                return
+            if getattr(cb, "__self__", None) is not None:
+                try:
+                    self._listeners.append(weakref.WeakMethod(cb))
+                    return
+                except TypeError:
+                    pass
+            self._listeners.append(cb)
 
     def remove_listener(self, cb: ProgressCallback) -> None:
         with self._lock:
-            self._listeners = [x for x in self._listeners if x is not cb]
+            retained: list[ProgressCallback | weakref.WeakMethod] = []
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None or target == cb:
+                    continue
+                retained.append(entry)
+            self._listeners = retained
 
     @property
     def state(self) -> DownloadState:
@@ -749,7 +782,15 @@ class HFModelDownloader:
                 return
             self._last_emit_t = now
             p = copy.copy(self._progress)
-            listeners = list(self._listeners)
+            listeners: list[ProgressCallback] = []
+            retained: list[ProgressCallback | weakref.WeakMethod] = []
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None:
+                    continue
+                retained.append(entry)
+                listeners.append(target)
+            self._listeners = retained
         for cb in listeners:
             try:
                 cb(p)
@@ -1584,13 +1625,17 @@ class _RangeNotSupported(Exception):
 
 # ── Module-level singleton per model_id ─────────────────────────────────────
 
-_downloaders: dict[str, HFModelDownloader] = {}
+_downloaders: weakref.WeakValueDictionary[str, HFModelDownloader] = (
+    weakref.WeakValueDictionary()
+)
 _downloaders_lock = threading.Lock()
 
 
 def get_downloader(model_id: str) -> HFModelDownloader:
     """Return (or create) the shared downloader for this model."""
     with _downloaders_lock:
-        if model_id not in _downloaders:
-            _downloaders[model_id] = HFModelDownloader(model_id)
-        return _downloaders[model_id]
+        downloader = _downloaders.get(model_id)
+        if downloader is None:
+            downloader = HFModelDownloader(model_id)
+            _downloaders[model_id] = downloader
+        return downloader

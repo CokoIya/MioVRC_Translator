@@ -2,6 +2,7 @@ import threading
 
 from PySide6.QtWidgets import QApplication
 
+from src.core import manual_translation_controller
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
 from src.core.output_dispatcher import OutputDispatcher
 
@@ -214,3 +215,127 @@ def test_overlapping_manual_requests_use_isolated_clients_and_retire_them(qtbot)
     qtbot.waitUntil(lambda: 1 in finished, timeout=1000)
     controller.close()
     assert created[0].closed is True
+
+
+def test_close_suppresses_late_worker_signals_and_releases_translator(qtbot):
+    _app()
+    config = {"translation": {"output_format": "translated_only"}}
+    dispatcher = OutputDispatcher(config)
+    started = threading.Event()
+    release = threading.Event()
+
+    class Translator(_Translator):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        def translate(self, text, src, tgt, context_source=None):
+            started.set()
+            release.wait(timeout=3)
+            return super().translate(text, src, tgt, context_source)
+
+        def close(self):
+            self.closed = True
+
+    translator = Translator()
+    controller = ManualTranslationController(
+        config,
+        dispatcher,
+        translator_factory=lambda _config: translator,
+        language_detector=lambda _text: "en",
+    )
+    succeeded = []
+    failed = []
+    finished = []
+    controller.succeeded.connect(succeeded.append)
+    controller.failed.connect(failed.append)
+    controller.worker_finished.connect(finished.append)
+
+    controller.start(ManualTranslationRequest("hello", "en", "ja"))
+    assert started.wait(timeout=1)
+    controller.close()
+    release.set()
+
+    qtbot.waitUntil(lambda: translator.closed and not controller._threads, timeout=1000)
+    QApplication.processEvents()
+    assert succeeded == []
+    assert failed == []
+    assert finished == []
+
+
+def test_close_before_translator_acquisition_does_not_create_or_retain_client():
+    _app()
+    config = {"translation": {"output_format": "translated_only"}}
+    dispatcher = OutputDispatcher(config)
+    detector_started = threading.Event()
+    release_detector = threading.Event()
+    created = []
+
+    def detect_language(_text):
+        detector_started.set()
+        release_detector.wait(timeout=3)
+        return "en"
+
+    controller = ManualTranslationController(
+        config,
+        dispatcher,
+        translator_factory=lambda _config: created.append(_Translator()) or created[-1],
+        language_detector=detect_language,
+    )
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(
+            controller.start(ManualTranslationRequest("hello", None, "ja"))
+        )
+    )
+
+    worker.start()
+    assert detector_started.wait(timeout=1)
+    controller.close()
+    release_detector.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert results == [None]
+    assert created == []
+    assert controller.translator is None
+    assert controller._active_translator_uses == {}
+    assert controller._retired_translators == {}
+
+
+def test_manual_worker_retention_is_bounded(monkeypatch):
+    _app()
+    config = {"translation": {"output_format": "translated_only"}}
+    dispatcher = OutputDispatcher(config)
+    started = threading.Event()
+    release = threading.Event()
+
+    class Translator(_Translator):
+        def translate(self, text, src, tgt, context_source=None):
+            started.set()
+            release.wait(timeout=3)
+            return super().translate(text, src, tgt, context_source)
+
+    translator = Translator()
+    controller = ManualTranslationController(
+        config,
+        dispatcher,
+        translator_factory=lambda _config: translator,
+        language_detector=lambda _text: "en",
+    )
+    failures = []
+    controller.failed.connect(failures.append)
+    monkeypatch.setattr(manual_translation_controller, "_MAX_ACTIVE_WORKERS", 1)
+
+    try:
+        assert controller.start(ManualTranslationRequest("first", "en", "ja")) == 1
+        assert started.wait(timeout=1)
+        assert controller.start(ManualTranslationRequest("second", "en", "ja")) == 2
+        assert len(controller._threads) == 1
+        assert len(failures) == 1
+    finally:
+        workers = tuple(controller._threads)
+        release.set()
+        for worker in workers:
+            worker.join(timeout=1)
+        controller.close()

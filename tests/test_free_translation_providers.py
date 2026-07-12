@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from src.translators.deepl_translator import DeepLTranslator
@@ -28,6 +30,7 @@ class _FakeSession:
         self.headers: dict[str, str] = {}
         self.response = response
         self.calls: list[dict[str, object]] = []
+        self.closed = False
 
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
@@ -36,6 +39,9 @@ class _FakeSession:
     def get(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return self.response
+
+    def close(self):
+        self.closed = True
 
 
 def test_deepl_translator_posts_form_payload(monkeypatch):
@@ -265,3 +271,27 @@ def test_no_key_translation_backends_do_not_require_api_keys():
             {"translation": {"backend": backend, backend: {}}}
         )
         assert (missing, label) == (False, "")
+
+
+def test_requests_translator_closes_sessions_owned_by_multiple_workers(monkeypatch):
+    sessions: list[_FakeSession] = []
+
+    def session_factory():
+        session = _FakeSession(_FakeResponse([[['ok']]]))
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(
+        "src.translators.google_web_translator.requests.Session",
+        session_factory,
+    )
+    translator = GoogleWebTranslator(max_retries=0)
+    translator._session_pool.get()
+    worker = threading.Thread(target=translator._session_pool.get)
+    worker.start()
+    worker.join(timeout=2)
+
+    translator.close()
+
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)

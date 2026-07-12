@@ -210,6 +210,7 @@ class GeminiLiveASRProvider(ASRProvider):
         self._live_active: dict[int, _LiveSessionSlot] = {}
         self._live_session_count = 0
         self._closing = False
+        self._closed = False
         self._prewarm_thread: threading.Thread | None = None
 
     def load(
@@ -219,6 +220,8 @@ class GeminiLiveASRProvider(ASRProvider):
         prewarm: bool = True,
     ) -> None:
         with self._lock:
+            if self._closed:
+                raise ASRConfigurationError("Gemini Live provider is closed")
             if self._client is not None:
                 return
             if not self.api_key:
@@ -285,12 +288,15 @@ class GeminiLiveASRProvider(ASRProvider):
         if np.asarray(audio).size == 0:
             return ""
         lang = _language_code(language) or self.language
+        if self._closed:
+            raise ASRConfigurationError("Gemini Live provider is closed")
         if self._client is None:
             self.load(prewarm=False)
-        client = self._client
-        genai = self._genai
-        if client is None or genai is None:
-            raise ASRConfigurationError("Gemini Live client is not loaded")
+        with self._lock:
+            client = self._client
+            genai = self._genai
+            if self._closed or client is None or genai is None:
+                raise ASRConfigurationError("Gemini Live provider is closed")
         started_at = time.monotonic()
         try:
             if self.use_live_api:
@@ -580,6 +586,9 @@ class GeminiLiveASRProvider(ASRProvider):
 
     def close(self) -> None:
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             runner = self._async_runner
             client = self._client
             prewarm_thread = self._prewarm_thread
@@ -588,6 +597,7 @@ class GeminiLiveASRProvider(ASRProvider):
             self._genai = None
             self._async_runner = None
             self._prewarm_thread = None
+            self._corrector = None
         if runner is not None:
             try:
                 runner.run(self._close_live_pool(), timeout=5.0)
@@ -615,7 +625,7 @@ class GeminiLiveASRProvider(ASRProvider):
     @property
     def is_loaded(self) -> bool:
         with self._lock:
-            return self._client is not None
+            return not self._closed and self._client is not None
 
 
 def _float_value(value: object, default: float) -> float:

@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -18,12 +18,22 @@ from src.ui_qt.font_config import (
     cjk_latin_font_paths,
 )
 from src.ui_qt.main_window import MainWindow
+from src.ui_qt.qt_localization import install_qt_translations
 from src.ui_qt.styles import build_app_stylesheet
 from src.ui_qt.theme import theme_from_config
 from src.utils.app_paths import resource_base_dirs
+from src.utils.ui_config import get_ui_language
 
 
 def run_qt_app(config: dict) -> int:
+    from src.ui_qt.update_window import (
+        consume_update_install_result,
+        load_deferred_update_info,
+        show_update_install_result,
+    )
+
+    update_install_result = consume_update_install_result()
+    deferred_update = load_deferred_update_info()
     _configure_rendering()
     app = QApplication.instance()
     if app is None:
@@ -31,13 +41,26 @@ def run_qt_app(config: dict) -> int:
 
     app.setApplicationName("Mio RealTime Translator")
     app.setOrganizationName("MioTranslator")
+    install_qt_translations(app, get_ui_language(config))
     apply_application_font(app, config)
     app.setWindowIcon(_app_icon())
     _apply_style(app, config)
 
     window = MainWindow(config)
     window.setWindowIcon(_app_icon())
+    if deferred_update is not None:
+        window._handle_update_available(deferred_update)
     window.show()
+    if update_install_result is not None:
+        ui_language = get_ui_language(config)
+        QTimer.singleShot(
+            0,
+            lambda: show_update_install_result(
+                window,
+                update_install_result,
+                ui_language,
+            ),
+        )
     return app.exec()
 
 
@@ -52,7 +75,11 @@ def _configure_rendering() -> None:
         )
     except Exception:
         pass
-    for attr_name in ("AA_UseHighDpiPixmaps", "AA_DontCreateNativeWidgetSiblings"):
+    for attr_name in (
+        "AA_UseHighDpiPixmaps",
+        "AA_DontCreateNativeWidgetSiblings",
+        "AA_DontUseNativeDialogs",
+    ):
         attr = getattr(Qt.ApplicationAttribute, attr_name, None)
         if attr is None:
             continue

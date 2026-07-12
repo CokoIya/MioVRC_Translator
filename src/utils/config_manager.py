@@ -55,11 +55,8 @@ from src.utils.ui_config import (
 )
 from src.tts.api_tts_config import (
     TTS_API_ENGINE_IDS,
-    get_tts_api_base_url,
     get_tts_api_default_config,
-    get_tts_api_known_base_urls,
-    normalize_tts_api_region,
-    tts_api_region_from_base_url,
+    resolve_tts_api_config,
 )
 from src.asr.model_registry import (
     ASR_ENGINE_SPECS,
@@ -1893,6 +1890,17 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
         config["tts"] = tts_cfg
         changed = True
 
+    loaded_tts_cfg = loaded.get("tts") if isinstance(loaded, dict) else None
+    if isinstance(loaded, dict):
+        raw_tts_cfg = loaded_tts_cfg if isinstance(loaded_tts_cfg, dict) else {}
+    else:
+        raw_tts_cfg = tts_cfg
+    raw_api_configs = {
+        engine: dict(engine_cfg)
+        for engine in TTS_API_ENGINE_IDS
+        if isinstance((engine_cfg := raw_tts_cfg.get(engine)), dict)
+    }
+
     legacy_output_device = tts_cfg.get("output_device")
     if "output_to_vrchat" not in tts_cfg:
         tts_cfg["output_to_vrchat"] = (
@@ -2091,24 +2099,11 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
         api_cfg = tts_cfg.get(engine)
         if not isinstance(api_cfg, dict):
             continue
-        base_url = str(api_cfg.get("base_url", "") or "").strip().rstrip("/")
-        region = normalize_tts_api_region(
-            engine,
-            api_cfg.get("region"),
-            default_region=tts_api_region_from_base_url(engine, base_url),
-        )
-        if api_cfg.get("region") != region:
-            api_cfg["region"] = region
-            changed = True
-        auto_base_url = get_tts_api_base_url(engine, region)
-        known_base_urls = get_tts_api_known_base_urls(engine)
-        if auto_base_url and (not base_url or base_url in known_base_urls):
-            if base_url != auto_base_url:
-                api_cfg["base_url"] = auto_base_url
+        resolved = resolve_tts_api_config(engine, raw_api_configs.get(engine))
+        for key in ("region", "base_url"):
+            if api_cfg.get(key) != resolved[key]:
+                api_cfg[key] = resolved[key]
                 changed = True
-        elif base_url != api_cfg.get("base_url"):
-            api_cfg["base_url"] = base_url
-            changed = True
 
     return changed
 
@@ -2249,6 +2244,7 @@ def load_config() -> dict:
     defaults = _load_json_dict(example_path) or {}
     loaded = _load_json_dict(config_path, secure=True)
     recovered_from_last_good = False
+    recover_ui_language_from_os = False
     if loaded is None or _config_is_severely_incomplete(loaded):
         last_good = _load_json_dict(
             _last_good_config_path(config_path),
@@ -2261,6 +2257,12 @@ def load_config() -> dict:
             loaded = last_good
             recovered_invalid = True
             recovered_from_last_good = True
+        else:
+            # Preserve any parseable user values while treating the sparse
+            # structure as a recovery case only for the initial UI language.
+            # Other partial user settings must not be replaced by first-run
+            # backend defaults.
+            recover_ui_language_from_os = True
     had_plaintext_secret = _contains_plaintext_api_key(loaded)
     loaded = _unprotect_config_for_runtime(loaded)
     config_changed = recovered_from_last_good
@@ -2296,7 +2298,12 @@ def load_config() -> dict:
         config_changed = True
     if _ensure_performance_config(merged):
         config_changed = True
-    if bootstrap_ui_language(merged, prefer_auto=created_new or recovered_invalid):
+    # A genuinely new configuration, or an invalid configuration with no
+    # usable last-good backup, should start from the current OS display
+    # language.  Recovery from a last-good user configuration must retain its
+    # saved language instead.
+    prefer_auto_ui_language = created_new or recover_ui_language_from_os
+    if bootstrap_ui_language(merged, prefer_auto=prefer_auto_ui_language):
         config_changed = True
     if _ensure_translation_config(
         merged,

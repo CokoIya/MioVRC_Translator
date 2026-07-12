@@ -3,7 +3,8 @@ import inspect
 import threading
 
 import pytest
-from PySide6.QtWidgets import QDialog
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.mode_manager import AppMode
 from src.ui_qt.main_window import (
@@ -57,6 +58,19 @@ def test_bottom_report_preserves_actionable_translation_error():
         "Internal worker failed: private implementation detail",
         color="danger",
     ) == "Runtime error"
+
+
+def test_bottom_report_preserves_full_update_success_confirmation():
+    window = MainWindow.__new__(MainWindow)
+    window._copy = lambda key, **_kwargs: key
+    message = "Installation completed successfully, and Mio reopened automatically."
+
+    assert MainWindow._bottom_report_text(
+        window,
+        message,
+        color="success",
+        key="update_install_success_message",
+    ) == message
 
 
 def _has_ancestor(widget, ancestor) -> bool:
@@ -234,6 +248,54 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert window._config["ui"]["main_window_theme"] == "light"
     assert not window._tweaks_btn.icon().isNull()
     assert window._tweaks_btn.iconSize().width() >= 18
+    window.destroy()
+
+
+def test_reopened_transient_dialogs_are_deleted_instead_of_accumulating(
+    qtbot,
+    monkeypatch,
+):
+    monkeypatch.setattr("src.ui_qt.main_window._list_microphone_devices", lambda: [])
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._register_hotkeys", lambda self: None)
+    monkeypatch.setattr("src.ui_qt.main_window.MainWindow._schedule_config_save", lambda self: None)
+
+    window = MainWindow(
+        {
+            "ui": {
+                "main_window_theme": "dark",
+                "osc_guide_seen": True,
+                "mode_wizard_seen": True,
+            }
+        }
+    )
+    qtbot.addWidget(window)
+
+    for _ in range(3):
+        window._open_osc_guide()
+        dialog = window._guide_win
+        assert dialog is not None
+        assert dialog.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.close()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        assert window._guide_win is None
+        assert [
+            child
+            for child in window.findChildren(QDialog)
+            if child.objectName() == "oscGuideDialog"
+        ] == []
+
+    for _ in range(3):
+        window._open_audio_diagnostics_window(MIC_SOURCE)
+        dialog = window._audio_diagnostics_windows[MIC_SOURCE]
+        timer = dialog._timer
+        assert timer.isActive()
+        dialog.close()
+        assert not timer.isActive()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        assert window._audio_diagnostics_windows == {}
+
     window.destroy()
 
 
@@ -1141,6 +1203,35 @@ def test_mode_wizard_open_settings_targets_player_facing_page():
     assert MainWindow._settings_page_for_mode_wizard("tts") == "tts"
     assert MainWindow._settings_page_for_mode_wizard("manual") == "translation"
     assert MainWindow._settings_page_for_mode_wizard("unknown") == "voice"
+
+
+def test_enabling_distinct_listen_asr_restarts_pipeline_before_loading_capture():
+    window = MainWindow.__new__(MainWindow)
+    shared_asr = object()
+    calls: list[object] = []
+    window._running = True
+    window._desktop_capture_enabled = False
+    window._asr = shared_asr
+    window._listen_asr = shared_asr
+    window._config = {
+        "asr": {"engine": "sensevoice-small"},
+        "vrc_listen": {"enabled": False, "asr_engine": "qwen3-asr"},
+    }
+    window._start_listen = lambda: calls.append("start_listen")
+    window._refresh_desktop_capture_button = lambda: None
+    window._refresh_floating_window_status = lambda *_args: None
+    window._sync_settings_window_vrc_listen_state = lambda: None
+    window._schedule_config_save = lambda: calls.append("save")
+    window._set_bottom = lambda *_args, **_kwargs: None
+    window._copy = lambda key: key
+    window._do_stop = lambda: calls.append("stop")
+    window._schedule_pipeline_start_retry = lambda delay: calls.append(("restart", delay))
+
+    window._set_desktop_capture_enabled(True, persist=True)
+
+    assert window._desktop_capture_enabled is True
+    assert window._config["vrc_listen"]["enabled"] is True
+    assert calls == ["save", "stop", ("restart", 100)]
 
 
 def test_desktop_audio_watch_restarts_when_output_signature_changes(monkeypatch):

@@ -4,13 +4,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtWidgets import QLabel, QPushButton, QWidget
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 from shiboken6 import delete as delete_qt_object
 
 from src.ui_qt import settings_window as settings_module
 from src.ui_qt.settings_window import (
     CapsuleSwitch,
     NAV_ITEMS,
+    ROLEPLAY_PRESET_DISPLAY_TEXTS,
     ROLEPLAY_PRESETS,
     SETTINGS_UPDATE_BUTTON_PADDING,
     STYLE_BERT_TTS_TEST_TIMEOUT_MS,
@@ -22,6 +24,7 @@ from src.ui_qt.settings_window import (
 from src.tts.xtts_engine import XTTS_SUPPORTED_LANGUAGES
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
+from src.utils.i18n import tr
 from src.utils.ui_config import (
     DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
     QWEN_TRANSLATION_BASE_URL_MAINLAND,
@@ -73,7 +76,10 @@ def _patch_dialog_deps(monkeypatch):
     monkeypatch.setattr("src.ui_qt.settings_window.find_best_virtual_output_device", lambda: None)
     monkeypatch.setattr("src.ui_qt.settings_window.create_tts_engine", lambda _engine: _DummyTTS())
     monkeypatch.setattr("src.ui_qt.settings_window.xtts_runtime_status", lambda **_kwargs: ready_status)
-    monkeypatch.setattr("src.ui_qt.settings_window.missing_required_translation_api_key", lambda _cfg: (False, ""))
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.missing_required_translation_api_key",
+        lambda _cfg, *_args, **_kwargs: (False, ""),
+    )
     monkeypatch.setattr("src.asr.model_manager.model_exists", lambda _spec: True)
     monkeypatch.setattr(
         "src.ui_qt.settings_window.dictionary_status",
@@ -117,6 +123,142 @@ def _select_settings_page(qtbot, dialog: SettingsWindow, page_id: str) -> None:
     row = next(i for i, (candidate, _label) in enumerate(NAV_ITEMS) if candidate == page_id)
     dialog._nav_list.setCurrentRow(row)
     qtbot.wait(30)
+
+
+def _flush_deferred_qt_deletes() -> None:
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QApplication.processEvents()
+
+
+def test_parent_owned_settings_windows_release_timers_and_qobjects_on_close(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    close_notifications: list[int] = []
+
+    for index in range(3):
+        dialog = SettingsWindow(
+            parent,
+            config,
+            on_close=lambda index=index: close_notifications.append(index),
+        )
+        timer = dialog._audio_device_refresh_timer
+        assert timer.isActive() is True
+
+        dialog.close()
+
+        assert timer.isActive() is False
+        _flush_deferred_qt_deletes()
+        assert parent.findChildren(SettingsWindow) == []
+
+    assert close_notifications == [0, 1, 2]
+
+
+def test_preloaded_settings_do_not_scan_audio_devices_until_shown(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    dialog = SettingsWindow(parent, config, preload=True)
+    timer = dialog._audio_device_refresh_timer
+
+    assert timer.isActive() is False
+
+    dialog.show()
+    qtbot.waitUntil(timer.isActive, timeout=1000)
+    dialog.hide()
+
+    assert timer.isActive() is False
+    dialog.close()
+
+
+def test_settings_close_clears_callbacks_and_closes_test_manager_once(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    close_calls: list[str] = []
+
+    class Manager:
+        def stop_playback(self):
+            close_calls.append("playback")
+
+        def close(self):
+            close_calls.append("close")
+
+    notifications: list[bool] = []
+    dialog = SettingsWindow(
+        parent,
+        config,
+        on_close=lambda: notifications.append(True),
+    )
+    dialog._tts_test_manager = Manager()
+    dialog._ui_callback_queue.put_nowait((0, lambda: None))
+
+    dialog.reject()
+    dialog.close()
+
+    assert dialog._ui_callback_queue.empty()
+    assert close_calls.count("playback") == 1
+    qtbot.waitUntil(lambda: close_calls.count("close") == 1, timeout=2000)
+    assert notifications == [True]
+    _flush_deferred_qt_deletes()
+    assert parent.findChildren(SettingsWindow) == []
+
+
+def test_temporary_local_tts_probe_closes_engine(monkeypatch):
+    class Engine:
+        def __init__(self):
+            self.close_calls = 0
+
+        def is_available(self):
+            return True
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = Engine()
+    monkeypatch.setattr(settings_module, "create_tts_engine", lambda _name: engine)
+    dialog = SettingsWindow.__new__(SettingsWindow)
+
+    assert dialog._local_tts_engine_available("voicevox") is True
+    assert engine.close_calls == 1
+
+
+def test_temporary_voice_enumeration_engine_is_closed(monkeypatch):
+    class Engine:
+        def __init__(self):
+            self.close_calls = 0
+
+        def get_available_voices(self):
+            return []
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = Engine()
+    delivered: list[tuple[str, list, int]] = []
+    monkeypatch.setattr(settings_module, "create_tts_engine", lambda _name: engine)
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    dialog._call_in_ui = lambda callback, delay_ms=0: callback() or True
+    dialog._on_tts_voices_loaded = (
+        lambda name, entries, generation: delivered.append((name, entries, generation))
+    )
+
+    dialog._load_tts_voices_worker("edge", 9)
+
+    assert engine.close_calls == 1
+    assert delivered == [("edge", [], 9)]
 
 
 def test_settings_window_constructs_and_shows_nav(qtbot, config, monkeypatch):
@@ -219,6 +361,54 @@ def test_settings_update_buttons_resize_for_localized_labels(qtbot, config, monk
     dialog.reject()
 
 
+def test_external_settings_language_update_preserves_values_without_signal_feedback(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    emitted: list[tuple[str, str]] = []
+    dialog.language_changed.connect(lambda code: emitted.append((code, dialog._ui_lang)))
+    target_code = dialog._lang_codes[dialog._target_lang_var.value()]
+
+    dialog.update_language("ru-RU")
+
+    assert dialog._ui_lang == "ru"
+    assert emitted == []
+    assert dialog._lang_codes[dialog._target_lang_var.value()] == target_code
+
+    japanese_label = next(label for label, code in dialog._ui_lang_codes.items() if code == "ja")
+    dialog._on_ui_lang_changed(japanese_label)
+
+    assert emitted == [("ja", "ja")]
+    assert dialog._lang_codes[dialog._target_lang_var.value()] == target_code
+    dialog.reject()
+
+
+def test_xtts_language_selection_is_localized_and_preserved_at_runtime(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["tts"] = {
+        "engine": "xtts",
+        "xtts": {"language": "ru", "device": "cpu"},
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._selected_xtts_language_code() == "ru"
+    dialog.update_language("ko")
+    _select_settings_page(qtbot, dialog, "tts")
+
+    assert dialog._selected_xtts_language_code() == "ru"
+    assert dialog._xtts_language_combo.currentText() == tr("ko", "xtts_language_russian")
+    dialog.reject()
+
+
 def test_roleplay_presets_are_popular_anime_character_labels():
     expected_ids = [
         "frieren",
@@ -241,6 +431,56 @@ def test_roleplay_presets_are_popular_anime_character_labels():
         assert profile["persona_name"] == label
         assert profile["persona_prompt"]
         assert profile["persona_glossary"]
+
+
+def test_roleplay_preset_editors_are_localized_without_changing_model_prompt(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    canonical = ROLEPLAY_PRESETS["frieren"]
+    config["ui"]["language"] = "ru"
+    config["translation"]["social"] = {
+        "mode": "roleplay",
+        "persona_preset": "frieren",
+        "persona_name": canonical["persona_name"],
+        "persona_prompt": canonical["persona_prompt"],
+        "persona_glossary": canonical["persona_glossary"],
+    }
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    russian = ROLEPLAY_PRESET_DISPLAY_TEXTS["frieren"]
+    assert dialog._roleplay_prompt_var.value() == russian["persona_prompt"]["ru"]
+    assert dialog._roleplay_glossary_var.value() == russian["persona_glossary"]["ru"]
+    snapshot = dialog._config_with_current_roleplay_settings()["translation"]["social"]
+    assert snapshot["persona_prompt"] == canonical["persona_prompt"]
+    assert snapshot["persona_glossary"] == canonical["persona_glossary"]
+
+    dialog.update_language("ja")
+    assert dialog._roleplay_prompt_var.value() == russian["persona_prompt"]["ja"]
+    assert dialog._config_with_current_roleplay_settings()["translation"]["social"]["persona_prompt"] == canonical["persona_prompt"]
+    dialog.reject()
+
+
+def test_roleplay_preset_preserves_a_user_edited_prompt(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["translation"]["social"] = {
+        "mode": "roleplay",
+        "persona_preset": "frieren",
+        "persona_prompt": "My deliberately customized prompt",
+        "persona_glossary": "My glossary",
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    snapshot = dialog._config_with_current_roleplay_settings()["translation"]["social"]
+
+    assert snapshot["persona_prompt"] == "My deliberately customized prompt"
+    assert snapshot["persona_glossary"] == "My glossary"
+    dialog.reject()
 
 
 def test_settings_window_nav_switches_pages(qtbot, config, monkeypatch):
@@ -424,6 +664,104 @@ def test_settings_window_voice_page_shows_dictionary_status(qtbot, config, monke
     assert dialog._dictionary_status_label is not None
     assert "D:/tmp/asr_terms.user.json" in dialog._dictionary_status_label.text()
 
+    dialog.reject()
+
+
+def test_dictionary_status_localizes_layer_order_and_large_counts(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ru"
+    monkeypatch.setattr(
+        settings_module,
+        "dictionary_status",
+        lambda: {
+            "layers": [
+                {"name": "user", "entry_count": 9, "version": ""},
+                {"name": "official", "entry_count": 27, "version": "2026.07"},
+                {"name": "bundled", "entry_count": 12345, "version": "1"},
+            ],
+            "user_path": "D:/tmp/asr_terms.user.json",
+        },
+    )
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "voice")
+
+    text = dialog._dictionary_status_label.text()
+
+    assert "Встроенный словарь: 12\u202f345" in text
+    assert "Официальный словарь: 27" in text
+    assert "Пользовательский словарь: 9" in text
+    assert text.index("Встроенный словарь") < text.index("Официальный словарь")
+    assert text.index("Официальный словарь") < text.index("Пользовательский словарь")
+    dialog.reject()
+
+
+def test_russian_numeric_inputs_use_and_accept_decimal_comma(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ru"
+    config.setdefault("audio", {})["vad_silence_threshold"] = 0.65
+    config["audio"]["vad_min_rms"] = 0.012
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._vad_var.value() == "0,65"
+    assert dialog._vad_min_rms_var.value() == "0,012"
+    assert dialog._parse_positive_float("0,65", "VAD") == pytest.approx(0.65)
+    assert dialog._parse_float_range("0,75", "Ratio", 0.0, 1.0) == pytest.approx(0.75)
+
+    dialog.update_language("en")
+    assert dialog._vad_var.value() == "0.65"
+    assert dialog._vad_min_rms_var.value() == "0.012"
+    dialog.reject()
+
+
+def test_backend_model_score_uses_selected_locale(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ru"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog._backend_model_info_title_label = QLabel()
+    dialog._backend_model_info_note_label = QLabel()
+    dialog._backend_model_badge_labels = {}
+    monkeypatch.setattr(
+        settings_module,
+        "get_backend_model_profile",
+        lambda *_args: {"model": "test-model", "score": 6.5, "note": "custom"},
+    )
+
+    dialog._refresh_backend_model_info()
+
+    assert "6,5/10" in dialog._backend_model_info_title_label.text()
+    dialog.reject()
+
+
+def test_settings_navigation_width_tracks_translated_text_and_font(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"].update({"language": "ru", "font_family": "system"})
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    width = dialog._nav_panel.width()
+    metrics = dialog._nav_list.fontMetrics()
+    for row in range(dialog._nav_list.count()):
+        item = dialog._nav_list.item(row)
+        required = metrics.horizontalAdvance(item.text()) + 52
+        if required <= settings_module.SETTINGS_NAV_MAX_WIDTH:
+            assert width >= required
+        else:
+            assert item.toolTip() == item.text()
     dialog.reject()
 
 
@@ -1629,6 +1967,89 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
     assert dialog._tts_voice_api_region_combo is None
 
 
+def test_qwen_tts_test_auth_failure_shows_actionable_message(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    config["tts"] = {
+        "enabled": True,
+        "engine": "qwen_tts",
+        "qwen_tts": {
+            "api_key": "rejected-key",
+            "region": "china_mainland",
+            "base_url": QWEN_TTS_BASE_URL_MAINLAND,
+            "model": "qwen3-tts-flash",
+            "voice": "Cherry",
+        },
+    }
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog._tts_testing = True
+    dialog._tts_test_manager = object()
+
+    dialog._finish_tts_test(
+        dialog._tts_test_generation,
+        False,
+        "Qwen TTS API request failed: Invalid API-key provided.",
+    )
+
+    assert len(warnings) == 1
+    _title, message = warnings[0]
+    assert "Mainland China" in message
+    assert "invalid, revoked, or belong to another service region" in message
+
+
+def test_qwen_tts_test_network_failure_shows_actionable_message(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    config["tts"] = {
+        "enabled": True,
+        "engine": "qwen_tts",
+        "qwen_tts": {
+            "api_key": "test-key",
+            "region": "singapore",
+            "model": "qwen3-tts-flash",
+            "voice": "Cherry",
+        },
+    }
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog._tts_testing = True
+    dialog._tts_test_manager = object()
+
+    dialog._finish_tts_test(
+        dialog._tts_test_generation,
+        False,
+        "Qwen TTS synthesis failed: Qwen TTS network connection was interrupted.",
+    )
+
+    assert len(warnings) == 1
+    _title, message = warnings[0]
+    assert "proxy or VPN settings" in message
+    assert "HTTPS/TLS" in message
+
+
 def test_bert_model_download_opens_progress_window(qtbot, config, monkeypatch):
     from src.asr.hf_model_downloader import DownloadProgress, DownloadState
 
@@ -1729,6 +2150,55 @@ def test_settings_check_update_opens_update_window(qtbot, config, monkeypatch):
     assert dialog._check_update_btn.isEnabled() is True
 
     dialog.reject()
+
+
+def test_settings_delegates_update_dialog_to_application_owner(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    opened: list[UpdateInfo] = []
+    parent._show_update_window = opened.append
+    dialog = SettingsWindow(parent, config)
+    qtbot.addWidget(dialog)
+    info = UpdateInfo(
+        version="v9.9.9",
+        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        sha256="a" * 64,
+    )
+
+    dialog._open_update_window(info)
+
+    assert opened == [info]
+    assert dialog._update_win is None
+    dialog.reject()
+
+
+def test_settings_disposal_shuts_down_standalone_update_owner(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    class UpdateOwner:
+        shutdown_calls = 0
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    owner = UpdateOwner()
+    dialog._update_win = owner
+
+    dialog.reject()
+
+    assert owner.shutdown_calls == 1
+    assert dialog._update_win is None
 
 
 def test_settings_check_update_reports_no_update(qtbot, config, monkeypatch):
@@ -1964,7 +2434,8 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
     assert dialog._tts_testing is False
     assert warnings == []
     assert len(opened_repairs) == 1
-    assert "Coqui TTS runtime" in opened_repairs[0]
+    assert tr("zh-CN", "xtts_runtime_component_coqui") in opened_repairs[0]
+    assert "Coqui TTS runtime" not in opened_repairs[0]
 
 
 def test_xtts_runtime_repair_opens_full_installer_update_window(qtbot, config, monkeypatch):
@@ -2009,7 +2480,85 @@ def test_xtts_runtime_repair_opens_full_installer_update_window(qtbot, config, m
     assert opened[0][1].version == "v1.3.7.8"
     assert opened[0][1].flow == "repair"
     assert opened[0][2] == "zh-CN"
-    assert "sklearn" in opened[0][1].localized_notes["zh-cn"]
+    assert tr("zh-CN", "xtts_runtime_component_sklearn") in opened[0][1].localized_notes["zh-cn"]
+    assert "No module named" not in opened[0][1].localized_notes["zh-cn"]
+
+
+@pytest.mark.parametrize(
+    ("raw_reason", "expected_key"),
+    (
+        (
+            "Reference audio file not found: C:/Users/Alice/private/sample.wav",
+            "xtts_reference_missing",
+        ),
+        (
+            "Reference audio could not be decoded: codec failed at C:/Users/Alice/private/sample.wav",
+            "voice_record_import_decode_failed",
+        ),
+    ),
+)
+def test_xtts_reference_preflight_localizes_and_hides_backend_details(
+    qtbot,
+    config,
+    monkeypatch,
+    raw_reason,
+    expected_key,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ru"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(dialog, "_selected_tts_voice_id", lambda: "custom")
+    monkeypatch.setattr(
+        settings_module,
+        "first_xtts_reference_audio_path",
+        lambda: Path("C:/Users/Alice/private/sample.wav"),
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "first_usable_xtts_reference_audio_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "repair_xtts_reference_audio_file",
+        lambda _path: (False, raw_reason, None),
+    )
+    monkeypatch.setattr(
+        settings_module,
+        "validate_xtts_reference_audio_file",
+        lambda _path: (False, raw_reason, None),
+    )
+
+    message = dialog._xtts_reference_preflight_error()
+
+    assert dialog._copy(expected_key) in message
+    assert "Alice" not in message
+    assert "codec failed" not in message
+    assert "Reference audio" not in message
+    dialog.reject()
+
+
+def test_xtts_import_dialog_uses_localized_title(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "ja"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    captured: dict[str, object] = {}
+    real_configure = settings_module.configure_file_dialog
+
+    def capture(file_dialog, language, **kwargs):
+        captured.update({"language": language, **kwargs})
+        return real_configure(file_dialog, language, **kwargs)
+
+    monkeypatch.setattr(settings_module, "configure_file_dialog", capture)
+    monkeypatch.setattr(settings_module.QFileDialog, "exec", lambda _dialog: 0)
+
+    dialog._on_import_voice_for_xtts()
+
+    assert captured["language"] == "ja"
+    assert captured["title"] == dialog._copy("xtts_import_audio_title")
+    dialog.reject()
 
 
 def test_xtts_test_unavailable_engine_opens_runtime_repair(qtbot, config, monkeypatch):
@@ -2102,7 +2651,8 @@ def test_xtts_test_runtime_exception_opens_repair(qtbot, config, monkeypatch):
 
     assert warnings == []
     assert len(opened_repairs) == 1
-    assert "sklearn" in opened_repairs[0]
+    assert tr("zh-CN", "xtts_runtime_component_sklearn") in opened_repairs[0]
+    assert "sklearn" not in opened_repairs[0]
 
 
 def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, monkeypatch):
@@ -2228,7 +2778,8 @@ def test_xtts_test_reports_unusable_reference_before_creating_manager(qtbot, con
     assert warnings
     assert warnings[0][0] == dialog._copy("tts_test")
     assert dialog._copy("xtts_reference_invalid") in warnings[0][1]
-    assert "too quiet" in warnings[0][1]
+    assert dialog._copy("xtts_reference_quality_quiet") in warnings[0][1]
+    assert "too quiet" not in warnings[0][1]
 
 
 def test_xtts_cuda_dropdown_prompts_and_keeps_cuda_when_runtime_unavailable(qtbot, config, monkeypatch):
@@ -2334,6 +2885,19 @@ def _prepare_background_failure_dialog(qtbot, config, monkeypatch):
     return dialog, messages
 
 
+def _select_settings_file_dialog_path(monkeypatch, path: Path) -> None:
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "exec",
+        lambda _dialog: 1,
+    )
+    monkeypatch.setattr(
+        settings_module.QFileDialog,
+        "selectedFiles",
+        lambda _dialog: [str(path)],
+    )
+
+
 def _assert_background_failure_state(dialog, config, messages):
     assert messages
     assert dialog._background_image_path == "existing-background.png"
@@ -2350,16 +2914,12 @@ def test_background_import_rejects_invalid_suffix_without_changing_state(
     source = tmp_path / "background.txt"
     source.write_bytes(b"not an image")
     dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
-    monkeypatch.setattr(
-        settings_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), ""),
-    )
+    _select_settings_file_dialog_path(monkeypatch, source)
 
     dialog._on_browse_background()
 
     _assert_background_failure_state(dialog, config, messages)
-    assert "Unsupported background image file type" in messages[0]
+    assert messages[0] == dialog._copy("background_unsupported_format")
 
 
 def test_background_import_rejects_oversized_source_without_changing_state(
@@ -2375,11 +2935,7 @@ def test_background_import_rejects_oversized_source_without_changing_state(
     dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
     monkeypatch.setattr(settings_module, "_MAX_BACKGROUND_IMAGE_BYTES", 4)
     monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
-    monkeypatch.setattr(
-        settings_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), ""),
-    )
+    _select_settings_file_dialog_path(monkeypatch, source)
 
     dialog._on_browse_background()
 
@@ -2404,11 +2960,7 @@ def test_background_import_rejects_symlink_source_without_changing_state(
     destination.mkdir()
     dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
     monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
-    monkeypatch.setattr(
-        settings_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), ""),
-    )
+    _select_settings_file_dialog_path(monkeypatch, source)
 
     dialog._on_browse_background()
 
@@ -2433,11 +2985,7 @@ def test_background_import_rejects_hardlink_source_without_changing_state(
     destination.mkdir()
     dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
     monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: destination)
-    monkeypatch.setattr(
-        settings_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), ""),
-    )
+    _select_settings_file_dialog_path(monkeypatch, source)
 
     dialog._on_browse_background()
 
@@ -2459,11 +3007,7 @@ def test_background_import_rejects_redirected_destination_without_changing_state
     _make_settings_directory_link(redirected, outside)
     dialog, messages = _prepare_background_failure_dialog(qtbot, config, monkeypatch)
     monkeypatch.setattr(settings_module, "backgrounds_dir", lambda: redirected)
-    monkeypatch.setattr(
-        settings_module.QFileDialog,
-        "getOpenFileName",
-        lambda *_args, **_kwargs: (str(source), ""),
-    )
+    _select_settings_file_dialog_path(monkeypatch, source)
 
     try:
         dialog._on_browse_background()

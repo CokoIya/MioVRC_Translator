@@ -16,11 +16,16 @@ from src.tts.xtts_downloader import (
 from src.tts.xtts_engine import xtts_runtime_status
 from src.ui_qt.installer_repair import build_runtime_repair_update_info, show_installer_download_fallback
 from src.ui_qt.model_download_dialog import DownloadProgressWidget
+from src.ui_qt.xtts_runtime_localization import localized_xtts_runtime_components
 from src.updater.update_checker import UpdateInfo, fetch_latest_installer_info
 from src.utils.i18n import tr
+from src.utils.localization import (
+    format_locale_number,
+    format_locale_percent,
+    normalize_ui_language,
+)
 
 logger = logging.getLogger(__name__)
-
 
 class XTTSDownloadDialog(QDialog):
     """SBV2-style dialog for downloading the Voice Cloning model."""
@@ -31,7 +36,7 @@ class XTTSDownloadDialog(QDialog):
 
     def __init__(self, parent=None, ui_lang: str | None = None):
         super().__init__(parent)
-        self._ui_lang = ui_lang or self._resolve_ui_lang(parent)
+        self._ui_lang = normalize_ui_language(ui_lang or self._resolve_ui_lang(parent))
         self._downloader = XTTSDownloader()
         self._close_scheduled = False
         self._installer_fetching = False
@@ -41,7 +46,8 @@ class XTTSDownloadDialog(QDialog):
         self.installer_info_failed.connect(self._on_installer_info_failed)
 
         self.setWindowTitle(self._t("xtts_download_title"))
-        self.setFixedSize(500, 500)
+        self.setMinimumSize(500, 500)
+        self.resize(560, 560)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         self._build()
@@ -73,15 +79,22 @@ class XTTSDownloadDialog(QDialog):
 
         header = QLabel(self._t("xtts_download_header"))
         header.setObjectName("setupHeader")
+        header.setWordWrap(True)
         root.addWidget(header)
 
         size_gb = estimate_xtts_download_size() / 1_073_741_824
-        info = QLabel(self._t("xtts_download_info", size=size_gb))
+        info = QLabel(
+            self._t(
+                "xtts_download_info",
+                size=format_locale_number(size_gb, self._ui_lang, decimals=1),
+            )
+        )
         info.setWordWrap(True)
         root.addWidget(info)
 
         one_time = QLabel(self._t("xtts_download_once"))
         one_time.setObjectName("accentLabel")
+        one_time.setWordWrap(True)
         root.addWidget(one_time)
 
         privacy = QLabel(self._t("xtts_download_privacy"))
@@ -141,14 +154,16 @@ class XTTSDownloadDialog(QDialog):
             QMessageBox.critical(
                 self,
                 self._t("xtts_download_error_title"),
-                self._t("xtts_download_start_failed", error=exc),
+                self._t("xtts_download_start_failed"),
             )
 
     def _already_complete(self) -> None:
         if self._close_scheduled:
             return
         self._progress_widget._bar.setValue(100)
-        self._progress_widget._pct_label.setText("100%")
+        self._progress_widget._pct_label.setText(
+            format_locale_percent(100, self._ui_lang)
+        )
         self._progress_widget._speed_label.setText(self._t("xtts_download_complete"))
         self._progress_widget._pause_btn.setEnabled(False)
         self._progress_widget._stop_btn.setEnabled(False)
@@ -179,9 +194,10 @@ class XTTSDownloadDialog(QDialog):
         return self._runtime_missing_text()
 
     def _runtime_missing_text(self) -> str:
-        components = ", ".join(self._runtime_status.missing_component_names)
-        if not components:
-            components = "Coqui TTS runtime"
+        components = localized_xtts_runtime_components(
+            self._runtime_status,
+            self._ui_lang,
+        )
         return self._t("xtts_download_runtime_missing", components=components)
 
     def _show_runtime_recovery_actions(self) -> None:
@@ -209,7 +225,7 @@ class XTTSDownloadDialog(QDialog):
             self.installer_info_ready.emit(info)
 
         def on_error(error: str) -> None:
-            self.installer_info_failed.emit(str(error or "unknown error"))
+            self.installer_info_failed.emit(str(error or "installer manifest unavailable"))
 
         try:
             fetch_latest_installer_info(
@@ -226,7 +242,7 @@ class XTTSDownloadDialog(QDialog):
         self._release_btn.setEnabled(True)
         self._release_btn.setText(self._t("xtts_runtime_download_installer"))
         if not isinstance(info, UpdateInfo):
-            self._on_installer_info_failed("Installer manifest did not contain a valid download")
+            self._on_installer_info_failed("invalid installer manifest")
             return
         from src.ui_qt.update_window import UpdateWindow
 

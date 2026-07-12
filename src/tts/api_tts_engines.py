@@ -7,7 +7,9 @@ import json
 import logging
 import re
 import socket
-from collections.abc import Mapping
+import ssl
+import time
+from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -18,14 +20,16 @@ from .api_tts_config import (
     resolve_tts_api_config,
 )
 from .base import BaseTTS, TTSVoice
+from .error_utils import is_tts_authentication_error
 from .persona_instructions import qwen_tts_model_supports_instructions
 from src.translators.factory import _float_setting, _int_setting
+from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
+from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.secure_http import (
     open_validated_requests_response,
     read_bounded_requests_response,
     validate_api_base_url,
 )
-from src.utils.http_session_pool import ThreadLocalSessionPool
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +43,37 @@ _DASHSCOPE_RESULT_HOST_RE = re.compile(
     r"^dashscope-result-[a-z0-9-]+\.oss-[a-z0-9-]+\.aliyuncs\.com$",
     re.IGNORECASE,
 )
+_QWEN_SYNTHESIS_RETRY_DELAYS = (0.2,)
+_QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS = (0.2, 0.6)
+_QWEN_NETWORK_ERROR_MESSAGE = (
+    "Qwen TTS network connection was interrupted. "
+    "Please check the network connection and try again."
+)
+_TLS_EOF_ERROR_TOKENS = (
+    "unexpected eof",
+    "unexpected_eof_while_reading",
+    "eof occurred in violation of protocol",
+    "eof while reading",
+    "remote end closed connection without response",
+    "connection reset",
+    "connection aborted",
+    "broken pipe",
+)
+_NON_RETRYABLE_TLS_ERROR_TOKENS = (
+    "certificate verify failed",
+    "hostname mismatch",
+    "self signed certificate",
+    "unknown ca",
+    "wrong version number",
+)
 
-from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
+
+class _QwenTransportRetriesExhausted(RuntimeError):
+    """Internal marker preventing nested request/download retry multiplication."""
+
+
+class _APITTSClientResponseError(RuntimeError):
+    """Marker for a received 4xx response that must never be transport-retried."""
 
 _HIDDEN_VOICES: set[str] | None = None
 
@@ -73,6 +106,63 @@ def _load_hidden_voices() -> set[str]:
     if _HIDDEN_VOICES:
         logger.debug("Hidden voices loaded: %s", _HIDDEN_VOICES)
     return _HIDDEN_VOICES
+
+
+def _nested_transport_exceptions(error: BaseException) -> tuple[BaseException, ...]:
+    pending: list[BaseException] = [error]
+    found: list[BaseException] = []
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        found.append(current)
+        for nested in (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+        ):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        for argument in getattr(current, "args", ()):  # urllib3 nests errors here.
+            if isinstance(argument, BaseException):
+                pending.append(argument)
+    return tuple(found)
+
+
+def _is_retryable_qwen_transport_error(error: BaseException) -> bool:
+    if isinstance(error, (_QwenTransportRetriesExhausted, _APITTSClientResponseError)):
+        return False
+    nested = _nested_transport_exceptions(error)
+    message = " ".join(str(item) for item in nested).casefold()
+    if any(token in message for token in _NON_RETRYABLE_TLS_ERROR_TOKENS):
+        return False
+    if any(isinstance(item, ssl.SSLEOFError) for item in nested):
+        return True
+    if any(isinstance(item, requests.exceptions.SSLError) for item in nested):
+        return any(token in message for token in _TLS_EOF_ERROR_TOKENS)
+    if any(isinstance(item, requests.exceptions.Timeout) for item in nested):
+        return True
+    if any(
+        isinstance(item, requests.exceptions.ChunkedEncodingError)
+        for item in nested
+    ):
+        return True
+    if any(isinstance(item, requests.exceptions.ConnectionError) for item in nested):
+        return True
+    if any(
+        isinstance(
+            item,
+            (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError),
+        )
+        for item in nested
+    ):
+        return True
+    return any(token in message for token in _TLS_EOF_ERROR_TOKENS) and any(
+        isinstance(item, OSError) for item in nested
+    )
 
 
 class _APITTSBase(BaseTTS):
@@ -111,7 +201,7 @@ class _APITTSBase(BaseTTS):
     def _create_session(self) -> requests.Session:
         session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
-            max_retries=self.max_retries,
+            max_retries=self._adapter_max_retries(),
             pool_connections=4,
             pool_maxsize=4,
             pool_block=False,
@@ -119,6 +209,9 @@ class _APITTSBase(BaseTTS):
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         return session
+
+    def _adapter_max_retries(self) -> int:
+        return self.max_retries
 
     @property
     def _session(self) -> requests.Session:
@@ -179,14 +272,9 @@ class _APITTSBase(BaseTTS):
             raise RuntimeError(
                 f"{self.ENGINE_LABEL} API URL must use HTTPS or loopback HTTP"
             )
-        session = self._session_pool.get()
-        response = session.post(
+        response = self._post_json_response(
             url,
-            headers=self._auth_headers(),
-            json=dict(payload),
-            timeout=self.timeout_seconds,
-            stream=True,
-            allow_redirects=False,
+            payload,
         )
         try:
             status_code = int(getattr(response, "status_code", 200) or 0)
@@ -198,18 +286,26 @@ class _APITTSBase(BaseTTS):
                 response.headers.get("content-type", "") or ""
             ).lower()
             if status_code >= 400:
-                content = read_bounded_requests_response(
-                    response,
-                    limit=_MAX_ERROR_RESPONSE_BYTES,
-                    label=f"{self.ENGINE_LABEL} API error response",
-                )
+                try:
+                    content = read_bounded_requests_response(
+                        response,
+                        limit=_MAX_ERROR_RESPONSE_BYTES,
+                        label=f"{self.ENGINE_LABEL} API error response",
+                    )
+                except Exception as exc:
+                    if 400 <= status_code < 500:
+                        raise _APITTSClientResponseError(
+                            self._api_request_failure_message(status_code, "")
+                        ) from exc
+                    raise
                 try:
                     response.raise_for_status()
                 except Exception as exc:
                     detail = _response_error_detail(content, content_type)
-                    message = f"{self.ENGINE_LABEL} API request failed"
-                    if detail:
-                        message = f"{message}: {detail}"
+                    message = self._api_request_failure_message(
+                        status_code,
+                        detail,
+                    )
                     raise RuntimeError(message) from exc
                 raise RuntimeError(f"{self.ENGINE_LABEL} API request failed")
 
@@ -241,6 +337,28 @@ class _APITTSBase(BaseTTS):
         if not audio:
             raise RuntimeError(f"{self.ENGINE_LABEL} API returned no audio data")
         return audio
+
+    def _post_json_response(
+        self,
+        url: str,
+        payload: Mapping[str, object],
+    ) -> requests.Response:
+        session = self._session_pool.get()
+        return session.post(
+            url,
+            headers=self._auth_headers(),
+            json=dict(payload),
+            timeout=self.timeout_seconds,
+            stream=True,
+            allow_redirects=False,
+        )
+
+    def _api_request_failure_message(self, status_code: int, detail: str) -> str:
+        del status_code
+        message = f"{self.ENGINE_LABEL} API request failed"
+        if detail:
+            message = f"{message}: {detail}"
+        return message
 
     def _extract_audio_from_payload(self, payload: Mapping[str, object]) -> bytes:
         data_value = _first_path_value(
@@ -374,6 +492,73 @@ class QwenTTS(_APITTSBase):
     ENGINE_ID = "qwen_tts"
     ENGINE_LABEL = "Qwen TTS"
 
+    def _with_transient_transport_retry(
+        self,
+        operation: Callable[[], Any],
+        *,
+        operation_label: str,
+        retry_delays: tuple[float, ...],
+    ) -> Any:
+        for retry_index in range(len(retry_delays) + 1):
+            try:
+                return operation()
+            except Exception as exc:
+                if not _is_retryable_qwen_transport_error(exc):
+                    raise
+                self._session_pool.close_current()
+                if retry_index >= len(retry_delays):
+                    raise _QwenTransportRetriesExhausted(
+                        _QWEN_NETWORK_ERROR_MESSAGE
+                    ) from exc
+                delay = retry_delays[retry_index]
+                logger.warning(
+                    "Qwen TTS %s hit a transient transport failure; "
+                    "retrying with a fresh HTTPS session (%d/%d)",
+                    operation_label,
+                    retry_index + 1,
+                    len(retry_delays),
+                )
+                time.sleep(delay)
+        raise RuntimeError(_QWEN_NETWORK_ERROR_MESSAGE)
+
+    def _adapter_max_retries(self) -> int:
+        # The synthesis POST is not idempotent.  Keep urllib3 from applying
+        # additional implicit retries underneath the single, explicit TLS
+        # recovery attempt below, even for legacy configs with max_retries > 0.
+        return 0
+
+    def _post_json_response(
+        self,
+        url: str,
+        payload: Mapping[str, object],
+    ) -> requests.Response:
+        post = super()._post_json_response
+        return self._with_transient_transport_retry(
+            lambda: post(url, payload),
+            operation_label="API request",
+            retry_delays=_QWEN_SYNTHESIS_RETRY_DELAYS,
+        )
+
+    def _download_audio(self, url: str) -> bytes:
+        download = super()._download_audio
+        return self._with_transient_transport_retry(
+            lambda: download(url),
+            operation_label="audio download",
+            retry_delays=_QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS,
+        )
+
+    def _api_request_failure_message(self, status_code: int, detail: str) -> str:
+        message = super()._api_request_failure_message(status_code, detail)
+        if not is_tts_authentication_error(f"status {status_code} {detail}"):
+            return message
+        region = self.region or "selected"
+        separator = " " if message.endswith((".", "!", "?")) else ". "
+        return (
+            f"{message}{separator}Authentication was rejected for service region "
+            f"'{region}'; the API key may be invalid, revoked, or belong to "
+            "another service region"
+        )
+
     def _normalize_audio_download_url(self, url: str) -> str:
         """Upgrade DashScope's signed OSS result URLs to encrypted transport.
 
@@ -432,6 +617,11 @@ class QwenTTS(_APITTSBase):
                 f"{self.base_url}/services/aigc/multimodal-generation/generation",
                 payload,
             )
+        except requests.RequestException as exc:
+            logger.error("Qwen TTS synthesis failed: network request failed")
+            raise RuntimeError(
+                f"Qwen TTS synthesis failed: {_QWEN_NETWORK_ERROR_MESSAGE}"
+            ) from exc
         except Exception as exc:
             logger.error("Qwen TTS synthesis failed: %s", exc)
             raise RuntimeError(f"Qwen TTS synthesis failed: {exc}") from exc

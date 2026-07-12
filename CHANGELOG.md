@@ -2,6 +2,21 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.1] - 2026-07-12
+
+### Localization and updates
+
+- Added a unified five-language localization layer for the application, Qt dialogs, settings pages, runtime messages, and installer catalogs with deterministic fallback and placeholder validation.
+- Improved automatic UI-language detection and runtime language switching, and made the installer follow the Windows display language while preserving an existing installation's language.
+- Reworked the in-app update flow with localized status and errors, verified-installer retention, deferred installation, clean cancellation, and post-restart result reporting.
+
+### Runtime reliability and performance
+
+- Strengthened ASR, audio capture, translation, OSC, and scheduler lifecycle management with generation-safe completion, cancellation pruning, reusable providers, and deterministic resource cleanup.
+- Improved TTS queue recovery, worker replacement, request backoff, provider error handling, playback cleanup, and engine teardown under rapid start/stop cycles.
+- Hardened XTTS CPU/CUDA lifecycle management with Windows commit-headroom checks, safer model release, automatic CPU fallback after CUDA failures, conditioning cleanup, and lower-latency prewarming.
+- Reduced retained Qt objects, HTTP sessions, native audio resources, model references, and exception tracebacks during long-running sessions.
+
 ## [1.3.8] - 2026-07-12
 
 ### Audio capture and OSC

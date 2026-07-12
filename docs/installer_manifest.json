@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.8",
-  "installer_name": "MioTranslator-Setup-v1.3.8.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8/MioTranslator-Setup-v1.3.8.exe",
-  "size_bytes": 463610904,
-  "sha256": "4885d5bdf5791c288e59f2db608eef52999cd38fbe623c263173a9ea03a220f5",
+  "version": "v1.3.8.1",
+  "installer_name": "MioTranslator-Setup-v1.3.8.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.1/MioTranslator-Setup-v1.3.8.1.exe",
+  "size_bytes": 463699410,
+  "sha256": "48f8dfa3be99ef142d053ab63d717d581bc89fb68733ae860afd25a7b8497bb2",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "f4e33e12a95db50480879fc1bff7461d7ffa2fc02163cf3c05a2ec72ec44c6fd4e46add3588f1a7532670feb3b6c143de9c9cfe63aeb5eba1a35fb8a292bf202",
-  "notes": "v1.3.8 synchronizes mute with microphone and Web Speech capture, improves active/default microphone selection and ordered OSC MuteSelf handling, secures Qwen TTS result downloads, improves virtual-output playback compatibility, synchronizes TTS service regions, and adds selectable UI fonts.",
+  "installer_signature": "adc2b78d48c7a628e836f346e1610ece412e87beb2ef8a3b94755fc29b28e086d3800cbb79ce46447d8a9ab360719bc0c3054e3481f9dd26a04fb48af4d5920b",
+  "notes": "v1.3.8.1 delivers complete five-language localization, safer deferred updates, stronger ASR/translation/TTS lifecycle cleanup, more resilient queue and cancellation handling, and improved XTTS CPU/CUDA memory management and fallback.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8 将静音状态与麦克风和 Web Speech 采集同步，改进活动/默认麦克风自动选择和有序的 OSC MuteSelf 处理，强化 Qwen TTS 结果下载安全性，提升虚拟输出设备播放兼容性，同步 TTS 服务区域，并新增可选界面字体。",
-    "en": "v1.3.8 synchronizes mute with microphone and Web Speech capture, improves active/default microphone selection and ordered OSC MuteSelf handling, secures Qwen TTS result downloads, improves virtual-output playback compatibility, synchronizes TTS service regions, and adds selectable UI fonts.",
-    "ja": "v1.3.8 は、ミュート状態とマイク/Web Speech 収録の同期、使用中/既定マイクの自動選択、順序を保つ OSC MuteSelf 処理を改善し、Qwen TTS 結果の安全なダウンロード、仮想出力デバイスとの再生互換性、TTS サービス地域の同期、UI フォント選択を追加します。",
-    "ru": "v1.3.8 синхронизирует отключение звука с захватом микрофона и Web Speech, улучшает выбор активного/системного микрофона и упорядоченную обработку OSC MuteSelf, защищает загрузку результатов Qwen TTS, улучшает воспроизведение через виртуальные устройства, синхронизирует регионы TTS и добавляет выбор шрифта интерфейса.",
-    "ko": "v1.3.8은 음소거 상태를 마이크 및 Web Speech 캡처와 동기화하고, 활성/기본 마이크 자동 선택과 순서 보장 OSC MuteSelf 처리를 개선합니다. 또한 Qwen TTS 결과 다운로드 보안, 가상 출력 장치 재생 호환성, TTS 서비스 지역 동기화, UI 글꼴 선택을 추가합니다."
+    "zh-CN": "v1.3.8.1 带来完整的五语言本地化、更安全的延迟安装更新流程、更可靠的 ASR/翻译/TTS 生命周期清理、更稳健的队列与取消处理，以及改进的 XTTS CPU/CUDA 内存管理和回退机制。",
+    "en": "v1.3.8.1 delivers complete five-language localization, safer deferred updates, stronger ASR/translation/TTS lifecycle cleanup, more resilient queue and cancellation handling, and improved XTTS CPU/CUDA memory management and fallback.",
+    "ja": "v1.3.8.1 では、5言語の完全なローカライズ、安全な延期更新、ASR/翻訳/TTS のライフサイクル整理、キューとキャンセル処理の安定化、XTTS の CPU/CUDA メモリ管理とフォールバックを改善しました。",
+    "ru": "v1.3.8.1 добавляет полную локализацию на пять языков, безопасное отложенное обновление, улучшенную очистку жизненного цикла ASR/перевода/TTS, устойчивую обработку очередей и отмены, а также улучшенное управление памятью и резервный режим XTTS CPU/CUDA.",
+    "ko": "v1.3.8.1은 완전한 5개 언어 현지화, 더 안전한 지연 업데이트, ASR/번역/TTS 수명 주기 정리, 안정적인 대기열 및 취소 처리, 향상된 XTTS CPU/CUDA 메모리 관리와 폴백을 제공합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-12T16:20:31+09:00",
+  "published_at": "2026-07-12T22:39:16+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "6cad21a0db8b1a4d835fe57454c269cc98a8080d385183c7b87d2aa013790a50e3a87019a86dff71ce6757354cdd46be03727d73bf5c78b781b8004edaae080f"
+  "signature": "78f49493da903dc9ca2d08aecc20af197469144e7d07282f573295e0e9a23542eee9946837134da9011156b1415a3871ff446ee980db6b13aee549d675e8ca01"
 }

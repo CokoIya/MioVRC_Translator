@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import pathlib
 import re
 import secrets
+import shutil
 import stat
 import sys
-import shutil
 import threading
 import time
-from contextlib import ExitStack, contextmanager
+from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import ExitStack, contextmanager
 
 from src.asr.model_registry import (
     ASRRuntimeSpec,
@@ -26,7 +27,10 @@ from src.utils.secure_http import open_validated_requests_response
 
 _DOWNLOAD_LOCK = threading.Lock()
 _FILE_HASH_CACHE_LOCK = threading.Lock()
-_FILE_HASH_CACHE: dict[tuple[str, int, int, int, int, int], str] = {}
+_FILE_HASH_CACHE_MAX_ENTRIES = 256
+_FILE_HASH_CACHE: OrderedDict[tuple[str, int, int, int, int, int], str] = (
+    OrderedDict()
+)
 _MODEL_METADATA_FILENAME = ".mio-model.json"
 _DOWNLOAD_ATTEMPTS = 3
 _MODEL_CONFIG_FILENAMES = ("configuration.json", "config.yaml")
@@ -122,6 +126,8 @@ def _sha256_file(path: pathlib.Path) -> str:
     cache_key = _file_identity(path)
     with _FILE_HASH_CACHE_LOCK:
         cached = _FILE_HASH_CACHE.get(cache_key)
+        if cached is not None:
+            _FILE_HASH_CACHE.move_to_end(cache_key)
     if cached is not None:
         return cached
 
@@ -137,6 +143,9 @@ def _sha256_file(path: pathlib.Path) -> str:
     digest = hasher.hexdigest()
     with _FILE_HASH_CACHE_LOCK:
         _FILE_HASH_CACHE[cache_key] = digest
+        _FILE_HASH_CACHE.move_to_end(cache_key)
+        while len(_FILE_HASH_CACHE) > _FILE_HASH_CACHE_MAX_ENTRIES:
+            _FILE_HASH_CACHE.popitem(last=False)
     return digest
 
 
@@ -759,6 +768,7 @@ def _emit_progress(
     indeterminate: bool = False,
     total_bytes: int | None = None,
     downloaded_bytes: int | None = None,
+    **metadata: object,
 ) -> None:
     if progress_callback is None:
         return
@@ -773,6 +783,7 @@ def _emit_progress(
         event["total_bytes"] = int(total_bytes)
     if downloaded_bytes is not None:
         event["downloaded_bytes"] = int(downloaded_bytes)
+    event.update(metadata)
     progress_callback(event)
 
 
@@ -1211,12 +1222,11 @@ def _download_pinned_sensevoice_to(
                 _emit_progress(
                     progress_callback,
                     stage="download_retry",
-                    message=(
-                        f"{spec.label} download interrupted. Retrying "
-                        f"{attempt + 1}/{_DOWNLOAD_ATTEMPTS}..."
-                    ),
+                    message="",
                     indeterminate=True,
                     downloaded_bytes=tracker.downloaded_bytes,
+                    attempt=attempt + 1,
+                    max_attempts=_DOWNLOAD_ATTEMPTS,
                 )
                 time.sleep(min(2.0 * attempt, 5.0))
         if last_error is not None:
@@ -1332,13 +1342,12 @@ def _download_model_to(
                 _emit_progress(
                     progress_callback,
                     stage="download_retry",
-                    message=(
-                        f"{spec.label} download interrupted. Retrying "
-                        f"{attempt + 1}/{_DOWNLOAD_ATTEMPTS}..."
-                    ),
+                    message="",
                     indeterminate=True,
                     total_bytes=total_bytes,
                     downloaded_bytes=tracker.downloaded_bytes,
+                    attempt=attempt + 1,
+                    max_attempts=_DOWNLOAD_ATTEMPTS,
                 )
                 time.sleep(min(2.0 * attempt, 5.0))
         if last_error is not None:

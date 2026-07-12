@@ -31,6 +31,7 @@ from src.ui_qt.styles import build_floating_window_styles
 from src.ui_qt.theme import icon_tint, theme_tokens
 from src.ui_qt.window_utils import set_window_topmost
 from src.utils.i18n import tr
+from src.utils.localization import normalize_ui_language
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class FloatingWindow(QDialog):
         # Keep this as an unowned top-level window so minimizing or raising the
         # main window does not drag the reverse-translation overlay along.
         super().__init__(None)
-        self._ui_lang = ui_language
+        self._ui_lang = normalize_ui_language(ui_language)
         self._on_resend = on_resend
         self._on_close = on_close
         self._history: deque[dict[str, object]] = deque(maxlen=MAX_HISTORY)
@@ -616,7 +617,7 @@ class FloatingWindow(QDialog):
         bar.setValue(bar.maximum())
 
     def update_language(self, ui_language: str) -> None:
-        self._ui_lang = ui_language
+        self._ui_lang = normalize_ui_language(ui_language)
         self.setWindowTitle(tr(self._ui_lang, "floating_window_title"))
         self._opacity_label.setText(self._opacity_label_text())
         self._refresh_status_label()

@@ -236,25 +236,25 @@ OUTPUT_FORMAT_LABELS = {
         "ko": "\uc6d0\ubb38(\ubc88\uc5ed\ubb38)",
     },
     "original_with_translated1_translated2": {
-        "zh-CN": "\u539f\u6587\uff08\u8bd1\uff081\uff09\uff08\u8bd1\uff082\uff09",
-        "en": "Original (TL1) (TL2)",
-        "ja": "\u539f\u6587\uff08\u8a33\uff081\uff09\uff08\u8a33\uff082\uff09",
-        "ru": "\u041e\u0440\u0438\u0433\u0438\u043d\u0430\u043b (\u041f\u041f1) (\u041f\u041f2)",
-        "ko": "\uc6d0\ubb38\uff08\ubc88\uff081\uff09\uff08\ubc88\uff082\uff09",
+        "zh-CN": "\u539f\u6587\uff08\u8bd1\u65871\uff09\uff08\u8bd1\u65872\uff09",
+        "en": "Original (Translation 1) (Translation 2)",
+        "ja": "\u539f\u6587\uff08\u8a33\u65871\uff09\uff08\u8a33\u65872\uff09",
+        "ru": "\u041e\u0440\u0438\u0433\u0438\u043d\u0430\u043b (\u043f\u0435\u0440\u0435\u0432\u043e\u0434 1) (\u043f\u0435\u0440\u0435\u0432\u043e\u0434 2)",
+        "ko": "\uc6d0\ubb38(\ubc88\uc5ed1)(\ubc88\uc5ed2)",
     },
     "translated1_with_translated2": {
-        "zh-CN": "\u8bd1\uff081\uff09\uff08\u8bd1\uff082\uff09",
-        "en": "TL1 (TL2)",
-        "ja": "\u8a33\uff081\uff09\uff08\u8a33\uff082\uff09",
-        "ru": "\u041f\u041f1 (\u041f\u041f2)",
-        "ko": "\ubc88\uff081\uff09\uff08\ubc88\uff082\uff09",
+        "zh-CN": "\u8bd1\u65871\uff08\u8bd1\u65872\uff09",
+        "en": "Translation 1 (Translation 2)",
+        "ja": "\u8a33\u65871\uff08\u8a33\u65872\uff09",
+        "ru": "\u041f\u0435\u0440\u0435\u0432\u043e\u0434 1 (\u043f\u0435\u0440\u0435\u0432\u043e\u0434 2)",
+        "ko": "\ubc88\uc5ed1(\ubc88\uc5ed2)",
     },
     "translated1_with_translated2_original": {
-        "zh-CN": "\u8bd1\uff081\uff09\uff08\u8bd1\uff082\uff09\uff08\u539f\u6587",
-        "en": "TL1 (TL2) (Original)",
-        "ja": "\u8a33\uff081\uff09\uff08\u8a33\uff082\uff09\uff08\u539f\u6587",
-        "ru": "\u041f\u041f1 (\u041f\u041f2) (\u041e\u0440\u0438\u0433\u0438\u043d\u0430\u043b)",
-        "ko": "\ubc88\uff081\uff09\uff08\ubc88\uff082\uff09\uff08\uc6d0\ubb38",
+        "zh-CN": "\u8bd1\u65871\uff08\u8bd1\u65872\uff09\uff08\u539f\u6587\uff09",
+        "en": "Translation 1 (Translation 2) (Original)",
+        "ja": "\u8a33\u65871\uff08\u8a33\u65872\uff09\uff08\u539f\u6587\uff09",
+        "ru": "\u041f\u0435\u0440\u0435\u0432\u043e\u0434 1 (\u043f\u0435\u0440\u0435\u0432\u043e\u0434 2) (\u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b)",
+        "ko": "\ubc88\uc5ed1(\ubc88\uc5ed2)(\uc6d0\ubb38)",
     },
 }
 
@@ -1181,6 +1181,59 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "anthropic_compatible": {},
 }
 
+TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
+    "openai": {"zh-CN": "GPT", "en": "GPT", "ja": "GPT", "ru": "GPT", "ko": "GPT"},
+    "openai_compatible": {
+        "zh-CN": "GPT 兼容服务",
+        "en": "GPT Compatible",
+        "ja": "GPT 互換サービス",
+        "ru": "GPT-совместимый сервис",
+        "ko": "GPT 호환 서비스",
+    },
+    "local_ai": {
+        "zh-CN": "本地 AI",
+        "en": "Local AI",
+        "ja": "ローカル AI",
+        "ru": "Локальный ИИ",
+        "ko": "로컬 AI",
+    },
+    "google_web": {
+        "zh-CN": "Google 网页翻译",
+        "en": "Google Web",
+        "ja": "Google ウェブ翻訳",
+        "ru": "Google Веб-перевод",
+        "ko": "Google 웹 번역",
+    },
+    "mymemory": {"zh-CN": "MyMemory", "en": "MyMemory", "ja": "MyMemory", "ru": "MyMemory", "ko": "MyMemory"},
+    "deepl": {
+        "zh-CN": "DeepL 免费版",
+        "en": "DeepL Free",
+        "ja": "DeepL 無料版",
+        "ru": "DeepL (бесплатный тариф)",
+        "ko": "DeepL 무료",
+    },
+    "libretranslate": {"zh-CN": "LibreTranslate", "en": "LibreTranslate", "ja": "LibreTranslate", "ru": "LibreTranslate", "ko": "LibreTranslate"},
+    "qianwen": {"zh-CN": "Qwen", "en": "Qwen", "ja": "Qwen", "ru": "Qwen", "ko": "Qwen"},
+    "hunyuan": {"zh-CN": "腾讯混元", "en": "Tencent Hunyuan", "ja": "Tencent Hunyuan", "ru": "Tencent Hunyuan", "ko": "Tencent Hunyuan"},
+    "xiaomi": {"zh-CN": "小米 AI", "en": "Xiaomi AI", "ja": "Xiaomi AI", "ru": "Xiaomi AI", "ko": "Xiaomi AI"},
+    "deepseek": {"zh-CN": "DeepSeek", "en": "DeepSeek", "ja": "DeepSeek", "ru": "DeepSeek", "ko": "DeepSeek"},
+    "zhipu": {"zh-CN": "GLM", "en": "GLM", "ja": "GLM", "ru": "GLM", "ko": "GLM"},
+    "gemini": {"zh-CN": "Gemini", "en": "Gemini", "ja": "Gemini", "ru": "Gemini", "ko": "Gemini"},
+    "kimi": {"zh-CN": "Kimi", "en": "Kimi", "ja": "Kimi", "ru": "Kimi", "ko": "Kimi"},
+    "xai": {"zh-CN": "xAI", "en": "xAI", "ja": "xAI", "ru": "xAI", "ko": "xAI"},
+    "mistral": {"zh-CN": "Mistral", "en": "Mistral", "ja": "Mistral", "ru": "Mistral", "ko": "Mistral"},
+    "doubao": {"zh-CN": "豆包", "en": "Doubao", "ja": "Doubao", "ru": "Doubao", "ko": "Doubao"},
+    "nvidia": {"zh-CN": "NVIDIA AI", "en": "NVIDIA AI", "ja": "NVIDIA AI", "ru": "NVIDIA AI", "ko": "NVIDIA AI"},
+    "anthropic": {"zh-CN": "Claude", "en": "Claude", "ja": "Claude", "ru": "Claude", "ko": "Claude"},
+    "anthropic_compatible": {
+        "zh-CN": "Claude 兼容服务",
+        "en": "Claude Compatible",
+        "ja": "Claude 互換サービス",
+        "ru": "Claude-совместимый сервис",
+        "ko": "Claude 호환 서비스",
+    },
+}
+
 # Keep profiles strictly aligned with selectable models. This prevents removed,
 # deprecated, reasoning-only, or known slow models from resurfacing through
 # recommendation metadata even when an older catalog is cached.
@@ -1300,12 +1353,29 @@ MANUAL_SOURCE_LANGUAGE_OPTIONS = ()
 
 
 def _resolve_ui_language(language: str | None) -> str:
-    if language in LANGUAGE_DISPLAY_NAMES:
-        return str(language)
     if isinstance(language, str):
-        base = language.split("-", 1)[0]
+        normalized = language.strip().replace("_", "-").casefold()
+        aliases = {
+            "zh": "zh-CN",
+            "zh-cn": "zh-CN",
+            "zh-hans": "zh-CN",
+            "cn": "zh-CN",
+            "en-us": "en",
+            "en-gb": "en",
+            "ja-jp": "ja",
+            "jp": "ja",
+            "ru-ru": "ru",
+            "ko-kr": "ko",
+            "kr": "ko",
+        }
+        exact = {candidate.casefold(): candidate for candidate in LANGUAGE_DISPLAY_NAMES}
+        if normalized in exact:
+            return exact[normalized]
+        if normalized in aliases:
+            return aliases[normalized]
+        base = normalized.split("-", 1)[0]
         for candidate in LANGUAGE_DISPLAY_NAMES:
-            if candidate.split("-", 1)[0] == base:
+            if candidate.casefold().split("-", 1)[0] == base:
                 return candidate
     return DEFAULT_UI_LANGUAGE
 
@@ -1511,8 +1581,16 @@ def get_backend_spec(backend: str | None) -> dict[str, object]:
     return _catalog_backends()[normalize_backend(backend)]
 
 
-def get_backend_label(backend: str | None) -> str:
-    return str(get_backend_spec(backend)["label"])
+def get_backend_label(
+    backend: str | None,
+    ui_language: str | None = None,
+) -> str:
+    normalized = normalize_backend(backend)
+    if ui_language is not None:
+        labels = TRANSLATION_BACKEND_LABELS.get(normalized)
+        if labels:
+            return _localized_static_label(labels, ui_language)
+    return str(get_backend_spec(normalized)["label"])
 
 
 def get_backend_value(backend: str | None, key: str) -> str:
@@ -1752,9 +1830,8 @@ def get_target_language_name(code: str | None, ui_language: str | None = None) -
 
 
 def get_manual_source_label(code: str | None, ui_language: str | None = None) -> str:
-    del ui_language
     code_text = str(code or "") or SUPPORTED_MANUAL_SOURCE_LANGUAGE_CODES[0]
-    return _native_language_name(code_text)
+    return _localized_language_name(code_text, ui_language)
 
 
 def get_target_language_options(
@@ -1791,6 +1868,6 @@ def get_ui_language(config: Mapping[str, object] | None) -> str:
     ui_cfg = config.get("ui", {}) if isinstance(config, Mapping) else {}
     if isinstance(ui_cfg, Mapping):
         language = ui_cfg.get("language")
-        if language in UI_LANGUAGE_LABELS:
-            return str(language)
+        if language is not None:
+            return _resolve_ui_language(str(language))
     return DEFAULT_UI_LANGUAGE

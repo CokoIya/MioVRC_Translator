@@ -21,21 +21,15 @@ from PySide6.QtWidgets import (
     QSlider,
     QGroupBox,
     QScrollArea,
-    QSpinBox,
     QDoubleSpinBox,
 )
 
-from src.utils.i18n import tr as _base_tr
-
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class AudioMicrophoneTab(QWidget):
+class AudioMicrophoneTab(LocalizedSettingsTab):
     """Audio & Microphone configuration tab."""
 
     config_changed = Signal()
@@ -51,15 +45,12 @@ class AudioMicrophoneTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
         self._on_test_microphone = on_test_microphone
         self._on_audio_diagnostics_requested = on_audio_diagnostics_requested
         self._on_vad_calibration_requested = on_vad_calibration_requested
 
         self._init_ui()
-
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
 
     def _init_ui(self) -> None:
         """Initialize the Audio & Microphone UI."""
@@ -93,7 +84,7 @@ class AudioMicrophoneTab(QWidget):
 
         scroll.setWidget(container)
 
-        main_layout = QVBoxLayout(self)
+        main_layout = self._root_layout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
@@ -108,11 +99,9 @@ class AudioMicrophoneTab(QWidget):
         device_layout.addWidget(device_label)
 
         self._device_combo = QComboBox()
-        self._device_combo.addItems([
-            self._t("device_default_microphone"),
-            self._t("device_system_default"),
-            self._t("device_custom"),
-        ])
+        self._device_combo.addItem(self._t("device_default_microphone"), "auto")
+        self._device_combo.addItem(self._t("device_system_default"), "system")
+        self._device_combo.addItem(self._t("device_custom"), "fixed")
         self._device_combo.currentIndexChanged.connect(self._on_config_change)
         device_layout.addWidget(self._device_combo, 1)
 
@@ -121,6 +110,7 @@ class AudioMicrophoneTab(QWidget):
         # Test button
         test_layout = QHBoxLayout()
         test_label = QLabel(self._t("microphone_test_info"))
+        test_label.setWordWrap(True)
         test_layout.addWidget(test_label, 1)
 
         test_btn = QPushButton("🎤 " + self._t("test_microphone"))
@@ -288,10 +278,16 @@ class AudioMicrophoneTab(QWidget):
         noise_map = {0: 0.0, 1: 0.35, 2: 0.6, 3: 0.85}
         sample_map = {0: 16000, 1: 24000, 2: 48000}
 
+        selection = str(self._device_combo.currentData() or "auto")
+        existing_audio = self._config.get("audio", {})
+        input_mode = "fixed" if selection == "fixed" else "auto"
+        input_device = str(existing_audio.get("input_device", "") or "") if input_mode == "fixed" else ""
         config = {
             "audio": {
-                "input_device": self._device_combo.currentText(),
+                "input_device_mode": input_mode,
+                "input_device": input_device,
                 "vad_sensitivity": self._vad_sensitivity_slider.value(),
+                "vad_speech_ratio": self._speech_threshold_spin.value(),
                 "vad_silence_threshold": self._silence_spin.value(),
                 "vad_min_rms": self._min_rms_spin.value(),
                 "denoise_strength": noise_map.get(self._noise_combo.currentIndex(), 0.35),
@@ -306,14 +302,15 @@ class AudioMicrophoneTab(QWidget):
         audio_cfg = config.get("audio", {})
 
         # Load device
-        device = audio_cfg.get("input_device", "")
-        if device:
-            index = self._device_combo.findText(device)
-            if index >= 0:
-                self._device_combo.setCurrentIndex(index)
+        mode = str(audio_cfg.get("input_device_mode", "") or "").strip().lower()
+        if not mode:
+            mode = "fixed" if audio_cfg.get("input_device") else "auto"
+        index = self._device_combo.findData("fixed" if mode == "fixed" else "auto")
+        self._device_combo.setCurrentIndex(max(0, index))
 
         # Load VAD settings
         self._vad_sensitivity_slider.setValue(int(audio_cfg.get("vad_sensitivity", 2)))
+        self._speech_threshold_spin.setValue(float(audio_cfg.get("vad_speech_ratio", 0.5)))
         self._silence_spin.setValue(float(audio_cfg.get("vad_silence_threshold", 0.65)))
         self._min_rms_spin.setValue(float(audio_cfg.get("vad_min_rms", 0.012)))
 
@@ -332,3 +329,10 @@ class AudioMicrophoneTab(QWidget):
         rate = int(audio_cfg.get("sample_rate", 16000))
         rate_map = {16000: 0, 24000: 1, 48000: 2}
         self._sample_rate_combo.setCurrentIndex(rate_map.get(rate, 0))
+
+    def _capture_localization_state(self) -> object:
+        return self._device_combo.currentIndex()
+
+    def _restore_localization_state(self, state: object) -> None:
+        if isinstance(state, int) and 0 <= state < self._device_combo.count():
+            self._device_combo.setCurrentIndex(state)

@@ -8,6 +8,7 @@ import re
 import tempfile
 import threading
 import time
+import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -236,19 +237,44 @@ class HololiveStyleBertDownloader:
         self._cancel_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._progress = DownloadProgress()
-        self._listeners: list[ProgressCallback] = []
+        # Downloaders are shared process-wide.  Bound UI callbacks must stay
+        # weak so closing a dialog also releases the dialog and its Qt graph.
+        self._listeners: list[ProgressCallback | weakref.WeakMethod] = []
         self._speed_samples: deque[tuple[float, int]] = deque()
         self._last_emit_t = 0.0
         self._session: requests.Session | None = None
 
     def add_listener(self, cb: ProgressCallback) -> None:
         with self._lock:
-            if cb not in self._listeners:
-                self._listeners.append(cb)
+            live_listeners: list[ProgressCallback | weakref.WeakMethod] = []
+            already_registered = False
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None:
+                    continue
+                live_listeners.append(entry)
+                if target == cb:
+                    already_registered = True
+            self._listeners = live_listeners
+            if already_registered:
+                return
+            if getattr(cb, "__self__", None) is not None:
+                try:
+                    self._listeners.append(weakref.WeakMethod(cb))
+                    return
+                except TypeError:
+                    pass
+            self._listeners.append(cb)
 
     def remove_listener(self, cb: ProgressCallback) -> None:
         with self._lock:
-            self._listeners = [item for item in self._listeners if item is not cb]
+            retained: list[ProgressCallback | weakref.WeakMethod] = []
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None or target == cb:
+                    continue
+                retained.append(entry)
+            self._listeners = retained
 
     @property
     def state(self) -> DownloadState:
@@ -312,7 +338,15 @@ class HololiveStyleBertDownloader:
                 return
             self._last_emit_t = now
             progress = copy.copy(self._progress)
-            listeners = list(self._listeners)
+            listeners: list[ProgressCallback] = []
+            retained: list[ProgressCallback | weakref.WeakMethod] = []
+            for entry in self._listeners:
+                target = entry() if isinstance(entry, weakref.WeakMethod) else entry
+                if target is None:
+                    continue
+                retained.append(entry)
+                listeners.append(target)
+            self._listeners = retained
         for listener in listeners:
             try:
                 listener(progress)
@@ -1159,15 +1193,17 @@ class HololiveStyleBertDownloader:
             response_context.__exit__(None, None, None)
 
 
-_downloaders: dict[str, HololiveStyleBertDownloader] = {}
+_downloaders: weakref.WeakValueDictionary[str, HololiveStyleBertDownloader] = (
+    weakref.WeakValueDictionary()
+)
 _downloaders_lock = threading.Lock()
 
 
 def get_hololive_downloader(model_path: str) -> HololiveStyleBertDownloader:
     bundle = _validated_bundle(model_path)
     with _downloaders_lock:
-        if bundle.model_path not in _downloaders:
-            _downloaders[bundle.model_path] = HololiveStyleBertDownloader(
-                bundle.model_path
-            )
-        return _downloaders[bundle.model_path]
+        downloader = _downloaders.get(bundle.model_path)
+        if downloader is None:
+            downloader = HololiveStyleBertDownloader(bundle.model_path)
+            _downloaders[bundle.model_path] = downloader
+        return downloader

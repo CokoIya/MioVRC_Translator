@@ -15,6 +15,15 @@ from src.translators.factory import create_translator
 from src.translators.base import translation_context_scope
 
 
+def _close_translator(translator: Any) -> None:
+    close = getattr(translator, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
 @dataclass(frozen=True)
 class RealtimeTranslationResult:
     original_text: str
@@ -144,8 +153,33 @@ class MicPipeline:
         context_sequence: int | None = None,
     ) -> tuple[RealtimeTranslationResult, Any]:
         active_translator = translator
+        created_translator = False
         if plan.needs_api_translation and active_translator is None:
             active_translator = self._translator_factory(self._current_config())
+            created_translator = True
+
+        try:
+            return self._translate_with_translator(
+                plan,
+                active_translator,
+                context_session_id=context_session_id,
+                defer_context_commit=defer_context_commit,
+                context_sequence=context_sequence,
+            )
+        except BaseException:
+            if created_translator:
+                _close_translator(active_translator)
+            raise
+
+    def _translate_with_translator(
+        self,
+        plan: MicTranslationPlan,
+        active_translator: Any,
+        *,
+        context_session_id: object | None,
+        defer_context_commit: bool,
+        context_sequence: int | None,
+    ) -> tuple[RealtimeTranslationResult, Any]:
 
         translated = plan.original_text
         translated_2 = ""
@@ -287,9 +321,35 @@ class ListenPipeline:
         context_sequence: int | None = None,
     ) -> tuple[RealtimeTranslationResult, Any]:
         active_translator = translator
+        created_translator = False
         if plan.needs_api_translation:
             if active_translator is None:
                 active_translator = self._translator_factory(self._current_config())
+                created_translator = True
+
+        try:
+            return self._translate_with_translator(
+                plan,
+                active_translator,
+                context_session_id=context_session_id,
+                defer_context_commit=defer_context_commit,
+                context_sequence=context_sequence,
+            )
+        except BaseException:
+            if created_translator:
+                _close_translator(active_translator)
+            raise
+
+    def _translate_with_translator(
+        self,
+        plan: ListenTranslationPlan,
+        active_translator: Any,
+        *,
+        context_session_id: object | None,
+        defer_context_commit: bool,
+        context_sequence: int | None,
+    ) -> tuple[RealtimeTranslationResult, Any]:
+        if plan.needs_api_translation:
             context_manager = (
                 translation_context_scope(
                     session_id=context_session_id,

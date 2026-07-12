@@ -15,6 +15,17 @@ from src.utils.app_paths import resource_base_dirs
 from src.utils.ui_config import UI_FONT_SYSTEM, ui_font_preference_from_config
 
 _BUNDLED_FONT_FILENAME = "851tegakizatsu.TTF"
+_UNICODE_FALLBACK_FAMILIES = (
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    "Yu Gothic UI",
+    "Meiryo UI",
+    "Malgun Gothic",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK KR",
+)
 _bundled_font_family: str | None = None
 
 
@@ -40,11 +51,13 @@ def application_font(config: object = None) -> QFont:
             set_cjk_latin_font_family(family)
             font = QFont(family)
             font.setPointSizeF(10.0)
+            _set_unicode_fallbacks(font, family)
             _tune_font_rendering(font)
             return font
 
     font = _system_default_font()
     set_cjk_latin_font_family(font.family())
+    _set_unicode_fallbacks(font, font.family())
     _tune_font_rendering(font)
     return font
 
@@ -88,5 +101,17 @@ def _tune_font_rendering(font: QFont) -> None:
     try:
         font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    except Exception:
+        pass
+
+
+def _set_unicode_fallbacks(font: QFont, primary_family: str) -> None:
+    families: list[str] = []
+    for family in (primary_family, *_UNICODE_FALLBACK_FAMILIES):
+        clean = str(family or "").strip()
+        if clean and clean.casefold() not in {item.casefold() for item in families}:
+            families.append(clean)
+    try:
+        font.setFamilies(families)
     except Exception:
         pass

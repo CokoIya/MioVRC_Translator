@@ -25,26 +25,45 @@ class ThreadLocalSessionPool:
         self._factory = factory
         self._local = threading.local()
         self._lock = threading.Lock()
-        self._sessions: dict[int, Any] = {}
+        self._sessions: dict[threading.Thread, Any] = {}
         self._closed = False
 
     def get(self) -> Any:
-        session = getattr(self._local, "session", None)
-        if session is not None:
-            return session
-
+        current_thread = threading.current_thread()
+        stale_sessions: list[Any] = []
         with self._lock:
             if self._closed:
                 raise RuntimeError("HTTP session pool is closed")
+            for owner, owned_session in tuple(self._sessions.items()):
+                if owner is current_thread or owner.is_alive():
+                    continue
+                self._sessions.pop(owner, None)
+                stale_sessions.append(owned_session)
+            session = getattr(self._local, "session", None)
+        for stale_session in stale_sessions:
+            self._close_session(stale_session)
+
+        if session is not None:
+            # Closing stale sessions may invoke arbitrary native/client cleanup.
+            # Recheck after that work so a concurrent close() cannot make us
+            # return a session the pool has already closed.
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("HTTP session pool is closed")
+                if self._sessions.get(current_thread) is session:
+                    return session
 
         session = self._factory()
         try:
             with self._lock:
                 if self._closed:
                     raise RuntimeError("HTTP session pool is closed")
-                self._sessions[id(session)] = session
+                previous = self._sessions.get(current_thread)
+                self._sessions[current_thread] = session
                 self._local.session = session
-                return session
+            if previous is not None and previous is not session:
+                self._close_session(previous)
+            return session
         except Exception:
             self._close_session(session)
             raise
@@ -58,8 +77,10 @@ class ThreadLocalSessionPool:
         except AttributeError:
             pass
         with self._lock:
-            self._sessions.pop(id(session), None)
-        self._close_session(session)
+            owned = self._sessions.pop(threading.current_thread(), None)
+            should_close = owned is session or not self._closed
+        if should_close:
+            self._close_session(session)
 
     def close(self) -> None:
         with self._lock:

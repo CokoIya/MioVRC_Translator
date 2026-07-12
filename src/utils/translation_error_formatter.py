@@ -5,7 +5,8 @@ import json
 import re
 from dataclasses import dataclass
 
-from src.utils.ui_config import DEFAULT_UI_LANGUAGE, normalize_backend
+from src.utils.localization import normalize_ui_language
+from src.utils.ui_config import normalize_backend
 
 
 @dataclass(frozen=True)
@@ -16,8 +17,6 @@ class FriendlyTranslationError:
     category: str
     detail: str
 
-
-_SUPPORTED_UI_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
 
 _TEXTS: dict[str, dict[str, str]] = {
     "zh-CN": {
@@ -57,6 +56,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "model_hint_default": "请检查设置中的 Model 是否正确，或更换该供应商支持的模型。",
         "model_hint_doubao": "请在 Model 字段中填写有效的火山引擎 Ark 模型 ID。",
         "auth_hint_openai": "请填写有效的 OpenAI API Key。",
+        "auth_hint_local_ai": "本地服务通常不需要 API Key；只有本地服务要求认证时才填写。",
         "auth_hint_deepseek": "请填写 DeepSeek 开放平台 API Key；如果使用代理、中转或第三方兼容 Key，请在设置里把 DeepSeek 服务区域改为自定义，并填写对应 Base URL。",
         "auth_hint_zhipu": "请填写有效的智谱 GLM API Key。",
         "auth_hint_qianwen": "请填写有效的阿里云 DashScope API Key。",
@@ -156,6 +156,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "model_hint_default": "設定の Model が正しいか確認するか、このプロバイダで使えるモデルに切り替えてください。",
         "model_hint_doubao": "Model 欄に有効な Volcano Ark モデル ID を入力してください。",
         "auth_hint_openai": "有効な OpenAI API Key を入力してください。",
+        "auth_hint_local_ai": "ローカルサービスでは通常 API Key は不要です。認証が必要な場合のみ入力してください。",
         "auth_hint_deepseek": "DeepSeek Open Platform の API Key を入力してください。proxy・relay・第三者互換キーを使う場合は、DeepSeek のサービス地域を Custom にして対応する Base URL を入力してください。",
         "auth_hint_zhipu": "有効な Zhipu GLM API Key を入力してください。",
         "auth_hint_qianwen": "有効な Alibaba Cloud DashScope API Key を入力してください。",
@@ -205,6 +206,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "model_hint_default": "Проверьте поле Model или переключитесь на модель, поддерживаемую этим провайдером.",
         "model_hint_doubao": "Введите корректный ID модели Volcano Ark в поле Model.",
         "auth_hint_openai": "Используйте действительный API-ключ OpenAI.",
+        "auth_hint_local_ai": "Локальным сервисам обычно не нужен API-ключ. Указывайте его только если локальный сервис требует авторизацию.",
         "auth_hint_deepseek": "Используйте API Key платформы DeepSeek Open Platform. Для proxy, relay или стороннего совместимого ключа выберите Custom в регионе DeepSeek и укажите соответствующий Base URL.",
         "auth_hint_zhipu": "Используйте действительный API-ключ Zhipu GLM.",
         "auth_hint_qianwen": "Используйте действительный API-ключ Alibaba Cloud DashScope.",
@@ -254,6 +256,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "model_hint_default": "설정의 Model 값이 올바른지 확인하거나, 해당 공급자가 지원하는 모델로 변경해 주세요.",
         "model_hint_doubao": "Model 필드에 올바른 Volcano Ark 모델 ID를 입력해 주세요.",
         "auth_hint_openai": "유효한 OpenAI API 키를 입력해 주세요.",
+        "auth_hint_local_ai": "로컬 서비스는 일반적으로 API Key가 필요하지 않습니다. 인증이 필요한 경우에만 입력하세요.",
         "auth_hint_deepseek": "DeepSeek Open Platform API Key를 입력하세요. 프록시, 중계, 타사 호환 키를 쓰는 경우 DeepSeek 서비스 지역을 사용자 지정으로 바꾸고 해당 Base URL을 입력하세요.",
         "auth_hint_zhipu": "유효한 Zhipu GLM API 키를 입력해 주세요.",
         "auth_hint_qianwen": "유효한 Alibaba Cloud DashScope API 키를 입력해 주세요.",
@@ -394,8 +397,6 @@ def format_translation_error(
         category = "auth"
         hint_key = f"auth_hint_{normalized_backend}"
         hint = texts.get(hint_key, texts["auth_hint_default"])
-        if normalized_backend == "local_ai" and hint_key not in texts:
-            hint = _TEXTS["en"]["auth_hint_local_ai"]
         return FriendlyTranslationError(
             short_message=texts["auth_short"].format(provider=provider),
             inline_message=texts["auth_inline"].format(
@@ -488,14 +489,7 @@ def format_translation_error(
 
 
 def _normalize_language(ui_language: str | None) -> str:
-    candidate = str(ui_language or "").strip()
-    if candidate in _SUPPORTED_UI_LANGUAGES:
-        return candidate
-    base = candidate.split("-", 1)[0]
-    for item in _SUPPORTED_UI_LANGUAGES:
-        if item.split("-", 1)[0] == base:
-            return item
-    return DEFAULT_UI_LANGUAGE
+    return normalize_ui_language(ui_language)
 
 
 def _parameter_subject(texts: dict[str, str], parameter: str | None) -> str:

@@ -6,6 +6,7 @@ import time
 import requests
 
 from src.utils.secure_http import validate_api_base_url
+from src.utils.http_session_pool import ThreadLocalSessionPool
 
 from .base import BaseTranslator
 from src.utils.input_validation import ValidationError, validate_translation_text
@@ -78,13 +79,17 @@ class DeepLTranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "Authorization": f"DeepL-Auth-Key {self._api_key}",
-                "User-Agent": "MioTranslator/1.3",
-            }
-        )
+        session_headers = {
+            "Authorization": f"DeepL-Auth-Key {self._api_key}",
+            "User-Agent": "MioTranslator/1.3",
+        }
+
+        def session_factory():
+            session = requests.Session()
+            session.headers.update(session_headers)
+            return session
+
+        self._session_pool = ThreadLocalSessionPool(session_factory)
         self.model = "deepl"
 
     def translate(
@@ -137,7 +142,11 @@ class DeepLTranslator(BaseTranslator):
         for attempt in range(self._max_retries + 1):
             started = time.perf_counter()
             try:
-                response = self._session.post(url, data=payload, timeout=self._timeout_s)
+                response = self._session_pool.get().post(
+                    url,
+                    data=payload,
+                    timeout=self._timeout_s,
+                )
                 if response.status_code == 456:
                     raise RuntimeError("DeepL quota exceeded")
                 response.raise_for_status()

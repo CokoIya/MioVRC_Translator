@@ -1,7 +1,12 @@
 import queue
 import threading
+import time
 
-from src.osc.sender import _QueuedOSCMessage, VRCOSCSender
+from src.osc.sender import (
+    MAX_AVATAR_STATE_ENTRIES,
+    _QueuedOSCMessage,
+    VRCOSCSender,
+)
 
 
 def _sender_without_worker(maxsize: int = 8) -> VRCOSCSender:
@@ -138,3 +143,43 @@ def test_closed_sender_rejects_late_chatbox_and_avatar_work():
     assert sender.send_chatbox("late") == ""
     assert sender.send_avatar_bool("MioSpeaking", True) is False
     assert sender._queue.empty()
+
+
+def test_avatar_state_cache_is_bounded():
+    sender = _sender_without_worker(maxsize=MAX_AVATAR_STATE_ENTRIES + 64)
+
+    for index in range(MAX_AVATAR_STATE_ENTRIES + 20):
+        assert sender.send_avatar_int(f"Param{index}", index) is True
+
+    assert len(sender._avatar_state) == MAX_AVATAR_STATE_ENTRIES
+    assert "Param0" not in sender._avatar_state
+    assert f"Param{MAX_AVATAR_STATE_ENTRIES + 19}" in sender._avatar_state
+
+
+def test_close_interrupts_rate_limit_wait_and_closes_udp_client(monkeypatch):
+    sent: list[str] = []
+
+    class FakeUDPClient:
+        def __init__(self, _host, _port):
+            self.closed = False
+
+        def send_message(self, address, _arguments):
+            sent.append(address)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("src.osc.sender.udp_client.SimpleUDPClient", FakeUDPClient)
+    sender = VRCOSCSender(min_send_interval_s=1.5)
+    client = sender._client
+    sender._last_sent_at = time.monotonic()
+    assert sender.send_chatbox("wait") == "wait"
+
+    started = time.monotonic()
+    sender.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.75
+    assert sent == []
+    assert client.closed is True
+    assert sender._worker is None

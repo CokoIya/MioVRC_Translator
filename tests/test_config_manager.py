@@ -158,6 +158,45 @@ class TestConfigValidation(unittest.TestCase):
 
         assert config_manager._contains_plaintext_api_key(config) is True
 
+    def test_qwen_tts_secret_round_trip_stays_engine_specific(self):
+        config = {
+            "translation": {
+                "qianwen": {"api_key": "translation-key"},
+            },
+            "tts": {
+                "qwen_tts": {
+                    "api_key": "tts-key",
+                    "region": "china_mainland",
+                    "base_url": "https://dashscope.aliyuncs.com/api/v1",
+                },
+            },
+        }
+
+        with patch.object(
+            config_manager,
+            "_protect_secret",
+            side_effect=lambda value: f"dpapi:v1:sealed:{value}" if value else "",
+        ):
+            stored = config_manager._protect_config_for_storage(config)
+
+        assert config["translation"]["qianwen"]["api_key"] == "translation-key"
+        assert config["tts"]["qwen_tts"]["api_key"] == "tts-key"
+        assert stored["translation"]["qianwen"]["api_key"] == (
+            "dpapi:v1:sealed:translation-key"
+        )
+        assert stored["tts"]["qwen_tts"]["api_key"] == "dpapi:v1:sealed:tts-key"
+
+        with patch.object(
+            config_manager,
+            "_unprotect_secret",
+            side_effect=lambda value: str(value).removeprefix("dpapi:v1:sealed:"),
+        ):
+            runtime = config_manager._unprotect_config_for_runtime(stored)
+
+        assert runtime["translation"]["qianwen"]["api_key"] == "translation-key"
+        assert runtime["tts"]["qwen_tts"]["api_key"] == "tts-key"
+        assert runtime["tts"]["qwen_tts"]["region"] == "china_mainland"
+
     def test_ensure_tts_config_defaults_auto_read_enabled(self):
         """New TTS configs should default to auto-read after manual translation."""
         config = {}
@@ -1586,17 +1625,94 @@ class TestConfigSave(unittest.TestCase):
             backup_path = config_manager._last_good_config_path(config_path)
             config_path.write_text("{}", encoding="utf-8")
             example_path.write_text("{}", encoding="utf-8")
-            backup_path.write_text(
-                json.dumps(self._complete_config("recovered")),
+            recovered = self._complete_config("recovered")
+            recovered["ui"] = {
+                "language": "ja",
+                "language_source": "auto",
+            }
+            backup_path.write_text(json.dumps(recovered), encoding="utf-8")
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_example_path", return_value=example_path), \
+                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"), \
+                 patch(
+                     "src.utils.ui_language_detection.detect_initial_ui_language",
+                     return_value="ko",
+                 ):
+                loaded = config_manager.load_config()
+
+            assert loaded["translation"]["marker"] == "recovered"
+            assert loaded["ui"]["language"] == "ja"
+
+    def test_installer_bootstrap_config_uses_system_ui_language(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            example_path = root / "config.example.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "ui": {
+                            "language": "en",
+                            "language_source": "auto",
+                            "theme": "dark",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            example_path.write_text(
+                json.dumps(
+                    {
+                        "ui": {
+                            "language": "zh-CN",
+                            "language_source": "auto",
+                        }
+                    }
+                ),
                 encoding="utf-8",
             )
 
             with patch.object(config_manager, "_config_path", return_value=config_path), \
                  patch.object(config_manager, "_example_path", return_value=example_path), \
-                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"):
+                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"), \
+                 patch(
+                     "src.utils.ui_language_detection.detect_initial_ui_language",
+                     return_value="ko",
+                 ):
                 loaded = config_manager.load_config()
 
-            assert loaded["translation"]["marker"] == "recovered"
+            assert loaded["ui"]["language"] == "ko"
+            assert loaded["ui"]["language_source"] == "auto"
+
+    def test_first_config_file_uses_system_ui_language(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path = root / "config.json"
+            example_path = root / "config.example.json"
+            example_path.write_text(
+                json.dumps(
+                    {
+                        "ui": {
+                            "language": "zh-CN",
+                            "language_source": "auto",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(config_manager, "_config_path", return_value=config_path), \
+                 patch.object(config_manager, "_example_path", return_value=example_path), \
+                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"), \
+                 patch(
+                     "src.utils.ui_language_detection.detect_initial_ui_language",
+                     return_value="ru",
+                 ):
+                loaded = config_manager.load_config()
+
+            assert loaded["ui"]["language"] == "ru"
+            assert loaded["ui"]["language_source"] == "auto"
 
 
 class TestConfigGet(unittest.TestCase):

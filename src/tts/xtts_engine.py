@@ -55,6 +55,7 @@ XTTS_DEFAULT_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 XTTS_API_CLASS: Any | None = None
 XTTS_IMPORT_ERROR: str | None = None
 XTTS_AVAILABLE = importlib.util.find_spec("TTS") is not None
+_XTTS_LIFECYCLE_LOCK = threading.RLock()
 XTTS_REFERENCE_SAMPLE_RATE = 24000
 XTTS_OUTPUT_SAMPLE_RATE = 24000
 XTTS_REFERENCE_MIN_DURATION_SECONDS = 2.0
@@ -109,6 +110,7 @@ XTTS_REFERENCE_AUDIO_NAME_FILTER = (
 )
 XTTS_CONDITIONING_CACHE_MAX_ITEMS = 4
 XTTS_CUDA_PRECISIONS = ("auto", "float32", "float16", "bfloat16")
+_XTTS_MIN_WINDOWS_COMMIT_HEADROOM_BYTES = 5 * 1024 * 1024 * 1024
 XTTS_SUPPORTED_LANGUAGES = (
     "en",
     "es",
@@ -177,6 +179,64 @@ XTTS_RUNTIME_COMPONENTS = {
     "unidic_lite": "Japanese dictionary",
     "mojimoji": "Japanese normalizer",
 }
+
+
+def _windows_commit_headroom_bytes() -> int | None:
+    """Return Windows commit headroom without importing optional runtimes."""
+
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = (
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            )
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        global_memory_status = kernel32.GlobalMemoryStatusEx
+        global_memory_status.argtypes = [ctypes.POINTER(_MemoryStatusEx)]
+        global_memory_status.restype = ctypes.c_int
+        if not global_memory_status(ctypes.byref(status)):
+            return None
+        return max(0, int(status.ullAvailPageFile))
+    except Exception:
+        logger.debug("Could not inspect Windows commit headroom", exc_info=True)
+        return None
+
+
+def _require_xtts_commit_headroom() -> None:
+    """Block a model load that is likely to terminate Windows on commit pressure."""
+
+    available = _windows_commit_headroom_bytes()
+    if available is None:
+        return
+    required = int(_XTTS_MIN_WINDOWS_COMMIT_HEADROOM_BYTES)
+    logger.info(
+        "XTTS Windows commit headroom check (available_gib=%.2f required_gib=%.2f)",
+        available / (1024**3),
+        required / (1024**3),
+    )
+    if available >= required:
+        return
+    raise RuntimeError(
+        "XTTS-v2 model loading was blocked to prevent a Windows out-of-memory "
+        f"crash: only {available / (1024**3):.1f} GiB of commit headroom is "
+        f"available, but at least {required / (1024**3):.1f} GiB is required. "
+        "Close memory-intensive applications or increase the Windows paging-file "
+        "size, then try again."
+    )
 _REQUIRED_TRANSFORMERS_XTTS_EXPORTS = (
     "GenerationMixin",
     "GenerationConfig",
@@ -1153,6 +1213,8 @@ class XTTSTS(BaseTTS):
         self._precision_fallback_reason = ""
         self._model_name = model_name
         self._model: Any | None = None
+        self._closed = False
+        self._close_requested = False
         self._reference_audio_path: str | None = None
         self._language = normalize_xtts_language_code(language)
         self._supported_languages = list(XTTS_SUPPORTED_LANGUAGES)
@@ -1220,6 +1282,15 @@ class XTTSTS(BaseTTS):
         return kwargs
 
     def _initialize_model(self, *, force_device: str | None = None) -> None:
+        with _XTTS_LIFECYCLE_LOCK:
+            if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+                raise RuntimeError("XTTS-v2 engine is closed")
+            try:
+                self._initialize_model_locked(force_device=force_device)
+            finally:
+                self._finalize_requested_close_locked()
+
+    def _initialize_model_locked(self, *, force_device: str | None = None) -> None:
         """Initialize XTTS with explicit runtime planning and safe CPU fallback."""
 
         if self._model is not None:
@@ -1270,10 +1341,12 @@ class XTTSTS(BaseTTS):
             cuda_status.device_name if cuda_status else "",
         )
 
+        _require_xtts_commit_headroom()
         api_class = _load_xtts_api()
         if api_class is None:
             raise RuntimeError(XTTS_IMPORT_ERROR or "Coqui TTS is not installed")
 
+        model = None
         try:
             model = api_class(**self._coqui_model_kwargs(use_gpu=use_gpu))
             self._model = model
@@ -1284,34 +1357,54 @@ class XTTSTS(BaseTTS):
                 self._runtime_precision,
             )
         except Exception as exc:
-            self._model = None
-            if (
+            failure_reason = str(exc) or exc.__class__.__name__
+            cuda_fallback = (
                 use_gpu
                 and getattr(self, "_allow_cpu_fallback", True)
                 and self._is_cuda_runtime_failure(exc)
-            ):
-                self._cuda_fallback_reason = str(exc) or exc.__class__.__name__
+            )
+            failed_model = self._model if self._model is not None else model
+            self._model = None
+            cache = getattr(self, "_conditioning_cache", None)
+            if cache is not None:
+                cache.clear()
+            self._close_model_instance(failed_model)
+            model = None
+            failed_model = None
+            if cuda_fallback:
+                self._cuda_fallback_reason = failure_reason
                 logger.warning(
                     "XTTS CUDA model initialization failed; retrying on CPU: %s",
-                    exc,
+                    failure_reason,
                 )
-                clear_torch_cuda_cache()
+                self._release_exception_traceback(exc)
+                exc = None
                 gc.collect()
+                clear_torch_cuda_cache()
                 self._initialize_model(force_device="cpu")
                 return
-            logger.error("Failed to load XTTS-v2 model: %s", exc)
+            logger.error("Failed to load XTTS-v2 model: %s", failure_reason)
+            self._release_exception_traceback(exc)
+            gc.collect()
+            if use_gpu:
+                clear_torch_cuda_cache()
             raise
 
     def _ensure_model_loaded(self) -> None:
         """Load the heavy XTTS model on demand."""
-        model_lock = getattr(self, "_model_lock", None)
-        if model_lock is None:
-            model_lock = threading.RLock()
-            self._model_lock = model_lock
-        with model_lock:
-            if self._model is not None:
-                return
-            self._initialize_model()
+        with _XTTS_LIFECYCLE_LOCK:
+            if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+                raise RuntimeError("XTTS-v2 engine is closed")
+            model_lock = getattr(self, "_model_lock", None)
+            if model_lock is None:
+                model_lock = threading.RLock()
+                self._model_lock = model_lock
+            with model_lock:
+                if self._model is not None:
+                    return
+                self._initialize_model()
+                if self._model is None:
+                    raise RuntimeError("XTTS-v2 engine closed while loading")
 
     @staticmethod
     def _is_cuda_runtime_failure(error: BaseException) -> bool:
@@ -1457,22 +1550,51 @@ class XTTSTS(BaseTTS):
             tensor = numpy_method()
         return np.asarray(tensor, dtype=np.float32)
 
-    def _switch_to_cpu_after_cuda_failure(self, error: BaseException) -> None:
-        model_lock = getattr(self, "_model_lock", None)
-        if model_lock is None:
-            model_lock = threading.RLock()
-            self._model_lock = model_lock
-        with model_lock:
-            if getattr(self, "_runtime_device", "cpu") != "cuda":
-                return
-            self._cuda_fallback_reason = str(error) or error.__class__.__name__
-            self._model = None
-            cache = getattr(self, "_conditioning_cache", None)
-            if cache is not None:
-                cache.clear()
-            clear_torch_cuda_cache()
-            gc.collect()
-            self._initialize_model(force_device="cpu")
+    @staticmethod
+    def _close_model_instance(model: Any | None) -> None:
+        close_model = getattr(model, "close", None)
+        if callable(close_model):
+            try:
+                close_model()
+            except Exception:
+                logger.debug("Failed to close the Coqui XTTS model", exc_info=True)
+
+    @staticmethod
+    def _release_exception_traceback(error: BaseException) -> None:
+        """Drop traceback frames that can retain failed CUDA activations/models."""
+
+        for attribute in ("__traceback__", "__context__", "__cause__"):
+            try:
+                setattr(error, attribute, None)
+            except Exception:
+                pass
+
+    def _switch_to_cpu_after_cuda_failure(self, error: BaseException | str) -> None:
+        reason = str(error) or getattr(error, "__class__", type(error)).__name__
+        if isinstance(error, BaseException):
+            self._release_exception_traceback(error)
+        error = None
+        with _XTTS_LIFECYCLE_LOCK:
+            model_lock = getattr(self, "_model_lock", None)
+            if model_lock is None:
+                model_lock = threading.RLock()
+                self._model_lock = model_lock
+            with model_lock:
+                if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+                    raise RuntimeError("XTTS-v2 engine is closed")
+                if getattr(self, "_runtime_device", "cpu") != "cuda":
+                    return
+                self._cuda_fallback_reason = reason
+                previous_model = self._model
+                self._model = None
+                cache = getattr(self, "_conditioning_cache", None)
+                if cache is not None:
+                    cache.clear()
+                self._close_model_instance(previous_model)
+                previous_model = None
+                gc.collect()
+                clear_torch_cuda_cache()
+                self._initialize_model(force_device="cpu")
 
     def _coqui_model_kwargs(self, *, use_gpu: bool) -> dict[str, object]:
         """Build Coqui API kwargs, preferring the managed local XTTS model.
@@ -1505,8 +1627,57 @@ class XTTSTS(BaseTTS):
 
         raise RuntimeError("XTTS-v2 local model files are not ready. Download the XTTS-v2 model first.")
 
+    def request_close(self) -> None:
+        """Request teardown without waiting for an in-flight XTTS operation."""
+
+        if getattr(self, "_closed", False):
+            return
+        self._close_requested = True
+        if not _XTTS_LIFECYCLE_LOCK.acquire(blocking=False):
+            return
+        try:
+            self._release_model_locked()
+        finally:
+            _XTTS_LIFECYCLE_LOCK.release()
+
+    def close(self) -> None:
+        """Release the model, conditioning tensors, and CUDA allocator cache."""
+
+        with _XTTS_LIFECYCLE_LOCK:
+            self._close_requested = True
+            self._release_model_locked()
+
+    def _finalize_requested_close_locked(self) -> None:
+        if getattr(self, "_close_requested", False) and not getattr(self, "_closed", False):
+            self._release_model_locked()
+
+    def _release_model_locked(self) -> None:
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        self._close_requested = False
+
+        model = self._model
+        self._model = None
+        cache = getattr(self, "_conditioning_cache", None)
+        if cache is not None:
+            cache.clear()
+        self._reference_audio_path = None
+        self._runtime_device = "cpu"
+        self._torch_device = "cpu"
+        self._device = "cpu"
+        self._runtime_precision = "float32"
+        self._cuda_status = None
+
+        self._close_model_instance(model)
+        model = None
+        gc.collect()
+        clear_torch_cuda_cache()
+
     def is_available(self) -> bool:
         """Check if XTTS-v2 synthesis is available."""
+        if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+            return False
         if not is_xtts_runtime_available():
             return False
         if self._model is not None:
@@ -1520,6 +1691,8 @@ class XTTSTS(BaseTTS):
 
     def _can_synthesize(self) -> bool:
         """Check if TTS synthesis is actually possible."""
+        if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+            return False
         if not is_xtts_runtime_available():
             logger.debug("XTTS library not installed")
             return False
@@ -1627,6 +1800,16 @@ class XTTSTS(BaseTTS):
     def prewarm(self, voice: str = "") -> None:
         """Load XTTS and cache voice conditioning before the first utterance."""
 
+        with _XTTS_LIFECYCLE_LOCK:
+            if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+                return
+            try:
+                self._prewarm_locked(voice)
+            finally:
+                self._finalize_requested_close_locked()
+
+    def _prewarm_locked(self, voice: str = "") -> None:
+
         if not self._can_synthesize():
             return
         ref_audio = self._resolve_reference_audio(voice)
@@ -1648,6 +1831,22 @@ class XTTSTS(BaseTTS):
         volume: float = 1.0,
     ) -> bytes:
         """Synthesize speech using XTTS-v2."""
+
+        with _XTTS_LIFECYCLE_LOCK:
+            if getattr(self, "_closed", False) or getattr(self, "_close_requested", False):
+                raise RuntimeError("XTTS-v2 engine is closed")
+            try:
+                return self._synthesize_locked(text, voice, rate, volume)
+            finally:
+                self._finalize_requested_close_locked()
+
+    def _synthesize_locked(
+        self,
+        text: str,
+        voice: str,
+        rate: float = 1.0,
+        volume: float = 1.0,
+    ) -> bytes:
         speed = self._normalize_speed(rate)
         if not self._can_synthesize():
             raise RuntimeError(
@@ -1683,11 +1882,14 @@ class XTTSTS(BaseTTS):
                 and getattr(self, "_allow_cpu_fallback", True)
                 and self._is_cuda_runtime_failure(exc)
             ):
+                fallback_reason = str(exc) or exc.__class__.__name__
                 logger.warning(
                     "XTTS CUDA synthesis failed; reloading on CPU and retrying once: %s",
-                    exc,
+                    fallback_reason,
                 )
-                self._switch_to_cpu_after_cuda_failure(exc)
+                self._release_exception_traceback(exc)
+                exc = None
+                self._switch_to_cpu_after_cuda_failure(fallback_reason)
                 return self._synthesize_loaded(
                     text=text,
                     ref_audio=ref_audio,
@@ -1985,12 +2187,17 @@ class XTTSTS(BaseTTS):
             ):
                 previous_precision = str(self._runtime_precision)
                 self._runtime_precision = "float32"
-                self._precision_fallback_reason = str(exc) or exc.__class__.__name__
+                fallback_reason = str(exc) or exc.__class__.__name__
+                self._precision_fallback_reason = fallback_reason
                 logger.warning(
                     "XTTS %s mixed precision failed; retrying this session in float32: %s",
                     previous_precision,
-                    exc,
+                    fallback_reason,
                 )
+                self._release_exception_traceback(exc)
+                exc = None
+                gc.collect()
+                clear_torch_cuda_cache()
                 with self._torch_execution_context(mixed_precision=False):
                     result = run_inference()
             else:

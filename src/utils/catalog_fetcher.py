@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -56,6 +57,19 @@ _EMPTY_CATALOG: dict = {
 
 
 CatalogCallback = Callable[[dict], None]
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogSubscriber:
+    callback: CatalogCallback
+    fallback_on_error: bool
+    fallback_payload: dict
+
+
+_MAX_FETCH_SUBSCRIBERS = 256
+_fetch_lock = threading.RLock()
+_fetch_thread: threading.Thread | None = None
+_fetch_subscribers: list[_CatalogSubscriber] = []
 
 
 def _cache_path() -> Path:
@@ -158,11 +172,20 @@ def get_catalog(
                 cached.get("updated", ""),
             )
 
+    subscriber = _CatalogSubscriber(
+        callback=on_result,
+        fallback_on_error=bool(force_refresh),
+        fallback_payload=fallback_payload,
+    )
+
     def _run() -> None:
+        global _fetch_thread
+
+        fresh: dict | None = None
+        source_url = ""
         try:
             fresh, source_url = _fetch_remote()
             _save_cache(fresh)
-            on_result(fresh)
             logger.info(
                 "Catalog refreshed from remote (source=%s version=%s updated=%s)",
                 source_url,
@@ -171,7 +194,51 @@ def get_catalog(
             )
         except Exception as exc:
             logger.warning("Failed to fetch catalog from remote: %s", exc)
-            if force_refresh:
-                on_result(fallback_payload)
+        finally:
+            with _fetch_lock:
+                subscribers = tuple(_fetch_subscribers)
+                _fetch_subscribers.clear()
+                _fetch_thread = None
 
-    threading.Thread(target=_run, daemon=True, name="catalog-fetch").start()
+        for current in subscribers:
+            payload = fresh if fresh is not None else (
+                current.fallback_payload if current.fallback_on_error else None
+            )
+            if payload is None:
+                continue
+            try:
+                current.callback(payload)
+            except Exception:
+                logger.exception("Catalog result callback failed")
+
+    global _fetch_thread
+    overflow = False
+    with _fetch_lock:
+        if len(_fetch_subscribers) >= _MAX_FETCH_SUBSCRIBERS:
+            overflow = True
+        else:
+            _fetch_subscribers.append(subscriber)
+            if _fetch_thread is not None:
+                return
+            active_thread = threading.Thread(
+                target=_run,
+                daemon=True,
+                name="catalog-fetch",
+            )
+            _fetch_thread = active_thread
+            try:
+                # Starting under the re-entrant state lock keeps an inline test
+                # worker and a real worker equally race-free.
+                active_thread.start()
+            except BaseException:
+                _fetch_subscribers.clear()
+                _fetch_thread = None
+                raise
+            return
+
+    logger.warning(
+        "Catalog refresh subscriber limit reached (%d); dropping remote callback",
+        _MAX_FETCH_SUBSCRIBERS,
+    )
+    if overflow and force_refresh:
+        on_result(fallback_payload)

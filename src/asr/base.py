@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import gc
+import logging
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Optional
@@ -8,6 +11,47 @@ import numpy as np
 
 
 ProgressCallback = Callable[[dict[str, object]], None]
+logger = logging.getLogger(__name__)
+
+
+def close_runtime_resource(resource: object | None) -> None:
+    """Best-effort close for a detached provider-owned native resource.
+
+    ASR providers are replaced while the application is running, and closed
+    provider instances can remain referenced by lifecycle bookkeeping.  Merely
+    dropping the provider's model/client attribute is therefore not enough when
+    the resource exposes an explicit ``close`` method.
+    """
+
+    if resource is None:
+        return
+    close = getattr(resource, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            logger.debug("ASR runtime resource close failed", exc_info=True)
+
+
+def release_runtime_memory(*, device: object = "") -> None:
+    """Collect detached model cycles and release an existing CUDA cache.
+
+    This intentionally does not import torch during teardown; it only asks an
+    already-loaded runtime to return unused CUDA allocator blocks.
+    """
+
+    gc.collect()
+
+    if not str(device or "").strip().lower().startswith("cuda"):
+        return
+    torch = sys.modules.get("torch")
+    cuda = getattr(torch, "cuda", None) if torch is not None else None
+    empty_cache = getattr(cuda, "empty_cache", None)
+    if callable(empty_cache):
+        try:
+            empty_cache()
+        except Exception:
+            logger.debug("CUDA cache release after ASR shutdown failed", exc_info=True)
 
 
 class ASRProvider(ABC):

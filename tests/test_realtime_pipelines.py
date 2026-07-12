@@ -96,3 +96,70 @@ def test_listen_pipeline_same_language_stays_local():
     assert result.api_translation_used is False
     assert result.display_text == "こんにちは"
     assert result.chatbox_text == "[Listen] こんにちは"
+
+
+def test_mic_pipeline_closes_internally_created_translator_on_failure():
+    dispatcher = OutputDispatcher({"translation": {"output_format": "translated_only"}})
+
+    class FailingTranslator:
+        def __init__(self):
+            self.closed = False
+
+        def translate(self, *_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        def close(self):
+            self.closed = True
+
+    translator = FailingTranslator()
+    pipeline = MicPipeline(
+        {},
+        dispatcher,
+        translator_factory=lambda _config: translator,
+    )
+    plan = pipeline.create_plan("hello", source_language="en", target_language="ja")
+
+    try:
+        pipeline.translate_plan(plan)
+    except RuntimeError as exc:
+        assert str(exc) == "boom"
+    else:
+        raise AssertionError("translation failure was not propagated")
+
+    assert translator.closed is True
+
+
+def test_listen_pipeline_closes_internally_created_translator_on_failure():
+    dispatcher = OutputDispatcher({})
+
+    class FailingTranslator:
+        def __init__(self):
+            self.closed = False
+
+        def translate(self, *_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        def close(self):
+            self.closed = True
+
+    translator = FailingTranslator()
+    pipeline = ListenPipeline(
+        {},
+        dispatcher,
+        translator_factory=lambda _config: translator,
+    )
+    plan = pipeline.create_plan(
+        "hello",
+        source_language="en",
+        target_language="ja",
+        listen_prefix="[Listen]",
+    )
+
+    try:
+        pipeline.translate_plan(plan)
+    except RuntimeError as exc:
+        assert str(exc) == "boom"
+    else:
+        raise AssertionError("translation failure was not propagated")
+
+    assert translator.closed is True

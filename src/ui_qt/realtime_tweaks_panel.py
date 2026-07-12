@@ -29,6 +29,7 @@ from src.translators.asr_rewriter import (
     normalize_asr_rewrite_style,
 )
 from src.utils.i18n import tr
+from src.utils.localization import format_locale_percent, normalize_ui_language
 from src.utils.ui_config import (
     get_backend_config_value,
     get_backend_label,
@@ -176,7 +177,7 @@ class RealtimeTweaksPanel(QDialog):
         super().__init__(None)
         self._owner = parent
         self._config = config
-        self._ui_lang = ui_language
+        self._ui_lang = normalize_ui_language(ui_language)
         self._theme = theme
         self._on_change = on_change
         self._drag_position = None
@@ -360,7 +361,10 @@ class RealtimeTweaksPanel(QDialog):
     def _refresh_combo_controls(self) -> None:
         trans_cfg = _dict_section(self._config, "translation")
         backend = normalize_backend(str(trans_cfg.get("backend", "")))
-        backend_options = [(get_backend_label(code), code) for code in get_backend_order()]
+        backend_options = [
+            (get_backend_label(code, self._ui_lang), code)
+            for code in get_backend_order()
+        ]
         self._set_combo_options("translation_provider", backend_options, backend)
 
         current_model = get_backend_config_value(trans_cfg, backend, "model")
@@ -407,7 +411,9 @@ class RealtimeTweaksPanel(QDialog):
 
     def _update_noise_value_label(self, value: int) -> None:
         if self._noise_value_label is not None:
-            self._noise_value_label.setText(f"{int(value)}%")
+            self._noise_value_label.setText(
+                format_locale_percent(int(value), self._ui_lang)
+            )
 
     def _set_combo_visible(self, key: str, visible: bool) -> None:
         combo = self._combos.get(key)
@@ -623,7 +629,7 @@ class RealtimeTweaksPanel(QDialog):
         self._apply_styles()
 
     def update_language(self, ui_language: str) -> None:
-        self._ui_lang = ui_language
+        self._ui_lang = normalize_ui_language(ui_language)
         self._refresh_static_texts()
         self._refresh_controls()
         self._refresh_icons()

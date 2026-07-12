@@ -6,6 +6,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 from src.audio.vad_calibration_service import VadCalibrationResult, VadCalibrationService
+from src.utils.localization import format_locale_number, normalize_ui_language
 
 
 _SAMPLE_MS = 5000
@@ -33,6 +34,9 @@ _COPY = {
         "sampling_noise": "请保持安静…",
         "sampling_speech": "请用平时音量说话…",
         "done": "校准完成，可以使用推荐设置。",
+        "confidence_low": "低",
+        "confidence_medium": "中",
+        "confidence_high": "高",
     },
     "en": {
         "title_mic": "Microphone VAD Calibration",
@@ -55,6 +59,9 @@ _COPY = {
         "sampling_noise": "Keep quiet…",
         "sampling_speech": "Speak at normal volume…",
         "done": "Sampling complete. You can apply the recommendation.",
+        "confidence_low": "Low",
+        "confidence_medium": "Medium",
+        "confidence_high": "High",
     },
     "ja": {
         "title_mic": "マイク自動区切りの調整",
@@ -77,6 +84,9 @@ _COPY = {
         "sampling_noise": "静かにしてください…",
         "sampling_speech": "ふだんの音量で話してください…",
         "done": "調整が完了しました。おすすめ設定を適用できます。",
+        "confidence_low": "低",
+        "confidence_medium": "中",
+        "confidence_high": "高",
     },
     "ru": {
         "title_mic": "Калибровка авторазделения микрофона",
@@ -99,6 +109,9 @@ _COPY = {
         "sampling_noise": "Сохраняйте тишину…",
         "sampling_speech": "Говорите обычной громкостью…",
         "done": "Калибровка завершена. Можно применить рекомендацию.",
+        "confidence_low": "Низкая",
+        "confidence_medium": "Средняя",
+        "confidence_high": "Высокая",
     },
     "ko": {
         "title_mic": "마이크 자동 문장 구분 보정",
@@ -121,29 +134,20 @@ _COPY = {
         "sampling_noise": "조용히 있어 주세요…",
         "sampling_speech": "평소 음량으로 말해 주세요…",
         "done": "보정이 완료되었습니다. 추천 설정을 적용할 수 있습니다.",
+        "confidence_low": "낮음",
+        "confidence_medium": "보통",
+        "confidence_high": "높음",
     },
 }
 
 
 def _lang(ui_language: str) -> str:
-    normalized = str(ui_language or "").strip()
-    if normalized in _COPY:
-        return normalized
-    lowered = normalized.lower()
-    if lowered.startswith("zh"):
-        return "zh-CN"
-    if lowered.startswith("ja") or lowered.startswith("jp"):
-        return "ja"
-    if lowered.startswith("ru"):
-        return "ru"
-    if lowered.startswith("ko"):
-        return "ko"
-    return "en"
+    return normalize_ui_language(ui_language, default="en")
 
 
-def _fmt(value: object, digits: int = 4) -> str:
+def _fmt(value: object, language: str = "en", digits: int = 4) -> str:
     try:
-        return f"{float(value):.{digits}f}"
+        return format_locale_number(float(value), language, decimals=digits)
     except (TypeError, ValueError):
         return "—"
 
@@ -163,11 +167,13 @@ class VadCalibrationWindow(QDialog):
         self._target = "vrc_listen" if target == "vrc_listen" else "mic"
         self._snapshot_provider = snapshot_provider
         self._apply_callback = apply_callback
-        self._copy = _COPY[_lang(ui_language)]
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
         self._service = VadCalibrationService(current_silence_s=current_silence_s)
         self._phase = "idle"
         self._remaining_ms = 0
         self._labels: dict[str, QLabel] = {}
+        self._name_labels: dict[str, QLabel] = {}
         self._progress: QProgressBar | None = None
         self._apply_btn: QPushButton | None = None
         self._tick_timer = QTimer(self)
@@ -184,14 +190,14 @@ class VadCalibrationWindow(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        title = QLabel(self.windowTitle())
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        self._title_label = QLabel(self.windowTitle())
+        self._title_label.setObjectName("sectionTitle")
+        layout.addWidget(self._title_label)
 
-        subtitle = QLabel(self._copy["subtitle"])
-        subtitle.setObjectName("hintLabel")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        self._subtitle_label = QLabel(self._copy["subtitle"])
+        self._subtitle_label.setObjectName("hintLabel")
+        self._subtitle_label.setWordWrap(True)
+        layout.addWidget(self._subtitle_label)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
@@ -200,12 +206,12 @@ class VadCalibrationWindow(QDialog):
         layout.addWidget(self._progress)
 
         actions = QHBoxLayout()
-        noise_btn = QPushButton(self._copy["start_noise"])
-        noise_btn.clicked.connect(lambda: self._start_phase("noise"))
-        speech_btn = QPushButton(self._copy["start_speech"])
-        speech_btn.clicked.connect(lambda: self._start_phase("speech"))
-        actions.addWidget(noise_btn)
-        actions.addWidget(speech_btn)
+        self._noise_btn = QPushButton(self._copy["start_noise"])
+        self._noise_btn.clicked.connect(lambda: self._start_phase("noise"))
+        self._speech_btn = QPushButton(self._copy["start_speech"])
+        self._speech_btn.clicked.connect(lambda: self._start_phase("speech"))
+        actions.addWidget(self._noise_btn)
+        actions.addWidget(self._speech_btn)
         layout.addLayout(actions)
 
         grid = QGridLayout()
@@ -215,10 +221,12 @@ class VadCalibrationWindow(QDialog):
         for row, key in enumerate(("current_rms", "samples", "noise_floor", "speech_floor", "recommended_rms", "recommended_silence", "confidence")):
             name = QLabel(self._copy[key])
             name.setObjectName("fieldLabel")
+            name.setWordWrap(True)
             value = QLabel("—")
             value.setObjectName("hintLabel")
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             self._labels[key] = value
+            self._name_labels[key] = name
             grid.addWidget(name, row, 0)
             grid.addWidget(value, row, 1)
 
@@ -227,9 +235,9 @@ class VadCalibrationWindow(QDialog):
         self._apply_btn = QPushButton(self._copy["apply"])
         self._apply_btn.clicked.connect(self._apply)
         bottom.addWidget(self._apply_btn)
-        close_btn = QPushButton(self._copy["close"])
-        close_btn.clicked.connect(self.close)
-        bottom.addWidget(close_btn)
+        self._close_btn = QPushButton(self._copy["close"])
+        self._close_btn.clicked.connect(self.close)
+        bottom.addWidget(self._close_btn)
         layout.addLayout(bottom)
 
     def _start_phase(self, phase: str) -> None:
@@ -245,7 +253,7 @@ class VadCalibrationWindow(QDialog):
     def _tick(self) -> None:
         snapshot = dict(self._snapshot_provider(self._target) or {})
         current_rms = snapshot.get("last_frame_rms") or snapshot.get("last_prepared_rms") or snapshot.get("last_rms") or 0.0
-        self._labels["current_rms"].setText(_fmt(current_rms))
+        self._labels["current_rms"].setText(_fmt(current_rms, self._ui_lang))
         if self._phase == "noise":
             self._service.add_noise_snapshot(snapshot)
         elif self._phase == "speech":
@@ -269,12 +277,16 @@ class VadCalibrationWindow(QDialog):
 
     def _refresh_result(self) -> None:
         result = self._service.result()
-        self._labels["samples"].setText(f"{result.noise_sample_count} / {result.speech_sample_count}")
-        self._labels["noise_floor"].setText(_fmt(result.noise_floor))
-        self._labels["speech_floor"].setText(_fmt(result.speech_floor))
-        self._labels["recommended_rms"].setText(_fmt(result.recommended_min_rms))
-        self._labels["recommended_silence"].setText(_fmt(result.recommended_silence_s, 2))
-        self._labels["confidence"].setText(result.confidence)
+        noise_count = format_locale_number(result.noise_sample_count, self._ui_lang, grouping=True)
+        speech_count = format_locale_number(result.speech_sample_count, self._ui_lang, grouping=True)
+        self._labels["samples"].setText(f"{noise_count} / {speech_count}")
+        self._labels["noise_floor"].setText(_fmt(result.noise_floor, self._ui_lang))
+        self._labels["speech_floor"].setText(_fmt(result.speech_floor, self._ui_lang))
+        self._labels["recommended_rms"].setText(_fmt(result.recommended_min_rms, self._ui_lang))
+        self._labels["recommended_silence"].setText(_fmt(result.recommended_silence_s, self._ui_lang, 2))
+        self._labels["confidence"].setText(
+            self._copy.get(f"confidence_{result.confidence}", result.confidence)
+        )
         if self._apply_btn is not None:
             self._apply_btn.setEnabled(result.noise_sample_count > 0 and result.speech_sample_count > 0)
 
@@ -282,3 +294,37 @@ class VadCalibrationWindow(QDialog):
         result = self._service.result()
         self._apply_callback(self._target, result)
         self._refresh_result()
+
+    def update_language(self, ui_language: str) -> None:
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
+        title_key = "title_listen" if self._target == "vrc_listen" else "title_mic"
+        self.setWindowTitle(self._copy[title_key])
+        self._title_label.setText(self._copy[title_key])
+        self._subtitle_label.setText(self._copy["subtitle"])
+        self._noise_btn.setText(self._copy["start_noise"])
+        self._speech_btn.setText(self._copy["start_speech"])
+        self._apply_btn.setText(self._copy["apply"])
+        self._close_btn.setText(self._copy["close"])
+        for key, label in self._name_labels.items():
+            label.setText(self._copy[key])
+        if self._progress is not None:
+            if self._phase in {"noise", "speech"}:
+                key = "sampling_noise" if self._phase == "noise" else "sampling_speech"
+            elif self._progress.value() >= 100:
+                key = "done"
+            else:
+                key = "idle"
+            self._progress.setFormat(self._copy[key])
+        self._refresh_result()
+        self.adjustSize()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._phase = "idle"
+        self._tick_timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._phase = "idle"
+        self._tick_timer.stop()
+        super().closeEvent(event)

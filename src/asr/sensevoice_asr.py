@@ -11,7 +11,7 @@ from typing import Optional
 import numpy as np
 
 from src.asr.asr_cleaner import clean_asr_text
-from src.asr.base import ASRProvider
+from src.asr.base import ASRProvider, close_runtime_resource, release_runtime_memory
 from src.asr.funasr_runtime_compat import patch_sentencepiece_unicode_path_support
 from src.asr.model_manager import (
     download_model,
@@ -161,6 +161,7 @@ class SenseVoiceASR(ASRProvider):
         self._postprocess = None
         self._lock = threading.Lock()
         self._corrector = corrector
+        self._closed = False
 
     def _runtime_spec(self):
         required_file_sha256 = (
@@ -185,6 +186,8 @@ class SenseVoiceASR(ASRProvider):
 
     def load(self, progress_callback=None):
         with self._lock:
+            if self._closed:
+                raise RuntimeError("SenseVoice ASR provider is closed")
             if self._model is not None:
                 return
             logger.info(
@@ -234,6 +237,8 @@ class SenseVoiceASR(ASRProvider):
         language: Optional[str] = None,
         is_final: bool = True,
     ) -> str:
+        if self._closed:
+            raise RuntimeError("SenseVoice ASR provider is closed")
         if self._model is None:
             self.load()
 
@@ -248,7 +253,10 @@ class SenseVoiceASR(ASRProvider):
 
         lang = _LANGUAGE_MAP.get(_normalize_language_code(language), "auto")
         with self._lock:
-            result = self._model.generate(
+            if self._closed or self._model is None:
+                raise RuntimeError("SenseVoice ASR provider is closed")
+            model = self._model
+            result = model.generate(
                 input=audio_input,
                 language=lang,
                 use_itn=True,
@@ -278,4 +286,19 @@ class SenseVoiceASR(ASRProvider):
 
     @property
     def is_loaded(self) -> bool:
-        return self._model is not None
+        with self._lock:
+            return not self._closed and self._model is not None
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            model = self._model
+            self._model = None
+            self._postprocess = None
+            self._corrector = None
+        if model is not None:
+            close_runtime_resource(model)
+            del model
+            release_runtime_memory(device=self.device)

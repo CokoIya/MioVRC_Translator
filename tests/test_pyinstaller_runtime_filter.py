@@ -55,10 +55,19 @@ def test_runtime_filter_keeps_required_runtime_payloads() -> None:
         "librosa/__init__.pyi",
         "TTS/tts/layers/xtts/model.pyi",
         "TTS/tts/models/xtts.py",
+        "soundcard/coreaudio.py.h",
+        "soundcard/mediafoundation.py.h",
+        "soundcard/pulseaudio.py.h",
     ]
 
     for dest in kept:
         assert should_keep_runtime_entry(dest, f"C:/venv/Lib/site-packages/{dest}") is True
+
+
+def test_runtime_filter_only_exempts_soundcard_runtime_cffi_headers() -> None:
+    assert should_keep_runtime_entry("soundcard/mediafoundation.py.h") is True
+    assert should_keep_runtime_entry("soundcard/include/private.h") is False
+    assert should_keep_runtime_entry("other_package/mediafoundation.py.h") is False
 
 
 def test_runtime_filter_limits_qt_translations_to_app_locales() -> None:

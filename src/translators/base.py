@@ -22,6 +22,7 @@ _CONTEXT_MAX_TURNS = 3
 _CONTEXT_MAX_AGE_S = 75.0
 _CONTEXT_TEXT_LIMIT = 160
 _CONTEXT_TOTAL_TEXT_LIMIT = 640
+_CONTEXT_MAX_KEYS = 128
 _MAX_CACHE_TEXT_LEN = 512
 _WRAP_PAIRS = {
     '"': '"',
@@ -126,10 +127,12 @@ class TranslationContextStore:
         max_turns: int = _CONTEXT_MAX_TURNS,
         max_age_s: float = _CONTEXT_MAX_AGE_S,
         max_text_chars: int = _CONTEXT_TOTAL_TEXT_LIMIT,
+        max_context_keys: int = _CONTEXT_MAX_KEYS,
     ) -> None:
         self._max_turns = max(1, int(max_turns))
         self._max_age_s = max(1.0, float(max_age_s))
         self._max_text_chars = max(64, int(max_text_chars))
+        self._max_context_keys = max(1, int(max_context_keys))
         self._lock = Lock()
         self._recent: dict[
             tuple[Hashable, str, str, str],
@@ -174,6 +177,45 @@ class TranslationContextStore:
         cutoff = now - self._max_age_s
         while turns and turns[0][0] < cutoff:
             turns.popleft()
+
+    def _prune_all_locked(self, now: float) -> None:
+        for key, turns in tuple(self._recent.items()):
+            self._prune(turns, now)
+            if not turns:
+                self._recent.pop(key, None)
+
+        cutoff = now - self._max_age_s
+        for key, pending in tuple(self._pending_sources.items()):
+            for sequence, (timestamp, _text) in tuple(pending.items()):
+                if timestamp < cutoff:
+                    pending.pop(sequence, None)
+            if not pending:
+                self._pending_sources.pop(key, None)
+
+    def _enforce_context_limit_locked(
+        self,
+        protected_key: tuple[Hashable, str, str, str],
+    ) -> None:
+        keys = list(dict.fromkeys((*self._recent.keys(), *self._pending_sources.keys())))
+        overflow = len(keys) - self._max_context_keys
+        if overflow <= 0:
+            return
+
+        def last_activity(key: tuple[Hashable, str, str, str]) -> float:
+            latest = 0.0
+            turns = self._recent.get(key)
+            if turns:
+                latest = max(latest, turns[-1][0])
+            pending = self._pending_sources.get(key)
+            if pending:
+                latest = max(latest, *(timestamp for timestamp, _text in pending.values()))
+            return latest
+
+        candidates = [key for key in keys if key != protected_key]
+        candidates.sort(key=last_activity)
+        for key in candidates[:overflow]:
+            self._recent.pop(key, None)
+            self._pending_sources.pop(key, None)
 
     @staticmethod
     def should_include_context(current_text: str) -> bool:
@@ -234,24 +276,9 @@ class TranslationContextStore:
         key = self._key(session_id, src_lang, tgt_lang, context_source)
         now = monotonic()
         with self._lock:
+            self._prune_all_locked(now)
             turns = self._recent.get(key)
-            if turns:
-                self._prune(turns, now)
-                if not turns:
-                    self._recent.pop(key, None)
-
             pending = self._pending_sources.get(key)
-            if pending:
-                cutoff = now - self._max_age_s
-                stale_sequences = [
-                    sequence
-                    for sequence, (timestamp, _text) in pending.items()
-                    if timestamp < cutoff
-                ]
-                for sequence in stale_sequences:
-                    pending.pop(sequence, None)
-                if not pending:
-                    self._pending_sources.pop(key, None)
 
             entries: list[tuple[str, str]] = [
                 (source_text, translated_text)
@@ -294,11 +321,13 @@ class TranslationContextStore:
         key = self._key(session_id, src_lang, tgt_lang, context_source)
         now = monotonic()
         with self._lock:
+            self._prune_all_locked(now)
             pending = self._pending_sources.setdefault(key, {})
             pending[int(sequence)] = (now, source_text)
             if len(pending) > 64:
                 for stale_sequence in sorted(pending)[: len(pending) - 64]:
                     pending.pop(stale_sequence, None)
+            self._enforce_context_limit_locked(key)
 
     def remember(
         self,
@@ -318,6 +347,7 @@ class TranslationContextStore:
         key = self._key(session_id, src_lang, tgt_lang, context_source)
         now = monotonic()
         with self._lock:
+            self._prune_all_locked(now)
             if sequence is not None:
                 pending = self._pending_sources.get(key)
                 if pending is not None:
@@ -337,6 +367,7 @@ class TranslationContextStore:
                 turns[-1] = (now, source_text, translated_text)
                 return
             turns.append((now, source_text, translated_text))
+            self._enforce_context_limit_locked(key)
 
     def discard_staged(
         self,
@@ -390,6 +421,13 @@ class TranslationContextStore:
             for key in stale_pending:
                 self._pending_sources.pop(key, None)
 
+    def clear(self) -> None:
+        """Release all retained conversation context."""
+
+        with self._lock:
+            self._recent.clear()
+            self._pending_sources.clear()
+
 
 class BaseTranslator(ABC):
     def __init__(
@@ -401,6 +439,7 @@ class BaseTranslator(ABC):
         self._cache_size = max(int(cache_size), 0)
         self._cache: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
         self._cache_lock = Lock()
+        self._owns_context_store = context_store is None
         self._context_store = context_store or TranslationContextStore()
         self._prompt_profile = prompt_profile or {}
         self._resource_close_lock = Lock()
@@ -450,7 +489,7 @@ class BaseTranslator(ABC):
                 return
             self._resources_closed = True
             resources: list[object] = []
-            for attribute in ("_client", "_session"):
+            for attribute in ("_client", "_session", "_session_pool"):
                 resource = getattr(self, attribute, None)
                 if resource is not None and all(
                     resource is not existing for existing in resources
@@ -459,6 +498,8 @@ class BaseTranslator(ABC):
 
         with self._cache_lock:
             self._cache.clear()
+        if self._owns_context_store:
+            self._context_store.clear()
         for resource in resources:
             close = getattr(resource, "close", None)
             if callable(close):

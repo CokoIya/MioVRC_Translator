@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from src.ui_qt import main_window
 from src.ui_qt.main_window import DESKTOP_SOURCE, MIC_SOURCE, MainWindow
 
@@ -43,7 +45,7 @@ def test_listen_asr_builds_separate_provider_when_engine_differs(monkeypatch):
             "engine": "qwen3-asr",
             "qwen3_asr": {"model": "qwen3-asr-flash"},
         },
-        "vrc_listen": {"asr_engine": "webspeech"},
+        "vrc_listen": {"enabled": True, "asr_engine": "webspeech"},
     }
 
     mic_asr, listen_asr = main_window._create_asr_pair(config)
@@ -66,13 +68,66 @@ def test_listen_asr_builds_separate_provider_when_engine_is_explicit(monkeypatch
             "engine": "qwen3-asr",
             "qwen3_asr": {"model": "qwen3-asr-flash"},
         },
-        "vrc_listen": {"asr_engine": "qwen3-asr"},
+        "vrc_listen": {"enabled": True, "asr_engine": "qwen3-asr"},
     }
 
     mic_asr, listen_asr = main_window._create_asr_pair(config)
 
     assert calls == ["qwen3-asr", "qwen3-asr"]
     assert mic_asr is not listen_asr
+
+
+def test_disabled_listen_does_not_construct_a_second_heavy_provider(monkeypatch):
+    calls: list[str | None] = []
+    provider = object()
+
+    def fake_create_asr(config, engine=None):
+        del config
+        calls.append(engine)
+        return provider
+
+    monkeypatch.setattr(main_window, "create_asr", fake_create_asr)
+    config = {
+        "asr": {"engine": "sensevoice-small"},
+        "vrc_listen": {"enabled": False, "asr_engine": "qwen3-asr"},
+    }
+
+    mic_asr, listen_asr = main_window._create_asr_pair(config)
+
+    assert calls == ["sensevoice-small"]
+    assert mic_asr is provider
+    assert listen_asr is provider
+
+
+def test_create_asr_pair_closes_main_provider_when_listen_creation_fails(monkeypatch):
+    class MainASR:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    provider = MainASR()
+    calls: list[str | None] = []
+
+    def fake_create_asr(config, engine=None):
+        del config
+        calls.append(engine)
+        if len(calls) == 1:
+            return provider
+        raise RuntimeError("listen provider failed")
+
+    monkeypatch.setattr(main_window, "create_asr", fake_create_asr)
+    config = {
+        "asr": {"engine": "qwen3-asr"},
+        "vrc_listen": {"enabled": True, "asr_engine": "webspeech"},
+    }
+
+    with pytest.raises(RuntimeError, match="listen provider failed"):
+        main_window._create_asr_pair(config)
+
+    assert calls == ["qwen3-asr", "webspeech"]
+    assert provider.close_calls == 1
 
 
 def test_shared_asr_instance_serializes_both_final_transcriptions_without_dropping():

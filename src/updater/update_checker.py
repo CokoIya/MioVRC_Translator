@@ -124,9 +124,19 @@ class _UpdateCheckSubscriber:
     on_error: Callable[[str], None] | None
 
 
+@dataclass(frozen=True, slots=True)
+class _InstallerFetchSubscriber:
+    on_installer_available: Callable[[UpdateInfo], None]
+    on_error: Callable[[str], None] | None
+
+
+_MAX_WORKER_SUBSCRIBERS = 256
 _update_check_in_progress = False
 _update_check_thread: threading.Thread | None = None
 _update_check_subscribers: list[_UpdateCheckSubscriber] = []
+_installer_fetch_lock = threading.RLock()
+_installer_fetch_thread: threading.Thread | None = None
+_installer_fetch_subscribers: list[_InstallerFetchSubscriber] = []
 
 
 def _strict_https_parts(url: str):
@@ -423,6 +433,12 @@ def _is_newer(remote: str, local: str) -> bool:
         return False
 
 
+def is_newer_version(candidate: str, current: str) -> bool:
+    """Return whether *candidate* is a valid version newer than *current*."""
+
+    return _is_newer(candidate, current)
+
+
 def _select_newest_update_info(candidates: list[UpdateInfo]) -> UpdateInfo | None:
     selected: UpdateInfo | None = None
     for candidate in candidates:
@@ -688,7 +704,13 @@ def check_for_update(
             active_thread = _update_check_thread
             if active_thread is None:
                 raise RuntimeError("Update checker entered an invalid active state")
-            _update_check_subscribers.append(subscriber)
+            if len(_update_check_subscribers) < _MAX_WORKER_SUBSCRIBERS:
+                _update_check_subscribers.append(subscriber)
+            else:
+                logger.warning(
+                    "Update-check subscriber limit reached (%d); dropping callback",
+                    _MAX_WORKER_SUBSCRIBERS,
+                )
             logger.debug("Update check joined the active worker")
             return active_thread
 
@@ -723,41 +745,97 @@ def fetch_latest_installer_info(
     """
     retries = _MAX_RETRIES if max_retries is None else max(1, int(max_retries))
     delays = tuple(_RETRY_DELAYS if retry_delays is None else retry_delays)
-    last_error: Exception | None = None
+    subscriber = _InstallerFetchSubscriber(
+        on_installer_available=on_installer_available,
+        on_error=on_error,
+    )
 
     def _worker() -> None:
-        nonlocal last_error
+        global _installer_fetch_thread
+
+        last_error: Exception | None = None
+        update_info: UpdateInfo | None = None
         permanent_source_errors: dict[str, BaseException] = {}
-        for attempt in range(1, retries + 1):
-            try:
-                logger.info("Installer manifest fetch attempt %d/%d", attempt, retries)
-                update_info = _fetch_latest_installer_info_from_sources(
-                    permanent_source_errors=permanent_source_errors,
-                )
-                if update_info is None:
-                    raise RuntimeError("Installer manifest did not contain a valid download")
-                on_installer_available(update_info)
-                return
-            except Exception as exc:
-                last_error = exc
-                retryable = not isinstance(exc, _UpdateSourceFailure) or exc.retryable
-                if not retryable:
-                    break
-                if attempt < retries:
-                    logger.warning(
-                        "Installer manifest fetch attempt %d/%d failed; retrying: %s",
-                        attempt,
-                        retries,
-                        exc,
+        try:
+            for attempt in range(1, retries + 1):
+                try:
+                    logger.info("Installer manifest fetch attempt %d/%d", attempt, retries)
+                    update_info = _fetch_latest_installer_info_from_sources(
+                        permanent_source_errors=permanent_source_errors,
                     )
-                    delay = delays[min(attempt - 1, len(delays) - 1)] if delays else 0
-                    if delay > 0:
-                        time.sleep(delay)
+                    if update_info is None:
+                        raise RuntimeError("Installer manifest did not contain a valid download")
+                    break
+                except Exception as exc:
+                    update_info = None
+                    last_error = exc
+                    retryable = not isinstance(exc, _UpdateSourceFailure) or exc.retryable
+                    if not retryable:
+                        break
+                    if attempt < retries:
+                        logger.warning(
+                            "Installer manifest fetch attempt %d/%d failed; retrying: %s",
+                            attempt,
+                            retries,
+                            exc,
+                        )
+                        delay = delays[min(attempt - 1, len(delays) - 1)] if delays else 0
+                        if delay > 0:
+                            time.sleep(delay)
+        except Exception as exc:
+            update_info = None
+            last_error = exc
+            logger.exception("Unexpected installer-manifest worker failure")
+        finally:
+            with _installer_fetch_lock:
+                subscribers = tuple(_installer_fetch_subscribers)
+                _installer_fetch_subscribers.clear()
+                _installer_fetch_thread = None
+
+        if update_info is not None:
+            for current in subscribers:
+                try:
+                    current.on_installer_available(update_info)
+                except Exception:
+                    logger.exception("Installer-manifest subscriber callback failed")
+            return
+
         msg = str(last_error) if last_error else "unknown error"
         logger.warning("Installer manifest fetch failed: %s", msg)
-        if on_error is not None:
-            on_error(msg)
+        for current in subscribers:
+            if current.on_error is None:
+                continue
+            try:
+                current.on_error(msg)
+            except Exception:
+                logger.exception("Installer-manifest error callback failed")
 
-    thread = threading.Thread(target=_worker, daemon=True, name="mio-installer-manifest-fetch")
-    thread.start()
-    return thread
+    global _installer_fetch_thread
+    with _installer_fetch_lock:
+        if _installer_fetch_thread is not None:
+            active_thread = _installer_fetch_thread
+            if len(_installer_fetch_subscribers) < _MAX_WORKER_SUBSCRIBERS:
+                _installer_fetch_subscribers.append(subscriber)
+            else:
+                logger.warning(
+                    "Installer-manifest subscriber limit reached (%d); dropping callback",
+                    _MAX_WORKER_SUBSCRIBERS,
+                )
+            logger.debug("Installer manifest fetch joined the active worker")
+            return active_thread
+
+        thread = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name="mio-installer-manifest-fetch",
+        )
+        _installer_fetch_subscribers.clear()
+        _installer_fetch_subscribers.append(subscriber)
+        _installer_fetch_thread = thread
+        try:
+            thread.start()
+        except BaseException:
+            _installer_fetch_subscribers.clear()
+            _installer_fetch_thread = None
+            raise
+        return thread

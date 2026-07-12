@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import threading
 import time
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -301,6 +303,98 @@ def test_shared_asr_provider_closes_exactly_once():
     assert window._listen_asr is None
 
 
+def test_closed_asr_registry_does_not_retain_replaced_provider():
+    class Provider:
+        def close(self) -> None:
+            pass
+
+    window = MainWindow.__new__(MainWindow)
+    provider = Provider()
+    provider_ref = weakref.ref(provider)
+    window._asr = provider
+    window._listen_asr = provider
+
+    window._close_asr_providers()
+
+    del provider
+    gc.collect()
+    assert provider_ref() is None
+    assert not any(
+        reference() is not None
+        for reference in window._closed_asr_provider_refs
+    )
+
+
+def test_clear_cached_translator_closes_distinct_owned_clients():
+    class Translator:
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Controller:
+        def __init__(self, translator) -> None:
+            self._translator = translator
+
+        @property
+        def translator(self):
+            return self._translator
+
+        @translator.setter
+        def translator(self, value) -> None:
+            previous = self._translator
+            self._translator = value
+            if previous is not None:
+                previous.close()
+
+    realtime = Translator()
+    manual = Translator()
+    window = MainWindow.__new__(MainWindow)
+    window._translator = realtime
+    window._manual_translation_controller = Controller(manual)
+
+    window._clear_cached_translator()
+
+    assert realtime.close_count == 1
+    assert manual.close_count == 1
+    assert window._translator is None
+    assert window._manual_translation_controller.translator is None
+
+
+def test_clear_cached_translator_closes_shared_client_once():
+    class Translator:
+        def __init__(self) -> None:
+            self.close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    class Controller:
+        def __init__(self, translator) -> None:
+            self._translator = translator
+
+        @property
+        def translator(self):
+            return self._translator
+
+        @translator.setter
+        def translator(self, value) -> None:
+            previous = self._translator
+            self._translator = value
+            if previous is not None:
+                previous.close()
+
+    translator = Translator()
+    window = MainWindow.__new__(MainWindow)
+    window._translator = translator
+    window._manual_translation_controller = Controller(translator)
+
+    window._clear_cached_translator()
+
+    assert translator.close_count == 1
+
+
 def test_provider_close_waits_for_deferred_worker_shutdown():
     release_workers = threading.Event()
     provider_closed = threading.Event()
@@ -565,6 +659,104 @@ def test_shutdown_sets_exact_startup_event_and_invalidates_session():
     assert window._running is False
     assert window._listen_session == 5
     assert close_waits == [shutdown_barrier]
+
+
+def test_pipeline_start_waits_for_previous_runtime_cleanup():
+    class ThreadState:
+        def __init__(self, alive: bool) -> None:
+            self.alive = alive
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+    window = MainWindow.__new__(MainWindow)
+    window._asr_close_lock = threading.RLock()
+    finished_startup = ThreadState(False)
+    active_cleanup = ThreadState(True)
+    window._startup_thread = finished_startup
+    window._asr_cleanup_threads = [active_cleanup]
+    window._closing_asr_providers = []
+
+    assert window._pipeline_cleanup_in_progress() is True
+    assert window._startup_thread is None
+    assert window._asr_cleanup_threads == [active_cleanup]
+
+    active_cleanup.alive = False
+    assert window._pipeline_cleanup_in_progress() is False
+    assert window._asr_cleanup_threads == []
+
+
+def test_do_start_defers_before_constructing_replacement_runtime():
+    class Button:
+        def __init__(self) -> None:
+            self.enabled = True
+            self.text = ""
+
+        def setEnabled(self, enabled: bool) -> None:
+            self.enabled = enabled
+
+        def setText(self, text: str) -> None:
+            self.text = text
+
+    window = MainWindow.__new__(MainWindow)
+    button = Button()
+    retries: list[int] = []
+    statuses: list[tuple[str, str, str]] = []
+    window._start_btn = button
+    window._destroying = False
+    window._running = False
+    window._startup_thread = None
+    window._pipeline_cleanup_in_progress = lambda: True
+    window._schedule_pipeline_start_retry = retries.append
+    window._t = lambda key, **_kwargs: key
+    window._set_status = (
+        lambda message, color, *, key=None: statuses.append((message, color, key))
+    )
+
+    window._do_start()
+
+    assert button.enabled is False
+    assert button.text == "starting"
+    assert retries == [100]
+    assert statuses == [("starting", "accent", "starting")]
+    assert window._startup_thread is None
+
+
+def test_stop_workers_clears_every_translation_context_session():
+    from queue import Queue
+
+    store = TranslationContextStore()
+    for session_id in (1, 2):
+        store.remember(
+            session_id=session_id,
+            text=f"source-{session_id}",
+            translated=f"target-{session_id}",
+            src_lang="en",
+            tgt_lang="ja",
+            context_source="mic",
+        )
+
+    window = MainWindow.__new__(MainWindow)
+    window._translation_context_store = store
+    window._listen_session = 3
+    window._realtime_delivery_cancel_event = threading.Event()
+    window._ui_priority_callback_queue = Queue(maxsize=1)
+    window._tts_manager = None
+    window._osc_sender = None
+    window._realtime_scheduler = None
+    window._partial_task_queues = {}
+    window._partial_workers = {}
+    window._final_task_queues = {}
+    window._final_workers = {}
+
+    assert window._stop_workers() is None
+    for session_id in (1, 2):
+        assert store.snapshot(
+            session_id=session_id,
+            src_lang="en",
+            tgt_lang="ja",
+            context_source="mic",
+        ) == ()
 
 
 def test_translation_workers_keep_translators_confined_to_worker_state(monkeypatch):

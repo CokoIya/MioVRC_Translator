@@ -6,6 +6,7 @@ import time
 import requests
 
 from src.utils.secure_http import validate_api_base_url
+from src.utils.http_session_pool import ThreadLocalSessionPool
 
 from .base import BaseTranslator
 from src.utils.input_validation import ValidationError, validate_translation_text
@@ -36,8 +37,12 @@ class LibreTranslateTranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "MioTranslator/1.3"})
+        def session_factory():
+            session = requests.Session()
+            session.headers.update({"User-Agent": "MioTranslator/1.3"})
+            return session
+
+        self._session_pool = ThreadLocalSessionPool(session_factory)
         self.model = "libretranslate"
 
     def translate(
@@ -91,7 +96,11 @@ class LibreTranslateTranslator(BaseTranslator):
         for attempt in range(self._max_retries + 1):
             started = time.perf_counter()
             try:
-                response = self._session.post(url, json=payload, timeout=self._timeout_s)
+                response = self._session_pool.get().post(
+                    url,
+                    json=payload,
+                    timeout=self._timeout_s,
+                )
                 response.raise_for_status()
                 data = response.json()
                 translated = data.get("translatedText", "")

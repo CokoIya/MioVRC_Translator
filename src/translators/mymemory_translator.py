@@ -8,6 +8,7 @@ from collections.abc import Mapping
 import requests
 
 from .base import BaseTranslator
+from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.input_validation import ValidationError, validate_translation_text
 from src.utils.lang_detect import detect_language
 
@@ -38,8 +39,12 @@ class MyMemoryTranslator(BaseTranslator):
         self._contact_email = str(contact_email or "").strip()
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "MioTranslator/1.3"})
+        def session_factory():
+            session = requests.Session()
+            session.headers.update({"User-Agent": "MioTranslator/1.3"})
+            return session
+
+        self._session_pool = ThreadLocalSessionPool(session_factory)
         self.model = "mymemory"
 
     def translate(
@@ -92,7 +97,7 @@ class MyMemoryTranslator(BaseTranslator):
         for attempt in range(self._max_retries + 1):
             started = time.perf_counter()
             try:
-                response = self._session.get(
+                response = self._session_pool.get().get(
                     self._base_url,
                     params=payload,
                     timeout=self._timeout_s,

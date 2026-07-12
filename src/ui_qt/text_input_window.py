@@ -30,6 +30,7 @@ from src.ui_qt.styles import build_text_input_styles
 from src.ui_qt.theme import icon_tint, theme_from_config, theme_tokens
 from src.ui_qt.window_utils import set_window_topmost
 from src.utils.i18n import tr
+from src.utils.localization import normalize_ui_language
 from src.utils.ui_config import get_ui_language
 
 logger = logging.getLogger(__name__)
@@ -334,7 +335,7 @@ class TextInputWindow(QDialog):
         self._send_btn.setIcon(send_icon if not send_icon.isNull() else QIcon())
 
     def update_language(self, ui_language: str) -> None:
-        self._ui_lang = ui_language
+        self._ui_lang = normalize_ui_language(ui_language)
         self.setWindowTitle(tr(self._ui_lang, "text_input_floating"))
         self._input_edit.setPlaceholderText(tr(self._ui_lang, "text_input_placeholder"))
         self._send_btn.setText(tr(self._ui_lang, "text_input_send"))

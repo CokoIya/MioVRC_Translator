@@ -1,6 +1,7 @@
 """Style-Bert-VITS2 local custom voice integration."""
 from __future__ import annotations
 
+import gc
 import io
 import importlib
 import logging
@@ -33,6 +34,7 @@ from .style_bert_vits2_models import (
     style_bert_voice_id,
 )
 from src.utils.config_manager import normalize_style_bert_bert_language
+from src.utils.gpu_support import clear_torch_cuda_cache
 
 logger = logging.getLogger(__name__)
 
@@ -1065,6 +1067,7 @@ class StyleBertVits2TTS(BaseTTS):
     def __init__(self, device: str = "cpu", bert_language: str = "jp") -> None:
         self._tts_model_cls = _load_runtime_tts_model_cls()
         self._model_cache: OrderedDict[str, Any] = OrderedDict()
+        self._closed = False
         requested_device = device if device in ("cpu", "cuda") else "cpu"
         if requested_device == "cuda" and not style_bert_cuda_available():
             logger.warning(
@@ -1095,6 +1098,19 @@ class StyleBertVits2TTS(BaseTTS):
         if self._patch_applied:
             self._restore_original_loader()
 
+    def close(self) -> None:
+        """Release cached voice models and their CUDA tensors."""
+
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        cache = getattr(self, "_model_cache", None)
+        if cache is not None:
+            cache.clear()
+        self._restore_original_loader()
+        gc.collect()
+        clear_torch_cuda_cache()
+
     def _restore_original_loader(self) -> None:
         """Restore original safetensors loader."""
         global _original_load_safetensors
@@ -1120,6 +1136,8 @@ class StyleBertVits2TTS(BaseTTS):
 
     def is_available(self) -> bool:
         """Check whether the runtime and at least one imported model are ready."""
+        if getattr(self, "_closed", False):
+            return False
         return (
             self._tts_model_cls is not None
             and style_bert_bert_assets_ready(self._bert_language)
@@ -1142,6 +1160,8 @@ class StyleBertVits2TTS(BaseTTS):
         volume: float = 1.0,
     ) -> bytes:
         """Render imported custom Style-Bert-VITS2 voices to WAV bytes."""
+        if getattr(self, "_closed", False):
+            raise RuntimeError("Style-Bert-VITS2 engine is closed")
         if self._tts_model_cls is None:
             raise RuntimeError("Style-Bert-VITS2 runtime is not available")
 
@@ -1213,6 +1233,8 @@ class StyleBertVits2TTS(BaseTTS):
             raise RuntimeError(f"Style-Bert-VITS2 synthesis failed: {exc}") from exc
 
     def _get_or_create_model(self, model_info):
+        if getattr(self, "_closed", False):
+            raise RuntimeError("Style-Bert-VITS2 engine is closed")
         cache_key = str(model_info.model_path)
         cached = self._model_cache.get(cache_key)
         if cached is not None:

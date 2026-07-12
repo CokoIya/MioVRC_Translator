@@ -20,23 +20,20 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLineEdit,
     QFrame,
-    QGroupBox,
 )
 
-from src.utils.i18n import tr as _base_tr
+from src.utils.ui_config import UI_LANGUAGE_OPTIONS
 
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class QuickSetupTab(QWidget):
+class QuickSetupTab(LocalizedSettingsTab):
     """Quick Setup tab for first-time configuration."""
 
     config_changed = Signal()
+    language_changed = Signal(str)
 
     def __init__(
         self,
@@ -47,17 +44,15 @@ class QuickSetupTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
         self._on_test_microphone = on_test_microphone
+        self._updating_language = False
 
         self._init_ui()
 
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
-
     def _init_ui(self) -> None:
         """Initialize the Quick Setup UI."""
-        layout = QVBoxLayout(self)
+        layout = self._root_layout()
         layout.setContentsMargins(40, 40, 40, 40)
         layout.setSpacing(30)
 
@@ -70,7 +65,20 @@ class QuickSetupTab(QWidget):
             self._t("quick_setup_subtitle")
         )
         subtitle.setStyleSheet("font-size: 14px; color: #888;")
+        subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+
+        language_row = QHBoxLayout()
+        language_label = QLabel(self._t("settings_app_language"))
+        language_row.addWidget(language_label)
+        self._language_combo = QComboBox()
+        for label, code in UI_LANGUAGE_OPTIONS:
+            self._language_combo.addItem(label, code)
+        language_index = self._language_combo.findData(self._ui_language)
+        self._language_combo.setCurrentIndex(max(0, language_index))
+        self._language_combo.currentIndexChanged.connect(self._on_language_changed)
+        language_row.addWidget(self._language_combo, 1)
+        layout.addLayout(language_row)
 
         layout.addSpacing(20)
 
@@ -158,6 +166,7 @@ class QuickSetupTab(QWidget):
         # Step title
         title_label = QLabel(title)
         title_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title_label.setWordWrap(True)
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
@@ -270,6 +279,7 @@ class QuickSetupTab(QWidget):
             self._t("api_key_help")
         )
         help_text.setStyleSheet("font-size: 12px; color: #888;")
+        help_text.setWordWrap(True)
         layout.addWidget(help_text)
 
         return widget
@@ -283,6 +293,7 @@ class QuickSetupTab(QWidget):
         label = QLabel(
             self._t("microphone_test_info")
         )
+        label.setWordWrap(True)
         layout.addWidget(label, 1)
 
         test_btn = QPushButton(
@@ -305,12 +316,14 @@ class QuickSetupTab(QWidget):
             self._t("quick_setup_complete")
         ))
         ready_label.setStyleSheet("font-size: 14px; color: #4CAF50;")
+        ready_label.setWordWrap(True)
         layout.addWidget(ready_label)
 
         tip_label = QLabel(
             self._t("quick_setup_tip")
         )
         tip_label.setStyleSheet("font-size: 12px; color: #888; margin-top: 10px;")
+        tip_label.setWordWrap(True)
         layout.addWidget(tip_label)
 
         return widget
@@ -336,6 +349,14 @@ class QuickSetupTab(QWidget):
             4: "sk-...",  # Qwen
         }
         self._api_key_input.setPlaceholderText(placeholders.get(provider_index, ""))
+        self._on_config_change()
+
+    def _on_language_changed(self, _index: int) -> None:
+        if self._updating_language:
+            return
+        code = str(self._language_combo.currentData() or "")
+        if code:
+            self.language_changed.emit(code)
         self._on_config_change()
 
     def _on_config_change(self) -> None:
@@ -373,10 +394,11 @@ class QuickSetupTab(QWidget):
             1: "anthropic",
             2: "deepseek",
             3: "gemini",
-            4: "qwen",
+            4: "qianwen",
         }
 
         config = {
+            "ui_language": str(self._language_combo.currentData() or self._ui_language),
             "source_language": source_map.get(self._source_combo.currentIndex(), "auto"),
             "target_language": target_map.get(self._target_combo.currentIndex(), "zh-CN"),
             "translation_provider": provider_map.get(self._provider_combo.currentIndex(), "openai"),
@@ -387,10 +409,25 @@ class QuickSetupTab(QWidget):
 
     def load_config(self, config: dict) -> None:
         """Load configuration into UI."""
+        ui_language = normalize_settings_language(config.get("ui_language", self._ui_language))
+        self._updating_language = True
+        try:
+            index = self._language_combo.findData(ui_language)
+            self._language_combo.setCurrentIndex(max(0, index))
+        finally:
+            self._updating_language = False
+
         # Reverse mapping from config to UI
         source_reverse = {"auto": 0, "en": 1, "zh-CN": 2, "ja": 3, "ko": 4, "es": 5, "fr": 6, "de": 7, "ru": 8}
         target_reverse = {"en": 0, "zh-CN": 1, "ja": 2, "ko": 3, "es": 4, "fr": 5, "de": 6, "ru": 7}
-        provider_reverse = {"openai": 0, "anthropic": 1, "deepseek": 2, "gemini": 3, "qwen": 4}
+        provider_reverse = {
+            "openai": 0,
+            "anthropic": 1,
+            "deepseek": 2,
+            "gemini": 3,
+            "qianwen": 4,
+            "qwen": 4,
+        }
 
         source = config.get("source_language", "auto")
         self._source_combo.setCurrentIndex(source_reverse.get(source, 0))

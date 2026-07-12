@@ -15,6 +15,74 @@ class _Response:
         return self._stream.read(size)
 
 
+def test_windows_display_language_takes_priority_over_regional_locale(monkeypatch):
+    monkeypatch.setattr(
+        ui_language_detection,
+        "_windows_display_language_tag",
+        lambda: "ja-JP",
+    )
+    monkeypatch.setattr(
+        ui_language_detection.locale,
+        "getlocale",
+        lambda: ("ru_RU", "UTF-8"),
+    )
+    monkeypatch.setenv("LANG", "ru_RU.UTF-8")
+
+    assert ui_language_detection._language_from_locale() == "ja"
+
+
+def test_supported_windows_display_language_tags_are_normalized():
+    expected = {
+        "zh-CN": "zh-CN",
+        "zh_Hant-TW": "zh-CN",
+        "en-US": "en",
+        "ja-JP": "ja",
+        "ru-RU": "ru",
+        "ko-KR": "ko",
+        "de-DE": "en",
+    }
+
+    for locale_name, language in expected.items():
+        assert ui_language_detection._language_from_tag(locale_name) == language
+
+
+def test_missing_locale_information_falls_back_to_english(monkeypatch):
+    monkeypatch.setattr(
+        ui_language_detection,
+        "_windows_display_language_tag",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        ui_language_detection.locale,
+        "getlocale",
+        lambda: (None, None),
+    )
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert ui_language_detection._language_from_locale() == "en"
+
+
+def test_first_run_language_is_detected_but_saved_manual_language_is_preserved(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ui_language_detection,
+        "detect_initial_ui_language",
+        lambda **_kwargs: "ko",
+    )
+    first_run = {"ui": {"language": "", "language_source": "auto"}}
+
+    assert ui_language_detection.bootstrap_ui_language(first_run, prefer_auto=True)
+    assert first_run["ui"]["language"] == "ko"
+    assert first_run["ui"]["language_source"] == "auto"
+
+    saved = {"ui": {"language": "ja", "language_source": "manual"}}
+    assert not ui_language_detection.bootstrap_ui_language(saved, prefer_auto=True)
+    assert saved["ui"]["language"] == "ja"
+    assert saved["ui"]["language_source"] == "manual"
+
+
 def test_ip_language_lookup_is_bounded_and_opt_in(monkeypatch):
     calls = []
 

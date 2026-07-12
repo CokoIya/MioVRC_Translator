@@ -147,6 +147,64 @@ def test_webspeech_provider_uses_embedded_opener_and_closes_handle(monkeypatch):
     assert closed == [True]
 
 
+def test_webspeech_provider_switches_bridge_language_without_restart():
+    provider = WebSpeechASRProvider(
+        {
+            "ui": {"language": "en"},
+            "asr": {
+                "webspeech": {
+                    "bridge_port": 0,
+                    "auto_open_browser": False,
+                }
+            },
+        }
+    )
+    try:
+        provider.load()
+        provider.update_language("ru-RU")
+        with urlopen(provider._url, timeout=2.0) as response:
+            page = response.read().decode("utf-8")
+        with urlopen(f"{provider._url}status", timeout=2.0) as response:
+            status = json.loads(response.read().decode("utf-8"))
+    finally:
+        provider.close()
+
+    assert '<html lang="ru">' in page
+    assert status["ui_language"] == "ru"
+
+
+def test_webspeech_provider_reloads_embedded_handle_on_language_change():
+    received: list[str] = []
+
+    class Handle:
+        def update_language(self, language: str) -> None:
+            received.append(language)
+
+        def close(self) -> None:
+            return None
+
+    provider = WebSpeechASRProvider(
+        {
+            "ui": {"language": "en"},
+            "asr": {
+                "webspeech": {
+                    "bridge_port": 0,
+                    "auto_open_browser": True,
+                    "embedded_browser": True,
+                }
+            },
+        }
+    )
+    provider.set_browser_opener(lambda _url: Handle())
+    try:
+        provider.load()
+        provider.update_language("ko-KR")
+    finally:
+        provider.close()
+
+    assert received == ["ko"]
+
+
 def test_webspeech_state_marks_stale_heartbeat_disconnected():
     state = _BridgeState()
     state.set_connected()

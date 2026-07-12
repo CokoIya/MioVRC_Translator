@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -26,24 +25,20 @@ from PySide6.QtWidgets import (
     QCheckBox,
 )
 
-from src.utils.i18n import tr as _base_tr
 from src.tts.xtts_engine import (
-    XTTS_REFERENCE_AUDIO_NAME_FILTER,
     normalize_xtts_reference_audio_file,
     safe_xtts_voice_name,
-    xtts_reference_import_error_message,
     xtts_reference_audio_dir,
 )
+from src.ui_qt.qt_localization import configure_file_dialog
+from src.utils.localization import format_locale_number, format_locale_percent
 
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class TTSVoiceTab(QWidget):
+class TTSVoiceTab(LocalizedSettingsTab):
     """TTS & Voice configuration tab."""
 
     config_changed = Signal()
@@ -56,12 +51,9 @@ class TTSVoiceTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
 
         self._init_ui()
-
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
 
     def _init_ui(self) -> None:
         """Initialize the TTS & Voice UI."""
@@ -98,7 +90,7 @@ class TTSVoiceTab(QWidget):
 
         scroll.setWidget(container)
 
-        main_layout = QVBoxLayout(self)
+        main_layout = self._root_layout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
@@ -113,14 +105,15 @@ class TTSVoiceTab(QWidget):
         engine_layout.addWidget(engine_label)
 
         self._engine_combo = QComboBox()
-        self._engine_combo.addItems([
-            self._t("engine_edge_label"),
-            self._t("engine_gtts_label"),
-            self._t("engine_xtts_label"),
-            self._t("engine_style_bert_label"),
-            self._t("engine_voicevox_label"),
-            self._t("engine_pyttsx3_label"),
-        ])
+        for label_key, engine in (
+            ("engine_edge_label", "edge"),
+            ("engine_gtts_label", "gtts"),
+            ("engine_xtts_label", "xtts"),
+            ("engine_style_bert_label", "style_bert_vits2"),
+            ("engine_voicevox_label", "voicevox"),
+            ("engine_pyttsx3_label", "pyttsx3"),
+        ):
+            self._engine_combo.addItem(self._t(label_key), engine)
         self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_layout.addWidget(self._engine_combo, 1)
 
@@ -129,6 +122,7 @@ class TTSVoiceTab(QWidget):
         # Engine info
         self._engine_info = QLabel(self._t("engine_edge_info"))
         self._engine_info.setStyleSheet("color: #4CAF50; font-size: 12px;")
+        self._engine_info.setWordWrap(True)
         group_layout.addWidget(self._engine_info)
 
         layout.addWidget(group)
@@ -144,15 +138,16 @@ class TTSVoiceTab(QWidget):
         voice_layout.addWidget(voice_label)
 
         self._voice_combo = QComboBox()
-        self._voice_combo.addItems([
-            self._t("voice_xiaoxiao"),
-            self._t("voice_xiaoyi"),
-            self._t("voice_yunyang"),
-            self._t("voice_nanami"),
-            self._t("voice_aoi"),
-            self._t("voice_jenny"),
-            self._t("voice_aria"),
-        ])
+        for label_key, voice_id in (
+            ("voice_xiaoxiao", "zh-CN-XiaoxiaoNeural"),
+            ("voice_xiaoyi", "zh-CN-XiaoyiNeural"),
+            ("voice_yunyang", "zh-CN-YunyangNeural"),
+            ("voice_nanami", "ja-JP-NanamiNeural"),
+            ("voice_aoi", "ja-JP-AoiNeural"),
+            ("voice_jenny", "en-US-JennyNeural"),
+            ("voice_aria", "en-US-AriaNeural"),
+        ):
+            self._voice_combo.addItem(self._t(label_key), voice_id)
         self._voice_combo.currentIndexChanged.connect(self._on_config_change)
         voice_layout.addWidget(self._voice_combo, 1)
 
@@ -176,7 +171,9 @@ class TTSVoiceTab(QWidget):
         speed_layout.addWidget(speed_label)
 
         speed_slider_layout = QHBoxLayout()
-        speed_slider_layout.addWidget(QLabel("0.5x"))
+        speed_slider_layout.addWidget(
+            QLabel(f"{format_locale_number(0.5, self._ui_language, decimals=1)}×")
+        )
 
         self._speed_slider = QSlider(Qt.Orientation.Horizontal)
         self._speed_slider.setMinimum(50)
@@ -187,9 +184,13 @@ class TTSVoiceTab(QWidget):
         self._speed_slider.valueChanged.connect(self._on_speed_changed)
         speed_slider_layout.addWidget(self._speed_slider, 1)
 
-        speed_slider_layout.addWidget(QLabel("2.0x"))
+        speed_slider_layout.addWidget(
+            QLabel(f"{format_locale_number(2.0, self._ui_language, decimals=1)}×")
+        )
 
-        self._speed_value_label = QLabel("1.0x")
+        self._speed_value_label = QLabel(
+            f"{format_locale_number(1.0, self._ui_language, decimals=1)}×"
+        )
         self._speed_value_label.setStyleSheet("font-weight: bold;")
         speed_slider_layout.addWidget(self._speed_value_label)
 
@@ -202,7 +203,7 @@ class TTSVoiceTab(QWidget):
         volume_layout.addWidget(volume_label)
 
         volume_slider_layout = QHBoxLayout()
-        volume_slider_layout.addWidget(QLabel("0%"))
+        volume_slider_layout.addWidget(QLabel(format_locale_percent(0, self._ui_language)))
 
         self._volume_slider = QSlider(Qt.Orientation.Horizontal)
         self._volume_slider.setMinimum(0)
@@ -213,9 +214,9 @@ class TTSVoiceTab(QWidget):
         self._volume_slider.valueChanged.connect(self._on_volume_changed)
         volume_slider_layout.addWidget(self._volume_slider, 1)
 
-        volume_slider_layout.addWidget(QLabel("100%"))
+        volume_slider_layout.addWidget(QLabel(format_locale_percent(100, self._ui_language)))
 
-        self._volume_value_label = QLabel("100%")
+        self._volume_value_label = QLabel(format_locale_percent(100, self._ui_language))
         self._volume_value_label.setStyleSheet("font-weight: bold;")
         volume_slider_layout.addWidget(self._volume_value_label)
 
@@ -252,12 +253,10 @@ class TTSVoiceTab(QWidget):
         device_layout.addWidget(device_label)
 
         self._output_combo = QComboBox()
-        self._output_combo.addItems([
-            self._t("default_speaker"),
-            self._t("virtual_cable"),
-            self._t("device_system_default"),
-            self._t("device_custom"),
-        ])
+        self._output_combo.addItem(self._t("default_speaker"), "default")
+        self._output_combo.addItem(self._t("virtual_cable"), "virtual_cable")
+        self._output_combo.addItem(self._t("device_system_default"), "system_default")
+        self._output_combo.addItem(self._t("device_custom"), "custom")
         self._output_combo.currentIndexChanged.connect(self._on_config_change)
         device_layout.addWidget(self._output_combo, 1)
 
@@ -279,6 +278,7 @@ class TTSVoiceTab(QWidget):
         # XTTS-v2 Voice Recording Section
         xtts_info = QLabel("🎤 " + self._t("xtts_management_hint"))
         xtts_info.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 5px;")
+        xtts_info.setWordWrap(True)
         group_layout.addWidget(xtts_info)
 
         xtts_btn_layout = QHBoxLayout()
@@ -327,12 +327,14 @@ class TTSVoiceTab(QWidget):
     def _on_speed_changed(self, value: int) -> None:
         """Handle speed slider change."""
         speed = value / 100.0
-        self._speed_value_label.setText(f"{speed:.1f}x")
+        self._speed_value_label.setText(
+            f"{format_locale_number(speed, self._ui_language, decimals=1)}×"
+        )
         self.config_changed.emit()
 
     def _on_volume_changed(self, value: int) -> None:
         """Handle volume slider change."""
-        self._volume_value_label.setText(f"{value}%")
+        self._volume_value_label.setText(format_locale_percent(value, self._ui_language))
         self.config_changed.emit()
 
     def _on_config_change(self) -> None:
@@ -365,7 +367,7 @@ class TTSVoiceTab(QWidget):
             QMessageBox.critical(
                 self,
                 self._t("error"),
-                self._t("recording_dialog_open_failed", error=e),
+                self._t("recording_dialog_open_failed", error=self._t("unknown_error")),
             )
 
     def _on_voice_recorded(self, audio_data: bytes, voice_name: str) -> None:
@@ -401,7 +403,7 @@ class TTSVoiceTab(QWidget):
             QMessageBox.critical(
                 self,
                 self._t("voice_save_error_title"),
-                self._t("voice_save_failed", error=e),
+                self._t("voice_save_failed", error=self._t("unknown_error")),
             )
 
     def _on_download_models(self) -> None:
@@ -419,8 +421,13 @@ class TTSVoiceTab(QWidget):
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         file_dialog = QFileDialog(self)
+        configure_file_dialog(
+            file_dialog,
+            self._ui_language,
+            title=self._t("voice_record_import_file"),
+        )
         file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        file_dialog.setNameFilter(XTTS_REFERENCE_AUDIO_NAME_FILTER)
+        file_dialog.setNameFilter(self._t("settings_audio_file_filter"))
 
         if file_dialog.exec():
             files = file_dialog.selectedFiles()
@@ -450,7 +457,7 @@ class TTSVoiceTab(QWidget):
                     QMessageBox.critical(
                         self,
                         self._t("voice_import_error_title"),
-                        self._t("voice_import_failed", error=xtts_reference_import_error_message(e)),
+                        self._t("voice_import_failed", error=self._t("unknown_error")),
                     )
 
     def _on_manage_voices(self) -> None:
@@ -460,23 +467,14 @@ class TTSVoiceTab(QWidget):
 
     def get_config(self) -> dict:
         """Get current configuration from UI."""
-        engine_map = {
-            0: "edge",
-            1: "gtts",
-            2: "xtts",
-            3: "style_bert_vits2",
-            4: "voicevox",
-            5: "pyttsx3",
-        }
-
         config = {
             "tts": {
-                "engine": engine_map.get(self._engine_combo.currentIndex(), "edge"),
-                "voice": self._voice_combo.currentText(),
+                "engine": str(self._engine_combo.currentData() or "edge"),
+                "voice": str(self._voice_combo.currentData() or self._voice_combo.currentText()),
                 "speed": self._speed_slider.value() / 100.0,
                 "volume": self._volume_slider.value() / 100.0,
                 "pitch": self._pitch_spin.value(),
-                "output_device": self._output_combo.currentText(),
+                "output_device": str(self._output_combo.currentData() or "default"),
                 "monitor_output": self._monitor_check.isChecked(),
             }
         }
@@ -489,20 +487,15 @@ class TTSVoiceTab(QWidget):
 
         # Load engine
         engine = tts_cfg.get("engine", "edge")
-        engine_map_reverse = {
-            "edge": 0,
-            "gtts": 1,
-            "xtts": 2,
-            "style_bert_vits2": 3,
-            "voicevox": 4,
-            "pyttsx3": 5,
-        }
-        self._engine_combo.setCurrentIndex(engine_map_reverse.get(engine, 0))
+        engine_index = self._engine_combo.findData(engine)
+        self._engine_combo.setCurrentIndex(max(0, engine_index))
 
         # Load voice
         voice = tts_cfg.get("voice", "")
         if voice:
-            index = self._voice_combo.findText(voice)
+            index = self._voice_combo.findData(voice)
+            if index < 0:
+                index = self._voice_combo.findText(voice)
             if index >= 0:
                 self._voice_combo.setCurrentIndex(index)
 
@@ -519,7 +512,9 @@ class TTSVoiceTab(QWidget):
         # Load output device
         output = tts_cfg.get("output_device", "")
         if output:
-            index = self._output_combo.findText(output)
+            index = self._output_combo.findData(output)
+            if index < 0:
+                index = self._output_combo.findText(output)
             if index >= 0:
                 self._output_combo.setCurrentIndex(index)
 

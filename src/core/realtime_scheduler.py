@@ -318,6 +318,9 @@ class RealtimeScheduler:
         self._cancelled_sequences: dict[str, set[int]] = {
             source: set() for source in self._sources
         }
+        self._asr_inflight_sequences: set[tuple[str, int]] = set()
+        self._rewrite_pending_sequences: set[tuple[str, int]] = set()
+        self._translation_active_sequences: set[tuple[str, int]] = set()
 
         self._provider_claimed: dict[Hashable, int] = {}
         self._provider_active_limits: dict[Hashable, list[int]] = {}
@@ -749,6 +752,9 @@ class RealtimeScheduler:
                 self._admitted_tasks[source].clear()
                 self._translation_queues[source].clear()
                 self._cancelled_sequences[source].clear()
+            self._asr_inflight_sequences.clear()
+            self._rewrite_pending_sequences.clear()
+            self._translation_active_sequences.clear()
             self._drain_stage_queue_locked(self._rewrite_queue)
             self._work_available.notify_all()
             self._recognized_available.notify_all()
@@ -815,6 +821,57 @@ class RealtimeScheduler:
         with self._state_lock:
             return self._task_cancelled_locked(task)
 
+    def _prune_cancelled_sequences_locked(self, source: str) -> None:
+        cancelled = self._cancelled_sequences[source]
+        if not cancelled:
+            return
+
+        recognized_floor = self._next_recognized_sequence[source]
+        translation_floor = self._next_translation_sequence[source]
+        delivery_floor = self._next_delivery_sequence[source]
+        admitted = self._admitted_tasks[source]
+        completed = self._completed[source]
+        recognized = self._recognized[source]
+        rewritten = self._rewritten[source]
+        queued_for_translation = {
+            work.task.sequence for work in self._translation_queues[source]
+        }
+        queued_at_ingress = {task.sequence for task in self._ingress[source]}
+
+        for sequence in tuple(cancelled):
+            key = (source, sequence)
+            if sequence >= recognized_floor or sequence >= delivery_floor:
+                continue
+            if self._rewrite_handler is not None and sequence >= translation_floor:
+                continue
+            if (
+                sequence in admitted
+                or sequence in completed
+                or sequence in recognized
+                or sequence in rewritten
+                or sequence in queued_for_translation
+                or sequence in queued_at_ingress
+                or key in self._asr_inflight_sequences
+                or key in self._rewrite_pending_sequences
+                or key in self._translation_active_sequences
+            ):
+                continue
+            cancelled.discard(sequence)
+
+    def _finish_asr_pipeline_task(self, task: RealtimeTask) -> None:
+        with self._state_lock:
+            self._asr_inflight_sequences.discard((task.source, task.sequence))
+            self._prune_cancelled_sequences_locked(task.source)
+            self._state_changed.notify_all()
+
+    def _finish_rewrite_pipeline_task(self, work: _RecognizedWork) -> None:
+        with self._state_lock:
+            self._rewrite_pending_sequences.discard(
+                (work.task.source, work.task.sequence)
+            )
+            self._prune_cancelled_sequences_locked(work.task.source)
+            self._state_changed.notify_all()
+
     def _is_idle_locked(self) -> bool:
         return bool(
             not any(self._ingress.values())
@@ -828,6 +885,10 @@ class RealtimeScheduler:
             and self._translation_running == 0
             and not any(self._completed.values())
             and self._delivery_running == 0
+            and not any(self._cancelled_sequences.values())
+            and not self._asr_inflight_sequences
+            and not self._rewrite_pending_sequences
+            and not self._translation_active_sequences
         )
 
     def _select_source_locked(self) -> str | None:
@@ -879,6 +940,7 @@ class RealtimeScheduler:
                 source = self._select_source_locked()
                 if source is not None:
                     task = self._ingress[source].popleft()
+                    self._asr_inflight_sequences.add((task.source, task.sequence))
                     self._asr_claimed += 1
                     self._provider_claimed[task.provider_key] = (
                         self._provider_claimed.get(task.provider_key, 0) + 1
@@ -927,7 +989,8 @@ class RealtimeScheduler:
             started_at = self._clock()
             queue_wait = max(0.0, started_at - task.submitted_at)
             try:
-                if self._cancel_event.is_set():
+                if self._cancel_event.is_set() or self._task_cancelled(task):
+                    self._finish_asr_pipeline_task(task)
                     continue
                 with self._state_lock:
                     self._asr_running += 1
@@ -954,7 +1017,8 @@ class RealtimeScheduler:
                 finished_at = self._clock()
                 self._finish_asr_claim(task, was_running=running)
 
-            if self._cancel_event.is_set():
+            if self._cancel_event.is_set() or self._task_cancelled(task):
+                self._finish_asr_pipeline_task(task)
                 continue
             duration = max(0.0, finished_at - started_at)
             work = _RecognizedWork(
@@ -976,13 +1040,18 @@ class RealtimeScheduler:
                 duration * 1000.0,
                 self._translation_pending_count(),
             )
-            self._store_recognized_work(work)
+            try:
+                self._store_recognized_work(work)
+            finally:
+                self._finish_asr_pipeline_task(task)
 
     def _store_recognized_work(self, work: _RecognizedWork) -> bool:
         """Publish one ASR terminal marker without blocking an ASR worker."""
 
         with self._recognized_available:
             if self._cancel_event.is_set() or self._task_cancelled_locked(work.task):
+                return False
+            if work.task.sequence < self._next_recognized_sequence[work.task.source]:
                 return False
             pending = self._recognized[work.task.source]
             pending[work.task.sequence] = work
@@ -1000,6 +1069,7 @@ class RealtimeScheduler:
             while expected in self._cancelled_sequences[source]:
                 expected += 1
             self._next_recognized_sequence[source] = expected
+            self._prune_cancelled_sequences_locked(source)
             work = self._recognized[source].get(expected)
             if work is not None:
                 self._recognized_round_robin_index = (index + 1) % len(
@@ -1017,6 +1087,7 @@ class RealtimeScheduler:
                 while expected in self._cancelled_sequences[source]:
                     expected += 1
                 self._next_recognized_sequence[source] = expected
+                self._prune_cancelled_sequences_locked(source)
                 work = self._recognized[source].get(expected)
             while work is None and not self._cancel_event.is_set():
                 self._recognized_available.wait(timeout=0.1)
@@ -1027,6 +1098,7 @@ class RealtimeScheduler:
                     while expected in self._cancelled_sequences[source]:
                         expected += 1
                     self._next_recognized_sequence[source] = expected
+                    self._prune_cancelled_sequences_locked(source)
                     work = self._recognized[source].get(expected)
             return work
 
@@ -1038,6 +1110,7 @@ class RealtimeScheduler:
                 self._next_recognized_sequence[work.task.source] = (
                     work.task.sequence + 1
                 )
+            self._prune_cancelled_sequences_locked(work.task.source)
             self._recognized_available.notify_all()
             self._state_changed.notify_all()
 
@@ -1071,6 +1144,9 @@ class RealtimeScheduler:
     ) -> bool:
         logged_backpressure = False
         while not self._cancel_event.is_set():
+            with self._state_lock:
+                if self._task_cancelled_locked(work.task):
+                    return True
             reserved_capacity = (
                 1
                 if reserve_priority
@@ -1092,11 +1168,22 @@ class RealtimeScheduler:
                 self._cancel_event.wait(0.05)
                 continue
             try:
-                stage_queue.put(work, timeout=0.05)
                 with self._state_lock:
+                    if self._cancel_event.is_set():
+                        return False
+                    if self._task_cancelled_locked(work.task):
+                        return True
+                    self._rewrite_pending_sequences.add(
+                        (work.task.source, work.task.sequence)
+                    )
+                    stage_queue.put_nowait(work)
                     self._state_changed.notify_all()
                 return True
             except queue.Full:
+                with self._state_lock:
+                    self._rewrite_pending_sequences.discard(
+                        (work.task.source, work.task.sequence)
+                    )
                 if not logged_backpressure:
                     logged_backpressure = True
                     logger.warning(
@@ -1167,6 +1254,7 @@ class RealtimeScheduler:
                 except queue.Empty:
                     continue
 
+                running = False
                 try:
                     if self._cancel_event.is_set() or self._task_cancelled(work.task):
                         continue
@@ -1174,6 +1262,7 @@ class RealtimeScheduler:
                     queue_wait = max(0.0, queue_started - work.enqueued_at)
                     with self._state_lock:
                         self._rewrite_running += 1
+                        running = True
                         self._state_changed.notify_all()
 
                     rewritten_text = work.text
@@ -1232,9 +1321,11 @@ class RealtimeScheduler:
                     )
                 finally:
                     with self._state_lock:
-                        self._rewrite_running = max(0, self._rewrite_running - 1)
+                        if running:
+                            self._rewrite_running = max(0, self._rewrite_running - 1)
                         self._state_changed.notify_all()
                     rewrite_queue.task_done()
+                    self._finish_rewrite_pipeline_task(work)
         finally:
             finalizer = self._rewrite_state_finalizer
             if state_initialized and callable(finalizer):
@@ -1246,6 +1337,8 @@ class RealtimeScheduler:
     def _store_rewritten_work(self, work: _RecognizedWork) -> None:
         with self._recognized_available:
             if self._cancel_event.is_set() or self._task_cancelled_locked(work.task):
+                return
+            if work.task.sequence < self._next_translation_sequence[work.task.source]:
                 return
             self._rewritten[work.task.source][work.task.sequence] = work
             self._recognized_available.notify_all()
@@ -1261,6 +1354,7 @@ class RealtimeScheduler:
             while expected in self._cancelled_sequences[source]:
                 expected += 1
             self._next_translation_sequence[source] = expected
+            self._prune_cancelled_sequences_locked(source)
             work = self._rewritten[source].get(expected)
             if work is not None:
                 self._rewritten_round_robin_index = (index + 1) % len(
@@ -1278,6 +1372,7 @@ class RealtimeScheduler:
                 while expected in self._cancelled_sequences[source]:
                     expected += 1
                 self._next_translation_sequence[source] = expected
+                self._prune_cancelled_sequences_locked(source)
                 work = self._rewritten[source].get(expected)
             while work is None and not self._cancel_event.is_set():
                 self._recognized_available.wait(timeout=0.1)
@@ -1288,6 +1383,7 @@ class RealtimeScheduler:
                     while expected in self._cancelled_sequences[source]:
                         expected += 1
                     self._next_translation_sequence[source] = expected
+                    self._prune_cancelled_sequences_locked(source)
                     work = self._rewritten[source].get(expected)
             return work
 
@@ -1299,6 +1395,7 @@ class RealtimeScheduler:
                 self._next_translation_sequence[work.task.source] = (
                     work.task.sequence + 1
                 )
+            self._prune_cancelled_sequences_locked(work.task.source)
             self._recognized_available.notify_all()
             self._state_changed.notify_all()
 
@@ -1368,6 +1465,9 @@ class RealtimeScheduler:
                 source = self._select_translation_source_locked()
                 if source is not None:
                     work = self._translation_queues[source].popleft()
+                    self._translation_active_sequences.add(
+                        (work.task.source, work.task.sequence)
+                    )
                     self._translation_running += 1
                     self._translation_running_by_source[source] += 1
                     self._translation_available.notify_all()
@@ -1384,6 +1484,10 @@ class RealtimeScheduler:
                 0,
                 self._translation_running_by_source[source] - 1,
             )
+            self._translation_active_sequences.discard(
+                (work.task.source, work.task.sequence)
+            )
+            self._prune_cancelled_sequences_locked(source)
             self._translation_available.notify_all()
             self._state_changed.notify_all()
 
@@ -1540,5 +1644,8 @@ class RealtimeScheduler:
                     self._admitted_tasks[completion.task.source].pop(
                         completion.task.sequence,
                         None,
+                    )
+                    self._prune_cancelled_sequences_locked(
+                        completion.task.source
                     )
                     self._state_changed.notify_all()

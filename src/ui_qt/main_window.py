@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import unicodedata
+import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,7 @@ from src.translators.asr_rewriter import (
     normalize_asr_rewrite_style,
 )
 from src.ui_qt.font_config import apply_application_font
+from src.ui_qt.qt_localization import install_qt_translations
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.styles import build_app_stylesheet, build_main_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme, normalize_theme_preference, resolve_theme, theme_preference_from_config, theme_tokens
@@ -68,11 +70,18 @@ from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
 from src.ui_qt.realtime_tweaks_panel import RealtimeTweaksPanel
 from src.ui_qt.state_manager import AppState
+from src.tts.error_utils import is_tts_authentication_error, is_tts_network_error
 from src.utils import config_manager
 from src.utils.app_paths import resource_base_dirs
 from src.utils.global_hotkey import GlobalHotkey, DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
 from src.utils.i18n import tr
 from src.utils.lang_detect import detect_language
+from src.utils.localization import (
+    format_locale_number,
+    format_locale_percent,
+    normalize_ui_language,
+    translate_key_catalog,
+)
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.translation_config_validation import missing_required_translation_api_key
 from src.utils.ui_config import (
@@ -199,30 +208,13 @@ LISTEN_REAL_OUTPUT_HINTS = (
     "usb audio",
 )
 
-TRANSLATION_COPY = {
-    "status_ready": {"zh-CN": "就绪", "en": "Ready", "ja": "準備完了", "ru": "Готово", "ko": "준비됨"},
-    "status_running": {"zh-CN": "监听中…", "en": "Listening…", "ja": "リスニング中…", "ru": "Прослушивание…", "ko": "듣는 중…"},
-    "status_error": {"zh-CN": "错误", "en": "Error", "ja": "エラー", "ru": "Ошибка", "ko": "오류"},
-    "starting": {"zh-CN": "启动中…", "en": "Starting…", "ja": "起動中…", "ru": "Запуск…", "ko": "시작 중…"},
-    "model_ready": {"zh-CN": "语音包已准备好", "en": "Model ready", "ja": "モデル準備完了", "ru": "Модель готова", "ko": "모델 준비됨"},
-    "model_unloaded": {"zh-CN": "语音包未准备好", "en": "Model unloaded", "ja": "モデル未ロード", "ru": "Модель не загружена", "ko": "모델 미로드"},
-    "listen_start_failed_title": {"zh-CN": "启动失败", "en": "Start Failed", "ja": "起動失敗", "ru": "Ошибка запуска", "ko": "시작 실패"},
-    "send_failed_title": {"zh-CN": "发送失败", "en": "Send Failed", "ja": "送信失敗", "ru": "Ошибка отправки", "ko": "전송 실패"},
-    "window_title": {"zh-CN": "Mio 实时翻译", "en": "Mio RealTime Translator", "ja": "Mio リアルタイム翻訳", "ru": "Mio Realtime Translator", "ko": "Mio 실시간 번역"},
-    "source_placeholder": {"zh-CN": "等待语音输入或手动输入文本", "en": "Waiting for input or enter text manually", "ja": "音声入力または手動入力待ち", "ru": "Ожидание ввода", "ko": "음성 입력 또는 수동 입력 대기"},
-    "translate": {"zh-CN": "翻译", "en": "Translate", "ja": "翻訳", "ru": "Перевод", "ko": "번역"},
-    "translating": {"zh-CN": "翻译中...", "en": "Translating...", "ja": "翻訳中...", "ru": "Перевод...", "ko": "번역 중..."},
-    "mic_muted_status": {"zh-CN": "● 麦克风已静音", "en": "● Mic muted", "ja": "● マイクミュート中", "ru": "● Mic muted", "ko": "● 마이크 음소거"},
-    "mic_unmuted_status": {"zh-CN": "○ 麦克风正常", "en": "○ Mic unmuted", "ja": "○ マイクミュート解除", "ru": "○ Mic unmuted", "ko": "○ 마이크 음소거 해제"},
-}
-
 MAIN_COPY = {
     "creator_banner_compact": {
-        "zh-CN": "天川 澪 | free build | GPL",
-        "en": "天川 澪 | free build | GPL",
-        "ja": "天川 澪 | free build | GPL",
-        "ru": "天川 澪 | free build | GPL",
-        "ko": "天川 澪 | free build | GPL",
+        "zh-CN": "天川 澪 | 免费版 | GPL",
+        "en": "天川 澪 | Free build | GPL",
+        "ja": "天川 澪 | 無料版 | GPL",
+        "ru": "天川 澪 | Бесплатная сборка | GPL",
+        "ko": "天川 澪 | 무료 빌드 | GPL",
     },
     "settings_short": {
         "zh-CN": "设置",
@@ -301,13 +293,6 @@ MAIN_COPY = {
         "ru": "Спонсоры",
         "ko": "후원자",
     },
-    "mode_translation": {
-        "zh-CN": "翻译",
-        "en": "Translate",
-        "ja": "翻訳",
-        "ru": "Перевод",
-        "ko": "번역",
-    },
     "mode_simultaneous": {
         "zh-CN": "朗读",
         "en": "Simul",
@@ -335,27 +320,6 @@ MAIN_COPY = {
         "ja": "同通モードに切り替えました。TTS は自動読み上げで VRChat へ出力されます。",
         "ru": "Включен синхронный режим. TTS будет читать и выводить звук в VRChat.",
         "ko": "동시통역 모드로 전환했습니다. TTS가 자동으로 읽고 VRChat으로 출력됩니다.",
-    },
-    "app_subtitle": {
-        "zh-CN": "VRChat 实时翻译伴侣",
-        "en": "VRChat realtime companion",
-        "ja": "VRChat リアルタイム翻訳",
-        "ru": "VRChat переводчик в реальном времени",
-        "ko": "VRChat 실시간 번역 도우미",
-    },
-    "source_panel": {
-        "zh-CN": "原文",
-        "en": "Source",
-        "ja": "原文",
-        "ru": "Исходный текст",
-        "ko": "원문",
-    },
-    "translation_panel": {
-        "zh-CN": "译文",
-        "en": "Translation",
-        "ja": "翻訳",
-        "ru": "Перевод",
-        "ko": "번역",
     },
     "quick_controls": {
         "zh-CN": "快捷控制",
@@ -406,13 +370,6 @@ MAIN_COPY = {
         "ru": "Микрофон выкл.",
         "ko": "음소거 중",
     },
-    "mic_device_none": {
-        "zh-CN": "未选择麦克风",
-        "en": "No microphone selected",
-        "ja": "マイク未選択",
-        "ru": "Микрофон не выбран",
-        "ko": "마이크 미선택",
-    },
     "mic_device_auto_option": {
         "zh-CN": "自动：活动设备 / 系统默认",
         "en": "Auto: Active / System Default",
@@ -420,12 +377,26 @@ MAIN_COPY = {
         "ru": "Авто: активный / системный",
         "ko": "자동: 사용 중 / 시스템 기본",
     },
-    "mic_device_auto_current": {
-        "zh-CN": "自动 · {name}",
-        "en": "Auto · {name}",
-        "ja": "自動 · {name}",
-        "ru": "Авто · {name}",
-        "ko": "자동 · {name}",
+    "input_device_missing": {
+        "zh-CN": "未检测到麦克风",
+        "en": "No microphone found",
+        "ja": "マイクが見つかりません",
+        "ru": "Микрофон не найден",
+        "ko": "마이크를 찾을 수 없음",
+    },
+    "qwen_tts_auth_error": {
+        "zh-CN": "Qwen TTS 凭据被拒绝，请检查 API Key 和服务区域",
+        "en": "Qwen TTS rejected the credential; check the API key and service region",
+        "ja": "Qwen TTS の認証が拒否されました。API Key とサービス地域を確認してください",
+        "ru": "Qwen TTS отклонил учетные данные; проверьте API-ключ и регион сервиса",
+        "ko": "Qwen TTS 인증이 거부되었습니다. API Key와 서비스 지역을 확인하세요",
+    },
+    "qwen_tts_network_error": {
+        "zh-CN": "Qwen TTS 网络连接中断，请检查网络或代理设置后重试",
+        "en": "Qwen TTS network connection was interrupted; check the network or proxy settings and try again",
+        "ja": "Qwen TTS のネットワーク接続が中断されました。ネットワークまたはプロキシ設定を確認して再試行してください",
+        "ru": "Сетевое соединение Qwen TTS прервано; проверьте сеть или настройки прокси и повторите попытку",
+        "ko": "Qwen TTS 네트워크 연결이 중단되었습니다. 네트워크 또는 프록시 설정을 확인한 뒤 다시 시도하세요",
     },
     "desktop_audio_saved": {
         "zh-CN": "听别人说话已切换",
@@ -449,11 +420,11 @@ MAIN_COPY = {
         "ko": "채팅박스 전송이 대기열에 들어가지 않았습니다",
     },
     "realtime_queue_full": {
-        "zh-CN": "???????????????",
+        "zh-CN": "语音处理任务已满，请稍等片刻",
         "en": "Speech processing is at capacity; please pause briefly",
-        "ja": "????????????????????????",
-        "ru": "????????? ???? ???????????; ???????? ???????? ?????",
-        "ko": "?? ?? ???? ?? ????. ?? ?? ???",
+        "ja": "音声処理が混み合っています。少し待ってから話してください",
+        "ru": "Обработка речи перегружена; сделайте короткую паузу",
+        "ko": "음성 처리 대기열이 가득 찼습니다. 잠시 후 다시 말해 주세요",
     },
     "update_badge": {
         "zh-CN": "新版本",
@@ -463,32 +434,32 @@ MAIN_COPY = {
         "ko": "업데이트",
     },
     "mode_translation": {
-        "zh-CN": "Text",
+        "zh-CN": "文本",
         "en": "Text",
-        "ja": "Text",
-        "ru": "Text",
-        "ko": "Text",
+        "ja": "テキスト",
+        "ru": "Текст",
+        "ko": "텍스트",
     },
     "source_lang_short": {
-        "zh-CN": "Src",
+        "zh-CN": "源语言",
         "en": "Src",
-        "ja": "Src",
-        "ru": "Src",
-        "ko": "Src",
+        "ja": "元言語",
+        "ru": "Исх.",
+        "ko": "원문 언어",
     },
     "translation_lang_1_short": {
-        "zh-CN": "TL 1",
+        "zh-CN": "译文 1",
         "en": "TL 1",
-        "ja": "TL 1",
-        "ru": "TL 1",
-        "ko": "TL 1",
+        "ja": "翻訳 1",
+        "ru": "Перевод 1",
+        "ko": "번역 1",
     },
     "translation_lang_2_short": {
-        "zh-CN": "TL 2",
+        "zh-CN": "译文 2",
         "en": "TL 2",
-        "ja": "TL 2",
-        "ru": "TL 2",
-        "ko": "TL 2",
+        "ja": "翻訳 2",
+        "ru": "Перевод 2",
+        "ko": "번역 2",
     },
 }
 
@@ -620,9 +591,26 @@ def _create_asr_pair(config: dict):
     main_engine = _main_asr_engine(config)
     listen_engine = _listen_asr_engine(config)
     main_asr = create_asr(config, engine=main_engine)
+    vrc_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+    if not isinstance(vrc_cfg, dict) or not bool(vrc_cfg.get("enabled", False)):
+        # Do not load a second heavyweight model merely to keep a disabled
+        # desktop-listen feature ready. Enabling a distinct listen engine while
+        # running performs a controlled pipeline restart below.
+        return main_asr, main_asr
     if _listen_asr_reuses_main(config) and _asr_runtime_signature(config, listen_engine) == _asr_runtime_signature(config, main_engine):
         return main_asr, main_asr
-    return main_asr, create_asr(config, engine=listen_engine)
+    try:
+        listen_asr = create_asr(config, engine=listen_engine)
+    except Exception:
+        try:
+            main_asr.close()
+        except Exception:
+            logger.debug(
+                "Failed to close partially constructed main ASR provider",
+                exc_info=True,
+            )
+        raise
+    return main_asr, listen_asr
 
 
 # ----------------------------------------------------------------
@@ -833,7 +821,8 @@ class MainWindow(QMainWindow):
         self._asr = None
         self._listen_asr = None
         self._asr_close_lock = threading.RLock()
-        self._reserved_asr_providers: list[Any] = []
+        self._closing_asr_providers: list[Any] = []
+        self._closed_asr_provider_refs: list[weakref.ReferenceType[Any]] = []
         self._asr_cleanup_threads: list[threading.Thread] = []
         self._translator = None
         self._output_dispatcher = OutputDispatcher(lambda: getattr(self, "_config", {}))
@@ -1173,6 +1162,8 @@ class MainWindow(QMainWindow):
                 startup_cancel_event.set()
         logger.info("Qt MainWindow shutdown requested")
         self._stop_hotkeys()
+        self._stop_owned_timers()
+        self._release_overlay_service()
         self._close_independent_tool_windows()
         self._flush_config_save()
         if self._running:
@@ -1203,6 +1194,98 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self._sender = None
+        self._close_manual_translation_controller()
+        self._discard_ui_callbacks()
+
+    def _stop_owned_timers(self) -> None:
+        """Stop child timers so a closed window cannot keep doing background work."""
+
+        try:
+            timers = tuple(self.findChildren(QTimer))
+        except Exception:
+            timers = tuple(
+                timer
+                for timer in self.__dict__.values()
+                if isinstance(timer, QTimer)
+            )
+        for timer in timers:
+            try:
+                timer.stop()
+            except Exception:
+                logger.debug("Failed to stop MainWindow timer", exc_info=True)
+
+    def _release_overlay_service(self) -> None:
+        dispatcher = getattr(self, "_output_dispatcher", None)
+        if dispatcher is not None:
+            for sink_name in ("overlay", "ui", "tts"):
+                try:
+                    dispatcher.unregister_sink(sink_name)
+                except Exception:
+                    logger.debug(
+                        "Failed to unregister output sink %s",
+                        sink_name,
+                        exc_info=True,
+                    )
+
+        service = getattr(self, "_overlay_service", None)
+        self._overlay_service = None
+        if service is None:
+            return
+        try:
+            service.set_enabled(False, reveal=False)
+        except Exception:
+            logger.debug("Failed to disable overlay service", exc_info=True)
+        try:
+            service.set_backend(None)
+        except Exception:
+            logger.debug("Failed to detach overlay backend", exc_info=True)
+        try:
+            service.deleteLater()
+        except Exception:
+            logger.debug("Failed to dispose overlay service", exc_info=True)
+
+    def _close_manual_translation_controller(self) -> None:
+        controller = getattr(self, "_manual_translation_controller", None)
+        self._manual_translation_controller = None
+        if controller is None:
+            return
+        try:
+            controller.invalidate()
+        except Exception:
+            logger.debug("Failed to invalidate manual translation", exc_info=True)
+        for signal_name, callback_name in (
+            ("started", "_on_manual_translate_started"),
+            ("succeeded", "_on_manual_translate_success"),
+            ("failed", "_on_manual_translate_error"),
+            ("worker_finished", "_finish_manual_translate_worker"),
+        ):
+            signal = getattr(controller, signal_name, None)
+            callback = getattr(self, callback_name, None)
+            disconnect = getattr(signal, "disconnect", None)
+            if callable(disconnect) and callback is not None:
+                try:
+                    disconnect(callback)
+                except Exception:
+                    pass
+        try:
+            controller.close()
+        except Exception:
+            logger.debug("Failed to close manual translation controller", exc_info=True)
+
+    def _discard_ui_callbacks(self) -> None:
+        """Release queued closures and their payloads after UI delivery is disabled."""
+
+        for queue_name in ("_ui_callback_queue", "_ui_priority_callback_queue"):
+            work_queue = getattr(self, queue_name, None)
+            if work_queue is None:
+                continue
+            while True:
+                try:
+                    work_queue.get_nowait()
+                except queue.Empty:
+                    break
+                except Exception:
+                    break
 
     def _close_independent_tool_windows(self) -> None:
         text_window = self._text_input_window
@@ -1210,23 +1293,19 @@ class MainWindow(QMainWindow):
         if text_window is not None:
             try:
                 text_window.close()
+                text_window.deleteLater()
             except Exception:
                 logger.debug("Failed to close text input window during shutdown", exc_info=True)
 
         floating_window = self._floating_window
         self._floating_window = None
         if floating_window is not None:
-            previous_on_close = getattr(floating_window, "_on_close", None)
             try:
                 floating_window._on_close = None
                 floating_window.close()
+                floating_window.deleteLater()
             except Exception:
                 logger.debug("Failed to close floating window during shutdown", exc_info=True)
-            finally:
-                try:
-                    floating_window._on_close = previous_on_close
-                except Exception:
-                    pass
 
         for windows_attr in ("_audio_diagnostics_windows", "_vad_calibration_windows"):
             windows = getattr(self, windows_attr, {})
@@ -1234,6 +1313,7 @@ class MainWindow(QMainWindow):
                 for tool_window in list(windows.values()):
                     try:
                         tool_window.close()
+                        tool_window.deleteLater()
                     except Exception:
                         logger.debug("Failed to close tool window during shutdown", exc_info=True)
                 windows.clear()
@@ -1242,6 +1322,7 @@ class MainWindow(QMainWindow):
         if mode_wizard is not None:
             try:
                 mode_wizard.close()
+                mode_wizard.deleteLater()
             except Exception:
                 logger.debug("Failed to close mode wizard during shutdown", exc_info=True)
 
@@ -1252,6 +1333,27 @@ class MainWindow(QMainWindow):
                 settings_window.close()
             except Exception:
                 logger.debug("Failed to close settings window during shutdown", exc_info=True)
+
+        for window_attr, label in (
+            ("_guide_win", "OSC guide"),
+            ("_sponsor_window", "sponsor window"),
+            ("_tweaks_panel", "quick-switch panel"),
+            ("_update_win", "update window"),
+        ):
+            tool_window = getattr(self, window_attr, None)
+            setattr(self, window_attr, None)
+            if tool_window is None:
+                continue
+            try:
+                shutdown = getattr(tool_window, "shutdown", None)
+                if window_attr == "_update_win" and callable(shutdown):
+                    shutdown()
+                else:
+                    tool_window.close()
+                if not bool(getattr(tool_window, "_downloading", False)):
+                    tool_window.deleteLater()
+            except Exception:
+                logger.debug("Failed to close %s during shutdown", label, exc_info=True)
 
     # ----------------------------------------------------------------
     # UI Construction
@@ -1306,11 +1408,11 @@ class MainWindow(QMainWindow):
 
 
     def _copy(self, key: str, **kwargs) -> str:
-        table = MAIN_COPY.get(key)
-        if table:
-            ui_lang = getattr(self, "_ui_lang", None) or get_ui_language(getattr(self, "_config", {}))
-            text = table.get(ui_lang) or table.get(str(ui_lang).split("-")[0]) or table.get("en") or next(iter(table.values()))
-            return text.format(**kwargs) if kwargs else text
+        if key in MAIN_COPY:
+            ui_lang = getattr(self, "_ui_lang", None) or get_ui_language(
+                getattr(self, "_config", {})
+            )
+            return translate_key_catalog(MAIN_COPY, ui_lang, key, **kwargs)
         return self._t(key, **kwargs)
 
 
@@ -1327,25 +1429,56 @@ class MainWindow(QMainWindow):
         code = self._ui_lang_codes.get(selected_label)
         if not code or code == self._ui_lang:
             return
+        self._apply_ui_language(code)
+
+    def _apply_ui_language(self, language_code: str, *, persist: bool = True) -> None:
+        code = normalize_ui_language(language_code)
+        if code not in self._ui_lang_reverse:
+            return
+        install_qt_translations(QApplication.instance(), code)
         self._ui_lang = code
         self._config.setdefault("ui", {})["language"] = code
         self._refresh_static_texts()
-        if self._floating_window is not None:
+        self._refresh_open_window_languages()
+        if persist:
+            self._schedule_config_save()
+
+    def _refresh_open_window_languages(self) -> None:
+        windows = [
+            getattr(self, "_settings_window", None),
+            getattr(self, "_floating_window", None),
+            getattr(self, "_text_input_window", None),
+            getattr(self, "_tweaks_panel", None),
+            getattr(self, "_mode_wizard_dialog", None),
+            getattr(self, "_sponsor_window", None),
+            getattr(self, "_update_win", None),
+        ]
+        for collection_name in ("_audio_diagnostics_windows", "_vad_calibration_windows"):
+            collection = getattr(self, collection_name, None)
+            if isinstance(collection, dict):
+                windows.extend(collection.values())
+        for provider in (getattr(self, "_asr", None), getattr(self, "_listen_asr", None)):
+            if provider is None:
+                continue
+            if callable(getattr(provider, "update_language", None)):
+                windows.append(provider)
+                continue
+            browser_handle = getattr(provider, "_browser_handle", None)
+            if browser_handle is not None:
+                windows.append(browser_handle)
+        for window in windows:
+            update_language = getattr(window, "update_language", None)
+            if not callable(update_language):
+                continue
             try:
-                self._floating_window.update_language(code)
+                update_language(self._ui_lang)
             except Exception:
-                logger.debug("Failed to update floating window language", exc_info=True)
-        if self._text_input_window is not None:
-            try:
-                self._text_input_window.update_language(code)
-            except Exception:
-                logger.debug("Failed to update text input window language", exc_info=True)
-        if self._tweaks_panel is not None:
-            try:
-                self._tweaks_panel.update_language(code)
-            except Exception:
-                logger.debug("Failed to update realtime tweaks panel language", exc_info=True)
-        self._schedule_config_save()
+                logger.debug(
+                    "Failed to update %s language",
+                    type(window).__name__,
+                    exc_info=True,
+                )
+        self._refresh_osc_guide_language()
 
     def _on_tgt_lang_change(self, selected_label: str | None = None) -> None:
         if selected_label is None and self._tgt_lang_combo:
@@ -1397,6 +1530,10 @@ class MainWindow(QMainWindow):
             self._config,
             initial_text=self._src_text,
             on_send=self._translate_and_send_from_text_window,
+        )
+        self._text_input_window.setAttribute(
+            Qt.WidgetAttribute.WA_DeleteOnClose,
+            True,
         )
         self._text_input_window.finished.connect(lambda _result: setattr(self, "_text_input_window", None))
         self._text_input_window.show()
@@ -1459,7 +1596,12 @@ class MainWindow(QMainWindow):
             self._sync_avatar_muted_state(force=True)
             self._sync_avatar_speaking_state(force=True)
         if capture_error is not None:
-            self._set_bottom(str(capture_error), "warning")
+            self._set_bottom(
+                self._t(
+                    "main_capture_pause_failed" if desired else "main_capture_resume_failed"
+                ),
+                "warning",
+            )
 
     def _apply_microphone_capture_mute_state(self) -> None:
         """Keep the physical microphone stream aligned with Mio's mute state."""
@@ -1583,9 +1725,30 @@ class MainWindow(QMainWindow):
     def _toggle_listen(self) -> None:
         self._set_desktop_capture_enabled(not self._desktop_capture_enabled, persist=True)
 
+    def _listen_asr_requires_restart_on_enable(self) -> bool:
+        if not getattr(self, "_running", False):
+            return False
+        main_asr = getattr(self, "_asr", None)
+        listen_asr = getattr(self, "_listen_asr", None)
+        if main_asr is None or listen_asr is not main_asr:
+            return False
+        return not _listen_asr_reuses_main(self._config)
+
     def _set_desktop_capture_enabled(self, enabled: bool, *, persist: bool) -> None:
         new_value = bool(enabled)
         if new_value and self._running:
+            if self._listen_asr_requires_restart_on_enable():
+                self._desktop_capture_enabled = True
+                self._config.setdefault("vrc_listen", {})["enabled"] = True
+                self._refresh_desktop_capture_button()
+                self._refresh_floating_window_status(False)
+                self._sync_settings_window_vrc_listen_state()
+                if persist:
+                    self._schedule_config_save()
+                self._set_bottom(self._copy("desktop_audio_saved"))
+                self._do_stop()
+                self._schedule_pipeline_start_retry(100)
+                return
             try:
                 self._start_listen()
             except Exception as exc:
@@ -1596,7 +1759,7 @@ class MainWindow(QMainWindow):
                 self._refresh_desktop_capture_button()
                 self._refresh_floating_window_status(False)
                 self._sync_settings_window_vrc_listen_state()
-                self._set_bottom(str(exc))
+                self._set_bottom(self._t("main_desktop_listen_failed"), "warning")
                 if persist:
                     self._schedule_config_save()
                 return
@@ -1692,13 +1855,17 @@ class MainWindow(QMainWindow):
                 service.setParent(self)
             except Exception:
                 logger.debug("Overlay service created before MainWindow QObject init")
-            service.error.connect(lambda message: getattr(self, "_set_bottom", lambda *_args, **_kwargs: None)(str(message), "warning"))
+            service.error.connect(self._on_overlay_service_error)
             self._overlay_service = service
             self._ensure_output_dispatcher().register_sink("overlay", service.show_message)
         elif create_backend and getattr(self, "_floating_window", None) is None:
             service.set_backend(self._ensure_floating_window(), backend_name="desktop")
         service.set_enabled(bool(self._listen_overlay_enabled), reveal=False)
         return service
+
+    def _on_overlay_service_error(self, message: str) -> None:
+        logger.warning("Caption overlay failed: %s", message)
+        self._set_bottom(self._t("main_overlay_error"), "warning")
 
     def _show_listen_translation(self, text: str, *, payload: str | None = None, source: str = "listen") -> None:
         message = OutputMessage(
@@ -1765,6 +1932,7 @@ class MainWindow(QMainWindow):
             snapshot_provider=self.audio_diagnostics_snapshot,
             ui_language=self._ui_lang,
         )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dialog.setStyleSheet(self._base_stylesheet())
         dialog.finished.connect(lambda _result, key=normalized: self._audio_diagnostics_windows.pop(key, None))
         self._audio_diagnostics_windows[normalized] = dialog
@@ -1796,6 +1964,7 @@ class MainWindow(QMainWindow):
             current_silence_s=current_silence,
             ui_language=self._ui_lang,
         )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dialog.setStyleSheet(self._base_stylesheet())
         dialog.finished.connect(lambda _result, key=normalized: self._vad_calibration_windows.pop(key, None))
         self._vad_calibration_windows[normalized] = dialog
@@ -1878,6 +2047,11 @@ class MainWindow(QMainWindow):
             self,
             self._find_sponsor_image(),
             on_close=lambda: setattr(self, "_sponsor_window", None),
+            ui_language=self._ui_lang,
+        )
+        self._sponsor_window.setAttribute(
+            Qt.WidgetAttribute.WA_DeleteOnClose,
+            True,
         )
         self._sponsor_window.show()
 
@@ -1885,9 +2059,37 @@ class MainWindow(QMainWindow):
         pending = getattr(self, "_pending_update", None)
         if not pending:
             return
+        self._show_update_window(pending)
+
+    def _show_update_window(self, update_info: UpdateInfo):
+        """Show one application-owned update/repair dialog at a time."""
+
+        existing = getattr(self, "_update_win", None)
+        if existing is not None and not bool(getattr(existing, "_destroying", False)):
+            try:
+                existing._minimized = False
+                existing.show()
+                existing.raise_()
+                existing.activateWindow()
+                return existing
+            except RuntimeError:
+                self._update_win = None
         from src.ui_qt.update_window import UpdateWindow
-        self._update_win = UpdateWindow(self, pending, self._ui_lang)
-        self._update_win.show()
+
+        dialog = UpdateWindow(self, update_info, self._ui_lang)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog_ref = weakref.ref(dialog)
+        window_ref = weakref.ref(self)
+
+        def clear_update_window(_result: int) -> None:
+            window = window_ref()
+            if window is not None and getattr(window, "_update_win", None) is dialog_ref():
+                window._update_win = None
+
+        dialog.finished.connect(clear_update_window)
+        self._update_win = dialog
+        dialog.show()
+        return dialog
 
     def _check_for_update(self) -> None:
         if self._destroying:
@@ -1895,14 +2097,43 @@ class MainWindow(QMainWindow):
         if not self.isVisible():
             return
 
+        window_ref = weakref.ref(self)
+
+        def deliver_update(update_info: UpdateInfo) -> None:
+            window = window_ref()
+            if window is not None and not window._destroying:
+                window._handle_update_available(update_info)
+
+        def deliver_error() -> None:
+            window = window_ref()
+            if window is not None and not window._destroying:
+                window._set_bottom(
+                    window._t("main_update_check_failed"),
+                    "warning",
+                    key="main_update_check_failed",
+                )
+
         def on_update(update_info: UpdateInfo | None) -> None:
-            if update_info is not None:
-                self._call_in_ui(lambda info=update_info: self._handle_update_available(info))
+            window = window_ref()
+            if update_info is not None and window is not None and not window._destroying:
+                window._call_in_ui(lambda info=update_info: deliver_update(info))
+
+        def on_error(message: str) -> None:
+            logger.warning("Qt update check failed: %s", message)
+            window = window_ref()
+            if window is None or window._destroying:
+                return
+            window._call_in_ui(deliver_error)
 
         try:
-            check_for_update(on_update)
+            check_for_update(on_update, on_error=on_error)
         except Exception:
             logger.debug("Qt update check failed", exc_info=True)
+            self._set_bottom(
+                self._t("main_update_check_failed"),
+                "warning",
+                key="main_update_check_failed",
+            )
 
     def _ignore_update_version(self, version: str) -> None:
         self._config.setdefault("ui", {})["ignored_update_version"] = version
@@ -1930,32 +2161,45 @@ class MainWindow(QMainWindow):
             existing.activateWindow()
             return
         dialog = QDialog(self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._guide_win = dialog
         dialog.setObjectName("oscGuideDialog")
         dialog.setWindowTitle(self._t("guide_title"))
         dialog.setStyleSheet(self._base_stylesheet())
-        dialog.setFixedSize(520, 430)
+        dialog.setMinimumSize(520, 430)
+        dialog.resize(560, 600)
         dialog.finished.connect(lambda _result: setattr(self, "_guide_win", None))
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("oscGuideContent")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
         title = QLabel(self._t("guide_title"))
         title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        content_layout.addWidget(title)
 
         subtitle = QLabel(self._t("guide_subtitle"))
         subtitle.setObjectName("mutedLabel")
         subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        content_layout.addWidget(subtitle)
 
-        for index, (step_title, step_body, path) in enumerate(self._guide_pages(), start=1):
+        step_widgets: list[tuple[QLabel, QLabel, QLabel]] = []
+        for step_title, step_body, path in self._guide_pages():
             card = QFrame()
             card.setObjectName("guideStepCard")
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(12, 10, 12, 10)
             card_layout.setSpacing(6)
-            step_label = QLabel(f"{index}. {step_title}")
+            step_label = QLabel(step_title)
             step_label.setObjectName("sectionTitle")
             body_label = QLabel(step_body)
             body_label.setObjectName("mutedLabel")
@@ -1965,39 +2209,76 @@ class MainWindow(QMainWindow):
             card_layout.addWidget(step_label)
             card_layout.addWidget(body_label)
             card_layout.addWidget(path_label)
-            layout.addWidget(card)
+            content_layout.addWidget(card)
+            step_widgets.append((step_label, body_label, path_label))
 
         footer = QLabel(self._t("guide_footer"))
         footer.setObjectName("mutedLabel")
         footer.setWordWrap(True)
-        layout.addWidget(footer)
-        layout.addStretch(1)
+        content_layout.addWidget(footer)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
 
         btn = QPushButton(self._t("guide_done"))
         btn.setObjectName("primaryButton")
         btn.clicked.connect(dialog.accept)
         layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignRight)
+        dialog._mio_guide_widgets = (title, subtitle, step_widgets, footer, btn)
+        dialog._mio_guide_scroll = scroll
         dialog.show()
         dialog.activateWindow()
 
+    @staticmethod
+    def _guide_page_specs() -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+        return (
+            (
+                "guide_step_1_title",
+                "guide_step_1_body",
+                ("guide_path_action_menu", "guide_path_options"),
+            ),
+            (
+                "guide_step_2_title",
+                "guide_step_2_body",
+                ("guide_path_options", "OSC"),
+            ),
+            (
+                "guide_step_3_title",
+                "guide_step_3_body",
+                ("OSC", "guide_path_enabled"),
+            ),
+        )
+
     def _guide_pages(self) -> list[tuple[str, str, list[str]]]:
-        return [
-            (
-                self._t("guide_step_1_title"),
-                self._t("guide_step_1_body"),
-                ["Action Menu", "Options"],
-            ),
-            (
-                self._t("guide_step_2_title"),
-                self._t("guide_step_2_body"),
-                ["Options", "OSC"],
-            ),
-            (
-                self._t("guide_step_3_title"),
-                self._t("guide_step_3_body"),
-                ["OSC", "Enabled"],
-            ),
-        ]
+        pages: list[tuple[str, str, list[str]]] = []
+        for title_key, body_key, path_keys in self._guide_page_specs():
+            path = [part if part == "OSC" else self._t(part) for part in path_keys]
+            pages.append((self._t(title_key), self._t(body_key), path))
+        return pages
+
+    def _refresh_osc_guide_language(self) -> None:
+        dialog = getattr(self, "_guide_win", None)
+        widgets = getattr(dialog, "_mio_guide_widgets", None)
+        if dialog is None or not widgets:
+            return
+        title, subtitle, step_widgets, footer, button = widgets
+        dialog.setWindowTitle(self._t("guide_title"))
+        title.setText(self._t("guide_title"))
+        subtitle.setText(self._t("guide_subtitle"))
+        for labels, page in zip(step_widgets, self._guide_pages()):
+            step_label, body_label, path_label = labels
+            step_title, step_body, path = page
+            step_label.setText(step_title)
+            body_label.setText(step_body)
+            path_label.setText("  >  ".join(path))
+        footer.setText(self._t("guide_footer"))
+        button.setText(self._t("guide_done"))
+        scroll = getattr(dialog, "_mio_guide_scroll", None)
+        content = scroll.widget() if scroll is not None else None
+        if content is not None:
+            content.updateGeometry()
+            if content.layout() is not None:
+                content.layout().activate()
 
     def _maybe_show_osc_guide(self) -> None:
         if self._destroying:
@@ -2043,6 +2324,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, lambda page_id=target_page: self.show_settings(page_id=page_id))
 
         dialog = ModeWizardDialog(self, ui_language=self._ui_lang, on_done=on_done)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._mode_wizard_dialog = dialog
         dialog.setStyleSheet(self._base_stylesheet())
         dialog.finished.connect(lambda _result: setattr(self, "_mode_wizard_dialog", None))
@@ -2294,8 +2576,17 @@ class MainWindow(QMainWindow):
     # Pipeline start / stop
     # ----------------------------------------------------------------
     def _do_start(self) -> None:
-        if self._start_btn is None:
+        if self._start_btn is None or self._destroying or self._running:
             return
+        if self._pipeline_cleanup_in_progress():
+            self._start_btn.setEnabled(False)
+            self._start_btn.setText(self._t("starting"))
+            self._set_status(self._t("starting"), "accent", key="starting")
+            self._schedule_pipeline_start_retry(100)
+            return
+        retry_timer = getattr(self, "_pipeline_start_retry_timer", None)
+        if retry_timer is not None and retry_timer.isActive():
+            retry_timer.stop()
         missing_api_key, _backend_label = missing_required_translation_api_key(self._config)
         if missing_api_key:
             QMessageBox.warning(
@@ -2346,6 +2637,49 @@ class MainWindow(QMainWindow):
         )
         self._startup_thread = startup_thread
         startup_thread.start()
+
+    def _pipeline_cleanup_in_progress(self) -> bool:
+        """Prevent a replacement model load while the previous runtime still owns memory."""
+
+        lock = self._asr_lifecycle_lock()
+        with lock:
+            startup_thread = getattr(self, "_startup_thread", None)
+            if startup_thread is not None:
+                try:
+                    startup_alive = startup_thread.is_alive()
+                except Exception:
+                    startup_alive = True
+                if not startup_alive:
+                    if self._startup_thread is startup_thread:
+                        self._startup_thread = None
+                else:
+                    return True
+
+            cleanup_threads = self.__dict__.setdefault("_asr_cleanup_threads", [])
+            alive_cleanup: list[threading.Thread] = []
+            for thread in cleanup_threads:
+                try:
+                    if thread.is_alive():
+                        alive_cleanup.append(thread)
+                except Exception:
+                    alive_cleanup.append(thread)
+            cleanup_threads[:] = alive_cleanup
+            return bool(
+                alive_cleanup
+                or self.__dict__.setdefault("_closing_asr_providers", [])
+            )
+
+    def _schedule_pipeline_start_retry(self, delay_ms: int) -> None:
+        if self._destroying:
+            return
+        timer = getattr(self, "_pipeline_start_retry_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._do_start)
+            self._pipeline_start_retry_timer = timer
+        if not timer.isActive():
+            timer.start(max(25, int(delay_ms)))
 
     def _clear_startup_thread(self, thread: threading.Thread) -> None:
         if self._startup_thread is thread:
@@ -2415,8 +2749,11 @@ class MainWindow(QMainWindow):
                         self._desktop_capture_enabled = False
                         self._config.setdefault("vrc_listen", {})["enabled"] = False
                         self._call_in_ui(
-                            lambda msg=str(exc), sid=session_id: (
-                                self._set_bottom(msg)
+                            lambda sid=session_id: (
+                                self._set_bottom(
+                                    self._t("main_desktop_listen_failed"),
+                                    "warning",
+                                )
                                 if self._running and sid == self._listen_session
                                 else None
                             )
@@ -2569,12 +2906,18 @@ class MainWindow(QMainWindow):
                     continue
                 unique_candidates.append(provider)
 
-            reserved = self.__dict__.setdefault("_reserved_asr_providers", [])
+            closing = self.__dict__.setdefault("_closing_asr_providers", [])
+            closed_refs = self.__dict__.setdefault("_closed_asr_provider_refs", [])
+            closed_refs[:] = [
+                reference for reference in closed_refs if reference() is not None
+            ]
             to_close: list[Any] = []
             for provider in unique_candidates:
-                if any(existing is provider for existing in reserved):
+                if any(existing is provider for existing in closing) or any(
+                    reference() is provider for reference in closed_refs
+                ):
                     continue
-                reserved.append(provider)
+                closing.append(provider)
                 to_close.append(provider)
 
             if any(provider is current_asr for provider in unique_candidates):
@@ -2592,6 +2935,32 @@ class MainWindow(QMainWindow):
                     provider.close()
                 except Exception:
                     logger.debug("Failed to close ASR provider", exc_info=True)
+                finally:
+                    with lock:
+                        closing = self.__dict__.setdefault(
+                            "_closing_asr_providers",
+                            [],
+                        )
+                        closing[:] = [
+                            existing
+                            for existing in closing
+                            if existing is not provider
+                        ]
+                        try:
+                            reference = weakref.ref(provider)
+                        except TypeError:
+                            # Some native extension objects do not support weak
+                            # references. Do not retain a closed model merely to
+                            # suppress a hypothetical duplicate close call.
+                            continue
+                        closed_refs = self.__dict__.setdefault(
+                            "_closed_asr_provider_refs",
+                            [],
+                        )
+                        if not any(
+                            existing() is provider for existing in closed_refs
+                        ):
+                            closed_refs.append(reference)
 
         if wait_for is None or wait_for.is_set():
             close_reserved()
@@ -2681,7 +3050,7 @@ class MainWindow(QMainWindow):
 
         context_store = getattr(self, "_translation_context_store", None)
         if isinstance(context_store, TranslationContextStore):
-            context_store.clear_session(int(getattr(self, "_listen_session", -1)))
+            context_store.clear()
 
         tts_manager = getattr(self, "_tts_manager", None)
         if tts_manager is not None:
@@ -2695,7 +3064,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 logger.debug("Failed to cancel stale TTS session work", exc_info=True)
 
-        osc_sender = getattr(self, "_osc_sender", None)
+        osc_sender = getattr(self, "_sender", None)
+        if osc_sender is None:
+            osc_sender = getattr(self, "_osc_sender", None)
         if osc_sender is not None:
             try:
                 clear_pending = getattr(osc_sender, "clear_pending_chatbox", None)
@@ -3090,7 +3461,15 @@ class MainWindow(QMainWindow):
         logger.info("Desktop listen stopped")
 
     def _handle_desktop_capture_runtime_error(self, message: str) -> None:
-        self._set_bottom(str(message or "Desktop listen stopped"))
+        detail = str(message or "").strip()
+        if detail:
+            logger.warning("Desktop audio capture stopped after an error: %s", detail)
+        self._set_bottom(
+            self._t("main_desktop_listen_failed")
+            if detail
+            else self._t("main_desktop_listen_stopped"),
+            "warning",
+        )
         self._set_desktop_capture_enabled(False, persist=True)
 
     def _desktop_capture_config(self) -> dict:
@@ -3476,7 +3855,11 @@ class MainWindow(QMainWindow):
             self._refresh_desktop_capture_button()
             self._refresh_floating_window_status(False)
             self._sync_settings_window_vrc_listen_state()
-            self._set_bottom(str(message or exc))
+            logger.warning("Desktop audio capture restart failed: %s", message or exc)
+            self._set_bottom(
+                self._t("main_desktop_listen_failed"),
+                "warning",
+            )
 
     def _maybe_log_listen_diagnostics(self) -> None:
         now = time.monotonic()
@@ -4745,7 +5128,8 @@ class MainWindow(QMainWindow):
             if not sent:
                 self._set_bottom(self._copy("chatbox_send_not_queued"))
         except Exception as exc:
-            self._set_bottom(str(exc))
+            logger.warning("Failed to send chatbox payload", exc_info=True)
+            self._set_bottom(self._t("main_send_failed_detail"), "warning")
             self._pulse_avatar_error()
 
     def _send_listen_chatbox(self, message: str, *, session_id: int | None = None) -> None:
@@ -5144,8 +5528,13 @@ class MainWindow(QMainWindow):
             )
             if sent:
                 return True
-        except Exception as e:
-            QMessageBox.critical(self, self._t("send_failed_title"), str(e))
+        except Exception:
+            logger.warning("Failed to send current translation to VRChat", exc_info=True)
+            QMessageBox.critical(
+                self,
+                self._t("send_failed_title"),
+                self._t("main_send_failed_detail"),
+            )
         return False
 
     def _ensure_sender(self):
@@ -5163,9 +5552,13 @@ class MainWindow(QMainWindow):
         service.setParent(self)
         service.mute_self_changed.connect(self._handle_vrchat_mute_self)
         service.avatar_parameter_received.connect(self._handle_osc_avatar_parameter)
-        service.error.connect(lambda message: self._set_bottom(str(message), "warning"))
+        service.error.connect(self._on_osc_service_error)
         self._osc_service = service
         return service
+
+    def _on_osc_service_error(self, message: str) -> None:
+        logger.warning("VRChat OSC service error: %s", message)
+        self._set_bottom(self._t("main_osc_error"), "warning")
 
     def _create_sender(self) -> VRCOSCSender:
         osc_cfg = self._config.get("osc", {})
@@ -5219,7 +5612,8 @@ class MainWindow(QMainWindow):
                 sync_mute_self=sync_mute_self,
             )
         except Exception as exc:
-            self._set_bottom(str(exc), "warning")
+            logger.warning("Failed to start VRChat OSC listener", exc_info=True)
+            self._set_bottom(self._t("main_osc_listener_failed"), "warning")
 
     def _osc_control_params(self) -> dict[str, str]:
         osc_cfg = self._config.setdefault("osc", {})
@@ -5278,7 +5672,8 @@ class MainWindow(QMainWindow):
         if not enabled:
             self._reset_tts_manager()
         self._schedule_config_save()
-        self._set_bottom("TTS enabled" if enabled else "TTS disabled")
+        key = "main_tts_enabled" if enabled else "main_tts_disabled"
+        self._set_bottom(self._t(key), key=key)
 
     # ----------------------------------------------------------------
     # TTS helpers
@@ -5448,6 +5843,8 @@ class MainWindow(QMainWindow):
                 self._finish_listen_tts_echo_suppression(
                     LISTEN_TTS_ECHO_SUPPRESS_TAIL_S if success else 0.0
                 )
+            if not success:
+                self._handle_tts_failure(_message)
 
         engine_cfg = self._current_tts_engine_config()
         accepted = manager.speak(
@@ -5460,6 +5857,25 @@ class MainWindow(QMainWindow):
         if not accepted and suppress_echo:
             self._finish_listen_tts_echo_suppression(0.0)
         return bool(accepted)
+
+    def _handle_tts_failure(self, message: object) -> None:
+        if self._current_tts_engine().strip().lower() != "qwen_tts":
+            return
+        if is_tts_authentication_error(message):
+            message_key = "qwen_tts_auth_error"
+        elif is_tts_network_error(message):
+            message_key = "qwen_tts_network_error"
+        else:
+            return
+
+        def report() -> None:
+            self._set_bottom(
+                self._copy(message_key),
+                "warning",
+                key=message_key,
+            )
+
+        self._call_in_ui(report, priority=True)
 
     def _manual_translation_tts_text(self, *, original_text: str, translated_text: str) -> str:
         if self._get_output_format() == "original_only":
@@ -5572,9 +5988,14 @@ class MainWindow(QMainWindow):
             prewarm(voice)
 
     def _on_start_error(self, msg: str) -> None:
+        logger.warning("Listening startup failed: %s", msg)
         self._set_status(self._t("status_error"), "danger", key="status_error")
         self._refresh_start_button()
-        QMessageBox.critical(self, self._t("listen_start_failed_title"), msg)
+        QMessageBox.critical(
+            self,
+            self._t("listen_start_failed_title"),
+            self._t("main_start_failed_detail"),
+        )
 
     def _handle_model_progress(self, event) -> None:
         if isinstance(event, dict):
@@ -5588,9 +6009,22 @@ class MainWindow(QMainWindow):
                 text = self._t("model_loading")
                 self._set_status(self._t("status_model_loading"), "accent", key="status_model_loading")
                 if progress is not None:
-                    text = f"{text} {float(progress) * 100:.0f}%"
+                    text = f"{text} {format_locale_percent(float(progress) * 100, self._ui_lang)}"
                 self._set_bottom(text, "accent")
                 self._show_bottom_progress(float(progress) if progress is not None else None, indeterminate=progress is None)
+                return
+            if stage == "download_retry":
+                attempt = int(event.get("attempt") or 1)
+                maximum = int(event.get("max_attempts") or attempt)
+                self._set_bottom(
+                    self._t(
+                        "model_download_retrying",
+                        attempt=format_locale_number(attempt, self._ui_lang),
+                        maximum=format_locale_number(maximum, self._ui_lang),
+                    ),
+                    "warning",
+                )
+                self._show_bottom_progress(None, indeterminate=True)
                 return
             if stage == "ready":
                 self._set_bottom(self._t("model_ready"), "success", key="model_ready")
@@ -5598,11 +6032,21 @@ class MainWindow(QMainWindow):
                 return
             msg = str(event.get("message", "")).strip()
             if msg:
-                self._set_bottom(msg, "danger")
+                logger.warning("Model preparation failed: %s", msg)
+                self._set_bottom(
+                    self._t("model_download_hint_error"),
+                    "danger",
+                    key="model_download_hint_error",
+                )
         else:
             msg = str(event).strip()
             if msg:
-                self._set_bottom(msg)
+                logger.warning("Model preparation failed: %s", msg)
+                self._set_bottom(
+                    self._t("model_download_hint_error"),
+                    "danger",
+                    key="model_download_hint_error",
+                )
 
     def _pulse_avatar_error(self) -> None:
         if not self._avatar_sync_enabled():
@@ -5794,7 +6238,13 @@ class MainWindow(QMainWindow):
     def _bottom_report_text(self, text: object, *, color: str = "default", key: str | None = None) -> str:
         value = self._clean_status_text(text)
         if not value and key:
-            value = self._clean_status_text(self._t(key))
+            value = self._clean_status_text(self._copy(key))
+        if key in {
+            "qwen_tts_auth_error",
+            "qwen_tts_network_error",
+            "update_install_success_message",
+        }:
+            return value
         lowered = value.lower()
         if any(token in lowered for token in ("network", "connection", "timeout", "timed out", "dns", "socket", "网络")):
             return self._copy("report_network_error")
@@ -5870,7 +6320,7 @@ class MainWindow(QMainWindow):
         if self._swap_lang_btn:
             swap_icon = ui_icon("repeat-2.svg", 16, muted_icon)
             self._swap_lang_btn.setIcon(swap_icon)
-            self._swap_lang_btn.setText("" if not swap_icon.isNull() else "Swap")
+            self._swap_lang_btn.setText("" if not swap_icon.isNull() else self._copy("swap_languages"))
             self._swap_lang_btn.setToolTip(self._copy("swap_languages"))
         if self._device_dropdown_btn:
             down_icon = ui_icon("chevron-down.svg", 15, muted_icon)
@@ -6305,7 +6755,13 @@ class MainWindow(QMainWindow):
             self._listen_in_speech = False
 
     def _stop_hotkeys(self) -> None:
-        for hk in (self._text_input_hotkey, self._mic_mute_hotkey):
+        hotkeys = (
+            getattr(self, "_text_input_hotkey", None),
+            getattr(self, "_mic_mute_hotkey", None),
+        )
+        self._text_input_hotkey = None
+        self._mic_mute_hotkey = None
+        for hk in hotkeys:
             if hk:
                 try:
                     hk.stop()
@@ -6345,7 +6801,12 @@ class MainWindow(QMainWindow):
 
     def _on_config_saved(self) -> None:
         was_running = self._running
-        if was_running:
+        startup_thread = getattr(self, "_startup_thread", None)
+        try:
+            was_starting = startup_thread is not None and startup_thread.is_alive()
+        except Exception:
+            was_starting = startup_thread is not None
+        if was_running or was_starting:
             self._set_bottom(self._t("settings_saved_reloading"))
             self._do_stop()
 
@@ -6382,13 +6843,8 @@ class MainWindow(QMainWindow):
         if isinstance(central, BackgroundWidget):
             central.set_theme(self._main_theme)
             central.set_background_path(self._background_image_path())
-        self._translator = None
-        manual_controller = getattr(self, "_manual_translation_controller", None)
-        if manual_controller is not None:
-            manual_controller.translator = None
-        self._asr = None
-        self._listen_asr = None
-        self._refresh_asr_transcribe_locks()
+        self._clear_cached_translator()
+        self._close_asr_providers()
         self._reset_translation_failure_backoff()
         self._reset_tts_manager()
         self._close_osc_sender()
@@ -6405,6 +6861,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 logger.debug("Failed to update floating window theme", exc_info=True)
         self._refresh_static_texts()
+        if previous_lang != self._ui_lang:
+            self._refresh_open_window_languages()
         self._load_devices_async()
         self._sync_settings_window_vrc_listen_state()
         self._schedule_settings_preload(500)
@@ -6416,20 +6874,10 @@ class MainWindow(QMainWindow):
                     else "mode_switched_translation"
                 )
             )
-        if previous_lang != self._ui_lang and self._floating_window is not None:
-            try:
-                self._floating_window.update_language(self._ui_lang)
-            except Exception:
-                logger.debug("Failed to update floating window language", exc_info=True)
-        if previous_lang != self._ui_lang and self._text_input_window is not None:
-            try:
-                self._text_input_window.update_language(self._ui_lang)
-            except Exception:
-                logger.debug("Failed to update text input window language", exc_info=True)
         self._stop_hotkeys()
         self._register_hotkeys()
-        if was_running:
-            QTimer.singleShot(100, self._do_start)
+        if was_running or was_starting:
+            self._schedule_pipeline_start_retry(100)
 
     def _background_image_path(self) -> str:
         ui_cfg = self._config.get("ui")
@@ -7108,9 +7556,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_assist_label", None):
             self._assist_label.setText(self._copy("guide_short"))
         if self._status_label is not None and getattr(self, "_status_key", None):
-            self._set_status(self._t(self._status_key), self._status_color, key=self._status_key)
+            self._set_status(self._copy(self._status_key), self._status_color, key=self._status_key)
         if self._bottom_bar is not None and getattr(self, "_bottom_key", None):
-            self._set_bottom(self._t(self._bottom_key), self._bottom_color, key=self._bottom_key)
+            self._set_bottom(self._copy(self._bottom_key), self._bottom_color, key=self._bottom_key)
         self._refresh_language_combos()
         self._set_source_text(self._src_text)
         self._refresh_start_button()
@@ -7222,10 +7670,37 @@ class MainWindow(QMainWindow):
         self._tweaks_panel.activateWindow()
 
     def _clear_cached_translator(self) -> None:
+        cached_translator = getattr(self, "_translator", None)
         self._translator = None
         controller = getattr(self, "_manual_translation_controller", None)
+        controller_translator = None
+        controller_released = False
         if controller is not None and hasattr(controller, "translator"):
-            controller.translator = None
+            try:
+                controller_translator = controller.translator
+                controller.translator = None
+                controller_released = True
+            except Exception:
+                logger.debug(
+                    "Failed to release manual translator client",
+                    exc_info=True,
+                )
+        if (
+            cached_translator is not None
+            and (
+                cached_translator is not controller_translator
+                or not controller_released
+            )
+        ):
+            close = getattr(cached_translator, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.debug(
+                        "Failed to close cached translator client",
+                        exc_info=True,
+                    )
 
     def _set_quick_translation_provider(self, provider: object) -> None:
         backend = normalize_backend(str(provider or ""))
@@ -7482,12 +7957,7 @@ class MainWindow(QMainWindow):
         return self._current_tts_engine() not in {"style_bert_vits2", "xtts"}
 
     def _on_language_changed(self, language_code: str) -> None:
-        code = str(language_code or "").strip()
-        if code in self._ui_lang_reverse:
-            self._ui_lang = code
-            self._config.setdefault("ui", {})["language"] = code
-            self._refresh_static_texts()
-            self._schedule_config_save()
+        self._apply_ui_language(language_code)
 
 class _StartupCancelled(Exception):
     pass

@@ -14,6 +14,8 @@ from src.utils.ui_config import get_backend_config_value, get_backend_spec, norm
 
 logger = logging.getLogger(__name__)
 
+_MAX_ACTIVE_WORKERS = 8
+
 
 def _create_translator(config: dict):
     from src.translators.factory import create_translator
@@ -76,6 +78,8 @@ class ManualTranslationController(QObject):
         self._lock = threading.RLock()
         self._active_translator_uses: dict[int, int] = {}
         self._retired_translators: dict[int, Any] = {}
+        self._threads: set[threading.Thread] = set()
+        self._closed = False
 
     @property
     def generation(self) -> int:
@@ -90,9 +94,13 @@ class ManualTranslationController(QObject):
     def translator(self, value: Any) -> None:
         close_now = None
         with self._lock:
+            if self._closed:
+                close_now = value
+                value = None
             previous = self._translator
             if previous is value:
-                return
+                if close_now is None:
+                    return
             self._translator = value
             if previous is not None:
                 identity = id(previous)
@@ -106,6 +114,9 @@ class ManualTranslationController(QObject):
         src_text = str(request.text or "").strip()
         if not src_text:
             return None
+        with self._lock:
+            if self._closed:
+                return None
 
         source_language = request.source_language or self._language_detector(src_text)
         target_language = request.target_language or "ja"
@@ -114,7 +125,8 @@ class ManualTranslationController(QObject):
 
         if self._output_dispatcher.output_format() == "original_only":
             generation = self._next_generation()
-            self.succeeded.emit(
+            self._emit_if_open(
+                self.succeeded,
                 ManualTranslationResult(
                     generation=generation,
                     original_text=src_text,
@@ -123,7 +135,7 @@ class ManualTranslationController(QObject):
                     display_text=src_text,
                 )
             )
-            self.worker_finished.emit(generation)
+            self._emit_if_open(self.worker_finished, generation)
             return generation
 
         include_second_target = (
@@ -134,7 +146,8 @@ class ManualTranslationController(QObject):
 
         if source_language == target_language and not include_second_target and not include_third_target:
             generation = self._next_generation()
-            self.succeeded.emit(
+            self._emit_if_open(
+                self.succeeded,
                 ManualTranslationResult(
                     generation=generation,
                     original_text=src_text,
@@ -143,7 +156,7 @@ class ManualTranslationController(QObject):
                     display_text=src_text,
                 )
             )
-            self.worker_finished.emit(generation)
+            self._emit_if_open(self.worker_finished, generation)
             return generation
 
         needs_primary_translation = source_language != target_language
@@ -161,12 +174,33 @@ class ManualTranslationController(QObject):
         )
 
         if needs_primary_translation or needs_second_translation or needs_third_translation:
+            with self._lock:
+                at_capacity = len(self._threads) >= _MAX_ACTIVE_WORKERS
+            if at_capacity:
+                exc = RuntimeError("Too many manual translation requests are still active")
+                generation = self._next_generation()
+                self._emit_if_open(
+                    self.failed,
+                    ManualTranslationError(generation, exc, self._format_error(exc)),
+                )
+                self._emit_if_open(self.worker_finished, generation)
+                logger.warning(
+                    "Manual translation worker limit reached (%d)",
+                    _MAX_ACTIVE_WORKERS,
+                )
+                return generation
             try:
                 translator = self._acquire_translator()
             except Exception as exc:
+                with self._lock:
+                    if self._closed:
+                        return None
                 generation = self._next_generation()
-                self.failed.emit(ManualTranslationError(generation, exc, self._format_error(exc)))
-                self.worker_finished.emit(generation)
+                self._emit_if_open(
+                    self.failed,
+                    ManualTranslationError(generation, exc, self._format_error(exc)),
+                )
+                self._emit_if_open(self.worker_finished, generation)
                 return generation
             translator_leased = True
         else:
@@ -174,7 +208,7 @@ class ManualTranslationController(QObject):
             translator_leased = False
 
         generation = self._next_generation()
-        self.started.emit(generation)
+        self._emit_if_open(self.started, generation)
 
         def run() -> None:
             try:
@@ -215,7 +249,8 @@ class ManualTranslationController(QObject):
                             context_source="manual",
                         )
                 display = self._output_dispatcher.manual_display_text(result, result2, result3)
-                self.succeeded.emit(
+                self._emit_if_open(
+                    self.succeeded,
                     ManualTranslationResult(
                         generation=generation,
                         original_text=src_text,
@@ -228,15 +263,47 @@ class ManualTranslationController(QObject):
                 )
             except Exception as exc:
                 logger.warning("Manual translation failed: %s", exc)
-                self.failed.emit(ManualTranslationError(generation, exc, self._format_error(exc)))
+                self._emit_if_open(
+                    self.failed,
+                    ManualTranslationError(generation, exc, self._format_error(exc)),
+                )
             finally:
                 if translator_leased:
                     self._release_translator(translator)
-                self.worker_finished.emit(generation)
+                with self._lock:
+                    self._threads.discard(threading.current_thread())
+                self._emit_if_open(self.worker_finished, generation)
 
+        thread = threading.Thread(target=run, daemon=True, name="manual-translate")
+        rejected_at_capacity = False
+        with self._lock:
+            if self._closed:
+                if translator_leased:
+                    self._release_translator(translator)
+                return None
+            if len(self._threads) >= _MAX_ACTIVE_WORKERS:
+                rejected_at_capacity = True
+            else:
+                self._threads.add(thread)
+        if rejected_at_capacity:
+            if translator_leased:
+                self._release_translator(translator)
+            exc = RuntimeError("Too many manual translation requests are still active")
+            self._emit_if_open(
+                self.failed,
+                ManualTranslationError(generation, exc, self._format_error(exc)),
+            )
+            self._emit_if_open(self.worker_finished, generation)
+            logger.warning(
+                "Manual translation worker limit reached (%d)",
+                _MAX_ACTIVE_WORKERS,
+            )
+            return generation
         try:
-            threading.Thread(target=run, daemon=True, name="manual-translate").start()
-        except Exception:
+            thread.start()
+        except BaseException:
+            with self._lock:
+                self._threads.discard(thread)
             if translator_leased:
                 self._release_translator(translator)
             raise
@@ -272,6 +339,17 @@ class ManualTranslationController(QObject):
             self._generation += 1
             return self._generation
 
+    def _emit_if_open(self, signal, *args: object) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                signal.emit(*args)
+                return True
+            except RuntimeError:
+                logger.debug("Suppressed signal delivery from a disposed manual translator")
+                return False
+
     def _ensure_translator(self) -> Any:
         with self._lock:
             if self._translator is None:
@@ -282,6 +360,8 @@ class ManualTranslationController(QObject):
         """Lease an isolated client when an older manual request is in flight."""
 
         with self._lock:
+            if self._closed:
+                raise RuntimeError("Manual translation controller is closed")
             translator = self._translator
             if translator is None:
                 translator = self._translator_factory(self._config)
@@ -320,7 +400,21 @@ class ManualTranslationController(QObject):
                 logger.debug("Failed to close manual translator client", exc_info=True)
 
     def close(self) -> None:
-        self.translator = None
+        close_now = None
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._generation += 1
+            previous = self._translator
+            self._translator = None
+            if previous is not None:
+                identity = id(previous)
+                if self._active_translator_uses.get(identity, 0) > 0:
+                    self._retired_translators[identity] = previous
+                else:
+                    close_now = previous
+        self._close_translator(close_now)
 
     def _format_error(self, error: object) -> object:
         if self._error_formatter is not None:

@@ -58,6 +58,28 @@ def test_sbv2_probe_does_not_throttle_process_wide_torch_threads(monkeypatch):
     )
 
 
+def test_style_bert_close_releases_cached_models_and_cuda_cache(monkeypatch):
+    events: list[str] = []
+    engine = StyleBertVits2TTS.__new__(StyleBertVits2TTS)
+    engine._closed = False
+    engine._model_cache = {"voice": object()}
+    engine._patch_applied = False
+
+    monkeypatch.setattr(engine_store.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(
+        engine_store,
+        "clear_torch_cuda_cache",
+        lambda: events.append("cuda-cache-clear"),
+    )
+
+    engine.close()
+    engine.close()
+
+    assert engine._model_cache == {}
+    assert events == ["gc", "cuda-cache-clear"]
+    assert engine.is_available() is False
+
+
 def test_import_style_model_folder_and_list_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     source_dir = _write_style_model(tmp_path / "source")

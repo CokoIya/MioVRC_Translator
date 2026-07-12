@@ -198,6 +198,28 @@ class _FakeTtsManager:
         return True
 
 
+class _FailingQwenTtsManager(_FakeTtsManager):
+    def speak(self, text, voice, rate, volume, callback=None):
+        self.requests.append(text)
+        if callback is not None:
+            callback(
+                False,
+                "Qwen TTS API request failed: Invalid API-key provided.",
+            )
+        return True
+
+
+class _NetworkFailingQwenTtsManager(_FakeTtsManager):
+    def speak(self, text, voice, rate, volume, callback=None):
+        self.requests.append(text)
+        if callback is not None:
+            callback(
+                False,
+                "Qwen TTS synthesis failed: Qwen TTS network connection was interrupted.",
+            )
+        return True
+
+
 def _window_for_tts_strategy(strategy: str):
     window = MainWindow.__new__(MainWindow)
     manager = _FakeTtsManager()
@@ -229,6 +251,76 @@ def test_tts_latest_strategy_discards_pending_speech():
 
     assert manager.clear_count == 1
     assert manager.requests == ["hello"]
+
+
+def test_qwen_tts_auth_failure_is_reported_to_runtime_ui():
+    window = MainWindow.__new__(MainWindow)
+    manager = _FailingQwenTtsManager()
+    reports: list[tuple[str, str, str | None]] = []
+    window._ui_lang = "en"
+    window._tts_enabled = True
+    window._config = {
+        "translation": {"output_format": "translated_only", "target_language": "en"},
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "voice": "Cherry",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+    }
+    window._ensure_tts_manager = lambda: manager
+    window._call_in_ui = lambda callback, **_kwargs: callback() or True
+    window._set_bottom = (
+        lambda text, color="default", key=None: reports.append((text, color, key))
+    )
+
+    assert window._queue_tts_playback("hello") is True
+
+    assert manager.requests == ["hello"]
+    assert reports == [
+        (
+            "Qwen TTS rejected the credential; check the API key and service region",
+            "warning",
+            "qwen_tts_auth_error",
+        )
+    ]
+
+
+def test_qwen_tts_network_failure_is_reported_to_runtime_ui():
+    window = MainWindow.__new__(MainWindow)
+    manager = _NetworkFailingQwenTtsManager()
+    reports: list[tuple[str, str, str | None]] = []
+    window._ui_lang = "en"
+    window._tts_enabled = True
+    window._config = {
+        "translation": {"output_format": "translated_only", "target_language": "en"},
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "voice": "Cherry",
+                "rate": 1.0,
+                "volume": 0.8,
+            },
+        },
+    }
+    window._ensure_tts_manager = lambda: manager
+    window._call_in_ui = lambda callback, **_kwargs: callback() or True
+    window._set_bottom = (
+        lambda text, color="default", key=None: reports.append((text, color, key))
+    )
+
+    assert window._queue_tts_playback("hello") is True
+
+    assert manager.requests == ["hello"]
+    assert reports == [
+        (
+            "Qwen TTS network connection was interrupted; check the network or proxy settings and try again",
+            "warning",
+            "qwen_tts_network_error",
+        )
+    ]
 
 
 def test_tts_to_vrchat_suppresses_desktop_listen_echo():

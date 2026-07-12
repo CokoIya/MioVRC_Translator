@@ -4,8 +4,10 @@ import io
 import os
 import struct
 import sys
+import threading
 import types
 import wave
+import weakref
 from collections import OrderedDict
 from contextlib import nullcontext
 from pathlib import Path
@@ -30,6 +32,13 @@ from src.tts.xtts_engine import (
     validate_xtts_reference_audio_file,
     xtts_language_from_target_language,
 )
+
+
+@pytest.fixture(autouse=True)
+def _avoid_host_commit_headroom_dependency(monkeypatch):
+    """XTTS unit tests use fake models and must not depend on host commit state."""
+
+    monkeypatch.setattr(xtts_engine, "_windows_commit_headroom_bytes", lambda: None)
 
 
 def _wav_bytes(duration_s: float = 1.0) -> bytes:
@@ -608,6 +617,290 @@ def test_xtts_prewarm_loads_model_and_caches_conditioning(monkeypatch):
     ]
 
 
+def test_xtts_requested_close_releases_model_before_next_instance_runs(monkeypatch):
+    events: list[str] = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+
+    class FakeModel:
+        def close(self):
+            events.append("first-model-close")
+
+    first = XTTSTS.__new__(XTTSTS)
+    first._closed = False
+    first._close_requested = False
+    first._model = FakeModel()
+    first._conditioning_cache = OrderedDict(
+        [("voice", xtts_engine._XTTSConditioningCacheEntry(object(), object()))]
+    )
+    first._reference_audio_path = "voice.wav"
+    first._runtime_device = "cuda"
+    first._torch_device = "cuda:0"
+    first._device = "cuda"
+    first._runtime_precision = "float16"
+    first._cuda_status = object()
+
+    def first_synthesis(_text, _voice, _rate, _volume):
+        first_started.set()
+        release_first.wait(timeout=2)
+        events.append("first-synthesis-finished")
+        return b"RIFF-first"
+
+    first._synthesize_locked = first_synthesis
+
+    second = XTTSTS.__new__(XTTSTS)
+    second._closed = False
+    second._close_requested = False
+
+    def second_synthesis(_text, _voice, _rate, _volume):
+        events.append("second-synthesis-started")
+        second_started.set()
+        return b"RIFF-second"
+
+    second._synthesize_locked = second_synthesis
+    monkeypatch.setattr(xtts_engine.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(
+        xtts_engine,
+        "clear_torch_cuda_cache",
+        lambda: events.append("cuda-cache-clear"),
+    )
+
+    first_thread = threading.Thread(
+        target=lambda: first.synthesize("first", "voice"),
+    )
+    first_thread.start()
+    assert first_started.wait(timeout=1)
+
+    first.request_close()
+    second_thread = threading.Thread(
+        target=lambda: second.synthesize("second", "voice"),
+    )
+    second_thread.start()
+
+    assert second_started.wait(timeout=0.05) is False
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert first_thread.is_alive() is False
+    assert second_thread.is_alive() is False
+    assert first._closed is True
+    assert first._model is None
+    assert first._conditioning_cache == {}
+    assert events.index("first-model-close") < events.index("second-synthesis-started")
+    assert events.index("gc") < events.index("cuda-cache-clear")
+    assert events.index("cuda-cache-clear") < events.index("second-synthesis-started")
+
+
+def test_xtts_requested_close_serializes_prewarm_and_next_model_use(monkeypatch):
+    events: list[str] = []
+    first_started = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+
+    class FakeModel:
+        def close(self):
+            events.append("first-model-close")
+
+    first = XTTSTS.__new__(XTTSTS)
+    first._closed = False
+    first._close_requested = False
+    first._model = FakeModel()
+    first._conditioning_cache = OrderedDict()
+    first._reference_audio_path = "voice.wav"
+    first._runtime_device = "cuda"
+    first._torch_device = "cuda:0"
+    first._device = "cuda"
+    first._runtime_precision = "float16"
+    first._cuda_status = object()
+
+    def first_prewarm(_voice):
+        first_started.set()
+        release_first.wait(timeout=2)
+        events.append("first-prewarm-finished")
+
+    first._prewarm_locked = first_prewarm
+
+    second = XTTSTS.__new__(XTTSTS)
+    second._closed = False
+    second._close_requested = False
+
+    def second_prewarm(_voice):
+        events.append("second-prewarm-started")
+        second_started.set()
+
+    second._prewarm_locked = second_prewarm
+    monkeypatch.setattr(xtts_engine.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(
+        xtts_engine,
+        "clear_torch_cuda_cache",
+        lambda: events.append("cuda-cache-clear"),
+    )
+
+    first_thread = threading.Thread(target=lambda: first.prewarm("first"))
+    first_thread.start()
+    assert first_started.wait(timeout=1)
+
+    first.request_close()
+    second_thread = threading.Thread(target=lambda: second.prewarm("second"))
+    second_thread.start()
+
+    assert second_started.wait(timeout=0.05) is False
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert first_thread.is_alive() is False
+    assert second_thread.is_alive() is False
+    assert first._closed is True
+    assert events.index("first-model-close") < events.index("second-prewarm-started")
+    assert events.index("cuda-cache-clear") < events.index("second-prewarm-started")
+
+
+def test_xtts_partial_cuda_model_is_closed_before_cpu_reload(monkeypatch):
+    events: list[str] = []
+
+    class FakeCoquiTTS:
+        created = 0
+
+        def __init__(self, **_kwargs):
+            self.kind = "cuda" if FakeCoquiTTS.created == 0 else "cpu"
+            FakeCoquiTTS.created += 1
+            events.append(f"create-{self.kind}")
+
+        def close(self):
+            events.append(f"close-{self.kind}")
+
+        def __del__(self):
+            events.append(f"destroy-{self.kind}")
+
+    monkeypatch.setattr(
+        "src.tts.xtts_engine.inspect_torch_cuda_runtime",
+        lambda _index=0: xtts_engine.TorchCudaRuntimeStatus(
+            torch_importable=True,
+            torch_version="2.8.0+cu128",
+            cuda_build="12.8",
+            cuda_available=True,
+            device_count=1,
+            device_name="NVIDIA RTX",
+            capability=(8, 9),
+            bf16_supported=True,
+        ),
+    )
+    def configure_runtime(self):
+        retained_model = self._model
+        if self._runtime_device == "cuda":
+            raise RuntimeError("CUDA out of memory")
+        assert retained_model is self._model
+
+    monkeypatch.setattr(XTTSTS, "_configure_loaded_model_runtime", configure_runtime)
+    monkeypatch.setattr("src.tts.xtts_engine.is_xtts_runtime_available", lambda **_kwargs: True)
+    monkeypatch.setattr("src.tts.xtts_engine._load_xtts_api", lambda: FakeCoquiTTS)
+    monkeypatch.setattr(
+        "src.tts.xtts_engine.xtts_coqui_model_kwargs",
+        lambda: {
+            "model_path": "local-xtts",
+            "config_path": "local-xtts/config.json",
+            "progress_bar": False,
+        },
+    )
+    monkeypatch.setattr(xtts_engine.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(
+        xtts_engine,
+        "clear_torch_cuda_cache",
+        lambda: events.append("cuda-cache-clear"),
+    )
+
+    engine = XTTSTS(device="cuda", lazy_load=False)
+
+    assert engine._runtime_device == "cpu"
+    assert engine._model.kind == "cpu"
+    assert events.index("close-cuda") < events.index("create-cpu")
+    assert events.index("destroy-cuda") < events.index("create-cpu")
+    assert events.index("cuda-cache-clear") < events.index("create-cpu")
+    engine.close()
+
+
+def test_xtts_low_windows_commit_headroom_blocks_before_runtime_import(monkeypatch):
+    load_calls: list[bool] = []
+    monkeypatch.setattr(
+        xtts_engine,
+        "_windows_commit_headroom_bytes",
+        lambda: xtts_engine._XTTS_MIN_WINDOWS_COMMIT_HEADROOM_BYTES - 1,
+    )
+    monkeypatch.setattr(
+        xtts_engine,
+        "_load_xtts_api",
+        lambda: load_calls.append(True),
+    )
+    engine = XTTSTS(device="cpu")
+
+    with pytest.raises(RuntimeError, match="commit headroom.*paging-file"):
+        engine._initialize_model()
+
+    assert load_calls == []
+    assert engine._model is None
+
+
+def test_xtts_commit_headroom_probe_unavailable_allows_runtime_import(monkeypatch):
+    class FakeCoquiTTS:
+        def __init__(self, **_kwargs):
+            pass
+
+    monkeypatch.setattr(xtts_engine, "_windows_commit_headroom_bytes", lambda: None)
+    monkeypatch.setattr(xtts_engine, "_load_xtts_api", lambda: FakeCoquiTTS)
+    monkeypatch.setattr(
+        xtts_engine,
+        "xtts_coqui_model_kwargs",
+        lambda: {
+            "model_path": "local-xtts",
+            "config_path": "local-xtts/config.json",
+            "progress_bar": False,
+        },
+    )
+    engine = XTTSTS(device="cpu")
+    monkeypatch.setattr(engine, "_configure_loaded_model_runtime", lambda: None)
+
+    engine._initialize_model()
+
+    assert isinstance(engine._model, FakeCoquiTTS)
+    engine.close()
+
+
+def test_xtts_cuda_fallback_drops_failed_traceback_before_cpu_load(monkeypatch):
+    class Payload:
+        pass
+
+    def make_error():
+        payload = Payload()
+        payload_ref = weakref.ref(payload)
+        try:
+            raise RuntimeError("CUDA out of memory")
+        except RuntimeError as error:
+            return error, payload_ref
+
+    error, payload_ref = make_error()
+    engine = XTTSTS.__new__(XTTSTS)
+    engine._closed = False
+    engine._close_requested = False
+    engine._runtime_device = "cuda"
+    engine._model = object()
+    engine._conditioning_cache = OrderedDict()
+    engine._model_lock = threading.RLock()
+    monkeypatch.setattr(xtts_engine, "clear_torch_cuda_cache", lambda: None)
+
+    def initialize_cpu(*, force_device=None):
+        assert force_device == "cpu"
+        assert payload_ref() is None
+
+    engine._initialize_model = initialize_cpu
+
+    engine._switch_to_cpu_after_cuda_failure(error)
+
+    assert engine._cuda_fallback_reason == "CUDA out of memory"
+
+
 def test_xtts_engine_enables_gpu_when_cuda_is_available(monkeypatch):
     captured: list[dict[str, object]] = []
 
@@ -767,11 +1060,13 @@ def test_xtts_conditioning_tensors_are_moved_to_selected_cuda_device(monkeypatch
 
 def test_xtts_mixed_precision_failure_retries_in_float32(monkeypatch):
     calls = 0
+    events: list[str] = []
 
     class FakeCoreModel:
         def inference(self, **_kwargs):
             nonlocal calls
             calls += 1
+            events.append(f"inference-{calls}")
             if calls == 1:
                 raise RuntimeError("bfloat16 operator is not implemented")
             return {"wav": np.zeros(10, dtype=np.float32)}
@@ -785,6 +1080,12 @@ def test_xtts_mixed_precision_failure_retries_in_float32(monkeypatch):
         engine,
         "_torch_execution_context",
         lambda **_kwargs: nullcontext(),
+    )
+    monkeypatch.setattr(xtts_engine.gc, "collect", lambda: events.append("gc"))
+    monkeypatch.setattr(
+        xtts_engine,
+        "clear_torch_cuda_cache",
+        lambda: events.append("cuda-cache-clear"),
     )
 
     samples = engine._run_xtts_core_inference(
@@ -800,6 +1101,7 @@ def test_xtts_mixed_precision_failure_retries_in_float32(monkeypatch):
     assert samples.shape == (10,)
     assert engine._runtime_precision == "float32"
     assert "not implemented" in engine._precision_fallback_reason
+    assert events == ["inference-1", "gc", "cuda-cache-clear", "inference-2"]
 
 
 def test_xtts_engine_does_not_auto_download_default_model(monkeypatch):

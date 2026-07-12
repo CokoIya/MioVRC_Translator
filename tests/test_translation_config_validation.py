@@ -42,3 +42,19 @@ def test_missing_translation_api_key_allows_local_backend():
     )
 
     assert missing is False
+
+
+def test_missing_translation_api_key_localizes_backend_qualifier():
+    missing, backend = missing_required_translation_api_key(
+        {
+            "translation": {
+                "backend": "openai_compatible",
+                "output_format": "translated_only",
+                "openai_compatible": {"api_key": ""},
+            }
+        },
+        "ru-RU",
+    )
+
+    assert missing is True
+    assert backend == "GPT-совместимый сервис"

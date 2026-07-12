@@ -289,14 +289,21 @@ def get_tts_api_voice_options(engine: object) -> tuple[tuple[str, str, str, str,
 
 def resolve_tts_api_config(engine: object, config: Mapping[str, object] | None) -> dict[str, object]:
     engine_code = normalize_tts_api_engine(engine)
+    raw_config = config if isinstance(config, Mapping) else {}
+    raw_region = str(raw_config.get("region", "") or "").strip()
+    raw_base_url = str(raw_config.get("base_url", "") or "").strip().rstrip("/")
+    inferred_region = (
+        tts_api_region_from_base_url(engine_code, raw_base_url)
+        if not raw_region
+        else ""
+    )
     defaults = get_tts_api_default_config(engine_code)
-    if isinstance(config, Mapping):
-        defaults.update(config)
+    defaults.update(raw_config)
     base_url = str(defaults.get("base_url", "") or "").strip().rstrip("/")
     region = normalize_tts_api_region(
         engine_code,
-        defaults.get("region"),
-        default_region=tts_api_region_from_base_url(engine_code, base_url),
+        raw_region or inferred_region or defaults.get("region"),
+        default_region=inferred_region or defaults.get("region"),
     )
     defaults["region"] = region
     known_base_urls = get_tts_api_known_base_urls(engine_code)

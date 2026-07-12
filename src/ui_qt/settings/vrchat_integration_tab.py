@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -20,21 +20,15 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QScrollArea,
     QCheckBox,
-    QLineEdit,
     QTextEdit,
 )
 
-from src.utils.i18n import tr as _base_tr
-
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class VRChatIntegrationTab(QWidget):
+class VRChatIntegrationTab(LocalizedSettingsTab):
     """VRChat Integration configuration tab."""
 
     config_changed = Signal()
@@ -47,12 +41,9 @@ class VRChatIntegrationTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
 
         self._init_ui()
-
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
 
     def _init_ui(self) -> None:
         """Initialize the VRChat Integration UI."""
@@ -89,7 +80,7 @@ class VRChatIntegrationTab(QWidget):
 
         scroll.setWidget(container)
 
-        main_layout = QVBoxLayout(self)
+        main_layout = self._root_layout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
@@ -160,6 +151,7 @@ class VRChatIntegrationTab(QWidget):
         # Template help
         help_label = QLabel(self._t("chatbox_template_help"))
         help_label.setStyleSheet("font-size: 11px; color: #888;")
+        help_label.setWordWrap(True)
         group_layout.addWidget(help_label)
 
         layout.addWidget(group)

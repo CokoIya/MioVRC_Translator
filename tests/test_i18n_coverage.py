@@ -3,6 +3,7 @@ from src.ui_qt.audio_diagnostics_window import _COPY as AUDIO_DIAGNOSTICS_COPY
 from src.ui_qt.settings_window import FIELD_HINTS, QT_SETTINGS_COPY
 from src.ui_qt.vad_calibration_window import _COPY as VAD_CALIBRATION_COPY
 from src.utils.i18n import UI_TEXTS, tr
+from src.utils.localization import SUPPORTED_UI_LANGUAGES
 from src.utils.ui_config import (
     DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
     backend_region_for_ui_language,
@@ -17,15 +18,17 @@ from src.utils.ui_config import (
 )
 
 
-SUPPORTED_UI_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
-
-
 def test_global_ui_texts_cover_supported_languages():
     all_keys = set().union(*(texts.keys() for texts in UI_TEXTS.values()))
 
     for language in SUPPORTED_UI_LANGUAGES:
         missing = sorted(all_keys - set(UI_TEXTS[language]))
         assert missing == []
+
+
+def test_global_translation_lookup_normalizes_locale_aliases():
+    assert tr("ru-RU", "save") == UI_TEXTS["ru"]["save"]
+    assert tr("ko_KR", "cancel") == UI_TEXTS["ko"]["cancel"]
 
 
 def test_settings_copy_tables_cover_supported_languages():

@@ -9,7 +9,7 @@ import numpy as np
 
 from src.asr.asr_cleaner import clean_asr_text
 from src.asr.audio_encoding import wav_data_url
-from src.asr.base import ASRProvider, ProgressCallback
+from src.asr.base import ASRProvider, ProgressCallback, close_runtime_resource
 from src.asr.model_registry import (
     QWEN3_ASR_DEFAULT_MODEL,
     QWEN3_ASR_DEFAULT_REGION,
@@ -102,6 +102,7 @@ class Qwen3ASRProvider(ASRProvider):
         self._corrector = corrector
         self._client = None
         self._lock = threading.RLock()
+        self._closed = False
 
     def _resolved_base_url(self) -> str:
         if self.base_url:
@@ -117,6 +118,8 @@ class Qwen3ASRProvider(ASRProvider):
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
+            if self._closed:
+                raise ASRConfigurationError("Qwen3-ASR provider is closed")
             if self._client is not None:
                 return
             if not self.api_key:
@@ -147,11 +150,14 @@ class Qwen3ASRProvider(ASRProvider):
         data_url = _encode_wav_data_url(audio, sample_rate)
         if not data_url:
             return ""
+        if self._closed:
+            raise ASRConfigurationError("Qwen3-ASR provider is closed")
         if self._client is None:
             self.load()
-        client = self._client
-        if client is None:
-            raise ASRConfigurationError("Qwen3-ASR client is not loaded")
+        with self._lock:
+            client = self._client
+            if self._closed or client is None:
+                raise ASRConfigurationError("Qwen3-ASR provider is closed")
         lang = _language_code(language) or self.language
         extra_body: dict[str, object] = {"asr_options": {"enable_itn": False}}
         if lang:
@@ -183,7 +189,18 @@ class Qwen3ASRProvider(ASRProvider):
 
     @property
     def is_loaded(self) -> bool:
-        return self._client is not None
+        with self._lock:
+            return not self._closed and self._client is not None
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self._client
+            self._client = None
+            self._corrector = None
+        close_runtime_resource(client)
 
 
 def _float_value(value: object, default: float) -> float:

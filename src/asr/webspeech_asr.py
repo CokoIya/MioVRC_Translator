@@ -19,6 +19,9 @@ from src.asr.asr_cleaner import clean_asr_text
 from src.asr.base import ASRProvider, ProgressCallback
 from src.asr.errors import ASRConfigurationError, ASRProviderError
 from src.asr.text_corrections import LayeredASRCorrector
+from src.utils.i18n import tr
+from src.utils.localization import normalize_ui_language
+from src.utils.ui_config import get_ui_language
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +197,7 @@ class _BridgeState:
 def _page(
     language: str,
     *,
+    ui_language: str = "en",
     continuous: bool = True,
     interim_results: bool = True,
     max_alternatives: int = 1,
@@ -202,6 +206,45 @@ def _page(
     capture_enabled: bool = True,
 ) -> bytes:
     safe_lang = html.escape(language, quote=True)
+    normalized_ui_language = normalize_ui_language(ui_language, default="en")
+    safe_ui_language = html.escape(normalized_ui_language, quote=True)
+    title = html.escape(tr(normalized_ui_language, "webspeech_page_title"))
+    intro = html.escape(tr(normalized_ui_language, "webspeech_page_intro"))
+    permission = html.escape(tr(normalized_ui_language, "webspeech_page_permission"))
+    messages = json.dumps(
+        {
+            "starting": tr(normalized_ui_language, "webspeech_status_starting"),
+            "unsupported": tr(normalized_ui_language, "webspeech_status_unsupported"),
+            "paused": tr(normalized_ui_language, "webspeech_status_paused"),
+            "resuming": tr(normalized_ui_language, "webspeech_status_resuming"),
+            "listening": tr(normalized_ui_language, "webspeech_status_listening"),
+            "errorPrefix": tr(normalized_ui_language, "webspeech_error_prefix"),
+            "errorDefault": tr(normalized_ui_language, "webspeech_error_default"),
+            "errors": {
+                "no-speech": tr(normalized_ui_language, "webspeech_error_no_speech"),
+                "aborted": tr(normalized_ui_language, "webspeech_error_aborted"),
+                "audio-capture": tr(
+                    normalized_ui_language, "webspeech_error_audio_capture"
+                ),
+                "network": tr(normalized_ui_language, "webspeech_error_network"),
+                "not-allowed": tr(
+                    normalized_ui_language, "webspeech_error_not_allowed"
+                ),
+                "service-not-allowed": tr(
+                    normalized_ui_language, "webspeech_error_service_not_allowed"
+                ),
+                "bad-grammar": tr(
+                    normalized_ui_language, "webspeech_error_bad_grammar"
+                ),
+                "language-not-supported": tr(
+                    normalized_ui_language,
+                    "webspeech_error_language_not_supported",
+                ),
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     options = json.dumps(
         {
             "continuous": bool(continuous),
@@ -214,16 +257,18 @@ def _page(
         separators=(",", ":"),
     )
     return f"""<!doctype html>
-<html lang="en">
+<html lang="{safe_ui_language}">
 <meta charset="utf-8">
-<title>Mio WebSpeech Bridge</title>
+<title>{title}</title>
 <body style="font-family: sans-serif; max-width: 720px; margin: 32px auto; line-height: 1.5;">
-<h1>Mio WebSpeech Bridge</h1>
-<p>This page lets the browser Web Speech API send microphone transcripts back to Mio Translator.</p>
-<p>Keep this page open while using WebSpeech ASR. Browser microphone permission is required.</p>
-<p id="status">Starting...</p>
+<h1>{title}</h1>
+<p>{intro}</p>
+<p>{permission}</p>
+<p id="status"></p>
 <script>
 const statusEl = document.getElementById('status');
+const messages = {messages};
+statusEl.textContent = messages.starting;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   function post(path, payload) {{
   return fetch(path, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify(payload)}}).catch(() => {{}});
@@ -236,8 +281,8 @@ function beacon(path, payload) {{
   post(path, payload || {{}});
 }}
 if (!SpeechRecognition) {{
-  statusEl.textContent = 'This browser does not support Web Speech API.';
-  post('/error', {{message: 'Browser does not support Web Speech API'}});
+  statusEl.textContent = messages.unsupported;
+  post('/error', {{message: messages.unsupported}});
 }} else {{
   const options = {options};
   const rec = new SpeechRecognition();
@@ -284,7 +329,10 @@ if (!SpeechRecognition) {{
   }}
   function startRecognition() {{
     if (stopped || !captureEnabled || recognitionRunning) return;
-    try {{ rec.start(); }} catch (e) {{ post('/error', {{message: String(e)}}); }}
+    try {{ rec.start(); }} catch (e) {{
+      statusEl.textContent = messages.errorPrefix + messages.errorDefault;
+      post('/error', {{message: messages.errorDefault}});
+    }}
   }}
   function setCaptureEnabled(enabled) {{
     const next = Boolean(enabled);
@@ -294,11 +342,11 @@ if (!SpeechRecognition) {{
     lastPartial = '';
     lastFinal = '';
     if (!captureEnabled) {{
-      statusEl.textContent = 'Connected. Microphone capture paused by Mio.';
+      statusEl.textContent = messages.paused;
       try {{ rec.abort(); }} catch (e) {{}}
       return;
     }}
-    statusEl.textContent = 'Connected. Resuming browser microphone...';
+    statusEl.textContent = messages.resuming;
     startRecognition();
   }}
   async function pollCaptureState() {{
@@ -316,13 +364,14 @@ if (!SpeechRecognition) {{
       try {{ rec.abort(); }} catch (e) {{}}
       return;
     }}
-    statusEl.textContent = 'Connected. Listening with browser microphone...';
+    statusEl.textContent = messages.listening;
     post('/ready', {{language: rec.lang}});
   }};
   rec.onerror = (event) => {{
-    const error = event.error || 'WebSpeech error';
-    statusEl.textContent = 'WebSpeech: ' + error;
-    if (error === 'no-speech' || error === 'aborted') return;
+    const errorCode = event.error || '';
+    const error = messages.errors[errorCode] || messages.errorDefault;
+    statusEl.textContent = messages.errorPrefix + error;
+    if (errorCode === 'no-speech' || errorCode === 'aborted') return;
     post('/error', {{message: error}});
   }};
   rec.onend = () => {{
@@ -350,7 +399,7 @@ if (!SpeechRecognition) {{
   if (captureEnabled) {{
     startRecognition();
   }} else {{
-    statusEl.textContent = 'Connected. Microphone capture paused by Mio.';
+    statusEl.textContent = messages.paused;
   }}
   window.addEventListener('beforeunload', () => {{
     stopped = true;
@@ -378,6 +427,11 @@ class WebSpeechASRProvider(ASRProvider):
         corrector: LayeredASRCorrector | None = None,
     ) -> None:
         provider_cfg = _cfg(config)
+        self.ui_language = normalize_ui_language(
+            get_ui_language(dict(config or {}))
+            if isinstance(config, Mapping)
+            else get_ui_language({}),
+        )
         self.language = _language_code(provider_cfg.get("language", "ja-JP"))
         if "final_timeout_seconds" in provider_cfg:
             self.final_timeout_seconds = _float_value(
@@ -427,6 +481,7 @@ class WebSpeechASRProvider(ASRProvider):
         self._browser_handle = None
         self._warned_audio_ignored = False
         self._lock = threading.RLock()
+        self._closed = False
 
     def set_browser_opener(self, opener) -> None:
         """Install an app-owned browser opener.
@@ -437,14 +492,58 @@ class WebSpeechASRProvider(ASRProvider):
         """
         self._browser_opener = opener
 
+    def update_language(self, ui_language: str) -> None:
+        """Apply a new UI locale without restarting the ASR provider.
+
+        The bridge HTTP handler deliberately reads ``self.ui_language`` for
+        every request, so reloading an already-open bridge page is enough to
+        update both its visible copy and any later browser-side error text.
+        """
+
+        normalized = normalize_ui_language(ui_language, default="en")
+        with self._lock:
+            self.ui_language = normalized
+            handle = self._browser_handle
+            url = self._url
+        if handle is None:
+            return
+        try:
+            update_language = getattr(handle, "update_language", None)
+            if callable(update_language):
+                update_language(normalized)
+                return
+            load_url = getattr(handle, "load_url", None)
+            if callable(load_url) and url:
+                load_url(url)
+                return
+            reload_page = getattr(handle, "reload", None)
+            if callable(reload_page):
+                reload_page()
+        except Exception:
+            logger.debug(
+                "Failed to refresh the WebSpeech bridge language",
+                exc_info=True,
+            )
+
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
+            if self._closed:
+                raise ASRConfigurationError("WebSpeech provider is closed")
             if self._server is None:
                 self._start_server()
             if self.auto_open_browser and not self._browser_opened:
                 self._open_bridge_page()
             if progress_callback is not None:
-                progress_callback({"stage": "ready", "message": f"WebSpeech bridge ready: {self._url}"})
+                progress_callback(
+                    {
+                        "stage": "ready",
+                        "message": tr(
+                            self.ui_language,
+                            "webspeech_progress_ready",
+                            url=self._url,
+                        ),
+                    }
+                )
 
     def transcribe(
         self,
@@ -461,9 +560,11 @@ class WebSpeechASRProvider(ASRProvider):
             self.load()
         self._state.mark_stale_if_needed(self.stale_connection_seconds)
         if not self._state.connected and not self._state.wait_connected(self.connection_timeout_seconds):
-            raise ASRProviderError("WebSpeech bridge is not connected; keep the browser bridge page open")
+            raise ASRProviderError(tr(self.ui_language, "webspeech_not_connected"))
         if self._state.error:
-            raise ASRProviderError(f"WebSpeech bridge error: {self._state.error}")
+            raise ASRProviderError(
+                tr(self.ui_language, "webspeech_bridge_error", error=self._state.error)
+            )
         text = (
             self._state.pop_final(self.final_timeout_seconds)
             if is_final
@@ -471,17 +572,28 @@ class WebSpeechASRProvider(ASRProvider):
         )
         text = clean_asr_text(text)
         if self._state.error:
-            raise ASRProviderError(f"WebSpeech bridge error: {self._state.error}")
+            raise ASRProviderError(
+                tr(self.ui_language, "webspeech_bridge_error", error=self._state.error)
+            )
         if text and self._corrector is not None:
             text = self._corrector.apply(text, language=_language_code(language) or self.language)
         return text
 
     def close(self) -> None:
-        server = self._server
-        handle = self._browser_handle
-        self._server = None
-        self._browser_opened = False
-        self._browser_handle = None
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            server = self._server
+            thread = self._thread
+            handle = self._browser_handle
+            self._server = None
+            self._thread = None
+            self._url = ""
+            self._browser_opened = False
+            self._browser_handle = None
+            self._browser_opener = None
+            self._corrector = None
         self._state.reset()
         if handle is not None:
             try:
@@ -491,12 +603,28 @@ class WebSpeechASRProvider(ASRProvider):
             except Exception:
                 logger.debug("Failed to close embedded WebSpeech bridge", exc_info=True)
         if server is not None:
-            server.shutdown()
-            server.server_close()
+            try:
+                if (
+                    thread is not None
+                    and thread is not threading.current_thread()
+                    and thread.is_alive()
+                ):
+                    server.shutdown()
+            finally:
+                server.server_close()
+        if (
+            thread is not None
+            and thread is not threading.current_thread()
+            and thread.is_alive()
+        ):
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                logger.warning("WebSpeech bridge thread did not stop in time")
 
     @property
     def is_loaded(self) -> bool:
-        return self._server is not None
+        with self._lock:
+            return not self._closed and self._server is not None
 
     def set_capture_enabled(self, enabled: bool) -> None:
         """Pause/resume browser-owned microphone capture and discard stale text."""
@@ -507,6 +635,7 @@ class WebSpeechASRProvider(ASRProvider):
         state = self._state
         state.reset()
         language = self.language
+        provider = self
         page_options = {
             "continuous": self.continuous,
             "interim_results": self.interim_results,
@@ -545,7 +674,11 @@ class WebSpeechASRProvider(ASRProvider):
                     ]
                     self._send_text(
                         HTTPStatus.OK,
-                        _page(language, **runtime_options),
+                        _page(
+                            language,
+                            ui_language=provider.ui_language,
+                            **runtime_options,
+                        ),
                         "text/html; charset=utf-8",
                     )
                     return
@@ -555,6 +688,7 @@ class WebSpeechASRProvider(ASRProvider):
                             "connected": state.connected,
                             "error": state.error,
                             "language": language,
+                            "ui_language": provider.ui_language,
                             "options": page_options,
                         }
                     ).encode("utf-8")
@@ -585,7 +719,15 @@ class WebSpeechASRProvider(ASRProvider):
                     self._send_text(HTTPStatus.OK, b"{}", "application/json")
                     return
                 if parsed.path == "/error":
-                    state.set_error(str(payload.get("message", "WebSpeech error")))
+                    state.set_error(
+                        str(
+                            payload.get("message")
+                            or tr(
+                                provider.ui_language,
+                                "webspeech_error_default",
+                            )
+                        )
+                    )
                     self._send_text(HTTPStatus.OK, b"{}", "application/json")
                     return
                 if parsed.path == "/disconnected":
@@ -597,12 +739,22 @@ class WebSpeechASRProvider(ASRProvider):
         try:
             server = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         except OSError as exc:
-            raise ASRConfigurationError(f"Failed to start WebSpeech bridge: {exc}") from exc
+            logger.error("Failed to start WebSpeech bridge: %s", exc)
+            raise ASRConfigurationError(
+                tr(self.ui_language, "webspeech_start_failed")
+            ) from exc
         self._server = server
         host, port = server.server_address[:2]
         self._url = f"http://{host}:{port}/"
         self._thread = threading.Thread(target=server.serve_forever, daemon=True, name="webspeech-bridge")
-        self._thread.start()
+        try:
+            self._thread.start()
+        except Exception:
+            self._server = None
+            self._thread = None
+            self._url = ""
+            server.server_close()
+            raise
         logger.info("WebSpeech bridge listening at %s", self._url)
 
     def _open_bridge_page(self) -> None:

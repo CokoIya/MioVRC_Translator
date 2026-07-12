@@ -5,7 +5,11 @@ from src.ui_qt.style_cache import cached_stylesheet, get_style_cache
 from src.ui_qt.theme import normalize_theme, theme_tokens
 
 
-_DEFAULT_FONT_STACK = '"Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+_DEFAULT_FONT_STACK = (
+    '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", '
+    '"Yu Gothic UI", "Meiryo UI", "Malgun Gothic", '
+    '"Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", sans-serif'
+)
 _cjk_latin_font_family: str | None = None
 
 

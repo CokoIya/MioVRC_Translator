@@ -1,7 +1,9 @@
 """Tests for Hololive Style-Bert-VITS2 download metadata helpers."""
 from __future__ import annotations
 
+import gc
 import json
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -86,3 +88,48 @@ def test_hololive_downloader_prefers_mainland_mirror_when_probes_fail(monkeypatc
     selected = downloader._select_base("SBV2_HoloLow", "config.json")
 
     assert selected == "https://hf-mirror.com"
+
+
+def test_hololive_downloader_does_not_retain_bound_listener_owner():
+    calls: list[bool] = []
+
+    class Owner:
+        def on_progress(self, _progress) -> None:
+            calls.append(True)
+
+    subject = downloader.HololiveStyleBertDownloader("SBV2_HoloLow")
+    owner = Owner()
+    owner_ref = weakref.ref(owner)
+    subject.add_listener(owner.on_progress)
+    del owner
+    gc.collect()
+
+    assert owner_ref() is None
+    subject._emit(force=True)
+    assert subject._listeners == []
+    assert calls == []
+
+
+def test_hololive_downloader_removes_equivalent_bound_method_listener():
+    class Owner:
+        def on_progress(self, _progress) -> None:
+            pass
+
+    subject = downloader.HololiveStyleBertDownloader("SBV2_HoloLow")
+    owner = Owner()
+    subject.add_listener(owner.on_progress)
+
+    subject.remove_listener(owner.on_progress)
+
+    assert subject._listeners == []
+
+
+def test_hololive_downloader_registry_does_not_own_idle_downloaders():
+    downloader._downloaders.clear()
+    subject = downloader.get_hololive_downloader("SBV2_HoloLow")
+    subject_ref = weakref.ref(subject)
+    del subject
+    gc.collect()
+
+    assert subject_ref() is None
+    assert "SBV2_HoloLow" not in downloader._downloaders

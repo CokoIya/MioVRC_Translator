@@ -24,18 +24,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 
-from src.utils.i18n import tr as _base_tr
 from src.utils.logger import logs_dir
 
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
 
-class AdvancedTab(QWidget):
+class AdvancedTab(LocalizedSettingsTab):
     """Advanced configuration tab."""
 
     config_changed = Signal()
@@ -48,12 +44,9 @@ class AdvancedTab(QWidget):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language
+        self._ui_language = normalize_settings_language(ui_language)
 
         self._init_ui()
-
-    def _t(self, key: str, **kwargs) -> str:
-        return tr(self._ui_language, key, **kwargs)
 
     def _init_ui(self) -> None:
         """Initialize the Advanced UI."""
@@ -93,7 +86,7 @@ class AdvancedTab(QWidget):
 
         scroll.setWidget(container)
 
-        main_layout = QVBoxLayout(self)
+        main_layout = self._root_layout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
@@ -192,7 +185,7 @@ class AdvancedTab(QWidget):
         self._cache_spin.setMinimum(10)
         self._cache_spin.setMaximum(1000)
         self._cache_spin.setValue(100)
-        self._cache_spin.setSuffix(" MB")
+        self._cache_spin.setSuffix(self._t("settings_megabytes_suffix"))
         self._cache_spin.valueChanged.connect(self._on_config_change)
         cache_layout.addWidget(self._cache_spin)
 

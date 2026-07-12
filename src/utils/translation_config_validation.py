@@ -10,7 +10,10 @@ from src.utils.ui_config import (
 )
 
 
-def missing_required_translation_api_key(config: Mapping[str, object] | None) -> tuple[bool, str]:
+def missing_required_translation_api_key(
+    config: Mapping[str, object] | None,
+    ui_language: str | None = None,
+) -> tuple[bool, str]:
     if not isinstance(config, Mapping):
         return False, ""
     trans_cfg = config.get("translation")
@@ -30,4 +33,4 @@ def missing_required_translation_api_key(config: Mapping[str, object] | None) ->
     api_key = ""
     if isinstance(backend_cfg, Mapping):
         api_key = str(backend_cfg.get("api_key", "") or "").strip()
-    return (not bool(api_key), get_backend_label(backend))
+    return (not bool(api_key), get_backend_label(backend, ui_language))

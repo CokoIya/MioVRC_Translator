@@ -48,6 +48,7 @@ TTS_DEBUG_AUDIO_ENV = "MIO_TTS_DEBUG_AUDIO"
 TTS_REQUEST_QUEUE_MAXSIZE = 10
 TTS_PIPELINE_MAX_OUTSTANDING = 12
 TTS_CLOUD_SYNTHESIS_CONCURRENCY = 2
+TTS_WORKER_JOIN_TIMEOUT_SECONDS = 2.0
 OutputDeviceRef = int | str | None
 
 _VIRTUAL_OUTPUT_KEYWORDS = (
@@ -240,6 +241,9 @@ class TTSManager:
         self._playback_thread: Optional[threading.Thread] = None
         self._running = False
         self._closed = False
+        self._engine_closed = False
+        self._engine_close_pending = False
+        self._active_synthesis_workers = 0
         self._lifecycle_lock = threading.RLock()
         self._pipeline_lock = threading.RLock()
         self._result_available = threading.Condition(self._pipeline_lock)
@@ -267,6 +271,7 @@ class TTSManager:
         self._device_cache_lock = threading.Lock()
         self._consecutive_failures = 0
         self._last_failure_message = ""
+        self._last_failure_stage = ""
         self._suspended_until = 0.0
 
         # Initialize engine eagerly so is_available() and get_available_voices()
@@ -349,6 +354,17 @@ class TTSManager:
                 return
             if self._running:
                 return
+            if self._active_synthesis_workers > 0:
+                logger.warning(
+                    "Cannot start TTS manager while %d previous synthesis worker(s) "
+                    "are still stopping",
+                    self._active_synthesis_workers,
+                )
+                return
+            # Repeated stop/close calls can enqueue more wake-up sentinels than
+            # the previous worker generation consumes.  Never let one of those
+            # stale sentinels terminate a replacement worker immediately.
+            self._discard_worker_stop_signals_locked()
             if not self.is_available():
                 logger.warning("Cannot start TTS manager: no engine available")
                 return
@@ -371,6 +387,7 @@ class TTSManager:
             self._synthesis_threads = synthesis_threads
             self._worker_thread = synthesis_threads[0]
             self._playback_thread = playback_thread
+            self._active_synthesis_workers = len(synthesis_threads)
 
         for thread in synthesis_threads:
             thread.start()
@@ -394,15 +411,25 @@ class TTSManager:
                     condition.notify_all()
 
         self.stop_playback()
-        deadline = time.monotonic() + 2.0
+        deadline = time.monotonic() + TTS_WORKER_JOIN_TIMEOUT_SECONDS
         current = threading.current_thread()
         for thread in (*synthesis_threads, playback_thread):
             if thread is None or thread is current:
                 continue
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
-        self._worker_thread = None
-        self._synthesis_threads = []
-        self._playback_thread = None
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            alive_synthesis = [
+                thread for thread in synthesis_threads if thread.is_alive()
+            ]
+            self._synthesis_threads = alive_synthesis
+            self._worker_thread = alive_synthesis[0] if alive_synthesis else None
+            self._playback_thread = (
+                playback_thread
+                if playback_thread is not None and playback_thread.is_alive()
+                else None
+            )
+            if not alive_synthesis:
+                self._discard_worker_stop_signals_locked()
         logger.info("TTS manager stopped")
 
     def close(self) -> None:
@@ -414,14 +441,70 @@ class TTSManager:
             self._closed = True
 
         self.stop()
+        self._release_retained_manager_state()
+
+        engine = None
+        deferred_engine = None
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            if self._active_synthesis_workers > 0:
+                self._engine_close_pending = True
+                deferred_engine = self._engine
+            else:
+                engine = self._detach_engine_locked()
+
+        if deferred_engine is not None:
+            request_close = getattr(deferred_engine, "request_close", None)
+            if callable(request_close):
+                try:
+                    request_close()
+                except Exception:
+                    logger.debug(
+                        "Failed to request deferred TTS engine close",
+                        exc_info=True,
+                    )
+            logger.warning(
+                "TTS engine close deferred until %d synthesis worker(s) finish",
+                self._active_synthesis_workers,
+            )
+        self._close_engine_resource(engine)
+
+    def _detach_engine_locked(self) -> Optional[BaseTTS]:
+        if self._engine_closed:
+            return None
         engine = self._engine
         self._engine = None
+        self._engine_closed = True
+        self._engine_close_pending = False
+        return engine
+
+    @staticmethod
+    def _close_engine_resource(engine: Optional[BaseTTS]) -> None:
         close_engine = getattr(engine, "close", None)
         if callable(close_engine):
             try:
                 close_engine()
             except Exception:
                 logger.debug("Failed to close TTS engine", exc_info=True)
+
+    def _release_retained_manager_state(self) -> None:
+        cache_lock = getattr(self, "_cache_lock", None)
+        if cache_lock is not None:
+            with cache_lock:
+                self._cache.clear()
+                self._cache_size_bytes = 0
+                inflight = tuple(self._cache_inflight.values())
+                self._cache_inflight.clear()
+            for event in inflight:
+                event.set()
+
+        device_lock = getattr(self, "_device_cache_lock", None)
+        if device_lock is not None:
+            with device_lock:
+                self._device_sample_rates_cache.clear()
+
+        engine_config = getattr(self, "_engine_config", None)
+        if isinstance(engine_config, dict):
+            engine_config.clear()
 
     def _signal_worker_stop(self) -> None:
         """Wake the worker without blocking the UI thread if the queue is full."""
@@ -443,6 +526,24 @@ class TTSManager:
                     )
                 elif isinstance(dropped, _TTSPrewarmRequest):
                     self._prewarm_queued = False
+
+    def _discard_worker_stop_signals_locked(self) -> int:
+        """Remove stale worker sentinels while preserving real queued work."""
+
+        retained: list[TTSRequest | _TTSPrewarmRequest] = []
+        removed = 0
+        while True:
+            try:
+                pending = self._request_queue.get_nowait()
+            except queue.Empty:
+                break
+            if pending is None:
+                removed += 1
+            else:
+                retained.append(pending)
+        for pending in retained:
+            self._request_queue.put_nowait(pending)
+        return removed
 
     def speak(
         self,
@@ -470,9 +571,9 @@ class TTSManager:
 
         suspended_for = self._suspended_until - time.monotonic()
         if suspended_for > 0:
-            message = (
-                "TTS playback is temporarily paused after repeated failures. "
-                f"Please try again in {int(max(1, suspended_for))} seconds."
+            message = self._suspension_message(
+                getattr(self, "_last_failure_stage", ""),
+                suspended_for,
             )
             logger.info(message)
             if callback:
@@ -916,50 +1017,80 @@ class TTSManager:
         self._synthesis_worker_loop(0)
 
     def _synthesis_worker_loop(self, worker_index: int) -> None:
-        while True:
-            try:
-                request = self._request_queue.get(timeout=0.1)
-            except queue.Empty:
-                if not self._running:
-                    self._close_synthesis_thread_context()
-                    return
-                continue
-
-            if request is None:
-                self._close_synthesis_thread_context()
-                return
-
-            if isinstance(request, _TTSPrewarmRequest):
+        try:
+            while True:
                 try:
-                    if self._running and self._engine is not None:
-                        started_at = time.monotonic()
-                        self._engine.prewarm(request.voice)
-                        logger.info(
-                            "TTS engine prewarm finished (engine=%s elapsed_ms=%.0f)",
-                            self._engine_name,
-                            (time.monotonic() - started_at) * 1000.0,
-                        )
-                except Exception as exc:
-                    logger.warning("TTS engine prewarm failed: %s", exc)
-                finally:
-                    with self._pipeline_lock:
-                        self._prewarm_queued = False
-                continue
+                    request = self._request_queue.get(timeout=0.1)
+                except queue.Empty:
+                    if not self._running:
+                        return
+                    continue
 
-            result = self._synthesize_request(request)
-            if not self._publish_synthesis_result(result):
-                self._finish_request_identity(request)
-                self._notify_request_callback(
-                    request,
-                    False,
-                    "TTS request was cancelled.",
+                if request is None:
+                    return
+
+                if isinstance(request, _TTSPrewarmRequest):
+                    try:
+                        if self._running and self._engine is not None:
+                            started_at = time.monotonic()
+                            self._engine.prewarm(request.voice)
+                            logger.info(
+                                "TTS engine prewarm finished (engine=%s elapsed_ms=%.0f)",
+                                self._engine_name,
+                                (time.monotonic() - started_at) * 1000.0,
+                            )
+                    except Exception as exc:
+                        logger.warning("TTS engine prewarm failed: %s", exc)
+                    finally:
+                        with self._pipeline_lock:
+                            self._prewarm_queued = False
+                    continue
+
+                result = self._synthesize_request(request)
+                if not self._publish_synthesis_result(result):
+                    self._finish_request_identity(request)
+                    self._notify_request_callback(
+                        request,
+                        False,
+                        "TTS request was cancelled.",
+                    )
+                logger.debug(
+                    "TTS synthesis worker finished (worker=%d sequence=%d generation=%d)",
+                    worker_index,
+                    request.sequence,
+                    request.generation,
                 )
-            logger.debug(
-                "TTS synthesis worker finished (worker=%d sequence=%d generation=%d)",
-                worker_index,
-                request.sequence,
-                request.generation,
+        finally:
+            self._close_synthesis_thread_context()
+            self._on_synthesis_worker_exit()
+
+    def _on_synthesis_worker_exit(self) -> None:
+        engine = None
+        current = threading.current_thread()
+        with getattr(self, "_lifecycle_lock", threading.RLock()):
+            self._active_synthesis_workers = max(
+                0,
+                int(getattr(self, "_active_synthesis_workers", 0)) - 1,
             )
+            self._synthesis_threads = [
+                thread
+                for thread in getattr(self, "_synthesis_threads", ())
+                if thread is not current and thread.is_alive()
+            ]
+            self._worker_thread = (
+                self._synthesis_threads[0] if self._synthesis_threads else None
+            )
+            if self._active_synthesis_workers == 0 and not self._running:
+                self._discard_worker_stop_signals_locked()
+            if (
+                self._active_synthesis_workers == 0
+                and self._engine_close_pending
+            ):
+                engine = self._detach_engine_locked()
+
+        if engine is not None:
+            self._release_retained_manager_state()
+            self._close_engine_resource(engine)
 
     def _close_synthesis_thread_context(self) -> None:
         cleanup = getattr(self._engine, "close_thread_context", None)
@@ -1057,12 +1188,21 @@ class TTSManager:
                 0.0,
                 result.synthesis_finished_at - result.synthesis_started_at,
             ) * 1000.0
-            logger.info(
-                "TTS ordered playback ready (sequence=%d queue_wait_ms=%.0f synthesis_ms=%.0f)",
-                request.sequence,
-                queue_wait_ms,
-                synthesis_ms,
-            )
+            if result.error is None:
+                logger.info(
+                    "TTS ordered playback ready (sequence=%d queue_wait_ms=%.0f synthesis_ms=%.0f)",
+                    request.sequence,
+                    queue_wait_ms,
+                    synthesis_ms,
+                )
+            else:
+                logger.info(
+                    "TTS ordered synthesis completed with error "
+                    "(sequence=%d queue_wait_ms=%.0f synthesis_ms=%.0f)",
+                    request.sequence,
+                    queue_wait_ms,
+                    synthesis_ms,
+                )
             self._process_synthesis_result(result)
             self._finish_request_identity(request)
 
@@ -1070,7 +1210,7 @@ class TTSManager:
         request = result.request
         if result.error is not None:
             message = str(result.error)
-            self._record_request_failure(message)
+            self._record_request_failure(message, stage="synthesis")
             logger.error("TTS synthesis failed: %s", result.error)
             self._notify_request_callback(request, False, message)
             return
@@ -1102,11 +1242,12 @@ class TTSManager:
                 return
             self._consecutive_failures = 0
             self._last_failure_message = ""
+            self._last_failure_stage = ""
             self._suspended_until = 0.0
             self._notify_request_callback(request, True, "")
         except Exception as exc:
             message = str(exc)
-            self._record_request_failure(message)
+            self._record_request_failure(message, stage="playback")
             logger.error("TTS playback failed: %s", exc)
             self._notify_request_callback(request, False, message)
 
@@ -1135,47 +1276,77 @@ class TTSManager:
     def _process_request(self, request: TTSRequest) -> None:
         """Process TTS request."""
         try:
-            # Get audio data (from cache or synthesize)
             audio_data = self._get_audio(
                 request.text,
                 request.voice,
                 request.rate,
                 request.volume,
             )
+        except Exception as exc:
+            message = str(exc)
+            self._record_request_failure(message, stage="synthesis")
+            logger.error("TTS synthesis failed: %s", exc)
+            self._notify_request_callback(request, False, message)
+            return
 
-            # Play audio
+        try:
             self._play_audio(audio_data)
 
-            # Callback success
             self._consecutive_failures = 0
             self._last_failure_message = ""
+            self._last_failure_stage = ""
             self._suspended_until = 0.0
             self._notify_request_callback(request, True, "")
 
         except Exception as exc:
             message = str(exc)
-            self._record_request_failure(message)
-            logger.error("TTS request failed: %s", exc)
+            self._record_request_failure(message, stage="playback")
+            logger.error("TTS playback failed: %s", exc)
             self._notify_request_callback(request, False, message)
 
-    def _record_request_failure(self, message: str) -> None:
+    @staticmethod
+    def _suspension_message(stage: str, remaining_seconds: float) -> str:
+        seconds = int(max(1, remaining_seconds))
+        normalized_stage = str(stage or "").strip().lower()
+        if normalized_stage == "synthesis":
+            subject = "TTS synthesis"
+        elif normalized_stage == "playback":
+            subject = "TTS audio playback"
+        else:
+            subject = "TTS request processing"
+        return (
+            f"{subject} is temporarily paused after repeated failures. "
+            f"Please try again in {seconds} seconds."
+        )
+
+    def _record_request_failure(self, message: str, *, stage: str = "request") -> None:
         clean_message = str(message or "").strip() or "Unknown TTS error"
-        if clean_message == self._last_failure_message:
+        clean_stage = str(stage or "request").strip().lower() or "request"
+        if (
+            clean_message == self._last_failure_message
+            and clean_stage == getattr(self, "_last_failure_stage", "")
+        ):
             self._consecutive_failures += 1
         else:
             self._last_failure_message = clean_message
+            self._last_failure_stage = clean_stage
             self._consecutive_failures = 1
 
         if self._consecutive_failures < TTS_FAILURE_SUSPEND_THRESHOLD:
             return
 
         self._suspended_until = time.monotonic() + TTS_FAILURE_SUSPEND_SECONDS
+        stage_label = {
+            "synthesis": "synthesis",
+            "playback": "audio playback",
+        }.get(clean_stage, "request processing")
         dropped = self._drop_pending_requests(
-            "TTS playback was paused after repeated failures."
+            f"TTS {stage_label} was paused after repeated failures."
         )
         logger.warning(
-            "TTS playback paused for %.0f seconds after %d repeated failures "
+            "TTS %s paused for %.0f seconds after %d repeated failures "
             "(dropped %d queued request(s)): %s",
+            stage_label,
             TTS_FAILURE_SUSPEND_SECONDS,
             self._consecutive_failures,
             dropped,
@@ -1206,6 +1377,8 @@ class TTSManager:
         # Try cache first and coalesce duplicate concurrent synthesis requests.
         if self._cache_enabled:
             while True:
+                if self._closed:
+                    raise RuntimeError("TTS manager stopped during synthesis")
                 with self._cache_lock:
                     now = time.monotonic()
                     expired = [
@@ -1307,6 +1480,8 @@ class TTSManager:
     def _add_to_cache(self, key: str, data: bytes) -> None:
         """Add audio data to cache."""
         with self._cache_lock:
+            if self._closed:
+                return
             data_size = len(data)
             if self._max_cache_size_mb <= 0 or self._max_cache_items <= 0:
                 return

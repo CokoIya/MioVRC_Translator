@@ -6,6 +6,7 @@ from PySide6.QtCore import QUrl, Qt
 from PySide6.QtWidgets import QDialog, QVBoxLayout
 
 from src.utils.i18n import tr
+from src.utils.localization import normalize_ui_language
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +20,11 @@ class WebSpeechBridgeWindow(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        ui_lang = str(getattr(parent, "_ui_lang", "") or "").strip() or "en"
-        self.setWindowTitle(tr(ui_lang, "webspeech_window_title"))
+        self._ui_lang = normalize_ui_language(
+            str(getattr(parent, "_ui_lang", "") or "").strip() or "en",
+            default="en",
+        )
+        self.setWindowTitle(tr(self._ui_lang, "webspeech_window_title"))
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.resize(560, 380)
 
@@ -31,7 +35,7 @@ class WebSpeechBridgeWindow(QDialog):
             from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
             from PySide6.QtWebEngineWidgets import QWebEngineView
         except Exception as exc:  # pragma: no cover - depends on optional Qt module
-            raise RuntimeError("PySide6 QtWebEngine is not available") from exc
+            raise RuntimeError(tr(self._ui_lang, "webspeech_qt_unavailable")) from exc
 
         self._page_type = QWebEnginePage
         self._view = QWebEngineView(self)
@@ -45,6 +49,13 @@ class WebSpeechBridgeWindow(QDialog):
         )
         layout.addWidget(self._view)
 
+    def update_language(self, ui_language: str) -> None:
+        self._ui_lang = normalize_ui_language(ui_language, default="en")
+        self.setWindowTitle(tr(self._ui_lang, "webspeech_window_title"))
+        current_url = self._view.url()
+        if current_url.isValid() and current_url.scheme() in {"http", "https"}:
+            self._view.reload()
+
     def load_url(self, url: str) -> None:
         self._view.setUrl(QUrl(str(url or "")))
         if not self.isVisible():
@@ -52,11 +63,21 @@ class WebSpeechBridgeWindow(QDialog):
         self.raise_()
 
     def close_bridge(self) -> None:
+        self._release_page()
+        self.close()
+
+    def _release_page(self) -> None:
         try:
+            self._view.stop()
             self._view.setUrl(QUrl("about:blank"))
         except Exception:
             logger.debug("Failed to blank WebSpeech bridge page", exc_info=True)
-        self.close()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        # Closing through the title-bar must release WebEngine microphone and
+        # page resources just like the explicit application shutdown path.
+        self._release_page()
+        super().closeEvent(event)
 
     def _on_feature_permission_requested(self, security_origin, feature) -> None:
         page = self._view.page()

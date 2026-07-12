@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import locale
 import os
@@ -18,6 +19,40 @@ _REQUEST_HEADERS = {
 }
 
 
+def _language_from_tag(value: object) -> str:
+    """Map an OS locale/UI-language tag to one of Mio's UI catalogs."""
+    tag = str(value or "").strip().replace("_", "-").casefold()
+    tag = tag.split(".", 1)[0].split("@", 1)[0]
+    primary = tag.split("-", 1)[0]
+    if primary == "zh":
+        return "zh-CN"
+    if primary in {"en", "ja", "ru", "ko"}:
+        return primary
+    return "en"
+
+
+def _windows_display_language_tag() -> str | None:
+    """Return the current user's Windows display-language locale name."""
+    try:
+        language_id = int(ctypes.windll.kernel32.GetUserDefaultUILanguage())
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+    locale_name = locale.windows_locale.get(language_id)
+    if locale_name:
+        return locale_name
+
+    # Keep the five supported primary languages working even when Python's
+    # Windows locale table does not contain a newly introduced sublanguage.
+    return {
+        0x0004: "zh",
+        0x0009: "en",
+        0x0011: "ja",
+        0x0012: "ko",
+        0x0019: "ru",
+    }.get(language_id & 0x03FF)
+
+
 def _language_from_country(country_code: str | None) -> str:
     code = str(country_code or "").upper()
     if code in {"CN", "TW", "HK", "MO", "SG"}:
@@ -32,6 +67,13 @@ def _language_from_country(country_code: str | None) -> str:
 
 
 def _language_from_locale() -> str:
+    # Windows' display language can intentionally differ from its regional
+    # format. GetUserDefaultUILanguage reflects the former; locale.getlocale()
+    # generally reflects the latter and therefore is only a fallback.
+    windows_display_language = _windows_display_language_tag()
+    if windows_display_language:
+        return _language_from_tag(windows_display_language)
+
     candidates: list[str] = []
     for env_name in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
         value = os.environ.get(env_name)
@@ -45,15 +87,8 @@ def _language_from_locale() -> str:
     if current:
         candidates.append(current)
 
-    normalized = " ".join(candidates).lower()
-    if "zh" in normalized:
-        return "zh-CN"
-    if "ja" in normalized:
-        return "ja"
-    if "ko" in normalized:
-        return "ko"
-    if "ru" in normalized:
-        return "ru"
+    if candidates:
+        return _language_from_tag(candidates[0])
     return "en"
 
 

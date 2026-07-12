@@ -137,7 +137,9 @@ def test_download_model_to_retries_transient_modelscope_failure(monkeypatch, tmp
     assert not staging_paths[0].exists()
     metadata = json.loads((target / ".mio-model.json").read_text(encoding="utf-8"))
     assert metadata["resolved_revision"] == "master"
-    assert any(event["stage"] == "download_retry" for event in events)
+    retry = next(event for event in events if event["stage"] == "download_retry")
+    assert retry["attempt"] == 2
+    assert retry["max_attempts"] == model_manager._DOWNLOAD_ATTEMPTS
 
 
 def test_download_model_to_preserves_existing_target_until_staged_install(

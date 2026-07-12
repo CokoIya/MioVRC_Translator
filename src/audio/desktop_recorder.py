@@ -777,6 +777,7 @@ class DesktopAudioRecorder(AudioRecorder):
             )
         self._output_device_name = str(output_device_name or "").strip()
         self._capture_thread: Optional[threading.Thread] = None
+        self._vad_prewarm_thread: Optional[threading.Thread] = None
         self._capture_stream = None
         self._pyaudio_module = None
         self._pyaudio_instance = None
@@ -831,8 +832,23 @@ class DesktopAudioRecorder(AudioRecorder):
         return cls._portaudio_error_code(exc) == -9999
 
     def start(self):
-        if self._running:
-            return
+        with self._lifecycle_lock:
+            if self._running:
+                return
+            for name in ("_capture_thread", "_worker_thread"):
+                previous = getattr(self, name)
+                if previous is None:
+                    continue
+                if previous.is_alive():
+                    raise RuntimeError(
+                        "Previous desktop audio thread is still stopping"
+                    )
+                setattr(self, name, None)
+            if (
+                self._vad_prewarm_thread is not None
+                and not self._vad_prewarm_thread.is_alive()
+            ):
+                self._vad_prewarm_thread = None
 
         self._loopback_device_info = None
         self._stream_config = None
@@ -869,53 +885,40 @@ class DesktopAudioRecorder(AudioRecorder):
 
         # Pre-warm Silero VAD model in the background while capture initializes.
         # This avoids blocking the first audio frame with torch.jit.load.
-        if isinstance(self.vad, SileroVADDetector):
-            threading.Thread(
-                target=lambda: self.vad.prewarm(),
+        if (
+            isinstance(self.vad, SileroVADDetector)
+            and self._vad_prewarm_thread is None
+        ):
+            self._vad_prewarm_thread = threading.Thread(
+                target=self.vad.prewarm,
                 name="vad-prewarm",
                 daemon=True,
-            ).start()
+            )
+            self._vad_prewarm_thread.start()
 
-        self._worker_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._worker_thread = threading.Thread(
+            target=self._worker_main,
+            daemon=True,
+            name="desktop-audio-worker",
+        )
         self._worker_thread.start()
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop,
+            daemon=True,
+            name="desktop-audio-capture",
+        )
         self._capture_thread.start()
 
         if not self._capture_ready_event.wait(timeout=_CAPTURE_START_TIMEOUT_S):
             error = RuntimeError("Desktop audio capture did not become ready in time")
             self._capture_start_error = error
-            self._running = False
-            if self._capture_thread is not None:
-                self._capture_thread.join(timeout=2)
-                if not self._capture_thread.is_alive():
-                    self._capture_thread = None
-            if self._worker_thread is not None:
-                self._enqueue_frame(None)
-                self._worker_thread.join(timeout=2)
-                self._worker_thread = None
-            self._clear_frame_queue()
-            self._loopback_device_info = None
-            self._stream_config = None
-            self._active_device_name = None
-            self.input_device = None
+            self.stop()
             self._report_runtime_error(error)
             raise error
 
         if self._capture_start_error is not None:
             error = self._capture_start_error
-            self._running = False
-            if self._capture_thread is not None:
-                self._capture_thread.join(timeout=2)
-                self._capture_thread = None
-            if self._worker_thread is not None:
-                self._enqueue_frame(None)
-                self._worker_thread.join(timeout=2)
-                self._worker_thread = None
-            self._clear_frame_queue()
-            self._loopback_device_info = None
-            self._stream_config = None
-            self._active_device_name = None
-            self.input_device = None
+            self.stop()
             raise error
 
         logger.info(
@@ -928,22 +931,60 @@ class DesktopAudioRecorder(AudioRecorder):
 
     def stop(self):
         self._running = False
-        if self._capture_thread is not None:
-            self._capture_thread.join(timeout=2)
-            if self._capture_thread.is_alive():
-                logger.warning("Desktop audio capture thread did not stop in time; closing stream from caller")
-                self._close_capture_stream()
-                self._capture_thread.join(timeout=1)
-            self._capture_thread = None
+        capture_stopped = self._stop_capture_thread()
         super().stop()
-        self._terminate_pyaudio()
-        self._loopback_device_info = None
-        self._stream_config = None
-        self._active_device_name = None
-        self._capture_stream = None
-        self.input_device = None
-        self.extra_settings = None
+        prewarm_stopped = self._join_vad_prewarm_thread()
+        worker_stopped = self._worker_thread is None or not self._worker_thread.is_alive()
+        if capture_stopped:
+            # Capture backends normally release these in their thread's
+            # finally block. Only repeat termination after that thread exited;
+            # Pa_Terminate while it is still active can crash the process.
+            self._terminate_pyaudio()
+            self._loopback_device_info = None
+            self._stream_config = None
+            self._active_device_name = None
+            self._capture_stream = None
+            self.input_device = None
+            self.extra_settings = None
+        if capture_stopped and worker_stopped and prewarm_stopped:
+            close_vad = getattr(self.vad, "close", None)
+            if callable(close_vad):
+                close_vad()
         logger.info("DesktopAudioRecorder stopped (requested_output=%s)", self._output_device_name or "auto")
+
+    def _stop_capture_thread(self) -> bool:
+        thread = self._capture_thread
+        if thread is None:
+            return True
+        if thread is threading.current_thread():
+            return False
+        thread.join(timeout=2)
+        if thread.is_alive():
+            logger.warning(
+                "Desktop audio capture thread did not stop in time; closing stream from caller"
+            )
+            self._close_capture_stream()
+            thread.join(timeout=1)
+        stopped = not thread.is_alive()
+        if stopped:
+            if self._capture_thread is thread:
+                self._capture_thread = None
+        else:
+            logger.warning(
+                "Desktop audio capture thread remains alive; native backend ownership is retained"
+            )
+        return stopped
+
+    def _join_vad_prewarm_thread(self) -> bool:
+        thread = self._vad_prewarm_thread
+        if thread is None:
+            return True
+        if thread is not threading.current_thread():
+            thread.join(timeout=1)
+        stopped = not thread.is_alive()
+        if stopped and self._vad_prewarm_thread is thread:
+            self._vad_prewarm_thread = None
+        return stopped
 
     def diagnostics_snapshot(self) -> dict[str, object]:
         activation_window = getattr(self.vad, "_activation_window", None)
@@ -1250,6 +1291,8 @@ class DesktopAudioRecorder(AudioRecorder):
 
                         while self._running:
                             data = recorder.record(numframes=blocksize)
+                            if not self._running:
+                                break
                             arr = np.asarray(data, dtype=np.float32)
                             if arr.size == 0:
                                 continue

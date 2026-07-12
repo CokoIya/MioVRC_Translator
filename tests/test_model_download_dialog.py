@@ -64,5 +64,63 @@ def test_asr_setup_window_failed_download_keeps_retry_visible(qtbot, monkeypatch
     window._on_failed("connection reset")
 
     assert window._retry_btn.isHidden() is False
-    assert "connection reset" in window._bottom_label.text()
+    assert "connection reset" not in window._bottom_label.text()
+    assert "network" in window._bottom_label.text().lower()
     assert "retry" in window._bottom_label.text().lower()
+
+
+def test_model_dialogs_keep_localization_per_instance(qtbot):
+    english = ModelMissingDialog(None, "sensevoice-small", ui_lang="en")
+    japanese = ModelMissingDialog(None, "sensevoice-small", ui_lang="ja")
+    qtbot.addWidget(english)
+    qtbot.addWidget(japanese)
+
+    assert english.windowTitle() == "Speech Model Not Found"
+    assert japanese.windowTitle() == "音声認識モデルが見つかりません"
+    assert english._download_btn.text() == "Download Now"
+    assert japanese._download_btn.text() == "今すぐダウンロード"
+
+
+def test_model_progress_uses_locale_aware_numbers_and_eta(qtbot):
+    widget = model_download_dialog.DownloadProgressWidget(
+        None,
+        "sensevoice-small",
+        downloader=None,
+        ui_lang="ru",
+        use_hf_downloader=False,
+    )
+    qtbot.addWidget(widget)
+
+    widget._apply_progress(
+        model_download_dialog.DownloadProgress(
+            state=model_download_dialog.DownloadState.DOWNLOADING,
+            total_bytes=536_870_912,
+            total_total=1_073_741_824,
+            speed_bps=1.5 * 1_048_576,
+            eta_s=65,
+        )
+    )
+
+    assert widget._pct_label.text() == "50%"
+    assert "1,5 МБ/с" in widget._speed_label.text()
+    assert "1 мин 5 с" in widget._speed_label.text()
+
+
+def test_setup_retry_progress_uses_structured_localized_fields(qtbot, monkeypatch):
+    monkeypatch.setattr(model_download_dialog, "model_exists", lambda _spec: True)
+    window = SetupWindow("whisper-large-v3-turbo", ui_lang="ko")
+    qtbot.addWidget(window)
+
+    window._apply_modelscope_progress(
+        {
+            "stage": "download_retry",
+            "message": "must not be displayed",
+            "attempt": 2,
+            "max_attempts": 3,
+        }
+    )
+
+    rendered = window._progress_widget._speed_label.text()
+    assert "다시 시도" in rendered
+    assert "2/3" in rendered
+    assert "must not be displayed" not in rendered

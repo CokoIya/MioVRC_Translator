@@ -670,6 +670,61 @@ class UpdateCheckerTests(unittest.TestCase):
         self.assertEqual(first_errors, ["temporary update service failure"])
         self.assertEqual(second_errors, ["temporary update service failure"])
 
+    def test_concurrent_installer_fetches_share_worker_and_release_subscribers(self):
+        fetch_started = threading.Event()
+        release_fetch = threading.Event()
+        first_results: list[UpdateInfo] = []
+        second_results: list[UpdateInfo] = []
+        update_info = UpdateInfo(
+            version=update_checker.APP_VERSION,
+            download_url="https://78hejiu.top/current.exe",
+            size_bytes=1,
+            sha256="a" * 64,
+        )
+
+        def fetch_installer(*, permanent_source_errors):
+            del permanent_source_errors
+            fetch_started.set()
+            self.assertTrue(release_fetch.wait(timeout=2))
+            return update_info
+
+        with patch.object(
+            update_checker,
+            "_installer_fetch_thread",
+            None,
+        ), patch.object(
+            update_checker,
+            "_installer_fetch_subscribers",
+            [],
+        ), patch.object(
+            update_checker,
+            "_fetch_latest_installer_info_from_sources",
+            side_effect=fetch_installer,
+        ) as fetch:
+            first = update_checker.fetch_latest_installer_info(
+                first_results.append,
+                max_retries=1,
+                retry_delays=(),
+            )
+            self.assertTrue(fetch_started.wait(timeout=2))
+            second = update_checker.fetch_latest_installer_info(
+                second_results.append,
+                max_retries=3,
+                retry_delays=(),
+            )
+            self.assertIs(second, first)
+            self.assertEqual(len(update_checker._installer_fetch_subscribers), 2)
+
+            release_fetch.set()
+            first.join(timeout=2)
+
+            self.assertFalse(first.is_alive())
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(first_results, [update_info])
+            self.assertEqual(second_results, [update_info])
+            self.assertIsNone(update_checker._installer_fetch_thread)
+            self.assertEqual(update_checker._installer_fetch_subscribers, [])
+
     def test_wrapped_installer_signature_failure_is_permanent(self):
         try:
             try:

@@ -4,7 +4,20 @@ from dataclasses import dataclass
 from typing import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QRadioButton, QVBoxLayout
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QVBoxLayout,
+)
+
+from src.utils.localization import normalize_ui_language
 
 
 @dataclass(frozen=True)
@@ -110,19 +123,7 @@ _MODE_ORDER = ("chatbox", "listen", "tts", "manual", "overlay")
 
 
 def _lang(ui_language: str) -> str:
-    normalized = str(ui_language or "").strip()
-    if normalized in _COPY:
-        return normalized
-    lowered = normalized.lower()
-    if lowered.startswith("zh"):
-        return "zh-CN"
-    if lowered.startswith("ja") or lowered.startswith("jp"):
-        return "ja"
-    if lowered.startswith("ru"):
-        return "ru"
-    if lowered.startswith("ko"):
-        return "ko"
-    return "en"
+    return normalize_ui_language(ui_language, default="en")
 
 
 class ModeWizardDialog(QDialog):
@@ -134,10 +135,13 @@ class ModeWizardDialog(QDialog):
         on_done: Callable[[ModeWizardResult | None], None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._copy = _COPY[_lang(ui_language)]
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
         self._on_done = on_done
         self._result: ModeWizardResult | None = None
         self._mode_buttons: dict[str, QRadioButton] = {}
+        self._mode_title_labels: dict[str, QLabel] = {}
+        self._mode_body_labels: dict[str, QLabel] = {}
         self._button_group = QButtonGroup(self)
         self.setObjectName("modeWizardDialog")
         self.setWindowTitle(self._copy["title"])
@@ -149,14 +153,14 @@ class ModeWizardDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
 
-        title = QLabel(self._copy["title"])
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        self._title_label = QLabel(self._copy["title"])
+        self._title_label.setObjectName("sectionTitle")
+        layout.addWidget(self._title_label)
 
-        subtitle = QLabel(self._copy["subtitle"])
-        subtitle.setObjectName("hintLabel")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+        self._subtitle_label = QLabel(self._copy["subtitle"])
+        self._subtitle_label.setObjectName("hintLabel")
+        self._subtitle_label.setWordWrap(True)
+        layout.addWidget(self._subtitle_label)
 
         for index, mode_id in enumerate(_MODE_ORDER):
             card = self._mode_card(
@@ -167,23 +171,34 @@ class ModeWizardDialog(QDialog):
             )
             layout.addWidget(card)
 
-        steps = QLabel(self._copy["steps"])
-        steps.setObjectName("hintLabel")
-        steps.setWordWrap(True)
-        layout.addWidget(steps)
+        self._steps_label = QLabel(self._copy["steps"])
+        self._steps_label.setObjectName("hintLabel")
+        self._steps_label.setWordWrap(True)
+        layout.addWidget(self._steps_label)
 
-        actions = QHBoxLayout()
-        actions.addStretch(1)
-        skip_btn = QPushButton(self._copy["skip"])
-        skip_btn.clicked.connect(self._skip)
-        actions.addWidget(skip_btn)
-        apply_btn = QPushButton(self._copy["apply"])
-        apply_btn.clicked.connect(lambda: self._finish(open_settings=False))
-        actions.addWidget(apply_btn)
-        start_btn = QPushButton(self._copy["open_settings"])
-        start_btn.setObjectName("primaryButton")
-        start_btn.clicked.connect(lambda: self._finish(open_settings=True))
-        actions.addWidget(start_btn)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(8)
+        actions.setVerticalSpacing(8)
+        actions.setColumnStretch(0, 1)
+        self._skip_btn = QPushButton(self._copy["skip"])
+        self._skip_btn.clicked.connect(self._skip)
+        actions.addWidget(self._skip_btn, 0, 2)
+        self._apply_btn = QPushButton(self._copy["apply"])
+        self._apply_btn.clicked.connect(lambda: self._finish(open_settings=False))
+        actions.addWidget(self._apply_btn, 1, 1)
+        self._open_settings_btn = QPushButton(self._copy["open_settings"])
+        self._open_settings_btn.setObjectName("primaryButton")
+        self._open_settings_btn.clicked.connect(lambda: self._finish(open_settings=True))
+        actions.addWidget(self._open_settings_btn, 1, 2)
+        for button in (
+            self._skip_btn,
+            self._apply_btn,
+            self._open_settings_btn,
+        ):
+            button.setSizePolicy(
+                QSizePolicy.Policy.MinimumExpanding,
+                QSizePolicy.Policy.Fixed,
+            )
         layout.addLayout(actions)
 
     def _mode_card(self, mode_id: str, title: str, body: str, *, checked: bool = False) -> QFrame:
@@ -201,15 +216,33 @@ class ModeWizardDialog(QDialog):
         text_col.setSpacing(4)
         title_label = QLabel(title)
         title_label.setObjectName("fieldLabel")
+        title_label.setWordWrap(True)
         body_label = QLabel(body)
         body_label.setObjectName("hintLabel")
         body_label.setWordWrap(True)
         body_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         text_col.addWidget(title_label)
         text_col.addWidget(body_label)
+        self._mode_title_labels[mode_id] = title_label
+        self._mode_body_labels[mode_id] = body_label
         row.addLayout(text_col, 1)
         frame.mousePressEvent = lambda _event, button=radio: button.setChecked(True)
         return frame
+
+    def update_language(self, ui_language: str) -> None:
+        self._ui_lang = _lang(ui_language)
+        self._copy = _COPY[self._ui_lang]
+        self.setWindowTitle(self._copy["title"])
+        self._title_label.setText(self._copy["title"])
+        self._subtitle_label.setText(self._copy["subtitle"])
+        self._steps_label.setText(self._copy["steps"])
+        self._skip_btn.setText(self._copy["skip"])
+        self._apply_btn.setText(self._copy["apply"])
+        self._open_settings_btn.setText(self._copy["open_settings"])
+        for mode_id in _MODE_ORDER:
+            self._mode_title_labels[mode_id].setText(self._copy[f"{mode_id}_title"])
+            self._mode_body_labels[mode_id].setText(self._copy[f"{mode_id}_body"])
+        self.adjustSize()
 
     def selected_mode(self) -> str:
         for mode_id in _MODE_ORDER:

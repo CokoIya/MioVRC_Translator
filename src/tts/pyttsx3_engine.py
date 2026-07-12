@@ -32,6 +32,21 @@ class Pyttsx3TTS(BaseTTS):
         """Check if pyttsx3 is available."""
         return self._engine is not None
 
+    def close(self) -> None:
+        """Stop and detach the native pyttsx3 driver."""
+
+        engine = self._engine
+        self._engine = None
+        self._voices_cache = None
+        if engine is None:
+            return
+        stop = getattr(engine, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:
+                logger.debug("Failed to stop pyttsx3 during shutdown", exc_info=True)
+
     def get_available_voices(self) -> list[TTSVoice]:
         """Get list of available system voices."""
         if not self.is_available():

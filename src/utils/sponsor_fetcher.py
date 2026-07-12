@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -63,6 +64,19 @@ _EMPTY: dict = {
 
 
 SponsorCallback = Callable[[dict], None]
+
+
+@dataclass(frozen=True, slots=True)
+class _SponsorSubscriber:
+    callback: SponsorCallback
+    fallback_on_error: bool
+    fallback_payload: dict
+
+
+_MAX_FETCH_SUBSCRIBERS = 256
+_fetch_lock = threading.RLock()
+_fetch_thread: threading.Thread | None = None
+_fetch_subscribers: list[_SponsorSubscriber] = []
 
 
 def _cache_path() -> Path:
@@ -207,11 +221,20 @@ def get_sponsors(
                 len(cached.get("sponsors", []) if isinstance(cached.get("sponsors"), list) else []),
             )
 
+    subscriber = _SponsorSubscriber(
+        callback=on_result,
+        fallback_on_error=bool(force_refresh),
+        fallback_payload=fallback_payload,
+    )
+
     def _run() -> None:
+        global _fetch_thread
+
+        fresh: dict | None = None
+        source_url = ""
         try:
             fresh, source_url = _fetch_remote()
             _save_cache(fresh)
-            on_result(fresh)
             logger.info(
                 "Sponsors list refreshed from remote (source=%s version=%s count=%s)",
                 source_url,
@@ -220,7 +243,51 @@ def get_sponsors(
             )
         except Exception as exc:
             logger.warning("Failed to fetch sponsors from remote: %s", exc)
-            if force_refresh:
-                on_result(fallback_payload)
+        finally:
+            with _fetch_lock:
+                subscribers = tuple(_fetch_subscribers)
+                _fetch_subscribers.clear()
+                _fetch_thread = None
 
-    threading.Thread(target=_run, daemon=True, name="sponsor-fetch").start()
+        for current in subscribers:
+            payload = fresh if fresh is not None else (
+                current.fallback_payload if current.fallback_on_error else None
+            )
+            if payload is None:
+                continue
+            try:
+                current.callback(payload)
+            except Exception:
+                logger.exception("Sponsors result callback failed")
+
+    global _fetch_thread
+    overflow = False
+    with _fetch_lock:
+        if len(_fetch_subscribers) >= _MAX_FETCH_SUBSCRIBERS:
+            overflow = True
+        else:
+            _fetch_subscribers.append(subscriber)
+            if _fetch_thread is not None:
+                return
+            active_thread = threading.Thread(
+                target=_run,
+                daemon=True,
+                name="sponsor-fetch",
+            )
+            _fetch_thread = active_thread
+            try:
+                # Starting under the re-entrant state lock keeps an inline test
+                # worker and a real worker equally race-free.
+                active_thread.start()
+            except BaseException:
+                _fetch_subscribers.clear()
+                _fetch_thread = None
+                raise
+            return
+
+    logger.warning(
+        "Sponsors refresh subscriber limit reached (%d); dropping remote callback",
+        _MAX_FETCH_SUBSCRIBERS,
+    )
+    if overflow and force_refresh:
+        on_result(fallback_payload)

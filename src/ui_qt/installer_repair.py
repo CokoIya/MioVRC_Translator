@@ -1,6 +1,7 @@
 """Shared full-installer repair helpers for bundled runtime components."""
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 from PySide6.QtCore import QUrl
@@ -9,9 +10,11 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 
 from src.updater.update_checker import UpdateInfo
 from src.utils.i18n import tr
+from src.utils.localization import normalize_ui_language
 
 MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
 _SUPPORTED_REPAIR_NOTE_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
+logger = logging.getLogger(__name__)
 
 
 def build_runtime_repair_update_info(
@@ -20,13 +23,23 @@ def build_runtime_repair_update_info(
     detail: str = "",
 ) -> UpdateInfo:
     issue = str(detail or "").strip() or tr(ui_lang, "xtts_runtime_unknown_issue")
+    current_language = normalize_ui_language(ui_lang)
     localized_notes = dict(update_info.localized_notes or {})
     for language in _SUPPORTED_REPAIR_NOTE_LANGUAGES:
         key = language.strip().lower().replace("_", "-")
-        localized_notes[key] = tr(language, "xtts_runtime_repair_notes", detail=issue)
+        localized_issue = (
+            issue
+            if language == current_language
+            else tr(language, "xtts_runtime_unknown_issue")
+        )
+        localized_notes[key] = tr(
+            language,
+            "xtts_runtime_repair_notes",
+            detail=localized_issue,
+        )
     return replace(
         update_info,
-        notes=tr("en", "xtts_runtime_repair_notes", detail=issue),
+        notes=localized_notes["en"],
         localized_notes=localized_notes,
         flow="repair",
     )
@@ -42,7 +55,8 @@ def show_installer_download_fallback(
     issue = str(detail or "").strip() or tr(ui_lang, "xtts_runtime_unknown_issue")
     fetch_error = str(error or "").strip()
     if fetch_error:
-        message = tr(ui_lang, "xtts_runtime_repair_fetch_failed", detail=issue, error=fetch_error)
+        logger.warning("Unable to fetch full installer information: %s", fetch_error)
+        message = tr(ui_lang, "xtts_runtime_repair_fetch_failed", detail=issue)
     else:
         message = tr(ui_lang, "xtts_runtime_repair_manual", detail=issue)
 

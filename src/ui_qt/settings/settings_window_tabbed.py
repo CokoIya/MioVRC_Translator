@@ -11,7 +11,7 @@ import copy
 import logging
 from typing import Callable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -29,12 +29,9 @@ from .tts_voice_tab import TTSVoiceTab
 from .vrchat_integration_tab import VRChatIntegrationTab
 from .advanced_tab import AdvancedTab
 from src.utils import config_manager
-from src.utils.i18n import tr as _base_tr
+from src.utils.i18n import tr
 
-
-def tr(language: str | None, key: str, **kwargs) -> str:
-    text = _base_tr(language, key, **kwargs)
-    return "" if text == key else text
+from .localized_tab import normalize_settings_language
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +95,9 @@ class SettingsWindowTabbed(QDialog):
     ):
         super().__init__(parent)
         self._config = config
-        self._ui_language = ui_language or str(config.get("ui", {}).get("language", "en") or "en")
+        self._ui_language = normalize_settings_language(
+            ui_language or config.get("ui", {}).get("language")
+        )
         self._on_test_microphone = on_test_microphone
         self._on_save = on_save
         self._on_close = on_close
@@ -118,7 +117,7 @@ class SettingsWindowTabbed(QDialog):
         )
         self._theme_var = _ValueVar(self._theme_labels().get(self._active_theme, self._theme_labels()["dark"]))
 
-        self.setWindowTitle(tr(self._ui_language, "settings_title") or "Settings")
+        self.setWindowTitle(tr(self._ui_language, "settings_title"))
         self.setMinimumSize(1000, 700)
 
         self._init_ui()
@@ -132,6 +131,8 @@ class SettingsWindowTabbed(QDialog):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
+        self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        self._tabs.tabBar().setUsesScrollButtons(True)
 
         self._quick_setup_tab = QuickSetupTab(
             self._config,
@@ -139,9 +140,10 @@ class SettingsWindowTabbed(QDialog):
             self._on_test_microphone,
         )
         self._quick_setup_tab.config_changed.connect(self._on_tab_config_changed)
+        self._quick_setup_tab.language_changed.connect(self.set_ui_language)
         self._tabs.addTab(
             self._quick_setup_tab,
-            "🎯 " + (tr(self._ui_language, "quick_setup_tab") or "Quick Setup"),
+            "🎯 " + tr(self._ui_language, "quick_setup_tab"),
         )
 
         self._api_models_tab = APIModelsTab(
@@ -151,7 +153,7 @@ class SettingsWindowTabbed(QDialog):
         self._api_models_tab.config_changed.connect(self._on_tab_config_changed)
         self._tabs.addTab(
             self._api_models_tab,
-            "🔑 " + (tr(self._ui_language, "api_models_tab") or "API & Models"),
+            "🔑 " + tr(self._ui_language, "api_models_tab"),
         )
 
         self._audio_tab = AudioMicrophoneTab(
@@ -164,7 +166,7 @@ class SettingsWindowTabbed(QDialog):
         self._audio_tab.config_changed.connect(self._on_tab_config_changed)
         self._tabs.addTab(
             self._audio_tab,
-            "🎤 " + (tr(self._ui_language, "audio_tab") or "Audio & Microphone"),
+            "🎤 " + tr(self._ui_language, "audio_tab"),
         )
 
         self._tts_tab = TTSVoiceTab(
@@ -174,7 +176,7 @@ class SettingsWindowTabbed(QDialog):
         self._tts_tab.config_changed.connect(self._on_tab_config_changed)
         self._tabs.addTab(
             self._tts_tab,
-            "🔊 " + (tr(self._ui_language, "tts_tab") or "TTS & Voice"),
+            "🔊 " + tr(self._ui_language, "tts_tab"),
         )
 
         self._vrchat_tab = VRChatIntegrationTab(
@@ -184,7 +186,7 @@ class SettingsWindowTabbed(QDialog):
         self._vrchat_tab.config_changed.connect(self._on_vrchat_config_changed)
         self._tabs.addTab(
             self._vrchat_tab,
-            "🎮 " + (tr(self._ui_language, "vrchat_tab") or "VRChat"),
+            "🎮 " + tr(self._ui_language, "vrchat_tab"),
         )
 
         self._advanced_tab = AdvancedTab(
@@ -194,7 +196,7 @@ class SettingsWindowTabbed(QDialog):
         self._advanced_tab.config_changed.connect(self._on_tab_config_changed)
         self._tabs.addTab(
             self._advanced_tab,
-            "⚙️ " + (tr(self._ui_language, "advanced_tab") or "Advanced"),
+            "⚙️ " + tr(self._ui_language, "advanced_tab"),
         )
 
         layout.addWidget(self._tabs)
@@ -203,12 +205,12 @@ class SettingsWindowTabbed(QDialog):
         button_layout.setContentsMargins(20, 10, 20, 10)
         button_layout.addStretch()
 
-        cancel_btn = QPushButton(tr(self._ui_language, "cancel") or "Cancel")
+        cancel_btn = QPushButton(tr(self._ui_language, "cancel"))
         cancel_btn.clicked.connect(self._on_cancel)
         button_layout.addWidget(cancel_btn)
         self._cancel_btn = cancel_btn
 
-        save_btn = QPushButton(tr(self._ui_language, "save") or "Save")
+        save_btn = QPushButton(tr(self._ui_language, "save"))
         save_btn.setDefault(True)
         save_btn.clicked.connect(self._on_save_clicked)
         button_layout.addWidget(save_btn)
@@ -250,8 +252,12 @@ class SettingsWindowTabbed(QDialog):
             self._set_save_controls_enabled(True)
             QMessageBox.critical(
                 self,
-                tr(self._ui_language, "save_failed") or "Save failed",
-                str(exc),
+                tr(self._ui_language, "save_failed"),
+                tr(
+                    self._ui_language,
+                    "settings_save_failed_detail",
+                    error=tr(self._ui_language, "unknown_error"),
+                ),
             )
             return
 
@@ -279,6 +285,9 @@ class SettingsWindowTabbed(QDialog):
             self._merge_dict(cfg, tab_config)
 
         quick_config = self._quick_setup_tab.get_config()
+        cfg.setdefault("ui", {})["language"] = normalize_settings_language(
+            quick_config.get("ui_language", self._ui_language)
+        )
         quick_translation = cfg.setdefault("translation", {})
         if "source_language" in quick_config:
             quick_translation["source_language"] = quick_config["source_language"]
@@ -312,6 +321,7 @@ class SettingsWindowTabbed(QDialog):
         """Load configuration into all tabs."""
         translation_cfg = config.get("translation", {}) if isinstance(config, dict) else {}
         quick_config = {
+            "ui_language": self._ui_language,
             "source_language": translation_cfg.get("source_language", "auto"),
             "target_language": translation_cfg.get("target_language", "zh-CN"),
             "translation_provider": translation_cfg.get("backend", "openai"),
@@ -363,10 +373,58 @@ class SettingsWindowTabbed(QDialog):
 
     def _theme_labels(self) -> dict[str, str]:
         return {
-            "dark": "Dark",
-            "light": "Light",
-            "system": "System",
+            "dark": tr(self._ui_language, "settings_theme_dark"),
+            "light": tr(self._ui_language, "settings_theme_light"),
+            "system": tr(self._ui_language, "settings_theme_system"),
         }
+
+    def set_ui_language(self, language: object) -> None:
+        """Retranslate the complete settings dialog without losing edits."""
+
+        self._apply_ui_language(language, emit_signal=True)
+
+    def update_language(self, language: object) -> None:
+        """Apply an external language change without emitting feedback."""
+
+        self._apply_ui_language(language, emit_signal=False)
+
+    def _apply_ui_language(self, language: object, *, emit_signal: bool) -> None:
+
+        normalized = normalize_settings_language(language)
+        if normalized == self._ui_language:
+            return
+        current_tab = self._tabs.currentIndex()
+        current_theme = self._theme_code_from_label(self._theme_var.value())
+        self._ui_language = normalized
+        self._config.setdefault("ui", {})["language"] = normalized
+
+        for tab in (
+            self._quick_setup_tab,
+            self._api_models_tab,
+            self._audio_tab,
+            self._tts_tab,
+            self._vrchat_tab,
+            self._advanced_tab,
+        ):
+            tab.set_ui_language(normalized)
+
+        self.setWindowTitle(tr(normalized, "settings_title"))
+        tab_keys = (
+            ("🎯 ", "quick_setup_tab"),
+            ("🔑 ", "api_models_tab"),
+            ("🎤 ", "audio_tab"),
+            ("🔊 ", "tts_tab"),
+            ("🎮 ", "vrchat_tab"),
+            ("⚙️ ", "advanced_tab"),
+        )
+        for index, (prefix, key) in enumerate(tab_keys):
+            self._tabs.setTabText(index, prefix + tr(normalized, key))
+        self._cancel_btn.setText(tr(normalized, "cancel"))
+        self._save_btn.setText(tr(normalized, "save"))
+        self._theme_var.set(self._theme_labels()[current_theme])
+        self._tabs.setCurrentIndex(current_tab)
+        if emit_signal:
+            self.language_changed.emit(normalized)
 
     def _theme_code_from_label(self, label: object) -> str:
         label_text = str(label or "")

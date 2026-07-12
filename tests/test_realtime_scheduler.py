@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import queue
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from src.core.realtime_scheduler import (
     AdmissionStatus,
+    RealtimeTask,
     RealtimeScheduler,
     SchedulerHealth,
 )
@@ -71,6 +74,65 @@ def _submit(scheduler, value, *, source=MIC, provider="provider"):
         provider_key=provider,
         payload=value,
     )
+
+
+def test_stop_cannot_leave_rewrite_work_enqueued_after_queue_drain():
+    put_started = threading.Event()
+    release_put = threading.Event()
+    stop_finished = threading.Event()
+
+    class BlockingQueue(queue.Queue):
+        def put(self, item, block=True, timeout=None):
+            put_started.set()
+            release_put.wait(timeout=3)
+            return super().put(item, block=block, timeout=timeout)
+
+    scheduler = RealtimeScheduler(
+        sources=(MIC,),
+        asr_handler=lambda task, cancel: task.payload,
+        rewrite_handler=lambda task, text, state, cancel: text,
+        translation_handler=lambda task, text, state, cancel: text,
+        delivery_handler=lambda completion: None,
+    )
+    stage_queue = BlockingQueue(maxsize=2)
+    scheduler._rewrite_queue = stage_queue
+    task = RealtimeTask(
+        source=MIC,
+        session_id=1,
+        sequence=0,
+        provider_key="provider",
+        payload=object(),
+        submitted_at=time.monotonic(),
+    )
+    work = SimpleNamespace(task=task)
+    enqueue_result = []
+    stop_result = []
+
+    enqueue_thread = threading.Thread(
+        target=lambda: enqueue_result.append(
+            scheduler._put_stage_work(stage_queue, work, stage_name="rewrite")
+        )
+    )
+    enqueue_thread.start()
+    assert put_started.wait(timeout=1)
+
+    def stop_scheduler():
+        stop_result.append(scheduler.stop(timeout=1))
+        stop_finished.set()
+
+    stop_thread = threading.Thread(target=stop_scheduler)
+    stop_thread.start()
+    assert not stop_finished.wait(timeout=0.05)
+    release_put.set()
+    enqueue_thread.join(timeout=1)
+    stop_thread.join(timeout=1)
+
+    assert not enqueue_thread.is_alive()
+    assert not stop_thread.is_alive()
+    assert enqueue_result == [True]
+    assert stop_result == [True]
+    assert stage_queue.empty()
+    assert scheduler._rewrite_pending_sequences == set()
 
 
 def test_next_sentence_starts_asr_while_previous_sentence_translates():
@@ -981,6 +1043,8 @@ def test_cancel_source_drops_stale_reverse_result_without_affecting_microphone()
         assert (DESKTOP, 0, "stale-reverse") not in delivered
         assert (MIC, 0, "mic-current") in delivered
         assert (DESKTOP, 1, "reverse-current") in delivered
+        assert scheduler._cancelled_sequences[DESKTOP] == set()
+        assert scheduler._translation_active_sequences == set()
     finally:
         release_reverse.set()
         assert scheduler.stop(timeout=2)

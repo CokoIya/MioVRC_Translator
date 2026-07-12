@@ -1,3 +1,5 @@
+import threading
+
 from src.utils import sponsor_fetcher
 
 
@@ -83,6 +85,48 @@ def test_get_sponsors_force_refresh_falls_back_to_cache_on_failure(monkeypatch):
     sponsor_fetcher.get_sponsors(callbacks.append, force_refresh=True)
 
     assert callbacks == [cached]
+
+
+def test_concurrent_sponsor_refreshes_share_one_worker_and_release_callbacks(
+    monkeypatch,
+):
+    cached = {"version": 1, "sponsors": [{"name": "old"}]}
+    fresh = {"version": 2, "sponsors": [{"name": "new"}]}
+    fetch_started = threading.Event()
+    release_fetch = threading.Event()
+    fetch_count = 0
+    first_results: list[dict] = []
+    second_results: list[dict] = []
+
+    def fetch_remote():
+        nonlocal fetch_count
+        fetch_count += 1
+        fetch_started.set()
+        assert release_fetch.wait(timeout=2)
+        return fresh, "https://example.com/sponsors.json"
+
+    monkeypatch.setattr(sponsor_fetcher, "_load_cache", lambda: cached)
+    monkeypatch.setattr(sponsor_fetcher, "_fetch_remote", fetch_remote)
+    monkeypatch.setattr(sponsor_fetcher, "_save_cache", lambda _data: None)
+
+    sponsor_fetcher.get_sponsors(first_results.append)
+    assert fetch_started.wait(timeout=1)
+    worker = sponsor_fetcher._fetch_thread
+    assert worker is not None
+
+    sponsor_fetcher.get_sponsors(second_results.append, force_refresh=True)
+    assert sponsor_fetcher._fetch_thread is worker
+    assert len(sponsor_fetcher._fetch_subscribers) == 2
+
+    release_fetch.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert fetch_count == 1
+    assert first_results == [cached, fresh]
+    assert second_results == [fresh]
+    assert sponsor_fetcher._fetch_thread is None
+    assert sponsor_fetcher._fetch_subscribers == []
 
 
 def test_fetch_remote_tries_github_first_then_mirror(monkeypatch):

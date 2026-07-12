@@ -6,11 +6,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import sys
 import threading
 from collections.abc import Callable
-from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
@@ -19,7 +17,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -33,6 +30,12 @@ from src.asr.hf_model_downloader import (
 )
 from src.asr.model_manager import download_model, model_exists
 from src.asr.model_registry import ASR_ENGINE_SPECS, get_asr_engine_spec
+from src.utils.i18n import tr
+from src.utils.localization import (
+    format_locale_number,
+    format_locale_percent,
+    normalize_ui_language,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,231 +47,45 @@ def _safe_disconnect(signal: QObject, slot: QObject) -> None:
     except (RuntimeError, TypeError):
         pass
 
-# ── Multilingual strings ─────────────────────────────────────────────────────
+# ── Shared localization helpers ──────────────────────────────────────────────
 
-_STRINGS: dict[str, dict[str, str]] = {
-    "zh": {
-        "dlg_title":    "模型未找到",
-        "dlg_header":   "模型未找到",
-        "engine_fmt":   "当前听写方式：{label}（{size}）",
-        "body":         "缺少模型，Mio 暂时听不懂你说话，也不能把语音翻译出去。\n建议现在下载。下载完成前仍可使用打字翻译。",
-        "privacy":      "下载到本机使用，你的声音不会上传到服务器",
-        "onetime":      "这个模型只需要下载一次，更新 Mio 时通常不用重新下载。",
-        "btn_download": "立即下载",
-        "btn_downloading": "正在下载",
-        "btn_skip":     "暂时跳过",
-        "btn_pause":    "暂停",
-        "btn_resume":   "继续",
-        "btn_cancel":   "取消",
-        "btn_retry":    "重新下载",
-        "btn_skip2":    "跳过，稍后下载",
-        "st_paused":    "已暂停",
-        "st_done":      "下载完成",
-        "st_cancelled": "已取消",
-        "st_error_pfx": "下载失败: ",
-        "hint_paused":  "下载已暂停，点击继续恢复",
-        "hint_error":   "下载失败: ",
-        "hint_ready":   "下载完成后窗口将自动关闭",
-        "hint_done":    "安装完成，即将关闭…",
-        "hint_existed": "模型已准备好，即将关闭…",
-        "hint_model_setup": "正在下载 {label} 模型，下载完成后窗口将自动关闭。",
-        "hint_retry":   "下载失败，请检查网络后重试。已经下载的缓存会保留，重新下载会尽量继续。",
-        "btn_close":    "关闭",
-        "setup_title":  "Mio RealTime Translator — 初始设置",
-        "setup_header": "正在准备模型",
-        "engine_desc": {
-            "sensevoice-small":      "适合中文、粤语，下载后可离线把声音变成文字。",
-            "whisper-large-v3-turbo": "适合英语听译的本地 Whisper Small，速度更快。",
-        },
-        "engine_size": {
-            "sensevoice-small":      "约 950 MB",
-            "whisper-large-v3-turbo": "约 461 MB",
-        },
-    },
-    "ja": {
-        "dlg_title":    "音声認識モデルが見つかりません",
-        "dlg_header":   "音声認識モデルが見つかりません",
-        "engine_fmt":   "エンジン：{label}（{size}）",
-        "body":         "モデルファイルが見つかりません。音声認識・翻訳機能が使用できません。\n今すぐダウンロードすることをお勧めします。ダウンロード中もテキスト入力は使用できます。",
-        "privacy":      "完全ローカル処理 — 音声データはどこにも送信されません",
-        "onetime":      "モデルのダウンロードは初回のみ。アップデート後の再ダウンロードは不要です。",
-        "btn_download": "今すぐダウンロード",
-        "btn_downloading": "ダウンロード中",
-        "btn_skip":     "後でダウンロード",
-        "btn_pause":    "一時停止",
-        "btn_resume":   "再開",
-        "btn_cancel":   "キャンセル",
-        "btn_retry":    "再ダウンロード",
-        "btn_skip2":    "スキップ（後でダウンロード）",
-        "st_paused":    "一時停止中",
-        "st_done":      "ダウンロード完了",
-        "st_cancelled": "キャンセルしました",
-        "st_error_pfx": "エラー: ",
-        "hint_paused":  "一時停止中。「再開」をクリックして続行。",
-        "hint_error":   "ダウンロード失敗: ",
-        "hint_ready":   "ダウンロード完了後、ウィンドウは自動的に閉じます",
-        "hint_done":    "インストール完了。まもなく閉じます…",
-        "hint_existed": "モデルは準備済みです。まもなく閉じます…",
-        "hint_model_setup": "{label} モデルをダウンロードしています。完了すると自動的に閉じます。",
-        "hint_retry":   "ダウンロードに失敗しました。ネットワークを確認して再試行してください。既存のキャッシュは保持され、可能な限り続きから再開します。",
-        "btn_close":    "閉じる",
-        "setup_title":  "Mio RealTime Translator — 初期設定",
-        "setup_header": "音声認識モデルをインストール中",
-        "engine_desc": {
-            "sensevoice-small":      "中国語・広東語向け、高精度オフライン音声認識モデル。",
-            "whisper-large-v3-turbo": "英語リスニング向けの高速なローカル Whisper Small モデル。",
-        },
-        "engine_size": {
-            "sensevoice-small":      "約 950 MB",
-            "whisper-large-v3-turbo": "約 461 MB",
-        },
-    },
-    "en": {
-        "dlg_title":    "Speech Model Not Found",
-        "dlg_header":   "Speech Recognition Model Not Found",
-        "engine_fmt":   "Engine: {label} ({size})",
-        "body":         "No model file found. Speech recognition and translation will not work.\nDownloading now is recommended. Text input remains available.",
-        "privacy":      "Fully local — your voice is never uploaded anywhere",
-        "onetime":      "The model only needs to be downloaded once. Updates will not require re-downloading.",
-        "btn_download": "Download Now",
-        "btn_downloading": "Downloading",
-        "btn_skip":     "Skip for Now",
-        "btn_pause":    "Pause",
-        "btn_resume":    "Resume",
-        "btn_cancel":   "Cancel",
-        "btn_retry":    "Retry Download",
-        "btn_skip2":    "Skip, Download Later",
-        "st_paused":    "Paused",
-        "st_done":      "Download Complete",
-        "st_cancelled": "Cancelled",
-        "st_error_pfx": "Error: ",
-        "hint_paused":  "Download paused. Click Resume to continue.",
-        "hint_error":   "Download failed: ",
-        "hint_ready":   "Window will close automatically when download completes",
-        "hint_done":    "Setup complete. Closing…",
-        "hint_existed": "Model is ready. Closing…",
-        "hint_model_setup": "Downloading the {label} model. This window will close automatically when it finishes.",
-        "hint_retry":   "Download failed. Check the network and retry. Existing cache is kept and the download will resume when possible.",
-        "btn_close":    "Close",
-        "setup_title":  "Mio RealTime Translator — Setup",
-        "setup_header": "Installing Speech Recognition Model",
-        "engine_desc": {
-            "sensevoice-small":      "High-accuracy offline speech recognition model for Chinese and Cantonese.",
-            "whisper-large-v3-turbo": "Fast local Whisper Small ASR model for English listening.",
-        },
-        "engine_size": {
-            "sensevoice-small":      "~950 MB",
-            "whisper-large-v3-turbo": "~461 MB",
-        },
-    },
-}
-
-_STRINGS["zh-cn"] = _STRINGS["zh"]
-_STRINGS["zh-tw"] = _STRINGS["zh"]
-_STRINGS["zh-hk"] = _STRINGS["zh"]
-_STRINGS["yue"] = _STRINGS["zh"]
-_STRINGS["ru"] = {
-    "dlg_title": "Модель не найдена",
-    "dlg_header": "Модель распознавания речи не найдена",
-    "engine_fmt": "Движок: {label} ({size})",
-    "body": "Файл модели не найден. Распознавание речи и перевод не будут работать.\nРекомендуется скачать сейчас. Текстовый ввод останется доступен.",
-    "privacy": "Полностью локально — ваш голос никуда не загружается",
-    "onetime": "Модель нужно скачать только один раз. После обновлений повторная загрузка обычно не нужна.",
-    "btn_download": "Скачать сейчас",
-    "btn_downloading": "Загрузка",
-    "btn_skip": "Пропустить",
-    "btn_pause": "Пауза",
-    "btn_resume": "Продолжить",
-    "btn_cancel": "Отмена",
-    "btn_retry": "Скачать заново",
-    "btn_skip2": "Пропустить, скачать позже",
-    "st_paused": "Пауза",
-    "st_done": "Загрузка завершена",
-    "st_cancelled": "Отменено",
-    "st_error_pfx": "Ошибка: ",
-    "hint_paused": "Загрузка приостановлена. Нажмите Продолжить.",
-    "hint_error": "Ошибка загрузки: ",
-    "hint_ready": "Окно закроется автоматически после загрузки",
-    "hint_done": "Установка завершена. Закрываем…",
-    "hint_existed": "Модель готова. Закрываем…",
-    "hint_model_setup": "Загружается модель {label}. Окно закроется автоматически после завершения.",
-    "hint_retry": "Загрузка не удалась. Проверьте сеть и повторите. Кэш будет сохранён, загрузка продолжится по возможности.",
-    "btn_close": "Закрыть",
-    "setup_title": "Mio RealTime Translator — настройка",
-    "setup_header": "Подготовка модели распознавания речи",
-    "engine_desc": {
-        "sensevoice-small": "Высокоточная офлайн-модель распознавания для китайского и кантонского.",
-        "whisper-large-v3-turbo": "Быстрая локальная модель Whisper Small для английского аудио.",
-    },
-    "engine_size": {
-        "sensevoice-small": "около 950 MB",
-        "whisper-large-v3-turbo": "около 461 MB",
-    },
-}
-_STRINGS["ko"] = {
-    "dlg_title": "모델을 찾을 수 없음",
-    "dlg_header": "음성 인식 모델을 찾을 수 없음",
-    "engine_fmt": "엔진: {label} ({size})",
-    "body": "모델 파일이 없습니다. 음성 인식과 번역이 작동하지 않습니다.\n지금 다운로드하는 것을 권장합니다. 다운로드 중에도 텍스트 입력은 사용할 수 있습니다.",
-    "privacy": "완전 로컬 처리 — 음성은 어디에도 업로드되지 않습니다",
-    "onetime": "모델은 한 번만 다운로드하면 됩니다. 업데이트 후에도 보통 다시 받을 필요가 없습니다.",
-    "btn_download": "지금 다운로드",
-    "btn_downloading": "다운로드 중",
-    "btn_skip": "지금은 건너뛰기",
-    "btn_pause": "일시정지",
-    "btn_resume": "계속",
-    "btn_cancel": "취소",
-    "btn_retry": "다시 다운로드",
-    "btn_skip2": "건너뛰고 나중에 다운로드",
-    "st_paused": "일시정지됨",
-    "st_done": "다운로드 완료",
-    "st_cancelled": "취소됨",
-    "st_error_pfx": "오류: ",
-    "hint_paused": "다운로드가 일시정지되었습니다. 계속을 눌러 재개하세요.",
-    "hint_error": "다운로드 실패: ",
-    "hint_ready": "다운로드가 완료되면 창이 자동으로 닫힙니다",
-    "hint_done": "설치 완료. 곧 닫습니다…",
-    "hint_existed": "모델이 준비되었습니다. 곧 닫습니다…",
-    "hint_model_setup": "{label} 모델을 다운로드 중입니다. 완료되면 창이 자동으로 닫힙니다.",
-    "hint_retry": "다운로드에 실패했습니다. 네트워크를 확인하고 다시 시도하세요. 기존 캐시는 유지되며 가능한 경우 이어받습니다.",
-    "btn_close": "닫기",
-    "setup_title": "Mio RealTime Translator — 설정",
-    "setup_header": "음성 인식 모델 준비 중",
-    "engine_desc": {
-        "sensevoice-small": "중국어와 광둥어에 적합한 고정확도 오프라인 음성 인식 모델입니다.",
-        "whisper-large-v3-turbo": "영어 듣기에 적합한 빠른 로컬 Whisper Small ASR 모델입니다.",
-    },
-    "engine_size": {
-        "sensevoice-small": "약 950 MB",
-        "whisper-large-v3-turbo": "약 461 MB",
-    },
+_ENGINE_TEXT_KEYS = {
+    "sensevoice-small": (
+        "model_download_sensevoice_description",
+        "model_download_sensevoice_size",
+    ),
+    "whisper-large-v3-turbo": (
+        "model_download_whisper_description",
+        "model_download_whisper_size",
+    ),
 }
 
 
-_dialog_lang: str = ""
+def _resolve_ui_language(parent: QWidget | None, explicit: str | None) -> str:
+    if explicit and str(explicit).strip():
+        return normalize_ui_language(explicit)
+    for attribute in ("_ui_lang", "_ui_language"):
+        value = str(getattr(parent, attribute, "") or "").strip()
+        if value:
+            return normalize_ui_language(value)
+    try:
+        from src.utils import config_manager
+
+        configured = str(
+            config_manager.load_config().get("ui", {}).get("language", "") or "en"
+        ).strip()
+        return normalize_ui_language(configured or "en")
+    except Exception:
+        return "en"
 
 
-def _set_dialog_lang(lang: str) -> None:
-    global _dialog_lang
-    _dialog_lang = lang.lower().split("-")[0] if lang else ""
+def _format_number(language: str, value: float, decimals: int) -> str:
+    return format_locale_number(value, language, decimals=decimals)
 
 
-def _effective_lang() -> str:
-    return _dialog_lang or "en"
-
-
-def _s(key: str, **fmt) -> str:
-    lang = _effective_lang()
-    table = _STRINGS.get(lang) or _STRINGS.get(lang.split("-")[0]) or _STRINGS["en"]
-    text = table.get(key, _STRINGS["en"].get(key, key))
-    return text.format(**fmt) if fmt else text
-
-
-def _s_engine(sub: str, engine: str) -> str:
-    lang = _effective_lang()
-    table = _STRINGS.get(lang) or _STRINGS.get(lang.split("-")[0]) or _STRINGS["en"]
-    en_table = _STRINGS["en"]
-    return (table.get(sub) or en_table.get(sub, {})).get(engine, "")
+def _engine_text(language: str, engine: str, index: int) -> str:
+    keys = _ENGINE_TEXT_KEYS.get(engine)
+    return tr(language, keys[index]) if keys else ""
 
 
 def _model_id_for_engine(engine: str) -> str:
@@ -303,8 +120,7 @@ class DownloadProgressWidget(QFrame):
         use_hf_downloader: bool = True,
     ) -> None:
         super().__init__(master)
-        if ui_lang:
-            _set_dialog_lang(ui_lang)
+        self._ui_lang = _resolve_ui_language(master, ui_lang)
         self._engine = engine
         self._model_id = model_id if model_id is not None else _model_id_for_engine(engine)
         self._on_completed = on_completed
@@ -320,6 +136,53 @@ class DownloadProgressWidget(QFrame):
         if self._downloader:
             self._downloader.add_listener(self._on_progress)
             self._on_progress(self._downloader.progress)
+
+    def _t(self, key: str, **kwargs: object) -> str:
+        return tr(self._ui_lang, key, **kwargs)
+
+    def _format_percent(self, fraction: float) -> str:
+        value = max(0, min(100, int(float(fraction) * 100)))
+        return format_locale_percent(value, self._ui_lang)
+
+    def _format_gb(self, byte_count: int) -> str:
+        return self._t(
+            "model_download_amount_gb",
+            value=_format_number(self._ui_lang, byte_count / 1_073_741_824, 2),
+        )
+
+    def _format_speed_eta(self, progress: DownloadProgress) -> str:
+        speed = ""
+        if progress.speed_bps > 0:
+            speed_mb = progress.speed_bps / 1_048_576
+            if speed_mb >= 0.1:
+                speed = self._t(
+                    "model_download_speed_mb",
+                    value=_format_number(self._ui_lang, speed_mb, 1),
+                )
+            else:
+                speed = self._t(
+                    "model_download_speed_kb",
+                    value=_format_number(self._ui_lang, progress.speed_bps / 1024, 0),
+                )
+
+        eta = ""
+        remaining = max(0, int(progress.eta_s))
+        if remaining:
+            minutes, seconds = divmod(remaining, 60)
+            if minutes:
+                eta = self._t(
+                    "model_download_eta_minutes_seconds",
+                    minutes=format_locale_number(minutes, self._ui_lang),
+                    seconds=format_locale_number(seconds, self._ui_lang),
+                )
+            else:
+                eta = self._t(
+                    "model_download_eta_seconds",
+                    seconds=format_locale_number(seconds, self._ui_lang),
+                )
+        if speed and eta:
+            return self._t("model_download_speed_eta", speed=speed, eta=eta)
+        return speed or eta
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -338,7 +201,7 @@ class DownloadProgressWidget(QFrame):
 
         info_row = QHBoxLayout()
         info_row.setSpacing(8)
-        self._pct_label = QLabel("0%")
+        self._pct_label = QLabel(self._format_percent(0))
         self._pct_label.setObjectName("pctLabel")
         info_row.addWidget(self._pct_label)
         info_row.addStretch(1)
@@ -349,13 +212,13 @@ class DownloadProgressWidget(QFrame):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self._pause_btn = QPushButton(_s("btn_pause"))
+        self._pause_btn = QPushButton(self._t("model_download_pause"))
         self._pause_btn.clicked.connect(self._toggle_pause)
         btn_row.addWidget(self._pause_btn)
-        self._stop_btn = QPushButton(_s("btn_cancel"))
+        self._stop_btn = QPushButton(self._t("model_download_cancel"))
         self._stop_btn.clicked.connect(self._cancel)
         btn_row.addWidget(self._stop_btn)
-        self._retry_btn = QPushButton(_s("btn_retry"))
+        self._retry_btn = QPushButton(self._t("model_download_retry"))
         self._retry_btn.clicked.connect(self._retry)
         self._retry_btn.hide()
         btn_row.addWidget(self._retry_btn)
@@ -391,7 +254,7 @@ class DownloadProgressWidget(QFrame):
     def _apply_progress(self, p: DownloadProgress) -> None:
         frac = p.overall_fraction
         self._bar.setValue(int(frac * 100))
-        self._pct_label.setText(f"{int(frac * 100)}%")
+        self._pct_label.setText(self._format_percent(frac))
 
         show_retry = p.state in (DownloadState.ERROR, DownloadState.CANCELLED)
         self._pause_btn.setVisible(not show_retry)
@@ -399,18 +262,13 @@ class DownloadProgressWidget(QFrame):
         self._retry_btn.setVisible(show_retry)
 
         if p.state == DownloadState.PAUSED:
-            self._speed_label.setText(_s("st_paused"))
-            self._pause_btn.setText(_s("btn_resume"))
+            self._speed_label.setText(self._t("model_download_status_paused"))
+            self._pause_btn.setText(self._t("model_download_resume"))
         elif p.state == DownloadState.DOWNLOADING:
-            speed_parts = []
-            if p.speed_bps > 0:
-                speed_parts.append(p.speed_mb)
-            if p.eta_str:
-                speed_parts.append(p.eta_str)
-            self._speed_label.setText("  ".join(speed_parts))
-            self._pause_btn.setText(_s("btn_pause"))
+            self._speed_label.setText(self._format_speed_eta(p))
+            self._pause_btn.setText(self._t("model_download_pause"))
         elif p.state == DownloadState.COMPLETED:
-            self._speed_label.setText(_s("st_done"))
+            self._speed_label.setText(self._t("model_download_status_complete"))
             self._pause_btn.setEnabled(False)
             self._stop_btn.setEnabled(False)
             if self._on_completed and not self._completed_notified:
@@ -418,20 +276,27 @@ class DownloadProgressWidget(QFrame):
                 self._on_completed()
             return
         elif p.state == DownloadState.ERROR:
-            self._speed_label.setText(_s("st_error_pfx") + p.error[:50])
+            if p.error:
+                logger.warning("Model download failed: %s", p.error)
+            self._speed_label.setText(self._t("model_download_status_error"))
         elif p.state == DownloadState.CANCELLED:
-            self._speed_label.setText(_s("st_cancelled"))
+            self._speed_label.setText(self._t("model_download_status_cancelled"))
 
         if not self._compact and hasattr(self, "_status_label"):
             if p.state == DownloadState.DOWNLOADING and p.file_name:
-                done_gb = p.total_bytes / 1_073_741_824
-                total_gb = p.total_total / 1_073_741_824 if p.total_total else 0
-                total_str = f"{total_gb:.2f} GB" if total_gb else "?"
-                self._status_label.setText(f"{p.file_name}  {done_gb:.2f} GB / {total_str}")
+                total_text = self._format_gb(p.total_total) if p.total_total else "?"
+                self._status_label.setText(
+                    self._t(
+                        "model_download_progress_file",
+                        file=p.file_name,
+                        downloaded=self._format_gb(p.total_bytes),
+                        total=total_text,
+                    )
+                )
             elif p.state == DownloadState.PAUSED:
-                self._status_label.setText(_s("hint_paused"))
+                self._status_label.setText(self._t("model_download_hint_paused"))
             elif p.state == DownloadState.ERROR:
-                self._status_label.setText(_s("hint_error") + p.error)
+                self._status_label.setText(self._t("model_download_hint_error"))
 
     def _apply_style(self) -> None:
         self.setStyleSheet("""
@@ -472,8 +337,7 @@ class ModelMissingDialog(QDialog):
         ui_lang: str | None = None,
     ) -> None:
         super().__init__(parent)
-        if ui_lang:
-            _set_dialog_lang(ui_lang)
+        self._ui_lang = _resolve_ui_language(parent, ui_lang)
         self._engine = engine
         self._model_id = _model_id_for_engine(engine)
         self._result = "skip"
@@ -484,50 +348,55 @@ class ModelMissingDialog(QDialog):
         self._is_download_running = is_download_running
 
         label = get_asr_engine_spec(engine).label
-        size = _s_engine("engine_size", engine)
+        size = _engine_text(self._ui_lang, engine, 1)
 
-        self.setWindowTitle(_s("dlg_title"))
-        self.setFixedSize(460, 380)
+        self.setWindowTitle(self._t("model_download_dialog_title"))
+        self.setMinimumSize(460, 380)
+        self.resize(520, 420)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._build_prompt(label, size)
         self._apply_style()
 
-    def _build_prompt(self, label: str, size: str) -> None:
-        from PySide6.QtCore import QTimer
+    def _t(self, key: str, **kwargs: object) -> str:
+        return tr(self._ui_lang, key, **kwargs)
 
+    def _build_prompt(self, label: str, size: str) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(12)
 
-        header = QLabel(_s("dlg_header"))
+        header = QLabel(self._t("model_download_dialog_header"))
         header.setObjectName("warningLabel")
+        header.setWordWrap(True)
         root.addWidget(header)
 
-        desc = _s_engine("engine_desc", self._engine)
+        desc = _engine_text(self._ui_lang, self._engine, 0)
         body = (
-            _s("engine_fmt", label=label, size=size) + "\n" +
+            self._t("model_download_engine_summary", label=label, size=size) + "\n" +
             (desc + "\n\n" if desc else "") +
-            _s("body")
+            self._t("model_download_missing_body")
         )
         body_label = QLabel(body)
         body_label.setWordWrap(True)
         root.addWidget(body_label)
 
-        one_time = QLabel("" + _s("onetime"))
+        one_time = QLabel(self._t("model_download_one_time"))
         one_time.setObjectName("accentLabel")
+        one_time.setWordWrap(True)
         root.addWidget(one_time)
 
-        privacy = QLabel(_s("privacy"))
+        privacy = QLabel(self._t("model_download_privacy"))
         privacy.setObjectName("successLabel")
+        privacy.setWordWrap(True)
         root.addWidget(privacy)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        self._download_btn = QPushButton(_s("btn_download"))
+        self._download_btn = QPushButton(self._t("model_download_now"))
         self._download_btn.setObjectName("primaryButton")
         self._download_btn.clicked.connect(self._start_download)
         btn_row.addWidget(self._download_btn)
-        self._skip_btn = QPushButton(_s("btn_skip"))
+        self._skip_btn = QPushButton(self._t("model_download_skip"))
         self._skip_btn.clicked.connect(self._skip)
         btn_row.addWidget(self._skip_btn)
         root.addLayout(btn_row)
@@ -541,10 +410,12 @@ class ModelMissingDialog(QDialog):
         self._result = "download"
         if self._on_download_click is not None:
             self._download_btn.setEnabled(False)
-            self._download_btn.setText(_s("btn_downloading"))
+            self._download_btn.setText(self._t("model_downloading_button"))
             self._skip_btn.setEnabled(False)
             self._on_download_click()
-            self._status_label.setText(_s("hint_model_setup", label=self._engine_label()))
+            self._status_label.setText(
+                self._t("model_download_hint_setup", label=self._engine_label())
+            )
             self._status_label.show()
             self._watching_external_download = True
 
@@ -569,11 +440,11 @@ class ModelMissingDialog(QDialog):
     def _on_external_download_stopped(self) -> None:
         self._watching_external_download = False
         self._result = "failed"
-        self._download_btn.setText(_s("btn_retry"))
+        self._download_btn.setText(self._t("model_download_retry"))
         self._download_btn.setEnabled(True)
         _safe_disconnect(self._download_btn.clicked, self._start_download)
         self._download_btn.clicked.connect(self._start_download)
-        self._skip_btn.setText(_s("btn_close"))
+        self._skip_btn.setText(self._t("model_download_close"))
         self._skip_btn.setEnabled(True)
         _safe_disconnect(self._skip_btn.clicked, self.close)
         self._skip_btn.clicked.connect(self.close)
@@ -625,8 +496,7 @@ class ModelMissingDialog(QDialog):
 class SetupWindow(QDialog):
     def __init__(self, engine: str, ui_lang: str | None = None) -> None:
         super().__init__()
-        if ui_lang:
-            _set_dialog_lang(ui_lang)
+        self._ui_lang = _resolve_ui_language(None, ui_lang)
         self._engine = engine
         self._model_id = _model_id_for_engine(engine)
         self._runtime_spec = get_asr_engine_spec(engine)
@@ -641,10 +511,11 @@ class SetupWindow(QDialog):
 
         label = self._runtime_spec.label or engine.replace("-", " ").title()
         self._engine_label = self._runtime_spec.label or label
-        size = _s_engine("engine_size", engine)
+        size = _engine_text(self._ui_lang, engine, 1)
 
-        self.setWindowTitle(_s("setup_title"))
-        self.setFixedSize(480, 430)
+        self.setWindowTitle(self._t("model_download_setup_title"))
+        self.setMinimumSize(480, 430)
+        self.resize(540, 470)
         self._build(self._engine_label, size)
         self._center()
 
@@ -655,6 +526,18 @@ class SetupWindow(QDialog):
             QTimer.singleShot(300, self._already_complete)
         else:
             QTimer.singleShot(300, self._auto_start)
+
+    def _t(self, key: str, **kwargs: object) -> str:
+        return tr(self._ui_lang, key, **kwargs)
+
+    def _format_percent(self, value: float) -> str:
+        return format_locale_percent(max(0, min(100, int(value))), self._ui_lang)
+
+    def _format_gb(self, byte_count: int) -> str:
+        return self._t(
+            "model_download_amount_gb",
+            value=_format_number(self._ui_lang, byte_count / 1_073_741_824, 2),
+        )
 
     def _center(self) -> None:
         geo = self.frameGeometry()
@@ -668,34 +551,44 @@ class SetupWindow(QDialog):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(12)
 
-        header = QLabel(_s("setup_header"))
+        header = QLabel(self._t("model_download_setup_header"))
         header.setObjectName("setupHeader")
+        header.setWordWrap(True)
         root.addWidget(header)
 
-        desc = _s_engine("engine_desc", self._engine)
-        info = QLabel(f"{label}  ·  {size}" + (f"\n{desc}" if desc else ""))
+        desc = _engine_text(self._ui_lang, self._engine, 0)
+        info_text = self._t(
+            "model_download_engine_info",
+            label=label,
+            size=size,
+            description=desc,
+        ).rstrip()
+        info = QLabel(info_text)
         info.setWordWrap(True)
         root.addWidget(info)
 
-        one_time = QLabel("" + _s("onetime"))
+        one_time = QLabel(self._t("model_download_one_time"))
         one_time.setObjectName("accentLabel")
+        one_time.setWordWrap(True)
         root.addWidget(one_time)
 
-        privacy = QLabel(_s("privacy"))
+        privacy = QLabel(self._t("model_download_privacy"))
         privacy.setObjectName("successLabel")
+        privacy.setWordWrap(True)
         root.addWidget(privacy)
 
         self._progress_widget = DownloadProgressWidget(
             self,
             self._engine,
+            ui_lang=self._ui_lang,
             use_hf_downloader=False,
         )
         root.addWidget(self._progress_widget)
 
-        self._bottom_label = QLabel(_s("hint_ready"))
+        self._bottom_label = QLabel(self._t("model_download_hint_ready"))
         self._bottom_label.setWordWrap(True)
         root.addWidget(self._bottom_label)
-        self._retry_btn = QPushButton(_s("btn_retry"))
+        self._retry_btn = QPushButton(self._t("model_download_retry"))
         self._retry_btn.clicked.connect(self._retry_download)
         self._retry_btn.hide()
         root.addWidget(self._retry_btn, 0, Qt.AlignmentFlag.AlignLeft)
@@ -708,9 +601,11 @@ class SetupWindow(QDialog):
         self._close_scheduled = False
         self._retry_btn.hide()
         self._progress_widget._bar.setValue(0)
-        self._progress_widget._pct_label.setText("0%")
+        self._progress_widget._pct_label.setText(self._format_percent(0))
         self._progress_widget._speed_label.setText("")
-        self._bottom_label.setText(_s("hint_model_setup", label=self._engine_label))
+        self._bottom_label.setText(
+            self._t("model_download_hint_setup", label=self._engine_label)
+        )
         self._download_thread = threading.Thread(
             target=self._download_runtime_model,
             daemon=True,
@@ -719,7 +614,7 @@ class SetupWindow(QDialog):
         self._download_thread.start()
 
     def _already_complete(self) -> None:
-        self._bottom_label.setText(_s("hint_existed"))
+        self._bottom_label.setText(self._t("model_download_hint_existed"))
         self._schedule_close(1500)
 
     def _download_runtime_model(self) -> None:
@@ -742,37 +637,70 @@ class SetupWindow(QDialog):
 
         if stage == "download_complete":
             self._progress_widget._bar.setValue(100)
-            self._progress_widget._pct_label.setText("100%")
-            self._progress_widget._speed_label.setText(_s("st_done"))
+            self._progress_widget._pct_label.setText(self._format_percent(100))
+            self._progress_widget._speed_label.setText(
+                self._t("model_download_status_complete")
+            )
+            return
+
+        if stage == "download_retry":
+            attempt = event.get("attempt")
+            maximum = event.get("max_attempts")
+            self._progress_widget._speed_label.setText(
+                self._t(
+                    "model_download_retrying",
+                    attempt=format_locale_number(
+                        int(attempt) if isinstance(attempt, int) else 1,
+                        self._ui_lang,
+                    ),
+                    maximum=format_locale_number(
+                        int(maximum) if isinstance(maximum, int) else 1,
+                        self._ui_lang,
+                    ),
+                )
+            )
             return
 
         if stage in {"download_prepare", "download"}:
             if progress is not None:
                 self._progress_widget._bar.setValue(int(progress * 100))
-                self._progress_widget._pct_label.setText(f"{int(progress * 100)}%")
+                self._progress_widget._pct_label.setText(
+                    self._format_percent(progress * 100)
+                )
             downloaded = event.get("downloaded_bytes")
             total = event.get("total_bytes")
             if isinstance(downloaded, int) and isinstance(total, int) and total > 0:
-                done_gb = downloaded / 1_073_741_824
-                total_gb = total / 1_073_741_824
-                self._progress_widget._speed_label.setText(f"{done_gb:.2f} / {total_gb:.2f} GB")
+                self._progress_widget._speed_label.setText(
+                    self._t(
+                        "model_download_progress_file",
+                        file="",
+                        downloaded=self._format_gb(downloaded),
+                        total=self._format_gb(total),
+                    ).strip()
+                )
+            elif stage == "download_prepare":
+                self._progress_widget._speed_label.setText(
+                    self._t("model_download_preparing")
+                )
             return
 
         message = str(event.get("message", "")).strip()
         if message:
-            self._progress_widget._speed_label.setText(message)
+            logger.debug("Unhandled model download progress message: %s", message)
 
     def _on_completed(self) -> None:
         if self._close_scheduled:
             return
         self._progress_widget._bar.setValue(100)
-        self._bottom_label.setText(_s("hint_done"))
+        self._bottom_label.setText(self._t("model_download_hint_done"))
         self._exit_code = 0
         self._schedule_close(1500)
 
     def _on_failed(self, message: str) -> None:
+        if message:
+            logger.error("Model setup download failed: %s", message)
         self._progress_widget._bar.setValue(0)
-        self._bottom_label.setText(_s("hint_error") + message + "\n" + _s("hint_retry"))
+        self._bottom_label.setText(self._t("model_download_hint_error"))
         self._retry_btn.show()
         self._exit_code = 1
 

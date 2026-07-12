@@ -4,6 +4,7 @@
 # This file is part of Mio RealTime Translator.
 
 import collections
+import gc
 import hashlib
 from io import BytesIO
 import logging
@@ -348,6 +349,24 @@ class SileroVADDetector:
         if self.envelope_follower:
             self.envelope_follower.reset()
         self.latest_smooth_rms = 0.0
+
+    def close(self) -> None:
+        """Release the per-recorder TorchScript model after capture stops."""
+
+        with self._model_lock:
+            model = self._model
+            self._model = None
+            self._model_error = None
+            self._fallback_vad = None
+        self.reset()
+        close = getattr(model, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.debug("Silero VAD model close failed", exc_info=True)
+        del model
+        gc.collect()
 
     def activation_speech_samples(self, fallback_frame_samples: int) -> int:
         """Return voiced samples already confirmed by the active VAD."""
