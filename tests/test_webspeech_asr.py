@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import time
 import webbrowser
+from urllib.request import urlopen
+
 from src.asr.webspeech_asr import _BridgeState, _page, WebSpeechASRProvider
 
 
@@ -22,6 +25,11 @@ def test_webspeech_bridge_page_applies_runtime_options():
     assert '"silenceTimeoutMs":1200' in page
     assert "rec.continuous = options.continuous" in page
     assert "postResult(lastPartial, true)" in page
+    assert "fetch('/capture-state'" in page
+    assert "rec.abort()" in page
+
+    paused_page = _page("zh-CN", capture_enabled=False).decode("utf-8")
+    assert '"captureEnabled":false' in paused_page
 
 
 def test_webspeech_state_deduplicates_final_results():
@@ -35,6 +43,22 @@ def test_webspeech_state_deduplicates_final_results():
 
     assert state.pop_final(0.01) == "hello"
     assert state.pop_final(0.01) == ""
+
+
+def test_webspeech_capture_pause_discards_and_blocks_microphone_results():
+    state = _BridgeState()
+    state.set_result("before mute", True)
+
+    state.set_capture_enabled(False)
+    state.set_result("while muted", True)
+
+    assert state.capture_status() == {"capture_enabled": False}
+    assert state.pop_final(0.01) == ""
+
+    state.set_capture_enabled(True)
+    state.set_result("after unmute", True)
+
+    assert state.pop_final(0.01) == "after unmute"
 
 
 def test_webspeech_provider_opens_browser_once(monkeypatch):
@@ -59,6 +83,31 @@ def test_webspeech_provider_opens_browser_once(monkeypatch):
 
     assert len(opened) == 1
     assert opened[0].startswith("http://127.0.0.1:")
+
+
+def test_webspeech_capture_control_is_exposed_to_browser_page():
+    provider = WebSpeechASRProvider(
+        {
+            "asr": {
+                "webspeech": {
+                    "bridge_port": 0,
+                    "auto_open_browser": False,
+                }
+            }
+        }
+    )
+    try:
+        provider.set_capture_enabled(False)
+        provider.load()
+        with urlopen(f"{provider._url}capture-state", timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(provider._url, timeout=2.0) as response:
+            page = response.read().decode("utf-8")
+    finally:
+        provider.close()
+
+    assert payload == {"capture_enabled": False}
+    assert '"captureEnabled":false' in page
 
 
 def test_webspeech_provider_uses_embedded_opener_and_closes_handle(monkeypatch):

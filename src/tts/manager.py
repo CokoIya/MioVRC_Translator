@@ -260,7 +260,10 @@ class TTSManager:
         self._playback_context = threading.local()
         self._playback_activity_event: threading.Event | None = None
 
-        self._device_sample_rates_cache: dict[OutputDeviceRef, list[int]] = {}
+        self._device_sample_rates_cache: dict[
+            tuple[OutputDeviceRef, int],
+            list[int],
+        ] = {}
         self._device_cache_lock = threading.Lock()
         self._consecutive_failures = 0
         self._last_failure_message = ""
@@ -612,9 +615,29 @@ class TTSManager:
         sample_rate: int,
         playback_device: OutputDeviceRef,
     ) -> tuple[np.ndarray, int]:
-        """Resample decoded audio to a rate supported by the target device."""
+        """Adapt decoded audio to the target device's channel/rate contract."""
         target_audio = np.asarray(audio_array, dtype=np.float32)
-        supported_rates = self._probe_supported_sample_rates(playback_device)
+        source_channels = 1 if target_audio.ndim == 1 else int(target_audio.shape[1])
+        target_channels = self._preferred_output_channels(
+            playback_device,
+            source_channels,
+        )
+        if target_channels != source_channels:
+            logger.info(
+                "Converting TTS channel layout: %d -> %d channels (device=%s)",
+                source_channels,
+                target_channels,
+                playback_device,
+            )
+            target_audio = self._convert_channel_layout(
+                target_audio,
+                target_channels,
+            )
+
+        supported_rates = self._probe_supported_sample_rates(
+            playback_device,
+            channels=target_channels,
+        )
         target_sample_rate = self._choose_best_sample_rate(sample_rate, supported_rates)
 
         if target_sample_rate != sample_rate:
@@ -630,7 +653,61 @@ class TTSManager:
                 sample_rate,
                 target_sample_rate,
             )
-        return target_audio, target_sample_rate
+        return np.ascontiguousarray(target_audio, dtype=np.float32), target_sample_rate
+
+    @staticmethod
+    def _convert_channel_layout(
+        audio_array: np.ndarray,
+        target_channels: int,
+    ) -> np.ndarray:
+        """Convert interleaved/mono PCM without changing duration."""
+
+        audio = np.asarray(audio_array, dtype=np.float32)
+        target_channels = max(1, int(target_channels))
+        source_channels = 1 if audio.ndim == 1 else int(audio.shape[1])
+        if source_channels == target_channels:
+            return audio
+        if target_channels == 1:
+            if audio.ndim == 1:
+                return audio
+            return np.mean(audio, axis=1, dtype=np.float32)
+        if source_channels == 1:
+            mono = audio if audio.ndim == 1 else audio[:, 0]
+            return np.repeat(mono[:, np.newaxis], target_channels, axis=1)
+        if target_channels < source_channels:
+            return audio[:, :target_channels]
+
+        repeats = int(math.ceil(target_channels / source_channels))
+        return np.tile(audio, (1, repeats))[:, :target_channels]
+
+    def _preferred_output_channels(
+        self,
+        device: OutputDeviceRef,
+        source_channels: int,
+    ) -> int:
+        """Choose a broadly compatible channel count for a playback endpoint."""
+
+        source_channels = max(1, int(source_channels))
+        try:
+            device_info = sd.query_devices(device, kind="output")
+        except Exception as exc:
+            logger.debug("Failed to query output device channels: %s", exc)
+            return source_channels
+
+        try:
+            max_channels = int(device_info.get("max_output_channels", 0) or 0)
+        except Exception:
+            max_channels = 0
+        if max_channels <= 0:
+            return source_channels
+
+        device_name = str(device_info.get("name", "") or "")
+        if _is_virtual_output_device(device_name) and max_channels >= 2:
+            # Qwen and several cloud engines return 24 kHz mono WAV. MixLine's
+            # render endpoints are stereo/48 kHz devices; explicitly duplicate
+            # mono into L/R so the virtual-microphone path receives both sides.
+            return 2
+        return max(1, min(source_channels, max_channels))
 
     def _create_output_stream(
         self,
@@ -1554,7 +1631,11 @@ class TTSManager:
             if getattr(self, "_playback_activity_event", None) is activity_event:
                 self._playback_activity_event = None
 
-    def _probe_supported_sample_rates(self, device: OutputDeviceRef) -> list[int]:
+    def _probe_supported_sample_rates(
+        self,
+        device: OutputDeviceRef,
+        channels: int = 1,
+    ) -> list[int]:
         """Probe which sample rates the device supports.
 
         Args:
@@ -1563,10 +1644,14 @@ class TTSManager:
         Returns:
             List of supported sample rates in Hz.
         """
-        # Check cache first
+        channels = max(1, int(channels))
+        cache_key = (device, channels)
+
+        # Check cache first. Channel count is part of the PortAudio contract;
+        # a rate accepted for mono is not necessarily accepted for stereo.
         with self._device_cache_lock:
-            if device in self._device_sample_rates_cache:
-                return self._device_sample_rates_cache[device]
+            if cache_key in self._device_sample_rates_cache:
+                return self._device_sample_rates_cache[cache_key]
 
         common_rates = [8000, 11025, 16000, 22050, 24000, 44100, 48000, 96000]
         supported = []
@@ -1576,7 +1661,7 @@ class TTSManager:
                 sd.check_output_settings(
                     device=device,
                     samplerate=rate,
-                    channels=1
+                    channels=channels,
                 )
                 supported.append(rate)
             except Exception as exc:
@@ -1587,16 +1672,25 @@ class TTSManager:
                     exc,
                 )
 
-        # If no rates found, assume 48kHz (most common)
+        # If probing is unavailable, use the device's advertised default rate.
         if not supported:
-            logger.warning("Could not probe device sample rates, assuming 48kHz")
-            supported = [48000]
+            fallback_rate = self._target_sample_rate(device, 48000)
+            logger.warning(
+                "Could not probe device sample rates for %d channel(s), assuming %d Hz",
+                channels,
+                fallback_rate,
+            )
+            supported = [fallback_rate]
 
-        logger.debug("Device supports sample rates: %s", supported)
+        logger.debug(
+            "Device supports sample rates (channels=%d): %s",
+            channels,
+            supported,
+        )
 
         # Update cache
         with self._device_cache_lock:
-            self._device_sample_rates_cache[device] = supported
+            self._device_sample_rates_cache[cache_key] = supported
 
         return supported
 

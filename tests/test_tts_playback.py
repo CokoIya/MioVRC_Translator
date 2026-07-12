@@ -27,6 +27,39 @@ class TestTTSAudioPlayback:
             assert 48000 in rates
             assert 24000 not in rates
 
+    def test_prepare_qwen_mono_for_mixline_uses_stereo_48khz(self, monkeypatch):
+        """MixLine receives Qwen's 24 kHz mono output as duplicated 48 kHz L/R."""
+        manager = TTSManager()
+        probes = []
+
+        monkeypatch.setattr(
+            "src.tts.manager.sd.query_devices",
+            lambda _device, kind=None: {
+                "name": "Speakers (MIXLINE)",
+                "max_output_channels": 2,
+                "default_samplerate": 48000.0,
+            },
+        )
+
+        def check_settings(*, device, samplerate, channels):
+            probes.append((device, samplerate, channels))
+            if samplerate != 48000 or channels != 2:
+                raise RuntimeError("unsupported format")
+
+        monkeypatch.setattr(
+            "src.tts.manager.sd.check_output_settings",
+            check_settings,
+        )
+
+        source = np.array([0.25, -0.5, 0.75, 0.0], dtype=np.float32)
+        prepared, sample_rate = manager._prepare_audio_for_device(source, 24000, 40)
+
+        assert sample_rate == 48000
+        assert prepared.shape == (8, 2)
+        np.testing.assert_allclose(prepared[:, 0], prepared[:, 1])
+        assert probes
+        assert {channels for _device, _rate, channels in probes} == {2}
+
     def test_choose_best_sample_rate_exact_match(self):
         """Test choosing sample rate when exact match exists."""
         manager = TTSManager()

@@ -353,8 +353,25 @@ def test_settings_window_common_page_has_theme_and_bg(qtbot, config, monkeypatch
     page = dialog._pages.get("common")
     assert page is not None
     assert dialog._theme_var.value() == dialog._theme_labels()["system"]
+    assert dialog._font_codes[dialog._font_var.value()] == "851"
 
     dialog.accept()
+
+
+def test_settings_window_saves_system_default_font(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    system_label = next(
+        label for label, code in dialog._font_codes.items() if code == "system"
+    )
+    dialog._font_var.set(system_label)
+
+    dialog._save()
+
+    assert config["ui"]["font_family"] == "system"
 
 
 def test_settings_theme_toggle_uses_lightweight_fade(qtbot, config, monkeypatch):
@@ -438,6 +455,23 @@ def test_settings_window_save_ui_language_and_avatar_sync(qtbot, config, monkeyp
         "error": "MioError",
         "target_language": "MioTargetLanguage",
     }
+
+
+def test_settings_save_persists_effective_osc_listener_for_mute_sync(
+    qtbot, config, monkeypatch
+):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    dialog._osc_listener_enabled_var.set(False)
+    dialog._osc_sync_mute_self_var.set(True)
+    dialog._osc_allow_avatar_control_var.set(False)
+
+    dialog._save()
+
+    assert config["osc"]["listener_enabled"] is True
 
 
 def test_settings_save_preserves_app_mode_when_tts_is_enabled(qtbot, config, monkeypatch):
@@ -1535,6 +1569,14 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
 
     dialog = SettingsWindow(None, config)
     qtbot.addWidget(dialog)
+    api_row = next(
+        i for i, (page_id, _label) in enumerate(NAV_ITEMS)
+        if page_id == "api_config"
+    )
+    dialog._nav_list.setCurrentRow(api_row)
+    qtbot.wait(30)
+    assert dialog._tts_api_base_url_entry is not None
+
     tts_row = next(i for i, (page_id, _label) in enumerate(NAV_ITEMS) if page_id == "tts")
     dialog._nav_list.setCurrentRow(tts_row)
     qtbot.wait(30)
@@ -1543,10 +1585,15 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
         label for label, code in dialog._tts_api_region_codes.items()
         if code == "china_mainland"
     )
+    assert dialog._tts_voice_api_region_combo is not None
+    assert dialog._tts_voice_api_region_combo.currentText() != mainland_label
     dialog._tts_api_key_var.set("new-key")
     dialog._tts_api_model_var.set("qwen3-tts-flash")
-    dialog._tts_api_region_var.set(mainland_label)
-    dialog._on_tts_api_region_changed(mainland_label)
+    dialog._tts_voice_api_region_combo.setCurrentText(mainland_label)
+
+    assert dialog._tts_api_region_var.value() == mainland_label
+    assert dialog._tts_api_region_combo.currentText() == mainland_label
+    assert dialog._tts_api_base_url_var.value() == QWEN_TTS_BASE_URL_MAINLAND
 
     dialog._on_tts_test()
     qtbot.waitUntil(lambda: bool(spoken), timeout=2000)
@@ -1572,6 +1619,14 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
     assert config["tts"]["qwen_tts"]["base_url"] == QWEN_TTS_BASE_URL_MAINLAND
     assert config["tts"]["qwen_tts"]["model"] == "qwen3-tts-flash"
     assert config["tts"]["qwen_tts"]["voice"] == "Cherry"
+
+    stale_base_url_entry = dialog._tts_api_base_url_entry
+    stale_region_combo = dialog._tts_voice_api_region_combo
+    delete_qt_object(stale_base_url_entry)
+    delete_qt_object(stale_region_combo)
+    dialog._on_tts_api_region_changed(mainland_label)
+    assert dialog._tts_api_base_url_entry is None
+    assert dialog._tts_voice_api_region_combo is None
 
 
 def test_bert_model_download_opens_progress_window(qtbot, config, monkeypatch):

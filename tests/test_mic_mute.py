@@ -241,3 +241,63 @@ def test_mic_mute_syncs_avatar_muted_and_speaking_state():
 
     assert ("MioMuted", True, True) in events
     assert ("MioSpeaking", False, True) in events
+
+
+def test_vrchat_mute_pauses_and_unmute_resumes_physical_microphone_capture():
+    window = MainWindow.__new__(MainWindow)
+    capture_events: list[str] = []
+    bottom_events: list[str] = []
+    window._config = {"osc": {"sync_mute_self": True}}
+    window._running = True
+    window._destroying = False
+    window._mic_muted = False
+    window._mic_capture_paused_for_mute = False
+    window._recorder = object()
+    asr_capture_events: list[bool] = []
+
+    class _ASR:
+        def set_capture_enabled(self, enabled: bool):
+            asr_capture_events.append(enabled)
+
+    window._asr = _ASR()
+    window._refresh_mic_mute_button = lambda: None
+    window._set_bottom = lambda message, *_args, **_kwargs: bottom_events.append(message)
+    window._copy = lambda key: key
+    window._sync_avatar_muted_state = lambda **_kwargs: None
+    window._sync_avatar_speaking_state = lambda **_kwargs: None
+    window._reset_streaming_state = lambda _source=None: capture_events.append("reset")
+
+    def stop_capture():
+        capture_events.append("stop")
+        window._recorder = None
+
+    def start_capture():
+        capture_events.append("start")
+        window._recorder = object()
+
+    window._stop_microphone_capture = stop_capture
+    window._start_microphone_capture = start_capture
+
+    window._handle_vrchat_mute_self(True)
+    window._handle_vrchat_mute_self(True)
+    window._handle_vrchat_mute_self(False)
+
+    assert window._mic_muted is False
+    assert window._mic_capture_paused_for_mute is False
+    assert capture_events == ["reset", "stop", "start"]
+    assert asr_capture_events == [False, False, True]
+    assert window._realtime_source_generations[MIC_SOURCE] == 1
+    assert bottom_events == ["mic_mute_on", "mic_mute_off"]
+
+
+def test_microphone_start_is_suppressed_while_muted():
+    window = MainWindow.__new__(MainWindow)
+    window._mic_muted = True
+    window._mic_capture_paused_for_mute = False
+    window._resolve_mic_input_device_name = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("muted microphone must not be opened")
+    )
+
+    window._start_microphone_capture()
+
+    assert window._mic_capture_paused_for_mute is True

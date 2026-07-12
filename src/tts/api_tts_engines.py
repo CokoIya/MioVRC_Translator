@@ -5,10 +5,11 @@ import binascii
 import ipaddress
 import json
 import logging
+import re
 import socket
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -34,6 +35,10 @@ _MAX_JSON_AUDIO_RESPONSE_BYTES = 48 * 1024 * 1024
 _MAX_ERROR_RESPONSE_BYTES = 64 * 1024
 _MAX_AUDIO_REDIRECTS = 5
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+_DASHSCOPE_RESULT_HOST_RE = re.compile(
+    r"^dashscope-result-[a-z0-9-]+\.oss-[a-z0-9-]+\.aliyuncs\.com$",
+    re.IGNORECASE,
+)
 
 from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
 
@@ -272,6 +277,7 @@ class _APITTSBase(BaseTTS):
         return b""
 
     def _download_audio(self, url: str) -> bytes:
+        url = self._normalize_audio_download_url(url)
         session = self._session_pool.get()
         with open_validated_requests_response(
             url,
@@ -321,6 +327,9 @@ class _APITTSBase(BaseTTS):
     def _is_safe_audio_url(self, url: str) -> bool:
         return _is_safe_audio_download_url(url, api_base_url=self.base_url)
 
+    def _normalize_audio_download_url(self, url: str) -> str:
+        return str(url or "").strip()
+
 
 class MimoTTS(_APITTSBase):
     ENGINE_ID = "mimo_tts"
@@ -364,6 +373,34 @@ class MimoTTS(_APITTSBase):
 class QwenTTS(_APITTSBase):
     ENGINE_ID = "qwen_tts"
     ENGINE_LABEL = "Qwen TTS"
+
+    def _normalize_audio_download_url(self, url: str) -> str:
+        """Upgrade DashScope's signed OSS result URLs to encrypted transport.
+
+        DashScope has historically returned ``http://dashscope-result-...``
+        URLs even though the same signed object is available over HTTPS. The
+        shared downloader intentionally rejects public HTTP, so upgrade only
+        Alibaba-controlled DashScope result hosts before validation.
+        """
+
+        candidate = super()._normalize_audio_download_url(url)
+        try:
+            parsed = urlsplit(candidate)
+            host = str(parsed.hostname or "").rstrip(".").casefold()
+            port = parsed.port
+        except (TypeError, ValueError):
+            return candidate
+        if (
+            parsed.scheme.casefold() != "http"
+            or port not in (None, 80)
+            or parsed.username is not None
+            or parsed.password is not None
+            or not _DASHSCOPE_RESULT_HOST_RE.fullmatch(host)
+        ):
+            return candidate
+
+        logger.info("Upgrading Qwen TTS audio download URL to HTTPS")
+        return urlunsplit(("https", host, parsed.path, parsed.query, parsed.fragment))
 
     def synthesize(
         self,

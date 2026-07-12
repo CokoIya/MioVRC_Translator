@@ -50,6 +50,7 @@ from src.utils.ui_config import (
     normalize_backend_region,
     normalize_output_format,
     normalize_output_format_2,
+    normalize_ui_font_preference,
     OUTPUT_FORMAT_2_DISABLED,
 )
 from src.tts.api_tts_config import (
@@ -1074,6 +1075,14 @@ def _ensure_osc_config(config: dict) -> bool:
     if _coerce_bool_config(osc_cfg, "sync_mute_self", True):
         changed = True
     if _coerce_bool_config(osc_cfg, "allow_avatar_control", False):
+        changed = True
+    if (
+        bool(osc_cfg.get("sync_mute_self", True))
+        or bool(osc_cfg.get("allow_avatar_control", False))
+    ) and not bool(osc_cfg.get("listener_enabled", False)):
+        # Persist the effective state so Settings matches the receiver that
+        # inbound mute sync/avatar-control features require.
+        osc_cfg["listener_enabled"] = True
         changed = True
     prefix = str(osc_cfg.get("control_prefix", "Mio") or "Mio").strip()
     if not prefix:
@@ -2126,6 +2135,10 @@ def _ensure_ui_config(config: dict) -> bool:
         elif not isinstance(value, str):
             ui_cfg["background_image_path"] = str(value)
             changed = True
+    font_preference = normalize_ui_font_preference(ui_cfg.get("font_family"))
+    if ui_cfg.get("font_family") != font_preference:
+        ui_cfg["font_family"] = font_preference
+        changed = True
     return changed
 
 

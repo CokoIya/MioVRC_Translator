@@ -138,6 +138,16 @@ class TestConfigValidation(unittest.TestCase):
         config = {"translation": {"openai": {"api_key": ""}}}
         assert config_manager._contains_plaintext_api_key(config) is False
 
+    def test_ensure_ui_config_defaults_to_851_and_normalizes_system_font(self):
+        config = {"ui": {}}
+
+        assert config_manager._ensure_ui_config(config) is True
+        assert config["ui"]["font_family"] == "851"
+
+        config["ui"]["font_family"] = "system-default"
+        assert config_manager._ensure_ui_config(config) is True
+        assert config["ui"]["font_family"] == "system"
+
     def test_contains_plaintext_api_key_detects_api_tts_keys(self):
         config = {
             "tts": {
@@ -398,8 +408,9 @@ class TestConfigValidation(unittest.TestCase):
 
         changed = config_manager._ensure_ui_config(config)
 
-        assert changed is False
+        assert changed is True
         assert config["ui"]["background_image_path"] == "backgrounds/custom.png"
+        assert config["ui"]["font_family"] == "851"
 
     def test_ensure_ui_config_normalizes_background_path(self):
         config = {"ui": {"background_image_path": 123}}
@@ -480,13 +491,26 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["osc"]["receive_host"] == "127.0.0.1"
         assert config["osc"]["receive_port"] == 9001
-        assert config["osc"]["listener_enabled"] is False
+        assert config["osc"]["listener_enabled"] is True
         assert config["osc"]["sync_mute_self"] is True
         assert config["osc"]["allow_avatar_control"] is False
         assert config["osc"]["control_prefix"] == "Mio"
         assert config["osc"]["control_params"]["mic"] == "MioToggleMic"
         assert config["osc"]["avatar_sync"]["params"]["muted"] == "MioMuted"
         assert config["osc"]["avatar_sync"]["params"]["overlay"] == "MioOverlayActive"
+
+    def test_osc_listener_can_stay_disabled_when_inbound_features_are_off(self):
+        config = {
+            "osc": {
+                "listener_enabled": False,
+                "sync_mute_self": False,
+                "allow_avatar_control": False,
+            }
+        }
+
+        config_manager._ensure_osc_config(config)
+
+        assert config["osc"]["listener_enabled"] is False
 
     def test_removed_legacy_asr_engine_migrates_away(self):
         """Removed local ASR engines should migrate to the default local ASR."""

@@ -51,3 +51,22 @@ def test_fallback_asr_uses_fallback_for_transcribe_failure():
 
     assert text == "fallback text"
     assert fallback.loaded is True
+
+
+def test_fallback_asr_forwards_browser_capture_control():
+    events: list[tuple[str, bool]] = []
+    primary = _FallbackASR()
+    fallback = _FallbackASR()
+    primary.set_capture_enabled = lambda enabled: events.append(("primary", enabled))
+    fallback.set_capture_enabled = lambda enabled: events.append(("fallback", enabled))
+    asr = FallbackASR(primary, fallback)
+
+    asr.set_capture_enabled(False)
+    asr.set_capture_enabled(True)
+
+    assert events == [
+        ("primary", False),
+        ("fallback", False),
+        ("primary", True),
+        ("fallback", True),
+    ]

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
+import os
 import sys
 import uuid
-import logging
 from typing import Any, Iterable
 
 import sounddevice as sd
@@ -52,6 +53,11 @@ if sys.platform == "win32":
     AUDIO_SESSION_STATE_ACTIVE = 1
     RPC_E_CHANGED_MODE = 0x80010106
     TH32CS_SNAPPROCESS = 0x00000002
+    _SYSTEM_AUDIO_SESSION_PROCESS_NAMES = {
+        "audiodg.exe",
+        "svchost.exe",
+        "system",
+    }
 
     _ole32 = ctypes.windll.ole32
     _kernel32 = ctypes.windll.kernel32
@@ -374,11 +380,96 @@ if sys.platform == "win32":
                 _release(device)
         return defaults
 
+    def _active_audio_session_process_ids(
+        device: c_void_p,
+    ) -> tuple[bool, list[int]]:
+        """Return active-session state for one CoreAudio endpoint.
+
+        Capture endpoints expose audio sessions just like render endpoints.  The
+        process IDs let callers distinguish a microphone already used by another
+        application from the capture stream opened by Mio itself.
+        """
+
+        manager = None
+        session_enum = None
+        has_active_session = False
+        process_ids: set[int] = set()
+        try:
+            manager = c_void_p()
+            hr = _vtable_method(device, 3, DeviceActivateProto)(
+                device,
+                byref(IID_IAudioSessionManager2),
+                CLSCTX_ALL,
+                None,
+                byref(manager),
+            )
+            if not _succeeded(hr) or not manager:
+                return False, []
+
+            session_enum = c_void_p()
+            hr = _vtable_method(manager, 5, GetSessionEnumeratorProto)(
+                manager,
+                byref(session_enum),
+            )
+            if not _succeeded(hr) or not session_enum:
+                return False, []
+
+            session_count = wintypes.INT()
+            hr = _vtable_method(session_enum, 3, SessionEnumGetCountProto)(
+                session_enum,
+                byref(session_count),
+            )
+            if not _succeeded(hr):
+                return False, []
+
+            for session_index in range(int(session_count.value)):
+                session = c_void_p()
+                session2 = None
+                try:
+                    hr = _vtable_method(session_enum, 4, SessionEnumGetSessionProto)(
+                        session_enum,
+                        session_index,
+                        byref(session),
+                    )
+                    if not _succeeded(hr) or not session:
+                        continue
+
+                    state = wintypes.INT()
+                    hr = _vtable_method(session, 3, SessionGetStateProto)(
+                        session,
+                        byref(state),
+                    )
+                    if not _succeeded(hr) or int(state.value) != AUDIO_SESSION_STATE_ACTIVE:
+                        continue
+                    has_active_session = True
+
+                    session2 = _query_interface(session, IID_IAudioSessionControl2)
+                    if session2 is None:
+                        continue
+                    process_id = wintypes.DWORD()
+                    hr = _vtable_method(session2, 14, SessionGetProcessIdProto)(
+                        session2,
+                        byref(process_id),
+                    )
+                    if _succeeded(hr) and int(process_id.value) > 0:
+                        process_ids.add(int(process_id.value))
+                finally:
+                    _release(session2)
+                    _release(session)
+            return has_active_session, sorted(process_ids)
+        except Exception:
+            logger.debug("CoreAudio session inspection failed", exc_info=True)
+            return has_active_session, sorted(process_ids)
+        finally:
+            _release(session_enum)
+            _release(manager)
+
     def _list_audio_endpoints_for_flow(
         enumerator: c_void_p,
         *,
         flow: int,
         include_inactive: bool,
+        ignored_session_process_ids: set[int],
     ) -> list[dict[str, Any]]:
         collection = c_void_p()
         state_mask = DEVICE_STATEMASK_ALL if include_inactive else DEVICE_STATE_ACTIVE
@@ -418,6 +509,19 @@ if sys.platform == "win32":
                     state = _get_device_state(device)
                     if not device_id and not name:
                         continue
+                    has_active_session = False
+                    active_session_process_ids: list[int] = []
+                    if flow == E_CAPTURE and state == DEVICE_STATE_ACTIVE:
+                        (
+                            has_active_session,
+                            active_session_process_ids,
+                        ) = _active_audio_session_process_ids(device)
+                    has_external_active_session = bool(has_active_session) and (
+                        any(
+                            process_id not in ignored_session_process_ids
+                            for process_id in active_session_process_ids
+                        )
+                    )
                     result.append(
                         {
                             "id": device_id,
@@ -432,6 +536,9 @@ if sys.platform == "win32":
                                 for role_name, default_id in defaults.items()
                                 if device_id and default_id == device_id
                             ],
+                            "has_active_session": has_active_session,
+                            "has_external_active_session": has_external_active_session,
+                            "active_session_process_ids": active_session_process_ids,
                         }
                     )
                 finally:
@@ -450,16 +557,25 @@ if sys.platform == "win32":
             enumerator = _create_device_enumerator()
             if enumerator is None:
                 return []
+            process_names_by_id = _process_image_names()
+            ignored_session_process_ids = {os.getpid()}
+            ignored_session_process_ids.update(
+                process_id
+                for process_id, image_name in process_names_by_id.items()
+                if image_name in _SYSTEM_AUDIO_SESSION_PROCESS_NAMES
+            )
             endpoints = _list_audio_endpoints_for_flow(
                 enumerator,
                 flow=E_RENDER,
                 include_inactive=include_inactive,
+                ignored_session_process_ids=ignored_session_process_ids,
             )
             endpoints.extend(
                 _list_audio_endpoints_for_flow(
                     enumerator,
                     flow=E_CAPTURE,
                     include_inactive=include_inactive,
+                    ignored_session_process_ids=ignored_session_process_ids,
                 )
             )
             return endpoints
@@ -474,12 +590,8 @@ if sys.platform == "win32":
                 except Exception:
                     pass
 
-    def _list_process_ids(process_names: Iterable[str]) -> set[int]:
-        targets = {str(name).strip().lower() for name in process_names if str(name).strip()}
-        if not targets:
-            return set()
-
-        result: set[int] = set()
+    def _process_image_names() -> dict[int, str]:
+        result: dict[int, str] = {}
         snapshot = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
         invalid_handle = ctypes.c_void_p(-1).value
         if snapshot == invalid_handle:
@@ -493,13 +605,23 @@ if sys.platform == "win32":
 
             while True:
                 image_name = str(entry.szExeFile).strip().lower()
-                if image_name in targets:
-                    result.add(int(entry.th32ProcessID))
+                if image_name:
+                    result[int(entry.th32ProcessID)] = image_name
                 if not _kernel32.Process32NextW(snapshot, byref(entry)):
                     break
         finally:
             _kernel32.CloseHandle(snapshot)
         return result
+
+    def _list_process_ids(process_names: Iterable[str]) -> set[int]:
+        targets = {str(name).strip().lower() for name in process_names if str(name).strip()}
+        if not targets:
+            return set()
+        return {
+            process_id
+            for process_id, image_name in _process_image_names().items()
+            if image_name in targets
+        }
 
     def _device_matches_for_process_ids(process_ids: set[int]) -> list[tuple[str, bool]]:
         if not process_ids:

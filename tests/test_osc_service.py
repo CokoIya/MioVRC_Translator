@@ -37,6 +37,89 @@ def test_osc_service_ignores_non_avatar_and_bad_mute_values():
     assert muted == []
 
 
+def test_osc_service_debounces_bursts_but_allows_later_state_reassertion(monkeypatch):
+    _app()
+    service = OscService()
+    muted = []
+    service.mute_self_changed.connect(lambda value: muted.append(value))
+    timestamps = iter((10.0, 10.05, 10.06, 10.5))
+    monkeypatch.setattr(
+        "src.core.osc_service.time.monotonic",
+        lambda: next(timestamps),
+    )
+
+    service._process_avatar_parameter("/avatar/parameters/MuteSelf", (True,))
+    service._process_avatar_parameter("/avatar/parameters/muteself", (1,))
+    service._process_avatar_parameter("/avatar/parameters/MuteSelf", (False,))
+    service._process_avatar_parameter("/avatar/parameters/MuteSelf", (0,))
+
+    assert muted == [True, False, False]
+
+
+def test_main_window_mute_sync_starts_listener_even_when_general_control_is_off():
+    window = MainWindow.__new__(MainWindow)
+    calls = []
+
+    class _Service:
+        def start_listener(self, **kwargs):
+            calls.append(("start", kwargs))
+
+        def stop_listener(self):
+            calls.append(("stop", None))
+
+    window._destroying = False
+    window._config = {
+        "osc": {
+            "listener_enabled": False,
+            "sync_mute_self": True,
+            "allow_avatar_control": False,
+            "receive_host": "127.0.0.1",
+            "receive_port": 9001,
+        }
+    }
+    window._ensure_osc_service = lambda: _Service()
+    window._set_bottom = lambda *args, **kwargs: None
+
+    window._apply_osc_listener_config()
+
+    assert calls == [
+        (
+            "start",
+            {
+                "host": "127.0.0.1",
+                "port": 9001,
+                "sync_mute_self": True,
+            },
+        )
+    ]
+
+
+def test_main_window_stops_listener_when_all_inbound_features_are_disabled():
+    window = MainWindow.__new__(MainWindow)
+    calls = []
+
+    class _Service:
+        def start_listener(self, **_kwargs):
+            calls.append("start")
+
+        def stop_listener(self):
+            calls.append("stop")
+
+    window._destroying = False
+    window._config = {
+        "osc": {
+            "listener_enabled": False,
+            "sync_mute_self": False,
+            "allow_avatar_control": False,
+        }
+    }
+    window._ensure_osc_service = lambda: _Service()
+
+    window._apply_osc_listener_config()
+
+    assert calls == ["stop"]
+
+
 def test_main_window_avatar_toggle_controls_basic_switches():
     window = MainWindow.__new__(MainWindow)
     calls = []

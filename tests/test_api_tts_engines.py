@@ -82,7 +82,18 @@ class _FakeSession:
                 ]
             }
             return _FakeResponse(payload)
-        return _FakeResponse({"output": {"audio": {"url": "https://audio.test/qwen.wav"}}})
+        return _FakeResponse(
+            {
+                "output": {
+                    "audio": {
+                        "url": (
+                            "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/"
+                            "qwen.wav?Signature=test"
+                        )
+                    }
+                }
+            }
+        )
 
     def get(
         self,
@@ -161,7 +172,32 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
         "voice": "Cherry",
         "language_type": "English",
     }
-    assert fake.gets == [("https://audio.test/qwen.wav", 30.0)]
+    assert fake.gets == [
+        (
+            "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/"
+            "qwen.wav?Signature=test",
+            30.0,
+        )
+    ]
+
+
+def test_qwen_tts_only_upgrades_alibaba_dashscope_result_urls():
+    engine = QwenTTS(
+        {
+            "base_url": "https://dashscope.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    assert engine._normalize_audio_download_url(
+        "http://dashscope-result-sg.oss-ap-southeast-1.aliyuncs.com/audio.wav?sig=1"
+    ) == (
+        "https://dashscope-result-sg.oss-ap-southeast-1.aliyuncs.com/"
+        "audio.wav?sig=1"
+    )
+    assert engine._normalize_audio_download_url(
+        "http://dashscope-result-sg.oss-ap-southeast-1.aliyuncs.com.evil.test/audio.wav"
+    ).startswith("http://")
 
 
 def test_qwen_tts_instruct_model_sends_style_instructions(monkeypatch):

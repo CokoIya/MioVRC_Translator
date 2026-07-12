@@ -60,6 +60,7 @@ from src.translators.asr_rewriter import (
     ASR_REWRITE_DISABLED,
     normalize_asr_rewrite_style,
 )
+from src.ui_qt.font_config import apply_application_font
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.styles import build_app_stylesheet, build_main_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme, normalize_theme_preference, resolve_theme, theme_preference_from_config, theme_tokens
@@ -413,11 +414,11 @@ MAIN_COPY = {
         "ko": "마이크 미선택",
     },
     "mic_device_auto_option": {
-        "zh-CN": "自动跟随系统默认",
-        "en": "Auto Follow System Default",
-        "ja": "システム既定を自動追従",
-        "ru": "Авто: системный по умолчанию",
-        "ko": "시스템 기본 장치 자동 추종",
+        "zh-CN": "自动：活动设备 / 系统默认",
+        "en": "Auto: Active / System Default",
+        "ja": "自動: 使用中 / システム既定",
+        "ru": "Авто: активный / системный",
+        "ko": "자동: 사용 중 / 시스템 기본",
     },
     "mic_device_auto_current": {
         "zh-CN": "自动 · {name}",
@@ -845,6 +846,7 @@ class MainWindow(QMainWindow):
         self._tts_manager: TTSManager | None = None
         self._tts_enabled = bool(config.get("tts", {}).get("enabled", False))
         self._mic_muted = False
+        self._mic_capture_paused_for_mute = False
         self._mic_in_speech = False
         self._listen_in_speech = False
         self._translating = False
@@ -1433,12 +1435,69 @@ class MainWindow(QMainWindow):
         self._set_mic_muted(not self._mic_muted)
 
     def _set_mic_muted(self, muted: bool, *, bottom_key: str | None = None) -> None:
-        self._mic_muted = bool(muted)
-        self._refresh_mic_mute_button()
-        key = bottom_key or ("mic_mute_on" if self._mic_muted else "mic_mute_off")
-        self._set_bottom(self._copy(key))
-        self._sync_avatar_muted_state(force=True)
-        self._sync_avatar_speaking_state(force=True)
+        desired = bool(muted)
+        capture_error: Exception | None = None
+        with self._asr_lifecycle_lock():
+            changed = desired != bool(getattr(self, "_mic_muted", False))
+            self._mic_muted = desired
+            try:
+                if changed and desired and getattr(self, "_running", False):
+                    self._reset_streaming_state(MIC_SOURCE)
+                    self._invalidate_realtime_source(MIC_SOURCE)
+                self._apply_microphone_capture_mute_state()
+            except Exception as exc:
+                capture_error = exc
+                logger.warning(
+                    "Failed to %s microphone capture after mute state changed: %s",
+                    "pause" if desired else "resume",
+                    exc,
+                )
+        if changed:
+            self._refresh_mic_mute_button()
+            key = bottom_key or ("mic_mute_on" if desired else "mic_mute_off")
+            self._set_bottom(self._copy(key))
+            self._sync_avatar_muted_state(force=True)
+            self._sync_avatar_speaking_state(force=True)
+        if capture_error is not None:
+            self._set_bottom(str(capture_error), "warning")
+
+    def _apply_microphone_capture_mute_state(self) -> None:
+        """Keep the physical microphone stream aligned with Mio's mute state."""
+
+        muted = bool(getattr(self, "_mic_muted", False))
+        self._set_microphone_asr_capture_enabled(not muted)
+        recorder = getattr(self, "_recorder", None)
+        if muted:
+            self._mic_capture_paused_for_mute = True
+            if recorder is not None:
+                logger.info("Pausing microphone capture because Mio is muted")
+                self._stop_microphone_capture()
+            return
+
+        was_paused = bool(getattr(self, "_mic_capture_paused_for_mute", False))
+        self._mic_capture_paused_for_mute = False
+        if getattr(self, "_running", False) and recorder is None and was_paused:
+            logger.info("Resuming microphone capture because Mio is unmuted")
+            self._start_microphone_capture()
+
+    def _set_microphone_asr_capture_enabled(self, enabled: bool) -> None:
+        """Control providers such as WebSpeech that own a separate mic stream."""
+
+        self._set_asr_provider_capture_enabled(getattr(self, "_asr", None), enabled)
+
+    @staticmethod
+    def _set_asr_provider_capture_enabled(provider: Any, enabled: bool) -> None:
+        setter = getattr(provider, "set_capture_enabled", None)
+        if not callable(setter):
+            return
+        try:
+            setter(bool(enabled))
+        except Exception:
+            logger.warning(
+                "Failed to %s ASR-owned microphone capture",
+                "resume" if enabled else "pause",
+                exc_info=True,
+            )
 
     def _set_app_mode(self, mode: AppMode, *, persist: bool) -> None:
         try:
@@ -2303,6 +2362,10 @@ class MainWindow(QMainWindow):
         installed = False
         try:
             mic_asr, listen_asr = _create_asr_pair(self._config)
+            self._set_asr_provider_capture_enabled(
+                mic_asr,
+                not bool(getattr(self, "_mic_muted", False)),
+            )
             mic_asr.load(
                 progress_callback=lambda event: self._call_in_ui(
                     lambda e=event, sid=session_id: (
@@ -2330,6 +2393,9 @@ class MainWindow(QMainWindow):
                 self._listen_asr = listen_asr
                 installed = True
                 self._refresh_asr_transcribe_locks()
+                self._set_microphone_asr_capture_enabled(
+                    not bool(getattr(self, "_mic_muted", False))
+                )
 
                 # Commit all runtime resources under the same lifecycle lock used
                 # by stop/shutdown.  This prevents a cancelled startup from
@@ -2811,6 +2877,10 @@ class MainWindow(QMainWindow):
     # Audio capture
     # ----------------------------------------------------------------
     def _start_microphone_capture(self) -> None:
+        if bool(getattr(self, "_mic_muted", False)):
+            self._mic_capture_paused_for_mute = True
+            logger.info("Microphone capture remains paused while Mio is muted")
+            return
         device_name = self._resolve_mic_input_device_name(refresh=True)
         matched_device_name = self._match_mic_input_device_name(device_name)
         if matched_device_name:
@@ -2862,6 +2932,7 @@ class MainWindow(QMainWindow):
             ),
         )
         self._recorder.start()
+        self._mic_capture_paused_for_mute = False
         self._active_mic_input_device_name = self._recorder.active_input_device_name or device_name
         self._last_mic_started_at = time.monotonic()
         self._last_mic_result_at = self._last_mic_started_at
@@ -3454,6 +3525,14 @@ class MainWindow(QMainWindow):
     def _current_default_input_device_name(self, devices: list[dict]) -> str | None:
         if not devices:
             return None
+        marked_defaults = [
+            str(device.get("name", "") or "").strip()
+            for device in devices
+            if bool(device.get("is_default"))
+            and str(device.get("name", "") or "").strip()
+        ]
+        if len(marked_defaults) == 1:
+            return marked_defaults[0]
         try:
             return inventory_default_input_device_name(force_refresh=False)
         except Exception:
@@ -3507,6 +3586,13 @@ class MainWindow(QMainWindow):
             if not self._running:
                 return
             recorder = self._recorder
+            if bool(getattr(self, "_mic_muted", False)) or bool(
+                getattr(self, "_mic_capture_paused_for_mute", False)
+            ):
+                if recorder is not None:
+                    logger.info("Stopping microphone capture left active while muted")
+                    self._stop_microphone_capture()
+                return
             if recorder is None and not self._mic_recovery_in_progress:
                 self._restart_microphone_capture("microphone recorder missing while running")
                 return
@@ -3671,7 +3757,13 @@ class MainWindow(QMainWindow):
         )
 
     def _restart_microphone_capture(self, reason: str) -> None:
-        if self._destroying or not self._running or self._mic_recovery_in_progress:
+        if (
+            self._destroying
+            or not self._running
+            or self._mic_recovery_in_progress
+            or bool(getattr(self, "_mic_muted", False))
+            or bool(getattr(self, "_mic_capture_paused_for_mute", False))
+        ):
             return
         logger.warning("Restarting microphone capture (reason=%s)", reason)
         self._mic_recovery_in_progress = True
@@ -5107,14 +5199,24 @@ class MainWindow(QMainWindow):
             return
         osc_cfg = self._config.setdefault("osc", {})
         service = self._ensure_osc_service()
-        if not bool(osc_cfg.get("listener_enabled", False)):
+        # Normalized production configs always contain sync_mute_self. Keep an
+        # absent key opt-in here so minimal/embedder configs do not unexpectedly
+        # bind a UDP listener.
+        sync_mute_self = bool(osc_cfg.get("sync_mute_self", False))
+        allow_avatar_control = bool(osc_cfg.get("allow_avatar_control", False))
+        listener_enabled = bool(osc_cfg.get("listener_enabled", False))
+        # Receiving MuteSelf/control parameters necessarily requires the OSC
+        # socket. Treat either inbound feature as enabling the listener so an
+        # otherwise contradictory settings combination cannot silently break
+        # synchronization.
+        if not (listener_enabled or sync_mute_self or allow_avatar_control):
             service.stop_listener()
             return
         try:
             service.start_listener(
                 host=str(osc_cfg.get("receive_host", "127.0.0.1") or "127.0.0.1"),
                 port=int(osc_cfg.get("receive_port", 9001)),
-                sync_mute_self=bool(osc_cfg.get("sync_mute_self", True)),
+                sync_mute_self=sync_mute_self,
             )
         except Exception as exc:
             self._set_bottom(str(exc), "warning")
@@ -5137,7 +5239,12 @@ class MainWindow(QMainWindow):
     def _handle_vrchat_mute_self(self, muted: bool) -> None:
         if not bool(self._config.get("osc", {}).get("sync_mute_self", True)):
             return
-        self._set_mic_muted(bool(muted), bottom_key="mic_mute_on" if muted else "mic_mute_off")
+        desired = bool(muted)
+        logger.info("Applying VRChat MuteSelf state to Mio: %s", desired)
+        self._set_mic_muted(
+            desired,
+            bottom_key="mic_mute_on" if desired else "mic_mute_off",
+        )
 
     def _handle_osc_avatar_parameter(self, name: str, value: object) -> None:
         osc_cfg = self._config.get("osc", {})
@@ -6253,6 +6360,9 @@ class MainWindow(QMainWindow):
         self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
         self._main_theme_preference = _main_theme_preference_from_config(self._config)
         self._main_theme = _resolve_main_theme(self._main_theme_preference)
+        app = QApplication.instance()
+        if app is not None:
+            apply_application_font(app, self._config)
         self._desktop_capture_enabled = bool(
             self._config.get("vrc_listen", {}).get("enabled", False)
         )

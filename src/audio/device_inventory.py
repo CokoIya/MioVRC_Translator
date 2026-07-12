@@ -22,6 +22,7 @@ _HOST_API_PRIORITY = {
 }
 _CACHE_MAX_AGE_S = 0.75
 _EMPTY_SCAN_CACHE_MAX_AGE_S = 30.0
+_MIXLINE_CAPTURE_NAME_TOKENS = ("mixline", "mix line")
 
 _PSEUDO_DEVICE_NAMES = {
     "microsoft sound mapper - input",
@@ -75,6 +76,47 @@ def device_names_match(left: object, right: object) -> bool:
     return len(shorter) / max(len(longer), 1) >= 0.72
 
 
+def _parenthesized_device_identities(value: object) -> frozenset[str]:
+    """Extract stable hardware labels from localized endpoint names."""
+
+    normalized = normalize_device_name(value)
+    if not normalized:
+        return frozenset()
+    identities: set[str] = set()
+    starts: list[int] = []
+    for index, character in enumerate(normalized):
+        if character == "(":
+            starts.append(index)
+        elif character == ")" and starts:
+            start = starts.pop()
+            identity = " ".join(normalized[start + 1 : index].split()).strip(" -_:;")
+            if len(identity) >= 4 and any(character.isalnum() for character in identity):
+                identities.add(identity)
+    return frozenset(identities)
+
+
+def input_device_names_match(left: object, right: object) -> bool:
+    """Match capture endpoints even when PortAudio mangles the localized prefix.
+
+    Windows CoreAudio may report ``Microphone (Hardware Name)`` while an MME or
+    frozen PortAudio build returns a mojibake prefix with the same parenthesized
+    hardware identity.  This fallback is capture-only and callers still require
+    a unique match, so similarly named physical endpoints remain ambiguous.
+    """
+
+    if device_names_match(left, right):
+        return True
+    return bool(
+        _parenthesized_device_identities(left)
+        & _parenthesized_device_identities(right)
+    )
+
+
+def _is_mixline_capture_endpoint(value: object) -> bool:
+    normalized = normalize_device_name(value)
+    return any(token in normalized for token in _MIXLINE_CAPTURE_NAME_TOKENS)
+
+
 def unique_device_name_match(
     target: object,
     candidates: Iterable[object],
@@ -89,6 +131,25 @@ def unique_device_name_match(
     if len(exact) == 1:
         return exact[0]
     matches = [candidate for candidate in values if device_names_match(clean, candidate)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def unique_input_device_name_match(
+    target: object,
+    candidates: Iterable[object],
+) -> str | None:
+    clean = str(target or "").strip()
+    if not clean:
+        return None
+    values = [str(candidate or "").strip() for candidate in candidates]
+    values = [candidate for candidate in values if candidate]
+    normalized = normalize_device_name(clean)
+    exact = [candidate for candidate in values if normalize_device_name(candidate) == normalized]
+    if len(exact) == 1:
+        return exact[0]
+    matches = [
+        candidate for candidate in values if input_device_names_match(clean, candidate)
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -288,8 +349,22 @@ def _resolve_default_endpoint(
         ]
         if len(exact) == 1:
             return exact[0]
-        matches = [item for item in selected if device_names_match(item.name, endpoint.name)]
+        name_matcher = (
+            input_device_names_match if flow == "capture" else device_names_match
+        )
+        matches = [item for item in selected if name_matcher(item.name, endpoint.name)]
         return matches[0] if len(matches) == 1 else None
+
+    def selected_for_name(name: object) -> AudioEndpoint | None:
+        matcher = (
+            unique_input_device_name_match
+            if flow == "capture"
+            else unique_device_name_match
+        )
+        matched_name = matcher(name, (item.name for item in selected))
+        if not matched_name:
+            return None
+        return next(item for item in selected if item.name == matched_name)
 
     core_defaults = [
         item
@@ -298,7 +373,11 @@ def _resolve_default_endpoint(
         and bool(item.get("active"))
         and bool(item.get("is_default"))
     ]
-    role_priority = {"multimedia": 0, "console": 1, "communications": 2}
+    role_priority = (
+        {"console": 0, "communications": 1, "multimedia": 2}
+        if flow == "capture"
+        else {"multimedia": 0, "console": 1, "communications": 2}
+    )
     core_defaults.sort(
         key=lambda item: min(
             (
@@ -308,17 +387,31 @@ def _resolve_default_endpoint(
             default=50,
         )
     )
-    core_default_names = [
-        str(item.get("name", "") or "").strip()
-        for item in core_defaults
-    ]
-    for default_name in core_default_names:
-        matched_name = unique_device_name_match(
-            default_name,
-            (item.name for item in selected),
-        )
-        if matched_name:
-            return next(item for item in selected if item.name == matched_name)
+    if flow == "capture":
+        externally_active: list[AudioEndpoint] = []
+        for item in windows_endpoints:
+            if (
+                str(item.get("flow", "")) != "capture"
+                or not bool(item.get("active"))
+                or not bool(item.get("has_external_active_session"))
+                or _is_mixline_capture_endpoint(item.get("name"))
+            ):
+                continue
+            matched = selected_for_name(item.get("name"))
+            if matched is not None and matched not in externally_active:
+                externally_active.append(matched)
+        if len(externally_active) == 1:
+            return externally_active[0]
+        if len(externally_active) > 1:
+            for item in core_defaults:
+                matched = selected_for_name(item.get("name"))
+                if matched in externally_active:
+                    return matched
+
+    for default_item in core_defaults:
+        matched = selected_for_name(default_item.get("name"))
+        if matched is not None:
+            return matched
 
     resolved = preferred_for(usable_raw(raw_default_index))
     if resolved is not None:
@@ -460,6 +553,22 @@ def _scan(sounddevice_module: Any) -> DeviceInventorySnapshot:
         "windows_endpoint_count": len(windows_endpoints),
         "windows_inactive_endpoint_count": len(inactive_windows),
         "windows_inactive_endpoints": inactive_windows,
+        "windows_active_capture_sessions": [
+            {
+                "name": item.get("name"),
+                "is_default": bool(item.get("is_default")),
+                "default_roles": list(item.get("default_roles", [])),
+                "has_external_active_session": bool(
+                    item.get("has_external_active_session")
+                ),
+                "active_session_process_ids": list(
+                    item.get("active_session_process_ids", [])
+                ),
+            }
+            for item in windows_endpoints
+            if str(item.get("flow", "")) == "capture"
+            and bool(item.get("has_active_session"))
+        ],
         "errors": errors,
         "scan_duration_ms": round((time.monotonic() - started) * 1000.0, 2),
     }

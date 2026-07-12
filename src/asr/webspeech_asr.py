@@ -67,6 +67,7 @@ class _BridgeState:
         self.final_results: deque[str] = deque(maxlen=max_results)
         self.last_event_at = 0.0
         self.last_heartbeat_at = 0.0
+        self.capture_enabled = True
 
     def reset(self) -> None:
         with self.condition:
@@ -100,6 +101,22 @@ class _BridgeState:
             self.last_heartbeat_at = time.monotonic()
             self.condition.notify_all()
 
+    def set_capture_enabled(self, enabled: bool) -> None:
+        with self.condition:
+            desired = bool(enabled)
+            if desired == self.capture_enabled:
+                return
+            self.capture_enabled = desired
+            self.partial_text = ""
+            self._last_partial_text = ""
+            self._last_final_text = ""
+            self.final_results.clear()
+            self.condition.notify_all()
+
+    def capture_status(self) -> dict[str, bool]:
+        with self.condition:
+            return {"capture_enabled": self.capture_enabled}
+
     def mark_stale_if_needed(self, stale_after_s: float) -> bool:
         if stale_after_s <= 0:
             return False
@@ -118,6 +135,8 @@ class _BridgeState:
     def set_result(self, text: str, is_final: bool) -> None:
         cleaned = clean_asr_text(text)
         with self.condition:
+            if not self.capture_enabled:
+                return
             self.last_event_at = time.monotonic()
             if is_final:
                 if cleaned and cleaned != self._last_final_text:
@@ -150,21 +169,25 @@ class _BridgeState:
     def pop_final(self, timeout_s: float) -> str:
         deadline = time.monotonic() + max(timeout_s, 0.0)
         with self.condition:
-            while not self.final_results:
+            while self.capture_enabled and not self.final_results:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return ""
                 self.condition.wait(timeout=remaining)
+            if not self.capture_enabled:
+                return ""
             return self.final_results.popleft()
 
     def latest_partial(self, timeout_s: float) -> str:
         deadline = time.monotonic() + max(timeout_s, 0.0)
         with self.condition:
-            while not self.partial_text:
+            while self.capture_enabled and not self.partial_text:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return ""
                 self.condition.wait(timeout=remaining)
+            if not self.capture_enabled:
+                return ""
             return self.partial_text
 
 
@@ -176,6 +199,7 @@ def _page(
     max_alternatives: int = 1,
     restart_on_end: bool = True,
     silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
+    capture_enabled: bool = True,
 ) -> bytes:
     safe_lang = html.escape(language, quote=True)
     options = json.dumps(
@@ -185,6 +209,7 @@ def _page(
             "maxAlternatives": max(1, min(int(max_alternatives or 1), 10)),
             "restartOnEnd": bool(restart_on_end),
             "silenceTimeoutMs": max(0, int(silence_timeout_ms or 0)),
+            "captureEnabled": bool(capture_enabled),
         },
         separators=(",", ":"),
     )
@@ -221,11 +246,14 @@ if (!SpeechRecognition) {{
   rec.interimResults = options.interimResults;
   rec.maxAlternatives = options.maxAlternatives;
   let stopped = false;
+  let recognitionRunning = false;
+  let captureEnabled = options.captureEnabled;
   let silenceTimer = null;
   let lastPartial = '';
   let lastFinal = '';
   let restartAttempts = 0;
   const heartbeatTimer = setInterval(() => post('/heartbeat', {{ts: Date.now()}}), 2000);
+  const captureTimer = setInterval(pollCaptureState, 250);
   function clearSilenceTimer() {{
     if (silenceTimer !== null) {{
       clearTimeout(silenceTimer);
@@ -233,6 +261,7 @@ if (!SpeechRecognition) {{
     }}
   }}
   function postResult(text, isFinal) {{
+    if (!captureEnabled) return;
     const clean = (text || '').trim();
     if (!clean) return;
     if (isFinal) {{
@@ -253,8 +282,40 @@ if (!SpeechRecognition) {{
       }}, options.silenceTimeoutMs);
     }}
   }}
+  function startRecognition() {{
+    if (stopped || !captureEnabled || recognitionRunning) return;
+    try {{ rec.start(); }} catch (e) {{ post('/error', {{message: String(e)}}); }}
+  }}
+  function setCaptureEnabled(enabled) {{
+    const next = Boolean(enabled);
+    if (captureEnabled === next) return;
+    captureEnabled = next;
+    clearSilenceTimer();
+    lastPartial = '';
+    lastFinal = '';
+    if (!captureEnabled) {{
+      statusEl.textContent = 'Connected. Microphone capture paused by Mio.';
+      try {{ rec.abort(); }} catch (e) {{}}
+      return;
+    }}
+    statusEl.textContent = 'Connected. Resuming browser microphone...';
+    startRecognition();
+  }}
+  async function pollCaptureState() {{
+    try {{
+      const response = await fetch('/capture-state', {{cache: 'no-store'}});
+      if (!response.ok) return;
+      const control = await response.json();
+      setCaptureEnabled(control.capture_enabled !== false);
+    }} catch (e) {{}}
+  }}
   rec.onstart = () => {{
+    recognitionRunning = true;
     restartAttempts = 0;
+    if (!captureEnabled) {{
+      try {{ rec.abort(); }} catch (e) {{}}
+      return;
+    }}
     statusEl.textContent = 'Connected. Listening with browser microphone...';
     post('/ready', {{language: rec.lang}});
   }};
@@ -265,31 +326,36 @@ if (!SpeechRecognition) {{
     post('/error', {{message: error}});
   }};
   rec.onend = () => {{
-    if (lastPartial) postResult(lastPartial, true);
+    recognitionRunning = false;
+    if (captureEnabled && lastPartial) postResult(lastPartial, true);
     clearSilenceTimer();
     post('/disconnected', {{}});
-    if (!stopped && options.restartOnEnd) {{
+    if (!stopped && captureEnabled && options.restartOnEnd) {{
       const delay = Math.min(400 + restartAttempts * 250, 2500);
       restartAttempts += 1;
       setTimeout(() => {{
-        try {{ rec.start(); }}
-        catch (e) {{
-          if (restartAttempts >= 8) post('/error', {{message: String(e)}});
-        }}
+        if (!captureEnabled || stopped) return;
+        startRecognition();
       }}, delay);
     }}
   }};
   rec.onresult = (event) => {{
+    if (!captureEnabled) return;
     for (let i = event.resultIndex; i < event.results.length; i++) {{
       const result = event.results[i];
       const text = result[0] && result[0].transcript ? result[0].transcript : '';
       postResult(text, result.isFinal);
     }}
   }};
-  try {{ rec.start(); }} catch (e) {{ post('/error', {{message: String(e)}}); }}
+  if (captureEnabled) {{
+    startRecognition();
+  }} else {{
+    statusEl.textContent = 'Connected. Microphone capture paused by Mio.';
+  }}
   window.addEventListener('beforeunload', () => {{
     stopped = true;
     clearInterval(heartbeatTimer);
+    clearInterval(captureTimer);
     beacon('/disconnected', {{}});
     try {{ rec.stop(); }} catch (e) {{}}
   }});
@@ -432,6 +498,11 @@ class WebSpeechASRProvider(ASRProvider):
     def is_loaded(self) -> bool:
         return self._server is not None
 
+    def set_capture_enabled(self, enabled: bool) -> None:
+        """Pause/resume browser-owned microphone capture and discard stale text."""
+
+        self._state.set_capture_enabled(enabled)
+
     def _start_server(self) -> None:
         state = self._state
         state.reset()
@@ -442,6 +513,7 @@ class WebSpeechASRProvider(ASRProvider):
             "max_alternatives": self.max_alternatives,
             "restart_on_end": self.restart_on_end,
             "silence_timeout_ms": self.silence_timeout_ms,
+            "capture_enabled": state.capture_status()["capture_enabled"],
         }
 
         class Handler(BaseHTTPRequestHandler):
@@ -467,7 +539,15 @@ class WebSpeechASRProvider(ASRProvider):
             def do_GET(self):
                 parsed = urlparse(self.path)
                 if parsed.path == "/":
-                    self._send_text(HTTPStatus.OK, _page(language, **page_options), "text/html; charset=utf-8")
+                    runtime_options = dict(page_options)
+                    runtime_options["capture_enabled"] = state.capture_status()[
+                        "capture_enabled"
+                    ]
+                    self._send_text(
+                        HTTPStatus.OK,
+                        _page(language, **runtime_options),
+                        "text/html; charset=utf-8",
+                    )
                     return
                 if parsed.path == "/status":
                     payload = json.dumps(
@@ -482,6 +562,10 @@ class WebSpeechASRProvider(ASRProvider):
                     return
                 if parsed.path == "/ping":
                     self._send_text(HTTPStatus.OK, b"{}", "application/json")
+                    return
+                if parsed.path == "/capture-state":
+                    payload = json.dumps(state.capture_status()).encode("utf-8")
+                    self._send_text(HTTPStatus.OK, payload, "application/json")
                     return
                 self._send_text(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 

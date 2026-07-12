@@ -126,6 +126,8 @@ from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
     OUTPUT_FORMAT_OPTIONS,
+    UI_FONT_851,
+    UI_FONT_SYSTEM,
     UI_LANGUAGE_OPTIONS,
     backend_api_key_is_required,
     backend_base_url_is_editable,
@@ -150,6 +152,7 @@ from src.utils.ui_config import (
     get_ui_language,
     normalize_backend,
     normalize_backend_region,
+    normalize_ui_font_preference,
 )
 from src.utils.translation_config_validation import missing_required_translation_api_key
 from src.version import APP_VERSION
@@ -283,6 +286,14 @@ THEME_LABELS = {
     "ja": {"system": "システムに追従", "dark": "ダーク", "light": "ライト"},
     "ko": {"system": "시스템 따르기", "dark": "다크", "light": "라이트"},
     "ru": {"system": "Следовать системе", "dark": "Тёмная", "light": "Светлая"},
+}
+
+FONT_LABELS = {
+    "zh-CN": {UI_FONT_851: "851（默认）", UI_FONT_SYSTEM: "系统默认字体"},
+    "en": {UI_FONT_851: "851 (Default)", UI_FONT_SYSTEM: "System Default Font"},
+    "ja": {UI_FONT_851: "851（既定）", UI_FONT_SYSTEM: "システム既定フォント"},
+    "ko": {UI_FONT_851: "851 (기본값)", UI_FONT_SYSTEM: "시스템 기본 글꼴"},
+    "ru": {UI_FONT_851: "851 (по умолчанию)", UI_FONT_SYSTEM: "Системный шрифт"},
 }
 
 DENOISE_PRESETS = (
@@ -636,6 +647,20 @@ QT_SETTINGS_COPY = {
     },
     "settings_app_language": {"zh-CN": "界面语言", "en": "UI Language", "ja": "UI 言語"},
     "settings_theme": {"zh-CN": "主题", "en": "Theme", "ja": "テーマ"},
+    "settings_font": {
+        "zh-CN": "界面字体",
+        "en": "Interface Font",
+        "ja": "UI フォント",
+        "ru": "Шрифт интерфейса",
+        "ko": "UI 글꼴",
+    },
+    "settings_font_hint": {
+        "zh-CN": "851 是默认字体；也可以改为电脑的系统默认字体。",
+        "en": "851 remains the default; choose the operating system's default font if preferred.",
+        "ja": "既定は 851 です。OS のシステム既定フォントも選択できます。",
+        "ru": "Шрифт 851 используется по умолчанию; также можно выбрать системный шрифт ОС.",
+        "ko": "기본 글꼴은 851이며 운영 체제의 시스템 기본 글꼴도 선택할 수 있습니다.",
+    },
     "settings_background": {"zh-CN": "背景图片", "en": "Background Image", "ja": "背景画像"},
     "settings_background_none": {"zh-CN": "（无）", "en": "(None)", "ja": "（なし）"},
     "browse": {"zh-CN": "浏览...", "en": "Browse...", "ja": "参照..."},
@@ -656,10 +681,10 @@ QT_SETTINGS_COPY = {
     "asr_region": {"zh-CN": "服务区域", "en": "Service Region", "ja": "サービス地域"},
     "asr_listen": {"zh-CN": "听别人时用哪个听写服务", "en": "Reverse Translation Speech Model", "ja": "逆翻訳音声モデル"},
     "input_device_mode": {"zh-CN": "麦克风选择方式", "en": "Microphone Mode", "ja": "マイクモード"},
-    "input_device_mode_auto": {"zh-CN": "自动跟随系统默认", "en": "Auto Follow System Default", "ja": "システム既定を追従"},
+    "input_device_mode_auto": {"zh-CN": "自动：活动设备 / 系统默认", "en": "Auto: Active / System Default", "ja": "自動: 使用中 / システム既定"},
     "input_device_mode_fixed": {"zh-CN": "固定指定设备", "en": "Fixed Device", "ja": "固定デバイス"},
     "input_device": {"zh-CN": "麦克风", "en": "Microphone", "ja": "マイク"},
-    "input_device_default": {"zh-CN": "系统默认麦克风", "en": "System Default Microphone", "ja": "システム既定マイク"},
+    "input_device_default": {"zh-CN": "自动选择麦克风", "en": "Automatic Microphone", "ja": "マイクを自動選択"},
     "input_device_missing": {"zh-CN": "未检测到麦克风", "en": "No microphone found", "ja": "マイクが見つかりません"},
     "mic_mute_hotkey": {"zh-CN": "一键闭麦的快捷键", "en": "Mic Mute Hotkey", "ja": "マイクミュートホットキー"},
     "streaming": {"zh-CN": "边说边出字", "en": "Streaming Recognition", "ja": "ストリーミング認識"},
@@ -1200,7 +1225,13 @@ QT_SETTINGS_COPY.update({
     "open_mic_calibration": {"zh-CN": "校准我的麦克风断句", "en": "Calibrate mic VAD", "ja": "マイク VAD を調整"},
     "open_listen_calibration": {"zh-CN": "校准听别人时的断句", "en": "Calibrate listen VAD", "ja": "リスン VAD を調整"},
     "osc_listener_section": {"zh-CN": "VRChat 控制 Mio（OSC）", "en": "OSC Listener / Control", "ja": "OSC 受信 / 制御"},
-    "osc_listener_enabled": {"zh-CN": "允许 VRChat 给 Mio 发开关（OSC）", "en": "Enable OSC listener", "ja": "OSC 受信を有効化"},
+    "osc_listener_enabled": {
+        "zh-CN": "启用 OSC 接收（需要时自动开启）",
+        "en": "Enable OSC receiver (automatic when needed)",
+        "ja": "OSC 受信を有効化（必要時は自動）",
+        "ru": "Включить OSC-приёмник (автоматически при необходимости)",
+        "ko": "OSC 수신기 사용(필요할 때 자동 활성화)",
+    },
     "osc_receive_host": {"zh-CN": "Mio 接收地址", "en": "Receive Host", "ja": "受信ホスト"},
     "osc_receive_port": {"zh-CN": "Mio 接收端口", "en": "Receive Port", "ja": "受信ポート"},
     "osc_sync_mute_self": {"zh-CN": "VRChat 闭麦时，Mio 也跟着闭麦", "en": "Sync VRChat MuteSelf", "ja": "VRChat MuteSelf を同期"},
@@ -1440,11 +1471,11 @@ QT_SETTINGS_COPY.update({
         "ko": "API 키와 서비스 지역은 API 설정 페이지에서 설정하세요",
     },
     "api_tts_model_only_hint": {
-        "zh-CN": "API密钥和服务区域请在\"API配置\"页面设置。这里只需选择TTS模型。",
-        "en": "Please set API key and service region in the API Configuration page. Only select TTS model here.",
-        "ja": "API キーとサービス地域は API 設定ページで設定してください。ここでは TTS モデルのみを選択します。",
-        "ru": "Установите API-ключ и регион в настройке API. Здесь только выбор модели TTS.",
-        "ko": "API 키와 서비스 지역은 API 설정 페이지에서 설정하세요. 여기서는 TTS 모델만 선택합니다.",
+        "zh-CN": "API密钥请在\"API配置\"页面设置。服务区域必须与密钥所属区域一致，也可在这里直接选择。",
+        "en": "Set the API key on the API Configuration page. The service region must match the key and can also be selected here.",
+        "ja": "API キーは API 設定ページで設定します。キーと同じサービス地域を、ここでも直接選択できます。",
+        "ru": "Укажите API-ключ в настройке API. Регион должен соответствовать ключу; его также можно выбрать здесь.",
+        "ko": "API 키는 API 설정 페이지에서 지정하세요. 키와 일치하는 서비스 지역을 여기에서도 선택할 수 있습니다.",
     },
     "xtts_device_label": {
         "zh-CN": "计算设备",
@@ -1568,10 +1599,10 @@ _SETTINGS_RU_KO_COPY = {
     "asr_region": {"ru": "Регион сервиса", "ko": "서비스 지역"},
     "asr_listen": {"ru": "ASR для обратного перевода", "ko": "역번역 ASR"},
     "input_device_mode": {"ru": "Режим микрофона", "ko": "마이크 모드"},
-    "input_device_mode_auto": {"ru": "Следовать системному", "ko": "시스템 기본값 따르기"},
+    "input_device_mode_auto": {"ru": "Авто: активный / системный", "ko": "자동: 사용 중 / 시스템 기본"},
     "input_device_mode_fixed": {"ru": "Фиксированное устройство", "ko": "고정 장치"},
     "input_device": {"ru": "Микрофон", "ko": "마이크"},
-    "input_device_default": {"ru": "Авто: системный микрофон", "ko": "자동: 시스템 기본 마이크"},
+    "input_device_default": {"ru": "Автоматический микрофон", "ko": "마이크 자동 선택"},
     "input_device_missing": {"ru": "Выбранное устройство не найдено", "ko": "선택한 장치를 찾을 수 없음"},
     "mic_mute_hotkey": {"ru": "Горячая клавиша mute", "ko": "마이크 음소거 단축키"},
     "streaming": {"ru": "Потоковое распознавание", "ko": "스트리밍 인식"},
@@ -1857,14 +1888,23 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "ja": "有効にすると翻訳結果を VRChat Chatbox へ送信します。無効時はツール内表示のみです。",
     },
     "input_device_mode": {
-        "zh-CN": "自动模式会跟随系统默认麦克风；固定模式适合多麦克风或虚拟声卡环境。",
-        "en": "Auto follows the system default microphone. Fixed mode is better for multi-mic or virtual audio setups.",
-        "ja": "自動はシステム既定マイクを追従します。固定は複数マイクや仮想オーディオ環境向けです。",
+        "zh-CN": "自动模式优先选择其他应用当前正在使用的麦克风，否则跟随系统默认；固定模式适合多麦克风或虚拟声卡环境。",
+        "en": "Auto prefers the microphone currently used by another app, then falls back to the system default. Fixed mode is better for multi-mic or virtual audio setups.",
+        "ja": "自動は他のアプリが使用中のマイクを優先し、なければシステム既定を使います。固定は複数マイクや仮想オーディオ環境向けです。",
+        "ru": "Авто предпочитает микрофон, используемый другим приложением, затем системный. Для нескольких микрофонов и виртуального аудио используйте фиксированный режим.",
+        "ko": "자동 모드는 다른 앱이 사용 중인 마이크를 우선하고, 없으면 시스템 기본값을 사용합니다. 다중 마이크나 가상 오디오 환경에서는 고정 모드를 사용하세요.",
     },
     "input_device": {
         "zh-CN": "选择用于识别你说话的麦克风。",
         "en": "Select the microphone used to recognize your speech.",
         "ja": "自分の声を認識するマイクを選びます。",
+    },
+    "osc_listener_enabled": {
+        "zh-CN": "启用 MuteSelf 同步或角色菜单控制时，Mio 会自动保持 OSC 接收开启。",
+        "en": "MuteSelf sync and avatar controls automatically keep the OSC receiver enabled.",
+        "ja": "MuteSelf 同期または Avatar 操作が有効な間は、OSC 受信も自動的に有効になります。",
+        "ru": "Синхронизация MuteSelf и управление аватаром автоматически оставляют OSC-приёмник включённым.",
+        "ko": "MuteSelf 동기화나 아바타 제어를 사용하면 OSC 수신기가 자동으로 활성화됩니다.",
     },
     "asr_listen": {
         "zh-CN": "这是用来听 VRChat 里其他玩家声音的。新手保持“跟随麦克风”即可；如果你想单独用在线听写服务，也可以在这里选。",
@@ -2183,6 +2223,7 @@ class SettingsWindow(QDialog):
         # Field value holders
         self._ui_lang_var = _StrVar()
         self._theme_var = _StrVar()
+        self._font_var = _StrVar()
         self._backend_var = _StrVar()
         self._backend_api_key_var = _StrVar()
         self._backend_base_url_var = _StrVar()
@@ -2440,6 +2481,10 @@ class SettingsWindow(QDialog):
         theme_labels = self._theme_labels()
         theme = _normalize_theme_preference(ui_cfg.get(MAIN_THEME_CONFIG_KEY, "system"))
         self._theme_var.set(theme_labels.get(theme, theme_labels["system"]))
+        font_labels = self._font_labels()
+        font_preference = normalize_ui_font_preference(ui_cfg.get("font_family"))
+        self._font_codes = {label: code for code, label in font_labels.items()}
+        self._font_var.set(font_labels[font_preference])
         self._background_image_path = str(ui_cfg.get("background_image_path") or "")
 
         ui_lang_reverse = {code: label for label, code in UI_LANGUAGE_OPTIONS}
@@ -2640,6 +2685,13 @@ class SettingsWindow(QDialog):
             or THEME_LABELS["en"]
         )
 
+    def _font_labels(self) -> dict[str, str]:
+        return (
+            FONT_LABELS.get(self._ui_lang)
+            or FONT_LABELS.get(self._ui_lang.split("-", 1)[0])
+            or FONT_LABELS["en"]
+        )
+
     @staticmethod
     def _theme_code_from_value(value: str) -> str:
         normalized = str(value or "").strip().lower()
@@ -2690,6 +2742,7 @@ class SettingsWindow(QDialog):
             self._dictionary_custom_patterns_var.set(patterns_edit.toPlainText())
         return {
             "theme": self._theme_code_from_value(self._theme_var.value()),
+            "font": self._font_codes.get(self._font_var.value(), UI_FONT_851),
             "target": self._lang_codes.get(self._target_lang_var.value(), "ja"),
             "target_2": self._lang_codes.get(self._target_lang2_var.value(), "en"),
             "target_3": self._lang3_codes.get(self._target_lang3_var.value(), ""),
@@ -2717,6 +2770,11 @@ class SettingsWindow(QDialog):
         theme_labels = self._theme_labels()
         theme_code = _normalize_theme_preference(codes.get("theme", "system"))
         self._theme_var.set(theme_labels.get(theme_code, theme_labels["system"]))
+
+        font_labels = self._font_labels()
+        font_code = normalize_ui_font_preference(codes.get("font", UI_FONT_851))
+        self._font_codes = {label: code for code, label in font_labels.items()}
+        self._font_var.set(font_labels[font_code])
 
         target_opts = list(get_target_language_options(ui_language=self._ui_lang))
         target_code = str(codes.get("target", "ja"))
@@ -3025,24 +3083,62 @@ class SettingsWindow(QDialog):
         if not engine:
             return
         region = self._selected_tts_api_region()
+        self._sync_tts_api_region_combos()
         if region != "custom":
             self._tts_api_base_url_var.set(get_tts_api_base_url(engine, region))
         entry = getattr(self, "_tts_api_base_url_entry", None)
+        if entry is not None and not self._qt_widget_is_alive(entry):
+            self._tts_api_base_url_entry = None
+            entry = None
         if entry is not None:
             entry.setText(self._tts_api_base_url_var.value())
             entry.setReadOnly(region != "custom")
+
+    def _sync_tts_api_region_combos(self) -> None:
+        """Keep the API and TTS-page region selectors in lockstep."""
+
+        items = list(self._tts_api_region_codes.keys()) or [""]
+        current = self._tts_api_region_var.value()
+        if current not in items:
+            current = items[0]
+            self._tts_api_region_var.set(current)
+        for attr_name in ("_tts_api_region_combo", "_tts_voice_api_region_combo"):
+            combo = getattr(self, attr_name, None)
+            if combo is None:
+                continue
+            if not self._qt_widget_is_alive(combo):
+                setattr(self, attr_name, None)
+                continue
+            combo.blockSignals(True)
+            try:
+                current_items = [combo.itemText(index) for index in range(combo.count())]
+                if current_items != items:
+                    combo.clear()
+                    combo.addItems(items)
+                combo.setCurrentText(current)
+            finally:
+                combo.blockSignals(False)
 
     def _refresh_tts_api_visibility(self) -> None:
         frame = getattr(self, "_tts_api_frame", None)
         if frame is None:
             return
+        if not self._qt_widget_is_alive(frame):
+            self._tts_api_frame = None
+            return
         visible = self._selected_tts_api_engine() in TTS_API_ENGINE_IDS
         frame.setVisible(visible)
         if visible:
             api_entry = getattr(self, "_tts_api_key_entry", None)
+            if api_entry is not None and not self._qt_widget_is_alive(api_entry):
+                self._tts_api_key_entry = None
+                api_entry = None
             if api_entry is not None:
                 api_entry.setText(self._tts_api_key_var.value())
             model_entry = getattr(self, "_tts_api_model_entry", None)
+            if model_entry is not None and not self._qt_widget_is_alive(model_entry):
+                self._tts_api_model_entry = None
+                model_entry = None
             if model_entry is not None:
                 items = list(
                     get_tts_api_model_options(
@@ -3058,21 +3154,7 @@ class SettingsWindow(QDialog):
                     model_entry.setEditText(current)
                 finally:
                     model_entry.blockSignals(False)
-            combo = getattr(self, "_tts_api_region_combo", None)
-            if combo is not None:
-                items = list(self._tts_api_region_codes.keys()) or [""]
-                current = self._tts_api_region_var.value()
-                combo.blockSignals(True)
-                try:
-                    combo.clear()
-                    combo.addItems(items)
-                    if current in items:
-                        combo.setCurrentText(current)
-                    elif items:
-                        combo.setCurrentIndex(0)
-                        self._tts_api_region_var.set(combo.currentText())
-                finally:
-                    combo.blockSignals(False)
+            self._sync_tts_api_region_combos()
             self._on_tts_api_region_changed(self._tts_api_region_var.value())
 
     def _tts_device_options(self) -> list[tuple[str, str]]:
@@ -3586,6 +3668,15 @@ class SettingsWindow(QDialog):
         self._section_title(layout, self._copy("settings_app_language"))
         self._row_layout(layout, self._copy("settings_app_language"), self._combo("ui_lang", self._ui_lang_var, list(self._ui_lang_codes.keys()), self._on_ui_lang_changed))
         self._field_hint(layout, "settings_app_language")
+        self._row_layout(
+            layout,
+            self._copy("settings_font"),
+            self._combo("font", self._font_var, list(self._font_codes.keys())),
+        )
+        font_hint = QLabel(self._copy("settings_font_hint"))
+        font_hint.setObjectName("hintLabel")
+        font_hint.setWordWrap(True)
+        layout.addWidget(font_hint)
 
         bg_row = QHBoxLayout()
         bg_row.setSpacing(8)
@@ -4035,6 +4126,7 @@ class SettingsWindow(QDialog):
 
         self._section_title(layout, self._copy("osc_listener_section"))
         self._build_switch_row(layout, self._copy("osc_listener_enabled"), self._osc_listener_enabled_var)
+        self._field_hint(layout, "osc_listener_enabled")
         self._row_layout(layout, self._copy("osc_receive_host"), self._line_edit("osc_receive_host", self._osc_receive_host_var, 180))
         self._row_layout(layout, self._copy("osc_receive_port"), self._line_edit("osc_receive_port", self._osc_receive_port_var, 120))
         self._build_switch_row(layout, self._copy("osc_sync_mute_self"), self._osc_sync_mute_self_var)
@@ -4316,6 +4408,7 @@ class SettingsWindow(QDialog):
         # OSC Listener
         self._section_title(layout, "OSC 监听器")
         self._build_switch_row(layout, self._copy("osc_listener_enabled"), self._osc_listener_enabled_var)
+        self._field_hint(layout, "osc_listener_enabled")
         self._row_layout(layout, self._copy("osc_receive_host"), self._line_edit("osc_receive_host", self._osc_receive_host_var, 180))
         self._row_layout(layout, self._copy("osc_receive_port"), self._line_edit("osc_receive_port", self._osc_receive_port_var, 120))
         self._build_switch_row(layout, self._copy("osc_sync_mute_self"), self._osc_sync_mute_self_var)
@@ -5917,7 +6010,7 @@ class SettingsWindow(QDialog):
         self._refresh_tts_runtime_card()
 
     def _build_tts_api_config(self, layout: QVBoxLayout) -> None:
-        """Build TTS API config - API keys moved to API Configuration page, only show model selection"""
+        """Build online-TTS model and region controls."""
         self._tts_api_frame = QFrame()
         self._tts_api_frame.setObjectName("runtimeNotice")
         frame_layout = QVBoxLayout(self._tts_api_frame)
@@ -5928,13 +6021,26 @@ class SettingsWindow(QDialog):
         title.setObjectName("fieldLabel")
         frame_layout.addWidget(title)
 
-        # API key, region, base URL are now in API Configuration page
+        # API key and custom base URL remain on the API Configuration page.
         hint = QLabel(self._copy("api_tts_model_only_hint"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         frame_layout.addWidget(hint)
 
-        # Only keep model selection
+        region_items = list(self._tts_api_region_codes.keys()) or [""]
+        region_combo = self._combo(
+            "tts_voice_api_region",
+            self._tts_api_region_var,
+            region_items,
+            self._on_tts_api_region_changed,
+        )
+        self._tts_voice_api_region_combo = region_combo
+        self._row_layout(
+            frame_layout,
+            self._copy("tts_service_region"),
+            region_combo,
+        )
+
         model = NoWheelComboBox()
         model.setEditable(True)
         model.addItems(
@@ -6749,6 +6855,10 @@ class SettingsWindow(QDialog):
         text_input_cfg = cfg.setdefault("text_input_window", {})
 
         ui_cfg[MAIN_THEME_CONFIG_KEY] = self._theme_code_from_value(self._theme_var.value())
+        ui_cfg["font_family"] = self._font_codes.get(
+            self._font_var.value(),
+            UI_FONT_851,
+        )
         ui_cfg["background_image_path"] = self._background_image_path
 
         ui_lang_code = self._ui_lang_codes.get(self._ui_lang_var.value(), self._ui_lang or "zh-CN")
@@ -6982,11 +7092,17 @@ class SettingsWindow(QDialog):
         if not isinstance(osc_cfg, dict):
             osc_cfg = {}
             cfg["osc"] = osc_cfg
-        osc_cfg["listener_enabled"] = self._osc_listener_enabled_var.value()
+        sync_mute_self = self._osc_sync_mute_self_var.value()
+        allow_avatar_control = self._osc_allow_avatar_control_var.value()
+        osc_cfg["listener_enabled"] = bool(
+            self._osc_listener_enabled_var.value()
+            or sync_mute_self
+            or allow_avatar_control
+        )
         osc_cfg["receive_host"] = self._osc_receive_host_var.value().strip() or "127.0.0.1"
         osc_cfg["receive_port"] = osc_receive_port
-        osc_cfg["sync_mute_self"] = self._osc_sync_mute_self_var.value()
-        osc_cfg["allow_avatar_control"] = self._osc_allow_avatar_control_var.value()
+        osc_cfg["sync_mute_self"] = sync_mute_self
+        osc_cfg["allow_avatar_control"] = allow_avatar_control
         osc_cfg["control_prefix"] = self._osc_control_prefix_var.value().strip() or "Mio"
         control_params = osc_cfg.get("control_params")
         if not isinstance(control_params, dict):

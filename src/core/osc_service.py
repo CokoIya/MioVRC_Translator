@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OSC_RECEIVE_HOST = "127.0.0.1"
 DEFAULT_OSC_RECEIVE_PORT = 9001
+MUTE_SELF_DUPLICATE_WINDOW_S = 0.25
 
 
 def _coerce_port(value: object, default: int) -> int:
@@ -50,11 +52,14 @@ class OscService(QObject):
     def __init__(self) -> None:
         super().__init__()
         self._sender: VRCOSCSender | None = None
-        self._listener_server: osc_server.ThreadingOSCUDPServer | None = None
+        self._listener_server: osc_server.OSCUDPServer | None = None
         self._listener_thread: threading.Thread | None = None
         self._listener_lock = threading.RLock()
         self._listener_endpoint: tuple[str, int] | None = None
         self._sync_mute_self = True
+        self._mute_state_lock = threading.Lock()
+        self._last_mute_self: bool | None = None
+        self._last_mute_self_at = 0.0
 
     @property
     def sender(self) -> VRCOSCSender | None:
@@ -125,7 +130,11 @@ class OscService(QObject):
             osc_dispatcher = dispatcher.Dispatcher()
             osc_dispatcher.set_default_handler(self._handle_osc_message)
             try:
-                server = osc_server.ThreadingOSCUDPServer(
+                # The listener already owns a dedicated background thread. A
+                # single-threaded UDP server keeps rapidly toggled avatar
+                # parameters in arrival order; ThreadingOSCUDPServer could run
+                # a later MuteSelf packet before an earlier one completed.
+                server = osc_server.OSCUDPServer(
                     (host_text, port_number),
                     osc_dispatcher,
                 )
@@ -143,6 +152,9 @@ class OscService(QObject):
             self._listener_thread = thread
             self._listener_endpoint = (host_text, port_number)
             self._sync_mute_self = bool(sync_mute_self)
+            with self._mute_state_lock:
+                self._last_mute_self = None
+                self._last_mute_self_at = 0.0
             thread.start()
         self.listener_started.emit(host_text, port_number)
         logger.info("OSC listener started on %s:%s", host_text, port_number)
@@ -156,6 +168,9 @@ class OscService(QObject):
             self._listener_server = None
             self._listener_thread = None
             self._listener_endpoint = None
+            with self._mute_state_lock:
+                self._last_mute_self = None
+                self._last_mute_self_at = 0.0
         if server is not None:
             try:
                 server.shutdown()
@@ -214,7 +229,19 @@ class OscService(QObject):
             return
         value = args[0] if args else None
         self.avatar_parameter_received.emit(name, value)
-        if self._sync_mute_self and name == "MuteSelf":
+        if self._sync_mute_self and name.casefold() == "muteself":
             muted = _coerce_bool(value)
-            if muted is not None:
-                self.mute_self_changed.emit(muted)
+            if muted is None:
+                return
+            now = time.monotonic()
+            with self._mute_state_lock:
+                if (
+                    muted == self._last_mute_self
+                    and (now - self._last_mute_self_at)
+                    < MUTE_SELF_DUPLICATE_WINDOW_S
+                ):
+                    return
+                self._last_mute_self = muted
+                self._last_mute_self_at = now
+            logger.info("VRChat MuteSelf changed: %s", muted)
+            self.mute_self_changed.emit(muted)

@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.7.9",
-  "installer_name": "MioTranslator-Setup-v1.3.7.9.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.7.9/MioTranslator-Setup-v1.3.7.9.exe",
-  "size_bytes": 463531454,
-  "sha256": "fcf339b39573fb0b300b7824970bc2857517d260ca52d3843621de9a0493b4ad",
+  "version": "v1.3.8",
+  "installer_name": "MioTranslator-Setup-v1.3.8.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8/MioTranslator-Setup-v1.3.8.exe",
+  "size_bytes": 463610904,
+  "sha256": "4885d5bdf5791c288e59f2db608eef52999cd38fbe623c263173a9ea03a220f5",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "93360fcc60e3b80440201c7e7b1d97f01a8ad9bc47f70a8671722cf101752fc650b7a0dbc30702184468c3fc4f97ae7f050bd0080da03b2fcd6944b6201fa905",
-  "notes": "v1.3.7.9 hardens in-app updates with Ed25519 verification and delivers a bounded concurrent ASR → rewrite → translation → ordered OSC/TTS pipeline, faster ASR/translation/TTS, reliable Windows audio hot-plug detection, isolated reverse translation, improved XTTS CUDA support, and refreshed AI model catalogs.",
+  "installer_signature": "f4e33e12a95db50480879fc1bff7461d7ffa2fc02163cf3c05a2ec72ec44c6fd4e46add3588f1a7532670feb3b6c143de9c9cfe63aeb5eba1a35fb8a292bf202",
+  "notes": "v1.3.8 synchronizes mute with microphone and Web Speech capture, improves active/default microphone selection and ordered OSC MuteSelf handling, secures Qwen TTS result downloads, improves virtual-output playback compatibility, synchronizes TTS service regions, and adds selectable UI fonts.",
   "notes_i18n": {
-    "zh-CN": "v1.3.7.9 通过 Ed25519 验证强化应用内更新，并带来有界并发的 ASR → 改写 → 翻译 → 顺序 OSC/TTS 流水线、更快的 ASR/翻译/TTS、可靠的 Windows 音频热插拔检测、隔离的反向翻译、改进的 XTTS CUDA 支持以及更新后的 AI 模型目录。",
-    "en": "v1.3.7.9 hardens in-app updates with Ed25519 verification and delivers a bounded concurrent ASR → rewrite → translation → ordered OSC/TTS pipeline, faster ASR/translation/TTS, reliable Windows audio hot-plug detection, isolated reverse translation, improved XTTS CUDA support, and refreshed AI model catalogs.",
-    "ja": "v1.3.7.9 は Ed25519 検証でアプリ内更新を強化し、上限付き並行 ASR → リライト → 翻訳 → 順序付き OSC/TTS パイプライン、高速化した ASR/翻訳/TTS、安定した Windows オーディオのホットプラグ検出、分離された逆翻訳、改善された XTTS CUDA 対応、更新済み AI モデルカタログを提供します。",
-    "ru": "v1.3.7.9 усиливает встроенное обновление проверкой Ed25519 и добавляет ограниченный параллельный конвейер ASR → перезапись → перевод → упорядоченный OSC/TTS, ускоряет ASR/перевод/TTS, улучшает обнаружение аудиоустройств Windows при горячем подключении, изолирует обратный перевод, улучшает XTTS CUDA и обновляет каталог моделей ИИ.",
-    "ko": "v1.3.7.9은 Ed25519 검증으로 앱 내 업데이트를 강화하고, 용량이 제한된 동시 ASR → 재작성 → 번역 → 순서 보장 OSC/TTS 파이프라인, 더 빠른 ASR/번역/TTS, 안정적인 Windows 오디오 핫플러그 감지, 격리된 역번역, 개선된 XTTS CUDA 지원 및 최신 AI 모델 카탈로그를 제공합니다."
+    "zh-CN": "v1.3.8 将静音状态与麦克风和 Web Speech 采集同步，改进活动/默认麦克风自动选择和有序的 OSC MuteSelf 处理，强化 Qwen TTS 结果下载安全性，提升虚拟输出设备播放兼容性，同步 TTS 服务区域，并新增可选界面字体。",
+    "en": "v1.3.8 synchronizes mute with microphone and Web Speech capture, improves active/default microphone selection and ordered OSC MuteSelf handling, secures Qwen TTS result downloads, improves virtual-output playback compatibility, synchronizes TTS service regions, and adds selectable UI fonts.",
+    "ja": "v1.3.8 は、ミュート状態とマイク/Web Speech 収録の同期、使用中/既定マイクの自動選択、順序を保つ OSC MuteSelf 処理を改善し、Qwen TTS 結果の安全なダウンロード、仮想出力デバイスとの再生互換性、TTS サービス地域の同期、UI フォント選択を追加します。",
+    "ru": "v1.3.8 синхронизирует отключение звука с захватом микрофона и Web Speech, улучшает выбор активного/системного микрофона и упорядоченную обработку OSC MuteSelf, защищает загрузку результатов Qwen TTS, улучшает воспроизведение через виртуальные устройства, синхронизирует регионы TTS и добавляет выбор шрифта интерфейса.",
+    "ko": "v1.3.8은 음소거 상태를 마이크 및 Web Speech 캡처와 동기화하고, 활성/기본 마이크 자동 선택과 순서 보장 OSC MuteSelf 처리를 개선합니다. 또한 Qwen TTS 결과 다운로드 보안, 가상 출력 장치 재생 호환성, TTS 서비스 지역 동기화, UI 글꼴 선택을 추가합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-12T12:11:16+09:00",
+  "published_at": "2026-07-12T16:20:31+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "acae6b14db0c31fc9ef66c1cb2ba42c79ac1ac029936dd361df4a6d41830deac6934f578d94f420a1e0675b24c3bb4bed2d1a04b7bf59569f0b01edf0f567702"
+  "signature": "6cad21a0db8b1a4d835fe57454c269cc98a8080d385183c7b87d2aa013790a50e3a87019a86dff71ce6757354cdd46be03727d73bf5c78b781b8004edaae080f"
 }

@@ -297,7 +297,7 @@
     "min_send_interval_s": 0.8,
     "receive_host": "127.0.0.1",
     "receive_port": 9001,
-    "listener_enabled": false,
+    "listener_enabled": true,
     "sync_mute_self": true,
     "allow_avatar_control": false,
     "control_prefix": "Mio",
@@ -407,6 +407,7 @@
     "osc_guide_seen": false,
     "mode_wizard_seen": false,
     "theme": "dark",
+    "font_family": "851",
     "background_image_path": ""
   },
   "hotkeys": {

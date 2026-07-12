@@ -903,6 +903,26 @@ def test_auto_microphone_resolves_current_default_device(monkeypatch):
     assert window._devices["Razer Seiren V2 X"] == 1
 
 
+def test_auto_microphone_uses_default_marker_from_fresh_device_scan(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    devices = [
+        {
+            "index": 2,
+            "name": "Microphone (PicoStreamingMicrophone)",
+            "is_default": False,
+        },
+        {"index": 7, "name": "Razer Seiren V2 X", "is_default": True},
+    ]
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.inventory_default_input_device_name",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fresh default marker should avoid a second lookup")
+        ),
+    )
+
+    assert MainWindow._current_default_input_device_name(window, devices) == "Razer Seiren V2 X"
+
+
 def test_fixed_microphone_matches_stable_parenthesized_hardware_identity(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._config = {

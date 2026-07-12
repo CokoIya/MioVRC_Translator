@@ -183,3 +183,14 @@ class FallbackASR(ASRProvider):
         self.primary.close()
         if self._fallback is not None:
             self._fallback.close()
+
+    def set_capture_enabled(self, enabled: bool) -> None:
+        """Forward optional capture control to browser-owned ASR providers."""
+
+        providers = [self.primary]
+        if self._fallback is not None:
+            providers.append(self._fallback)
+        for provider in providers:
+            setter = getattr(provider, "set_capture_enabled", None)
+            if callable(setter):
+                setter(bool(enabled))

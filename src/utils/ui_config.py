@@ -4,6 +4,43 @@ from collections.abc import Collection, Mapping
 
 DEFAULT_UI_LANGUAGE = "zh-CN"
 
+UI_FONT_851 = "851"
+UI_FONT_SYSTEM = "system"
+UI_FONT_PREFERENCES = (UI_FONT_851, UI_FONT_SYSTEM)
+
+
+def normalize_ui_font_preference(value: object) -> str:
+    """Normalize persisted UI font choices to a stable preference code."""
+
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    if normalized in {
+        "system",
+        "system-default",
+        "default",
+        "native",
+        "os",
+    }:
+        return UI_FONT_SYSTEM
+    if normalized in {
+        "851",
+        "851tegakizatsu",
+        "851-tegakizatsu",
+        "custom",
+        "bundled",
+        "",
+    }:
+        return UI_FONT_851
+    return UI_FONT_851
+
+
+def ui_font_preference_from_config(config: object) -> str:
+    if not isinstance(config, Mapping):
+        return UI_FONT_851
+    ui_config = config.get("ui", {})
+    if not isinstance(ui_config, Mapping):
+        return UI_FONT_851
+    return normalize_ui_font_preference(ui_config.get("font_family", UI_FONT_851))
+
 UI_LANGUAGE_OPTIONS = (
     ("\u7b80\u4f53\u4e2d\u6587", "zh-CN"),
     ("English", "en"),

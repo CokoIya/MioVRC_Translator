@@ -191,3 +191,196 @@ def test_coreaudio_multimedia_default_overrides_stale_portaudio_default(monkeypa
 
     assert snapshot.default_output_index == 1
     assert snapshot.default_output.name == "Current Speakers"
+
+
+def test_coreaudio_capture_default_matches_stable_hardware_identity(monkeypatch):
+    inventory._reset_device_inventory_cache_for_tests()
+    monkeypatch.setattr(
+        inventory.sd,
+        "query_devices",
+        lambda: [
+            {
+                "name": "Microphone (PicoStreamingMicrophone)",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+            },
+            {
+                "name": "??? (Razer Seiren V2 X)",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        inventory.sd,
+        "query_hostapis",
+        lambda: [
+            {
+                "name": "Windows WASAPI",
+                "default_input_device": 0,
+                "default_output_device": -1,
+            }
+        ],
+    )
+    monkeypatch.setattr(inventory.sd.default, "device", [0, -1])
+    monkeypatch.setattr(
+        inventory,
+        "_windows_endpoint_diagnostics",
+        lambda: (
+            [
+                {
+                    "id": "razer",
+                    "name": "麦克风 (Razer Seiren V2 X)",
+                    "flow": "capture",
+                    "active": True,
+                    "is_default": True,
+                    "default_roles": ["console", "multimedia"],
+                }
+            ],
+            [],
+        ),
+    )
+
+    snapshot = inventory.get_device_inventory(force_refresh=True, allow_cached=False)
+
+    assert snapshot.default_input_index == 1
+    assert snapshot.default_input.name == "??? (Razer Seiren V2 X)"
+
+
+def test_unique_external_capture_session_selects_microphone_in_use(monkeypatch):
+    inventory._reset_device_inventory_cache_for_tests()
+    monkeypatch.setattr(
+        inventory.sd,
+        "query_devices",
+        lambda: [
+            {
+                "name": "Microphone (PicoStreamingMicrophone)",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+            },
+            {
+                "name": "Microphone (Razer Seiren V2 X)",
+                "hostapi": 0,
+                "max_input_channels": 1,
+                "max_output_channels": 0,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        inventory.sd,
+        "query_hostapis",
+        lambda: [
+            {
+                "name": "Windows WASAPI",
+                "default_input_device": 0,
+                "default_output_device": -1,
+            }
+        ],
+    )
+    monkeypatch.setattr(inventory.sd.default, "device", [0, -1])
+    monkeypatch.setattr(
+        inventory,
+        "_windows_endpoint_diagnostics",
+        lambda: (
+            [
+                {
+                    "id": "pico",
+                    "name": "Microphone (PicoStreamingMicrophone)",
+                    "flow": "capture",
+                    "active": True,
+                    "is_default": True,
+                    "default_roles": ["console", "multimedia"],
+                    "has_active_session": False,
+                    "has_external_active_session": False,
+                },
+                {
+                    "id": "razer",
+                    "name": "Microphone (Razer Seiren V2 X)",
+                    "flow": "capture",
+                    "active": True,
+                    "is_default": False,
+                    "default_roles": [],
+                    "has_active_session": True,
+                    "has_external_active_session": True,
+                    "active_session_process_ids": [4242],
+                },
+            ],
+            [],
+        ),
+    )
+
+    snapshot = inventory.get_device_inventory(force_refresh=True, allow_cached=False)
+
+    assert snapshot.default_input_index == 1
+    assert snapshot.default_input.name == "Microphone (Razer Seiren V2 X)"
+    assert snapshot.diagnostics["windows_active_capture_sessions"] == [
+        {
+            "name": "Microphone (Razer Seiren V2 X)",
+            "is_default": False,
+            "default_roles": [],
+            "has_external_active_session": True,
+            "active_session_process_ids": [4242],
+        }
+    ]
+
+
+def test_capture_hardware_identity_match_stays_ambiguous_when_not_unique():
+    assert inventory.unique_input_device_name_match(
+        "Microphone (USB Audio Device)",
+        [
+            "Front Microphone (USB Audio Device)",
+            "Rear Microphone (USB Audio Device)",
+        ],
+    ) is None
+
+
+def test_active_mixline_capture_does_not_override_real_default_microphone():
+    real_microphone = inventory.AudioEndpoint(
+        index=1,
+        name="Microphone (Razer Seiren V2 X)",
+        hostapi="Windows WASAPI",
+        hostapi_index=0,
+        max_input_channels=1,
+        max_output_channels=0,
+        default_samplerate=48000.0,
+    )
+    mixline_microphone = inventory.AudioEndpoint(
+        index=2,
+        name="Microphone (MIXLINE Stream)",
+        hostapi="Windows WASAPI",
+        hostapi_index=0,
+        max_input_channels=1,
+        max_output_channels=0,
+        default_samplerate=48000.0,
+    )
+
+    resolved = inventory._resolve_default_endpoint(
+        flow="capture",
+        selected=[real_microphone, mixline_microphone],
+        raw_by_index={1: real_microphone, 2: mixline_microphone},
+        raw_default_index=1,
+        hostapis=[],
+        windows_endpoints=[
+            {
+                "name": real_microphone.name,
+                "flow": "capture",
+                "active": True,
+                "is_default": True,
+                "default_roles": ["console", "multimedia"],
+                "has_external_active_session": False,
+            },
+            {
+                "name": mixline_microphone.name,
+                "flow": "capture",
+                "active": True,
+                "is_default": False,
+                "default_roles": [],
+                "has_external_active_session": True,
+            },
+        ],
+    )
+
+    assert resolved == real_microphone

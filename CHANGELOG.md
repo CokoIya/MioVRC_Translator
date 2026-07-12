@@ -2,6 +2,21 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8] - 2026-07-12
+
+### Audio capture and OSC
+
+- Synchronized application mute with physical microphone capture and browser-owned Web Speech capture, including clean pause, cancellation, and resume behavior.
+- Improved automatic microphone selection with active Core Audio session detection, canonical endpoint matching, refreshed inventories, and reliable default-device fallback.
+- Kept inbound OSC active whenever MuteSelf synchronization or avatar controls require it, serialized receive handling, and suppressed duplicate mute-state events.
+
+### TTS and interface
+
+- Enforced HTTPS for allowlisted Qwen TTS result downloads and rejected unsafe result URLs.
+- Adapted playback channel layout and sample rate to the selected output device for more reliable virtual-audio routing.
+- Synchronized TTS service-region selectors and hardened settings refreshes against stale Qt widgets.
+- Added a choice between the bundled 851 typeface and the Windows system UI font.
+
 ## [1.3.7.9] - 2026-07-12
 
 ### Security and updates
@@ -28,8 +43,8 @@ All notable production changes to Mio RealTime Translator are documented here.
 
 - Added optional ASR rewrite presets for anime, cat-speech, Classical Chinese, and humorous academic styles before translation.
 - Disabled model thinking/reasoning modes where supported and added context-aware translation history with source isolation.
-- Refreshed provider catalogs, including `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and Claude Sonnet 5 for direct and compatible relay providers.
-- Removed GPT-5.4 models, Claude Opus models, and Claude Sonnet models earlier than 4.6 from selectable catalogs and migrated obsolete saved selections.
+- Refreshed provider catalogs, including `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and Sonnet 5 for direct and compatible relay providers.
+- Removed GPT-5.4 models, Opus-series models, and Sonnet models earlier than 4.6 from selectable catalogs and migrated obsolete saved selections.
 
 ### Packaging and diagnostics
 
