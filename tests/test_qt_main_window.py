@@ -1,6 +1,7 @@
 import ast
 import inspect
 import threading
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
@@ -17,6 +18,191 @@ from src.ui_qt.main_window import (
     _freeze_snapshot_value,
 )
 from src.utils.i18n import tr
+
+
+def test_missing_credential_prompt_opens_relevant_settings_field(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {"translation": {"backend": "qianwen"}}
+    window._ui_lang = "en"
+    missing = SimpleNamespace(
+        settings_page="api_config",
+        focus_target="backend_api_key",
+    )
+    validation_calls: list[dict[str, object]] = []
+    opened: list[dict[str, object]] = []
+
+    def fake_first_missing(config, **kwargs):
+        validation_calls.append({"config": config, **kwargs})
+        return missing
+
+    def fake_prompt(parent, item, **kwargs):
+        assert parent is window
+        assert item is missing
+        assert kwargs["ui_language"] == "en"
+        kwargs["open_settings"]()
+        return True
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.first_missing_required_credential",
+        fake_first_missing,
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.show_missing_credential_prompt",
+        fake_prompt,
+    )
+    window.show_settings = lambda **kwargs: opened.append(kwargs)
+
+    assert MainWindow._prompt_for_missing_credential(
+        window,
+        ("translation", "asr"),
+    )
+    assert validation_calls == [
+        {
+            "config": window._config,
+            "scopes": ("translation", "asr"),
+            "ui_language": "en",
+            "active_only": True,
+        }
+    ]
+    assert opened == [
+        {"page_id": "api_config", "focus_target": "backend_api_key"}
+    ]
+
+
+def test_pipeline_start_checks_all_active_provider_credentials():
+    window = MainWindow.__new__(MainWindow)
+    window._start_btn = object()
+    window._destroying = False
+    window._running = False
+    window._pipeline_cleanup_in_progress = lambda: False
+    checked: list[tuple[str, ...]] = []
+    window._prompt_for_missing_credential = (
+        lambda scopes: checked.append(scopes) or True
+    )
+    window._t = lambda key: key
+    statuses: list[tuple[str, str, str | None]] = []
+    window._set_status = (
+        lambda text, color, *, key=None: statuses.append((text, color, key))
+    )
+
+    MainWindow._do_start(window)
+
+    assert checked == [("translation", "asr", "tts")]
+    assert statuses == [("status_error", "danger", "status_error")]
+
+
+def test_pipeline_start_missing_asr_key_uses_actionable_prompt(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "ui": {"language": "en"},
+        "translation": {"output_format": "original_only"},
+        "asr": {"engine": "qwen3-asr", "qwen3_asr": {"api_key": ""}},
+        "tts": {"enabled": False, "engine": "edge"},
+    }
+    window._ui_lang = "en"
+    window._start_btn = object()
+    window._destroying = False
+    window._running = False
+    window._pipeline_cleanup_in_progress = lambda: False
+    window._t = lambda key: key
+    window._set_status = lambda *_args, **_kwargs: None
+    prompted = []
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.show_missing_credential_prompt",
+        lambda _parent, missing, **_kwargs: prompted.append(missing),
+    )
+
+    MainWindow._do_start(window)
+
+    assert len(prompted) == 1
+    assert prompted[0].scope == "asr"
+    assert prompted[0].credential_id == "asr.qwen3_asr.api_key"
+
+
+def test_manual_translation_checks_translation_credential_before_controller():
+    window = MainWindow.__new__(MainWindow)
+    window._src_text = "hello"
+    checked: list[tuple[str, ...]] = []
+    window._prompt_for_missing_credential = (
+        lambda scopes: checked.append(scopes) or True
+    )
+    window._t = lambda key: key
+    window._set_status = lambda *_args, **_kwargs: None
+    window._ensure_manual_translation_controller = lambda: pytest.fail(
+        "controller must not start while its credential is missing"
+    )
+
+    MainWindow._do_manual_translate(window)
+
+    assert checked == [("translation",)]
+
+
+def test_tts_manager_checks_credential_before_engine_creation():
+    window = MainWindow.__new__(MainWindow)
+    checked: list[tuple[str, ...]] = []
+    window._prompt_for_missing_credential = (
+        lambda scopes: checked.append(scopes) or True
+    )
+
+    assert MainWindow._ensure_tts_manager(window) is None
+    assert checked == [("tts",)]
+
+
+def test_tts_manager_missing_api_key_stops_before_generic_unavailable_error(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "ui": {"language": "en"},
+        "tts": {
+            "enabled": True,
+            "engine": "qwen_tts",
+            "qwen_tts": {"api_key": "", "model": "qwen3-tts-flash"},
+        },
+    }
+    window._ui_lang = "en"
+    prompted = []
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.show_missing_credential_prompt",
+        lambda _parent, missing, **_kwargs: prompted.append(missing),
+    )
+
+    assert MainWindow._ensure_tts_manager(window) is None
+    assert len(prompted) == 1
+    assert prompted[0].scope == "tts"
+    assert prompted[0].provider_id == "qwen_tts"
+
+
+def test_show_settings_forwards_credential_focus_target():
+    selected: list[tuple[str, str | None]] = []
+
+    class FakeSettingsWindow:
+        _closing = False
+
+        def select_page(self, page_id, focus_target=None):
+            selected.append((page_id, focus_target))
+
+        def show(self):
+            pass
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+    window = MainWindow.__new__(MainWindow)
+    window._settings_window = FakeSettingsWindow()
+    window._sync_settings_window_vrc_listen_state = lambda: None
+
+    MainWindow.show_settings(
+        window,
+        page_id="api_config",
+        focus_target="gemini_api_key",
+    )
+
+    assert selected == [("api_config", "gemini_api_key")]
 
 
 @pytest.fixture(autouse=True)
@@ -484,7 +670,7 @@ def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch
     assert window._tts_manager is None
 
 
-def test_qwen_tts_runtime_rebuilds_for_derived_language_and_persona_not_voice(monkeypatch):
+def test_qwen_tts_runtime_rebuilds_for_derived_language_not_legacy_persona_or_voice(monkeypatch):
     created = []
     stopped = []
 
@@ -520,6 +706,7 @@ def test_qwen_tts_runtime_rebuilds_for_derived_language_and_persona_not_voice(mo
             "output_to_vrchat": False,
             "monitor_enabled": False,
             "qwen_tts": {
+                "api_key": "test-key",
                 "model": "qwen3-tts-instruct-flash",
                 "base_url": "https://example.invalid/v1",
                 "voice": "Cherry",
@@ -557,8 +744,8 @@ def test_qwen_tts_runtime_rebuilds_for_derived_language_and_persona_not_voice(mo
     }
     MainWindow._reset_tts_manager_if_runtime_changed(window)
 
-    assert window._tts_manager is None
-    assert stopped == [first, second]
+    assert window._tts_manager is second
+    assert stopped == [first]
 
 
 def test_tts_runtime_rebuilds_when_cache_limits_change(monkeypatch):
@@ -808,29 +995,50 @@ def test_quick_switch_translation_provider_resets_cached_translator_and_initiali
     assert saved == [True]
 
 
-def test_quick_switch_roleplay_profile_updates_social_config():
-    config = {
-        "translation": {
-            "social": {
-                "mode": "standard",
-                "persona_preset": "custom",
-            }
-        },
-        "tts": {"engine": "edge", "edge": {"voice": "en-US-AriaNeural"}},
-    }
+def test_quick_switch_rewrite_typed_text_updates_only_toggle():
+    config = {"translation": {"asr_rewrite_style": "frieren"}}
     window, saved, _bottom = _quick_switch_window(config)
-    resets: list[bool] = []
-    window._reset_tts_manager_if_runtime_changed = lambda: resets.append(True)
 
-    MainWindow._on_quick_switch_changed(window, "roleplay_profile", "roleplay:frieren")
+    MainWindow._on_quick_switch_changed(window, "rewrite_typed_text", True)
 
-    social = config["translation"]["social"]
-    assert social["mode"] == "roleplay"
-    assert social["persona_preset"] == "frieren"
-    assert social["persona_prompt"]
-    assert window._translator is None
-    assert resets == [True]
+    assert config["translation"]["rewrite_typed_text"] is True
+    assert config["translation"]["asr_rewrite_style"] == "frieren"
     assert saved == [True]
+
+
+def test_manual_translation_snapshots_shared_rewrite_style_and_typed_toggle():
+    window = MainWindow.__new__(MainWindow)
+    window._src_text = "hello"
+    window._config = {
+        "translation": {
+            "asr_rewrite_style": "frieren",
+            "rewrite_typed_text": True,
+        }
+    }
+    window._current_src_lang = "en"
+    window._current_tgt_lang = "ja"
+    window._current_tgt_lang_2 = "en"
+    window._current_tgt_lang_3 = "ko"
+    window._translator = None
+    window._prompt_for_missing_credential = lambda _scopes: False
+    captured = []
+
+    class Controller:
+        translator = None
+        generation = 0
+
+        def start(self, request):
+            captured.append(request)
+            return 1
+
+    controller = Controller()
+    window._ensure_manual_translation_controller = lambda: controller
+
+    MainWindow._do_manual_translate(window)
+
+    assert len(captured) == 1
+    assert captured[0].rewrite_typed_text is True
+    assert captured[0].rewrite_style == "frieren"
 
 
 def test_quick_switch_tts_voice_does_not_reset_tts_runtime():

@@ -13,9 +13,6 @@ from pythonosc import udp_client
 MAX_CHATBOX_CHARS = 144
 _VALID_AVATAR_PARAM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
-CHATBOX_DYNAMIC_INTERVAL_BASE_S = 0.55
-CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND = 180.0
-CHATBOX_DYNAMIC_INTERVAL_MAX_S = 1.5
 SEND_QUEUE_MAXSIZE = 32
 MAX_AVATAR_STATE_ENTRIES = 256
 logger = logging.getLogger(__name__)
@@ -106,11 +103,11 @@ class VRCOSCSender:
         return safe
 
     def _chatbox_min_interval_s(self, text: str) -> float:
-        dynamic = CHATBOX_DYNAMIC_INTERVAL_BASE_S + (
-            len(str(text or "")) / CHATBOX_DYNAMIC_INTERVAL_CHARS_PER_SECOND
-        )
-        dynamic = min(dynamic, CHATBOX_DYNAMIC_INTERVAL_MAX_S)
-        return max(self._min_send_interval_s, dynamic)
+        del text
+        # Preserve FIFO pacing with the configured VRChat-safe interval. Text
+        # length must not create an additional hidden backlog after translation
+        # completions are already ordered by the realtime scheduler.
+        return self._min_send_interval_s
 
     def _send_loop(self) -> None:
         stop_event = getattr(self, "_stop_event", None)

@@ -1,24 +1,24 @@
 {
-  "version": "v1.3.8.1",
-  "installer_name": "MioTranslator-Setup-v1.3.8.1.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.1/MioTranslator-Setup-v1.3.8.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.1/MioTranslator-Setup-v1.3.8.1.exe",
-  "size_bytes": 463699410,
-  "sha256": "48f8dfa3be99ef142d053ab63d717d581bc89fb68733ae860afd25a7b8497bb2",
+  "version": "v1.3.8.2",
+  "installer_name": "MioTranslator-Setup-v1.3.8.2.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
+  "size_bytes": 463741527,
+  "sha256": "cb13bccb9f0a4307276ab75b3bd02f680f22e6dd01bbdf01529addc5b2fac80d",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "adc2b78d48c7a628e836f346e1610ece412e87beb2ef8a3b94755fc29b28e086d3800cbb79ce46447d8a9ab360719bc0c3054e3481f9dd26a04fb48af4d5920b",
-  "notes": "v1.3.8.1 delivers complete five-language localization, safer deferred updates, stronger ASR/translation/TTS lifecycle cleanup, more resilient queue and cancellation handling, and improved XTTS CPU/CUDA memory management and fallback.",
+  "installer_signature": "566f7a656b4255b0aa22f6821377a0cc2506bad5b783842bfc228da67bad6df1779a9e41d19474867733df3caa02db83c0f36ca80e362d6d31e1deee6ade8703",
+  "notes": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.1 带来完整的五语言本地化、更安全的延迟安装更新流程、更可靠的 ASR/翻译/TTS 生命周期清理、更稳健的队列与取消处理，以及改进的 XTTS CPU/CUDA 内存管理和回退机制。",
-    "en": "v1.3.8.1 delivers complete five-language localization, safer deferred updates, stronger ASR/translation/TTS lifecycle cleanup, more resilient queue and cancellation handling, and improved XTTS CPU/CUDA memory management and fallback.",
-    "ja": "v1.3.8.1 では、5言語の完全なローカライズ、安全な延期更新、ASR/翻訳/TTS のライフサイクル整理、キューとキャンセル処理の安定化、XTTS の CPU/CUDA メモリ管理とフォールバックを改善しました。",
-    "ru": "v1.3.8.1 добавляет полную локализацию на пять языков, безопасное отложенное обновление, улучшенную очистку жизненного цикла ASR/перевода/TTS, устойчивую обработку очередей и отмены, а также улучшенное управление памятью и резервный режим XTTS CPU/CUDA.",
-    "ko": "v1.3.8.1은 완전한 5개 언어 현지화, 더 안전한 지연 업데이트, ASR/번역/TTS 수명 주기 정리, 안정적인 대기열 및 취소 처리, 향상된 XTTS CPU/CUDA 메모리 관리와 폴백을 제공합니다."
+    "zh-CN": "v1.3.8.2 新增本地化凭据检查并可直接定位到对应设置，使用有界超时和保温 HTTP 连接池减少实时翻译阻塞，移除 OSC 按文本长度附加的隐藏延迟，并改进有序流水线延迟诊断与上下文感知日语翻译。",
+    "en": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
+    "ja": "v1.3.8.2 では、設定項目へ直接移動できるローカライズ済み認証情報チェックを追加し、上限付きタイムアウトと接続再利用でリアルタイム翻訳の停滞を軽減しました。また、OSC の文字数依存遅延を廃止し、順序付きパイプラインの遅延診断と文脈対応の日本語翻訳を改善しました。",
+    "ru": "v1.3.8.2 добавляет локализованную проверку учетных данных с переходом к нужной настройке, сокращает задержки перевода с помощью ограниченных тайм-аутов и повторного использования HTTP-соединений, убирает скрытую OSC-задержку по длине текста и улучшает диагностику упорядоченного конвейера и контекстный перевод на японский.",
+    "ko": "v1.3.8.2는 관련 설정으로 바로 이동하는 현지화된 자격 증명 검사를 추가하고, 제한된 시간 초과와 HTTP 연결 재사용으로 실시간 번역 정체를 줄입니다. 또한 텍스트 길이에 따른 숨겨진 OSC 지연을 제거하고 순서 보장 파이프라인 지연 진단과 문맥 기반 일본어 번역을 개선합니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-12T22:39:16+09:00",
+  "published_at": "2026-07-13T11:48:41+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "f26762f3211c1785314d6619f2f5869e8ae548bd99665c25f9c2c7f7fa240b371948b5d0963b78281ab211dd992935f44d8e2fffa19dfe782e08734b49ce8b0e"
+  "signature": "852dfdd1a5492b20ba402dea50aab2e8c5df11433f28b7ae1e4b28b60a8995c227dce1bf3ced80d33023cb96864c164e6943b3676a179fd57eb1d4e03e26d30b"
 }

@@ -247,7 +247,7 @@ class TranslationContextStore:
         text = " ".join(str(current_text or "").split()).strip()
         if not text:
             return False
-        if len(text) <= 18:
+        if len(text) <= 4 or (len(text) <= 18 and text.endswith(("?", "？"))):
             return True
         lowered = text.lower()
         markers = (
@@ -271,8 +271,14 @@ class TranslationContextStore:
         current_text: str = "",
         before_sequence: int | None = None,
     ) -> tuple[tuple[str, str], ...]:
-        if current_text and not self.should_include_context(current_text):
-            return ()
+        if current_text:
+            include_context = (
+                self.context_likely_needed(current_text)
+                if before_sequence is not None
+                else self.should_include_context(current_text)
+            )
+            if not include_context:
+                return ()
         key = self._key(session_id, src_lang, tgt_lang, context_source)
         now = monotonic()
         with self._lock:
@@ -294,6 +300,11 @@ class TranslationContextStore:
                         entries.append((source_text, ""))
             if not entries:
                 return ()
+            # Concurrent realtime work may stage many lower sequences while a
+            # slow provider request is still running. Conversation memory is
+            # intentionally bounded to the same turn limit as committed
+            # history so backlog cannot inflate every later provider prompt.
+            entries = entries[-self._max_turns :]
             selected: list[tuple[str, str]] = []
             used_chars = 0
             for source_text, translated_text in reversed(entries):
@@ -441,14 +452,14 @@ class BaseTranslator(ABC):
         self._cache_lock = Lock()
         self._owns_context_store = context_store is None
         self._context_store = context_store or TranslationContextStore()
-        self._prompt_profile = prompt_profile or {}
+        # Kept as an empty compatibility attribute for older integrations.
+        # Translation personas now run exclusively through the explicit
+        # same-language rewrite stage and are never injected into MT prompts.
+        del prompt_profile
+        self._prompt_profile: dict[str, object] = {}
         self._resource_close_lock = Lock()
         self._resources_closed = False
-        self._prompt_signature = json.dumps(
-            self._prompt_profile,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        self._prompt_signature = ""
 
     @abstractmethod
     def translate(
@@ -489,7 +500,12 @@ class BaseTranslator(ABC):
                 return
             self._resources_closed = True
             resources: list[object] = []
-            for attribute in ("_client", "_session", "_session_pool"):
+            for attribute in (
+                "_client",
+                "_http_client",
+                "_session",
+                "_session_pool",
+            ):
                 resource = getattr(self, attribute, None)
                 if resource is not None and all(
                     resource is not existing for existing in resources
@@ -508,6 +524,12 @@ class BaseTranslator(ABC):
                 except Exception:
                     # Cleanup is best-effort and must not mask pipeline shutdown.
                     pass
+
+    @staticmethod
+    def _active_context() -> TranslationContext:
+        """Return request-scoped identity for provider timing diagnostics."""
+
+        return _ACTIVE_TRANSLATION_CONTEXT.get()
 
     def _normalize_language_code(self, code: str | None) -> str:
         normalized = str(code or "").strip().lower().replace("_", "-")
@@ -608,9 +630,6 @@ class BaseTranslator(ABC):
                 context_source=context_source,
             )
         )
-        profile_lines = self._prompt_profile_lines(context_source=context_source)
-        if profile_lines:
-            requirements.append("follow the social style instructions below")
         context_lines = self._context_lines(context_snapshot or ())
         return (
             "Translate the following text.\n"
@@ -618,7 +637,6 @@ class BaseTranslator(ABC):
             f"Target language: {tgt}\n"
             f"Requirements: {', '.join(requirements)}.\n"
             f"{context_lines}"
-            f"{profile_lines}"
             f"Text:\n{text}"
         )
 
@@ -663,82 +681,6 @@ class BaseTranslator(ABC):
                 f"{json.dumps(context_snapshot, ensure_ascii=False, separators=(',', ':'))}"
             )
         return (signature, str(src_lang), str(tgt_lang), str(text))
-
-    def _prompt_profile_lines(self, *, context_source: str = "default") -> str:
-        if context_source == "listen":
-            return ""
-        if not self._prompt_profile:
-            return ""
-
-        lines: list[str] = []
-        social_mode = str(self._prompt_profile.get("mode", "standard")).strip()
-        if social_mode in {"", "standard"}:
-            return ""
-        if social_mode not in {"language_exchange", "roleplay"}:
-            return ""
-        if social_mode == "language_exchange":
-            lines.append(
-                "- Social mode: language exchange. Prefer easy-to-understand, friendly wording "
-                "that helps cross-language conversation."
-            )
-        elif social_mode == "roleplay":
-            lines.append(
-                "- Social mode: roleplay. Preserve in-character phrasing and roleplay flavor "
-                "without changing the original meaning."
-            )
-
-        politeness = str(self._prompt_profile.get("politeness", "neutral")).strip()
-        politeness_map = {
-            "casual": "Use a casual register unless the source is explicitly formal.",
-            "polite": "Use a polite register suitable for friendly VR social conversation.",
-            "very_polite": "Use a very polite and respectful register.",
-        }
-        if politeness in politeness_map:
-            lines.append(f"- Politeness: {politeness_map[politeness]}")
-
-        tone = str(self._prompt_profile.get("tone", "natural")).strip()
-        tone_map = {
-            "natural": "Keep the translation natural and conversational.",
-            "cute": "Use a lightly cute and playful tone when it fits.",
-            "cool": "Use a concise, cool, composed tone when it fits.",
-            "clear": "Use clean, precise, socially safe wording.",
-            "cheerful": "Use a bright, friendly, energetic tone without adding meaning.",
-            "playful": "Use light playful phrasing or teasing only when the source supports it.",
-            "warm": "Use a gentle, supportive, sincere tone without becoming melodramatic.",
-            "host": "Use a clear, welcoming host or guide tone when it fits.",
-        }
-        if tone in tone_map:
-            lines.append(f"- Tone: {tone_map[tone]}")
-
-        if social_mode == "roleplay":
-            persona_name = str(self._prompt_profile.get("persona_name", "")).strip()
-            if persona_name:
-                lines.append(f"- Persona name: {persona_name}")
-
-            persona_prompt = str(self._prompt_profile.get("persona_prompt", "")).strip()
-            if persona_prompt:
-                lines.append(f"- Persona notes: {persona_prompt}")
-
-            glossary = self._prompt_profile.get("glossary", ())
-            if isinstance(glossary, (list, tuple)) and glossary:
-                glossary_items = [
-                    str(item).strip()
-                    for item in glossary
-                    if str(item).strip()
-                ]
-                if glossary_items:
-                    lines.append("- Preferred glossary:")
-                    lines.extend(f"  * {item}" for item in glossary_items)
-
-            lines.append(
-                "- Persona safety: Apply the persona only to wording and register; "
-                "do not add new facts, actions, emotions, catchphrases, honorifics, "
-                "or roleplay content not present in the source."
-            )
-
-        if not lines:
-            return ""
-        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _trim_context_text(text: str) -> str:

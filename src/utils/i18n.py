@@ -1911,18 +1911,15 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_section_translation": "翻译",
         "quick_switch_section_audio": "音频",
         "quick_switch_section_tts": "朗读",
-        "quick_switch_section_persona": "风格",
+        "quick_switch_section_persona": "改写",
         "quick_switch_translation_provider": "AI 服务",
         "quick_switch_translation_model": "翻译模型",
         "quick_switch_output_format": "语言显示格式",
         "quick_switch_noise_reduction": "麦克风降噪",
         "quick_switch_tts_language": "朗读语言",
         "quick_switch_tts_voice": "音色包",
-        "quick_switch_roleplay_profile": "翻译风格",
         "quick_switch_current_tts_engine": "当前朗读引擎：{engine}",
         "quick_switch_no_option": "没有可切换选项",
-        "quick_switch_roleplay_off": "关闭",
-        "quick_switch_roleplay_language_exchange": "语言交换",
         "quick_switch_lang_auto": "自动",
         "quick_switch_lang_chinese": "中文",
         "quick_switch_lang_english": "英语",
@@ -1937,18 +1934,15 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_section_translation": "Translation",
         "quick_switch_section_audio": "Audio",
         "quick_switch_section_tts": "TTS",
-        "quick_switch_section_persona": "Persona",
+        "quick_switch_section_persona": "Rewrite",
         "quick_switch_translation_provider": "AI provider",
         "quick_switch_translation_model": "Translation model",
         "quick_switch_output_format": "Language display format",
         "quick_switch_noise_reduction": "Mic noise reduction",
         "quick_switch_tts_language": "TTS language",
         "quick_switch_tts_voice": "Voice package",
-        "quick_switch_roleplay_profile": "Translation persona",
         "quick_switch_current_tts_engine": "Current TTS engine: {engine}",
         "quick_switch_no_option": "No quick-switch option",
-        "quick_switch_roleplay_off": "Off",
-        "quick_switch_roleplay_language_exchange": "Language exchange",
         "quick_switch_lang_auto": "Auto",
         "quick_switch_lang_chinese": "Chinese",
         "quick_switch_lang_english": "English",
@@ -1963,18 +1957,15 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_section_translation": "翻訳",
         "quick_switch_section_audio": "音声",
         "quick_switch_section_tts": "読み上げ",
-        "quick_switch_section_persona": "ペルソナ",
+        "quick_switch_section_persona": "書き換え",
         "quick_switch_translation_provider": "AI サービス",
         "quick_switch_translation_model": "翻訳モデル",
         "quick_switch_output_format": "言語表示形式",
         "quick_switch_noise_reduction": "マイクノイズ低減",
         "quick_switch_tts_language": "読み上げ言語",
         "quick_switch_tts_voice": "音色パック",
-        "quick_switch_roleplay_profile": "翻訳ペルソナ",
         "quick_switch_current_tts_engine": "現在の読み上げエンジン: {engine}",
         "quick_switch_no_option": "切り替え可能な項目はありません",
-        "quick_switch_roleplay_off": "オフ",
-        "quick_switch_roleplay_language_exchange": "言語交換",
         "quick_switch_lang_auto": "自動",
         "quick_switch_lang_chinese": "中国語",
         "quick_switch_lang_english": "英語",
@@ -1989,18 +1980,15 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_section_translation": "Перевод",
         "quick_switch_section_audio": "Аудио",
         "quick_switch_section_tts": "TTS",
-        "quick_switch_section_persona": "Персона",
+        "quick_switch_section_persona": "Перезапись",
         "quick_switch_translation_provider": "AI-сервис",
         "quick_switch_translation_model": "Модель перевода",
         "quick_switch_output_format": "Формат отображения языка",
         "quick_switch_noise_reduction": "Шумоподавление микрофона",
         "quick_switch_tts_language": "Язык TTS",
         "quick_switch_tts_voice": "Голосовой пакет",
-        "quick_switch_roleplay_profile": "Персона перевода",
         "quick_switch_current_tts_engine": "Текущий движок TTS: {engine}",
         "quick_switch_no_option": "Нет вариантов быстрого переключения",
-        "quick_switch_roleplay_off": "Выкл.",
-        "quick_switch_roleplay_language_exchange": "Языковой обмен",
         "quick_switch_lang_auto": "Авто",
         "quick_switch_lang_chinese": "Китайский",
         "quick_switch_lang_english": "Английский",
@@ -2015,18 +2003,15 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_section_translation": "번역",
         "quick_switch_section_audio": "오디오",
         "quick_switch_section_tts": "TTS",
-        "quick_switch_section_persona": "페르소나",
+        "quick_switch_section_persona": "재작성",
         "quick_switch_translation_provider": "AI 서비스",
         "quick_switch_translation_model": "번역 모델",
         "quick_switch_output_format": "언어 표시 형식",
         "quick_switch_noise_reduction": "마이크 노이즈 감소",
         "quick_switch_tts_language": "TTS 언어",
         "quick_switch_tts_voice": "음색 팩",
-        "quick_switch_roleplay_profile": "번역 페르소나",
         "quick_switch_current_tts_engine": "현재 TTS 엔진: {engine}",
         "quick_switch_no_option": "빠른 전환 옵션 없음",
-        "quick_switch_roleplay_off": "끄기",
-        "quick_switch_roleplay_language_exchange": "언어 교환",
         "quick_switch_lang_auto": "자동",
         "quick_switch_lang_chinese": "중국어",
         "quick_switch_lang_english": "영어",
@@ -2039,14 +2024,24 @@ _QUICK_SWITCH_PANEL_TEXTS = {
 }
 
 _QUICK_SWITCH_ASR_REWRITE_LABELS = {
-    "zh-CN": "ASR 识别改写风格",
-    "en": "ASR rewrite style",
-    "ja": "ASR 認識文の書き換え",
-    "ru": "Стиль перезаписи ASR",
-    "ko": "ASR 인식문 재작성 스타일",
+    "zh-CN": "改写风格",
+    "en": "Rewrite style",
+    "ja": "書き換えスタイル",
+    "ru": "Стиль перезаписи",
+    "ko": "재작성 스타일",
 }
 for _language, _label in _QUICK_SWITCH_ASR_REWRITE_LABELS.items():
     _QUICK_SWITCH_PANEL_TEXTS[_language]["quick_switch_asr_rewrite_style"] = _label
+
+_QUICK_SWITCH_TYPED_REWRITE_LABELS = {
+    "zh-CN": "改写手动输入文本",
+    "en": "Rewrite typed text",
+    "ja": "入力したテキストも書き換える",
+    "ru": "Перезаписывать введённый текст",
+    "ko": "입력한 텍스트 재작성",
+}
+for _language, _label in _QUICK_SWITCH_TYPED_REWRITE_LABELS.items():
+    _QUICK_SWITCH_PANEL_TEXTS[_language]["quick_switch_rewrite_typed_text"] = _label
 
 for _language, _texts in _QUICK_SWITCH_PANEL_TEXTS.items():
     UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
@@ -3436,6 +3431,41 @@ for _language, _texts in _SETTINGS_TABBED_NEW_TEXTS.items():
     UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
 UI_TEXT_COMPLETIONS.setdefault("ru", {}).update(_SETTINGS_TABBED_RU_TEXTS)
 UI_TEXT_COMPLETIONS.setdefault("ko", {}).update(_SETTINGS_TABBED_KO_TEXTS)
+
+_API_CREDENTIAL_PROMPT_TEXTS = {
+    "zh-CN": {
+        "api_credential_missing_title": "需要 API Key",
+        "api_credential_missing_message": "无法使用 {provider}，因为尚未配置 {credential}。请先在“设置 > API配置”中填写，再继续。",
+        "api_credential_open_settings": "打开 API配置",
+        "api_credential_label": "{provider} 的 API Key",
+    },
+    "en": {
+        "api_credential_missing_title": "API Key Required",
+        "api_credential_missing_message": "{provider} cannot be used because {credential} is not configured. Enter it in Settings > API Configuration before continuing.",
+        "api_credential_open_settings": "Open API Configuration",
+        "api_credential_label": "{provider} API Key",
+    },
+    "ja": {
+        "api_credential_missing_title": "API キーが必要です",
+        "api_credential_missing_message": "{credential} が未設定のため、{provider} を使用できません。続行する前に「設定 > API 設定」で入力してください。",
+        "api_credential_open_settings": "API 設定を開く",
+        "api_credential_label": "{provider} API キー",
+    },
+    "ru": {
+        "api_credential_missing_title": "Требуется ключ API",
+        "api_credential_missing_message": "Невозможно использовать {provider}: не настроен {credential}. Перед продолжением укажите его в разделе «Настройки > Настройка API».",
+        "api_credential_open_settings": "Открыть настройку API",
+        "api_credential_label": "ключ API для {provider}",
+    },
+    "ko": {
+        "api_credential_missing_title": "API 키 필요",
+        "api_credential_missing_message": "{credential}가 설정되지 않아 {provider}을(를) 사용할 수 없습니다. 계속하기 전에 '설정 > API 설정'에서 입력하세요.",
+        "api_credential_open_settings": "API 설정 열기",
+        "api_credential_label": "{provider} API 키",
+    },
+}
+for _language, _texts in _API_CREDENTIAL_PROMPT_TEXTS.items():
+    UI_TEXT_COMPLETIONS.setdefault(_language, {}).update(_texts)
 
 for _language, _texts in UI_TEXT_COMPLETIONS.items():
     UI_TEXTS.setdefault(_language, {}).update(_texts)

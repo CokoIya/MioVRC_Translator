@@ -38,7 +38,7 @@ def test_chatbox_duplicate_text_is_still_queued():
     assert second.arguments == ("hello", True, False)
 
 
-def test_chatbox_pacing_scales_with_text_length():
+def test_chatbox_pacing_uses_fixed_configured_interval():
     sender = _sender_without_worker()
     sender._min_send_interval_s = 0.8
 
@@ -48,8 +48,31 @@ def test_chatbox_pacing_scales_with_text_length():
     short = sender._queue.get_nowait()
     long = sender._queue.get_nowait()
     assert short.min_interval_s == 0.8
-    assert long.min_interval_s is not None
-    assert long.min_interval_s > short.min_interval_s
+    assert long.min_interval_s == 0.8
+
+
+def test_chatbox_burst_is_sent_in_fifo_order(monkeypatch):
+    sent: list[str] = []
+
+    class FakeUDPClient:
+        def __init__(self, _host, _port):
+            pass
+
+        def send_message(self, _address, arguments):
+            sent.append(arguments[0])
+
+    monkeypatch.setattr("src.osc.sender.udp_client.SimpleUDPClient", FakeUDPClient)
+    sender = VRCOSCSender(min_send_interval_s=0.01)
+    try:
+        assert sender.send_chatbox("first") == "first"
+        assert sender.send_chatbox("second") == "second"
+        assert sender.send_chatbox("third") == "third"
+        deadline = time.monotonic() + 1.0
+        while len(sent) < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert sent == ["first", "second", "third"]
+    finally:
+        sender.close()
 
 
 def test_chatbox_send_reports_failure_when_enqueue_fails():

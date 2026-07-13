@@ -23,6 +23,7 @@ def _scheduler(
     *,
     asr,
     rewrite=None,
+    rewrite_required=None,
     translate,
     deliver,
     rewrite_state_factory=None,
@@ -34,6 +35,7 @@ def _scheduler(
     translation_concurrency=2,
     ingress_limits=None,
     outstanding_limits=None,
+    rewrite_queue_size=8,
     translation_queue_size=8,
     priority_burst=3,
     stale_task_age_s=30.0,
@@ -44,6 +46,7 @@ def _scheduler(
         sources=(MIC, DESKTOP),
         asr_handler=asr,
         rewrite_handler=rewrite,
+        rewrite_required=rewrite_required,
         translation_handler=translate,
         delivery_handler=deliver,
         rewrite_state_factory=rewrite_state_factory,
@@ -52,6 +55,7 @@ def _scheduler(
         translation_state_finalizer=state_finalizer,
         ingress_limits=ingress_limits or {MIC: 8, DESKTOP: 8},
         outstanding_limits=outstanding_limits,
+        rewrite_queue_size=rewrite_queue_size,
         translation_queue_size=translation_queue_size,
         asr_concurrency=asr_concurrency,
         rewrite_concurrency=rewrite_concurrency,
@@ -213,6 +217,102 @@ def test_rewrite_stage_runs_concurrently_and_translation_receives_source_order()
         assert delivered[0].rewritten_text == "styled:first"
     finally:
         release_first.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_rewrite_bypass_avoids_handler_and_busy_rewrite_queue_delay():
+    rewrite_started = threading.Event()
+    release_rewrite = threading.Event()
+    bypass_translated = threading.Event()
+    rewrite_calls: list[tuple[str, int]] = []
+    delivered = []
+
+    def rewrite(task, text, _state, _cancel):
+        rewrite_calls.append((task.source, task.sequence))
+        rewrite_started.set()
+        release_rewrite.wait(timeout=2)
+        return f"styled:{text}"
+
+    def translate(task, text, _state, _cancel):
+        if task.source == DESKTOP:
+            bypass_translated.set()
+        return text
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=rewrite,
+        rewrite_required=lambda task, _text: task.source == MIC,
+        translate=translate,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        rewrite_queue_size=1,
+        translation_concurrency=2,
+    )
+    try:
+        assert _submit(scheduler, "mic", source=MIC).accepted
+        assert rewrite_started.wait(timeout=1)
+
+        assert _submit(scheduler, "desktop", source=DESKTOP).accepted
+        assert bypass_translated.wait(timeout=1)
+        assert rewrite_calls == [(MIC, 0)]
+
+        release_rewrite.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert sorted(
+            (item.task.source, item.result) for item in delivered
+        ) == [(DESKTOP, "desktop"), (MIC, "styled:mic")]
+    finally:
+        release_rewrite.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_mixed_rewrite_and_bypass_reach_translation_in_source_order():
+    first_rewrite_started = threading.Event()
+    release_first_rewrite = threading.Event()
+    translated: list[tuple[int, str]] = []
+    rewrite_calls: list[int] = []
+    delivered = []
+
+    def rewrite(task, text, _state, _cancel):
+        rewrite_calls.append(task.sequence)
+        first_rewrite_started.set()
+        release_first_rewrite.wait(timeout=2)
+        return f"styled:{text}"
+
+    def translate(task, text, _state, _cancel):
+        translated.append((task.sequence, text))
+        return text
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=rewrite,
+        rewrite_required=lambda task, _text: task.sequence == 0,
+        translate=translate,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        translation_concurrency=2,
+    )
+    try:
+        assert _submit(scheduler, "first", provider="p1").accepted
+        assert _submit(scheduler, "second", provider="p2").accepted
+        assert first_rewrite_started.wait(timeout=1)
+
+        deadline = time.monotonic() + 1
+        while scheduler.snapshot().rewritten_pending[MIC] != 1:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert translated == []
+        assert rewrite_calls == [0]
+
+        release_first_rewrite.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert translated == [(0, "styled:first"), (1, "second")]
+        assert [item.task.sequence for item in delivered] == [0, 1]
+        assert [item.result for item in delivered] == ["styled:first", "second"]
+        assert delivered[1].rewrite_queue_wait_s == 0.0
+        assert delivered[1].rewrite_duration_s == 0.0
+    finally:
+        release_first_rewrite.set()
         assert scheduler.stop(timeout=2)
 
 

@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from src.utils.ui_config import UI_LANGUAGE_OPTIONS
+from src.utils.ui_config import UI_LANGUAGE_OPTIONS, normalize_backend
+from src.ui_qt.credential_prompt import show_missing_credential_prompt
+from src.utils.credential_validation import (
+    MissingCredential,
+    first_missing_required_credential,
+)
 
 from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
@@ -41,12 +46,30 @@ class QuickSetupTab(LocalizedSettingsTab):
         ui_language: str,
         on_test_microphone: Callable[[], None] | None = None,
         parent: QWidget | None = None,
+        *,
+        on_open_api_settings: Callable[[MissingCredential], None] | None = None,
     ):
         super().__init__(parent)
         self._config = config
         self._ui_language = normalize_settings_language(ui_language)
         self._on_test_microphone = on_test_microphone
+        self._on_open_api_settings = on_open_api_settings
         self._updating_language = False
+        self._loading_config = False
+        translation_cfg = (
+            config.get("translation", {}) if isinstance(config, dict) else {}
+        )
+        self._provider_api_keys = {}
+        for provider in ("openai", "anthropic", "deepseek", "gemini", "qianwen"):
+            provider_cfg = translation_cfg.get(provider, {})
+            if provider == "qianwen" and not isinstance(provider_cfg, dict):
+                provider_cfg = translation_cfg.get("qwen", {})
+            if provider == "qianwen" and not provider_cfg:
+                provider_cfg = translation_cfg.get("qwen", {})
+            self._provider_api_keys[provider] = str(
+                provider_cfg.get("api_key", "") if isinstance(provider_cfg, dict) else ""
+            )
+        self._current_provider = "openai"
 
         self._init_ui()
 
@@ -237,13 +260,14 @@ class QuickSetupTab(LocalizedSettingsTab):
         layout.addWidget(label)
 
         self._provider_combo = QComboBox()
-        self._provider_combo.addItems([
-            self._t("provider_openai_recommended"),
-            self._t("provider_anthropic"),
-            self._t("provider_deepseek"),
-            self._t("provider_gemini"),
-            self._t("provider_qwen"),
-        ])
+        for label_key, backend in (
+            ("provider_openai_recommended", "openai"),
+            ("provider_anthropic", "anthropic"),
+            ("provider_deepseek", "deepseek"),
+            ("provider_gemini", "gemini"),
+            ("provider_qwen", "qianwen"),
+        ):
+            self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
         layout.addWidget(self._provider_combo, 1)
 
@@ -339,6 +363,14 @@ class QuickSetupTab(LocalizedSettingsTab):
 
     def _on_provider_change(self) -> None:
         """Handle provider selection change."""
+        provider = str(self._provider_combo.currentData() or "openai")
+        if not self._loading_config:
+            self._provider_api_keys[self._current_provider] = self._api_key_input.text()
+        self._current_provider = provider
+        provider_key = self._provider_api_keys.get(provider, "")
+        if self._api_key_input.text() != provider_key:
+            self._api_key_input.setText(provider_key)
+
         # Update API key placeholder based on provider
         provider_index = self._provider_combo.currentIndex()
         placeholders = {
@@ -350,6 +382,39 @@ class QuickSetupTab(LocalizedSettingsTab):
         }
         self._api_key_input.setPlaceholderText(placeholders.get(provider_index, ""))
         self._on_config_change()
+        if not self._loading_config:
+            self._prompt_for_missing_credential()
+
+    def _prompt_for_missing_credential(self) -> bool:
+        provider = str(self._provider_combo.currentData() or "openai")
+        config = {
+            "translation": {
+                "backend": provider,
+                provider: {"api_key": self._api_key_input.text().strip()},
+            }
+        }
+        missing = first_missing_required_credential(
+            config,
+            scopes=("translation",),
+            ui_language=self._ui_language,
+            active_only=False,
+        )
+        if missing is None:
+            return False
+
+        def open_api_settings() -> None:
+            if callable(self._on_open_api_settings):
+                self._on_open_api_settings(missing)
+            else:
+                self._api_key_input.setFocus()
+
+        show_missing_credential_prompt(
+            self,
+            missing,
+            ui_language=self._ui_language,
+            open_settings=open_api_settings,
+        )
+        return True
 
     def _on_language_changed(self, _index: int) -> None:
         if self._updating_language:
@@ -389,19 +454,11 @@ class QuickSetupTab(LocalizedSettingsTab):
             7: "ru",
         }
 
-        provider_map = {
-            0: "openai",
-            1: "anthropic",
-            2: "deepseek",
-            3: "gemini",
-            4: "qianwen",
-        }
-
         config = {
             "ui_language": str(self._language_combo.currentData() or self._ui_language),
             "source_language": source_map.get(self._source_combo.currentIndex(), "auto"),
             "target_language": target_map.get(self._target_combo.currentIndex(), "zh-CN"),
-            "translation_provider": provider_map.get(self._provider_combo.currentIndex(), "openai"),
+            "translation_provider": str(self._provider_combo.currentData() or "openai"),
             "api_key": self._api_key_input.text().strip(),
         }
 
@@ -409,6 +466,13 @@ class QuickSetupTab(LocalizedSettingsTab):
 
     def load_config(self, config: dict) -> None:
         """Load configuration into UI."""
+        self._loading_config = True
+        try:
+            self._load_config_values(config)
+        finally:
+            self._loading_config = False
+
+    def _load_config_values(self, config: dict) -> None:
         ui_language = normalize_settings_language(config.get("ui_language", self._ui_language))
         self._updating_language = True
         try:
@@ -435,8 +499,9 @@ class QuickSetupTab(LocalizedSettingsTab):
         target = config.get("target_language", "zh-CN")
         self._target_combo.setCurrentIndex(target_reverse.get(target, 1))
 
-        provider = config.get("translation_provider", "openai")
+        provider = normalize_backend(config.get("translation_provider", "openai"))
+        api_key = str(config.get("api_key", "") or "")
+        self._provider_api_keys[provider] = api_key
         self._provider_combo.setCurrentIndex(provider_reverse.get(provider, 0))
 
-        api_key = config.get("api_key", "")
         self._api_key_input.setText(api_key)

@@ -101,6 +101,7 @@ from src.tts.style_bert_vits2_models import (
     style_bert_voice_id,
 )
 from src.ui_qt.icon_utils import ui_icon
+from src.ui_qt.credential_prompt import show_missing_credential_prompt
 from src.ui_qt.installer_repair import build_runtime_repair_update_info, show_installer_download_fallback
 from src.ui_qt.pytorch_cuda_install_dialog import PytorchCudaInstallDialog
 from src.ui_qt.qt_localization import configure_file_dialog
@@ -155,7 +156,10 @@ from src.utils.ui_config import (
     normalize_backend_region,
     normalize_ui_font_preference,
 )
-from src.utils.translation_config_validation import missing_required_translation_api_key
+from src.utils.credential_validation import (
+    MissingCredential,
+    first_missing_required_credential,
+)
 from src.utils.localization import (
     SUPPORTED_UI_LANGUAGES,
     format_locale_number,
@@ -810,8 +814,8 @@ QT_SETTINGS_COPY = {
     "header_title": {"zh-CN": "设置", "en": "Settings", "ja": "設定"},
     "header_subtitle": {
         "zh-CN": "按你想做的事来调整 Mio，不需要懂专业术语。",
-        "en": "Tune translation, speech, VRC listen, TTS, and roleplay settings.",
-        "ja": "翻訳、音声、VRC リスン、TTS、ロールプレイ設定を調整します。",
+        "en": "Tune translation, speech, VRC listen, TTS, and advanced settings.",
+        "ja": "翻訳、音声、VRC リスン、TTS、詳細設定を調整します。",
     },
     "appearance_section": {
         "zh-CN": "快速设置",
@@ -2000,8 +2004,8 @@ for _key, _values in _SETTINGS_COMPLETE_RU_KO_COPY.items():
 _SETTINGS_RU_KO_COPY = {
     "header_title": {"ru": "Настройки", "ko": "설정"},
     "header_subtitle": {
-        "ru": "Настройте перевод, речь, обратный перевод, синхронный перевод и ролевые параметры.",
-        "ko": "번역, 음성, 역번역, 동시통역, 롤플레이 설정을 조정합니다.",
+        "ru": "Настройте перевод, речь, обратный перевод, синхронный перевод и дополнительные параметры.",
+        "ko": "번역, 음성, 역번역, 동시통역 및 고급 설정을 조정합니다.",
     },
     "xtts_device_label": {
         "ru": "Вычислительное устройство",
@@ -3132,6 +3136,9 @@ class SettingsWindow(QDialog):
         self._backend_model_info_note_label: QLabel | None = None
         self._backend_model_badge_labels: dict[str, QLabel] = {}
         self._backend_base_url_entry: QLineEdit | None = None
+        self._backend_api_key_entry: QLineEdit | None = None
+        self._qwen_api_key_entry: QLineEdit | None = None
+        self._gemini_api_key_entry: QLineEdit | None = None
         self._qwen_model_hint_label: QLabel | None = None
         self._missing_model_prompted = False
         self._save_thread: QThread | None = None
@@ -4266,7 +4273,7 @@ class SettingsWindow(QDialog):
         if refresh_style:
             self._apply_style()
 
-    def select_page(self, page_id: str) -> None:
+    def select_page(self, page_id: str, focus_target: str | None = None) -> None:
         row = next((i for i, item in enumerate(NAV_ITEMS) if item[0] == page_id), -1)
         if row < 0 or self._page_stack is None:
             return
@@ -4280,6 +4287,31 @@ class SettingsWindow(QDialog):
             self._animate_page_switch(previous_row, row)
         else:
             self._page_stack.setCurrentIndex(row)
+        if focus_target:
+            QTimer.singleShot(
+                0,
+                lambda target=str(focus_target): self.focus_credential_target(target),
+            )
+
+    def focus_credential_target(self, focus_target: str) -> bool:
+        """Focus the credential editor named by credential validation."""
+
+        attribute = {
+            "backend_api_key": "_backend_api_key_entry",
+            "qwen_api_key": "_qwen_api_key_entry",
+            "gemini_api_key": "_gemini_api_key_entry",
+            "tts_api_key": "_tts_api_key_entry",
+        }.get(str(focus_target or "").strip())
+        if not attribute:
+            return False
+        widget = getattr(self, attribute, None)
+        if widget is None:
+            return False
+        try:
+            widget.setFocus(Qt.FocusReason.OtherFocusReason)
+            return True
+        except RuntimeError:
+            return False
 
     def _finish_deferred_initial_page(self) -> None:
         if self._page_stack is None:
@@ -4594,6 +4626,7 @@ class SettingsWindow(QDialog):
 
         api = self._line_edit("qwen_api_key", self._qwen_api_key_var)
         api.setEchoMode(QLineEdit.EchoMode.Password)
+        self._qwen_api_key_entry = api
         self._row_layout(layout, self._copy("asr_api_key"), api)
         self._row_layout(layout, self._copy("asr_region"), self._combo("qwen_region", self._qwen_region_var, list(self._qwen_region_codes.keys()), self._on_qwen_region_changed))
         base = self._line_edit("qwen_base", self._qwen_base_url_var)
@@ -4609,6 +4642,7 @@ class SettingsWindow(QDialog):
 
         api_gemini = self._line_edit("gemini_api_key", self._gemini_api_key_var)
         api_gemini.setEchoMode(QLineEdit.EchoMode.Password)
+        self._gemini_api_key_entry = api_gemini
         self._row_layout(layout, self._copy("asr_api_key"), api_gemini)
 
         # TTS API Configuration
@@ -5252,7 +5286,7 @@ class SettingsWindow(QDialog):
         self._build_advanced_consolidated_page(layout)
 
     def _build_advanced_consolidated_page(self, layout: QVBoxLayout) -> None:
-        """Consolidated Advanced Page - merges VRChat, Hotkeys, Models, Roleplay, and Advanced"""
+        """Consolidated Advanced Page for VRChat, hotkeys, models, and diagnostics."""
 
         # VRChat Integration Section
         self._section_title(layout, self._copy("vrchat_integration_section"))
@@ -5296,34 +5330,6 @@ class SettingsWindow(QDialog):
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-
-        # Roleplay / Persona Section
-        self._section_title(layout, self._copy("roleplay_persona_section"))
-        self._build_switch_row(layout, self._copy("roleplay_enabled"), self._roleplay_enabled_var)
-        self._row_layout(layout, self._copy("roleplay_preset"), self._combo("roleplay_preset", self._roleplay_preset_var, list(self._roleplay_preset_codes.keys()), self._on_roleplay_preset_changed))
-        self._row_layout(layout, self._copy("persona_name"), self._line_edit("persona_name", self._persona_name_var, 260))
-
-        prompt_label = QLabel(self._copy("persona_prompt"))
-        prompt_label.setObjectName("fieldLabel")
-        layout.addWidget(prompt_label)
-        self._roleplay_prompt_edit = QTextEdit()
-        self._roleplay_prompt_edit.setPlainText(self._roleplay_prompt_var.value())
-        self._roleplay_prompt_edit.textChanged.connect(
-            lambda: self._roleplay_prompt_var.set(self._roleplay_prompt_edit.toPlainText())
-        )
-        self._roleplay_prompt_edit.setMinimumHeight(140)
-        layout.addWidget(self._roleplay_prompt_edit)
-
-        glossary_label = QLabel(self._copy("persona_glossary"))
-        glossary_label.setObjectName("fieldLabel")
-        layout.addWidget(glossary_label)
-        self._roleplay_glossary_edit = QTextEdit()
-        self._roleplay_glossary_edit.setPlainText(self._roleplay_glossary_var.value())
-        self._roleplay_glossary_edit.textChanged.connect(
-            lambda: self._roleplay_glossary_var.set(self._roleplay_glossary_edit.toPlainText())
-        )
-        self._roleplay_glossary_edit.setMinimumHeight(100)
-        layout.addWidget(self._roleplay_glossary_edit)
 
         # Model Downloads Section
         self._section_title(layout, self._copy("model_downloads_section"))
@@ -5445,6 +5451,7 @@ class SettingsWindow(QDialog):
         backend = self._backend_code()
         self._set_backend_field_vars(backend)
         self._clear_layout(self._backend_fields_layout)
+        self._backend_api_key_entry = None
         self._backend_base_url_entry = None
 
         spec = get_backend_spec(backend)
@@ -5460,6 +5467,7 @@ class SettingsWindow(QDialog):
             hint = self._copy(hint_key) if hint_key else ""
             api = self._line_edit("backend_api_key", self._backend_api_key_var)
             api.setEchoMode(QLineEdit.EchoMode.Password)
+            self._backend_api_key_entry = api
             self._row_layout(self._backend_fields_layout, self._copy("api_key"), api)
             if hint:
                 hint_label = QLabel(hint)
@@ -5548,6 +5556,66 @@ class SettingsWindow(QDialog):
     def _profile_copy(self, key: str) -> str:
         return self._copy(key) if key in QT_SETTINGS_COPY else str(key)
 
+    def _credential_validation_config(self, scope: str) -> dict:
+        """Return a validation snapshot containing the current unsaved edits."""
+
+        cfg = copy.deepcopy(self._config)
+        if scope == "translation":
+            backend = self._backend_code()
+            trans_cfg = cfg.setdefault("translation", {})
+            trans_cfg["backend"] = backend
+            backend_cfg = trans_cfg.setdefault(backend, {})
+            if isinstance(backend_cfg, dict):
+                backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
+        elif scope == "asr":
+            asr_cfg = cfg.setdefault("asr", {})
+            asr_cfg["engine"] = self._selected_asr_engine()
+            qwen_cfg = asr_cfg.setdefault("qwen3_asr", {})
+            if isinstance(qwen_cfg, dict):
+                qwen_cfg["api_key"] = self._qwen_api_key_var.value().strip()
+            gemini_cfg = asr_cfg.setdefault("gemini_live", {})
+            if isinstance(gemini_cfg, dict):
+                gemini_cfg["api_key"] = self._gemini_api_key_var.value().strip()
+            # Selection validation concerns the provider chosen on the main
+            # ASR control. A distinct listen-ASR choice is checked on save.
+            cfg.setdefault("vrc_listen", {})["asr_engine"] = ASR_ENGINE_FOLLOW_MAIN
+        elif scope == "tts":
+            tts_cfg = cfg.setdefault("tts", {})
+            engine = self._selected_tts_engine()
+            tts_cfg["engine"] = engine
+            engine_cfg = tts_cfg.setdefault(engine, {})
+            if isinstance(engine_cfg, dict):
+                engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
+        return cfg
+
+    def _show_missing_credential(self, missing: MissingCredential) -> None:
+        show_missing_credential_prompt(
+            self,
+            missing,
+            ui_language=self._ui_lang,
+            open_settings=lambda: self.select_page(
+                missing.settings_page,
+                focus_target=missing.focus_target,
+            ),
+        )
+
+    def _prompt_for_missing_credential(
+        self,
+        scope: str,
+        *,
+        config: dict | None = None,
+    ) -> bool:
+        missing = first_missing_required_credential(
+            config if config is not None else self._credential_validation_config(scope),
+            scopes=(scope,),
+            ui_language=self._ui_lang,
+            active_only=False,
+        )
+        if missing is None:
+            return False
+        self._show_missing_credential(missing)
+        return True
+
     def _refresh_backend_model_info(self) -> None:
         if self._backend_model_info_title_label is None or self._backend_model_info_note_label is None:
             return
@@ -5574,9 +5642,11 @@ class SettingsWindow(QDialog):
 
     def _on_backend_model_changed(self, _label: str) -> None:
         self._refresh_backend_model_info()
+        self._prompt_for_missing_credential("translation")
 
     def _on_backend_changed(self, _label: str) -> None:
         self._render_backend_fields()
+        self._prompt_for_missing_credential("translation")
 
     def _on_output_format_changed(self, _label: str) -> None:
         pass
@@ -5659,6 +5729,7 @@ class SettingsWindow(QDialog):
         if hasattr(self, "_asr_provider_layout"):
             self._render_asr_provider_fields(engine)
         self._maybe_prompt_missing_model_download()
+        self._prompt_for_missing_credential("asr")
 
     def _render_asr_provider_fields(self, engine: str) -> None:
         """Render ASR provider fields - API keys moved to API Configuration page, only show model selection"""
@@ -5716,6 +5787,8 @@ class SettingsWindow(QDialog):
         if self._qwen_model_hint_label is None:
             return
         self._qwen_model_hint_label.setText(self._copy("qwen_model_recommendation"))
+        if _label is not None:
+            self._prompt_for_missing_credential("asr")
 
     def _selected_qwen_region(self) -> str:
         return self._qwen_region_codes.get(self._qwen_region_var.value(), QWEN3_ASR_DEFAULT_REGION)
@@ -6158,59 +6231,7 @@ class SettingsWindow(QDialog):
                 engine_cfg["language_type"] = self._qwen_tts_language_type_from_code(
                     self._selected_tts_test_language()
                 )
-                self._apply_qwen_tts_persona_instructions(engine_cfg)
         return engine_cfg
-
-    def _apply_qwen_tts_persona_instructions(self, engine_cfg: dict[str, object]) -> None:
-        from src.tts.persona_instructions import (
-            build_qwen_tts_persona_instructions,
-            qwen_tts_model_supports_instructions,
-        )
-
-        if engine_cfg.get("instructions"):
-            return
-        if not qwen_tts_model_supports_instructions(engine_cfg.get("model", "")):
-            return
-        instructions = build_qwen_tts_persona_instructions(
-            self._config_with_current_roleplay_settings()
-        )
-        if not instructions:
-            return
-        engine_cfg["instructions"] = instructions
-        engine_cfg.setdefault("optimize_instructions", True)
-
-    def _config_with_current_roleplay_settings(self) -> dict[str, object]:
-        config = dict(self._config) if isinstance(self._config, dict) else {}
-        trans_source = config.get("translation", {})
-        trans_cfg = dict(trans_source) if isinstance(trans_source, dict) else {}
-        social_source = trans_cfg.get("social", {})
-        social_cfg = dict(social_source) if isinstance(social_source, dict) else {}
-        if hasattr(self, "_roleplay_enabled_var"):
-            social_cfg["mode"] = "roleplay" if self._roleplay_enabled_var.value() else "standard"
-        if hasattr(self, "_roleplay_preset_codes") and hasattr(self, "_roleplay_preset_var"):
-            selected_preset = self._roleplay_preset_codes.get(
-                self._roleplay_preset_var.value(), "custom"
-            )
-            social_cfg["persona_preset"] = selected_preset
-        else:
-            selected_preset = str(social_cfg.get("persona_preset", "custom") or "custom")
-        if hasattr(self, "_persona_name_var"):
-            social_cfg["persona_name"] = self._persona_name_var.value().strip()
-        if hasattr(self, "_roleplay_prompt_var"):
-            social_cfg["persona_prompt"] = _roleplay_preset_config_text(
-                selected_preset,
-                "persona_prompt",
-                self._roleplay_prompt_var.value(),
-            )
-        if hasattr(self, "_roleplay_glossary_var"):
-            social_cfg["persona_glossary"] = _roleplay_preset_config_text(
-                selected_preset,
-                "persona_glossary",
-                self._roleplay_glossary_var.value(),
-            )
-        trans_cfg["social"] = social_cfg
-        config["translation"] = trans_cfg
-        return config
 
     @staticmethod
     def _qwen_tts_language_type_from_code(language: object) -> str:
@@ -6943,6 +6964,11 @@ class SettingsWindow(QDialog):
         self._refresh_tts_api_visibility()
         self._refresh_sbv2_options_visibility()
         self._refresh_xtts_options_visibility()
+        self._prompt_for_missing_credential("tts")
+
+    def _on_tts_api_model_changed(self, text: str) -> None:
+        self._tts_api_model_var.set(text)
+        self._prompt_for_missing_credential("tts")
 
     def _on_tts_voice_changed(self, _text: str) -> None:
         self._refresh_bert_model_prompt()
@@ -7017,6 +7043,7 @@ class SettingsWindow(QDialog):
         model.setMaximumHeight(32)
         model.setEditText(self._tts_api_model_var.value())
         model.currentTextChanged.connect(self._tts_api_model_var.set)
+        model.textActivated.connect(self._on_tts_api_model_changed)
         self._tts_api_model_entry = model
         self._row_layout(frame_layout, self._copy("tts_api_model"), model)
 
@@ -7608,6 +7635,8 @@ class SettingsWindow(QDialog):
     def _on_tts_test(self) -> None:
         if self._tts_testing:
             return
+        if self._prompt_for_missing_credential("tts"):
+            return
         self._stop_tts_test_manager()
         self._tts_test_generation += 1
         generation = self._tts_test_generation
@@ -8186,18 +8215,6 @@ class SettingsWindow(QDialog):
         fmt_code = self._fmt_codes.get(self._output_format_var.value(), "translated_with_original")
         trans_cfg["output_format"] = normalize_output_format(fmt_code)
         trans_cfg["chatbox_template"] = self._chatbox_template_var.value().strip()
-        missing_api_key, backend_label = missing_required_translation_api_key(
-            cfg,
-            self._ui_lang,
-        )
-        if missing_api_key:
-            QMessageBox.warning(
-                self,
-                tr(self._ui_lang, "api_missing_title"),
-                self._copy("api_missing_save_message", backend=backend_label),
-            )
-            return
-
         asr_code = self._asr_codes.get(self._asr_engine_var.value(), DEFAULT_ASR_ENGINE)
         asr_cfg["engine"] = asr_code
         asr_cfg["device"] = (
@@ -8449,26 +8466,24 @@ class SettingsWindow(QDialog):
             )
             return
 
-        social_cfg = trans_cfg.setdefault("social", {})
-        social_cfg["mode"] = "roleplay" if self._roleplay_enabled_var.value() else "standard"
-        selected_preset = self._roleplay_preset_codes.get(self._roleplay_preset_var.value(), "custom")
-        preset_profile = ROLEPLAY_PRESETS.get(selected_preset, ROLEPLAY_PRESETS["custom"])
-        social_cfg["persona_preset"] = selected_preset
-        social_cfg["politeness"] = preset_profile.get("politeness", "neutral")
-        social_cfg["tone"] = preset_profile.get("tone", "natural")
-        social_cfg["persona_name"] = self._persona_name_var.value().strip()
-        social_cfg["persona_prompt"] = _roleplay_preset_config_text(
-            selected_preset,
-            "persona_prompt",
-            self._roleplay_prompt_var.value(),
-        )
-        social_cfg["persona_glossary"] = _roleplay_preset_config_text(
-            selected_preset,
-            "persona_glossary",
-            self._roleplay_glossary_var.value(),
-        )
+        # Translation personas were consolidated into the shared rewrite-style
+        # selector. Keep legacy fields for migration/debugging, but never
+        # reactivate their old translation-prompt behavior on save.
+        social_cfg = trans_cfg.get("social", {})
+        if isinstance(social_cfg, dict):
+            social_cfg["mode"] = "standard"
 
         ui_cfg.setdefault("osc_guide_seen", False)
+
+        missing = first_missing_required_credential(
+            cfg,
+            scopes=("translation", "asr", "tts"),
+            ui_language=self._ui_lang,
+            active_only=False,
+        )
+        if missing is not None:
+            self._show_missing_credential(missing)
+            return
 
         self._pending_save_rollback_config = copy.deepcopy(self._config)
         self._config.clear()

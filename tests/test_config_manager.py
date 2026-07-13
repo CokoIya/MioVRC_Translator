@@ -833,6 +833,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["target_language_3"] == ""
         assert config["translation"]["chatbox_template"] == ""
         assert config["translation"]["fallback_backends"] == []
+        assert config["translation"]["rewrite_typed_text"] is False
         assert "output_format_2" not in config["translation"]
         assert config["translation"]["language_pair_source"] == "auto"
 
@@ -852,6 +853,103 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["source_language"] == "ja"
         assert config["translation"]["target_language"] == "zh"
         assert config["translation"]["language_pair_source"] == "auto"
+
+    def test_translation_rewrite_migration_preserves_existing_non_off_style(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "openai",
+                "backend_source": "manual",
+                "asr_rewrite_style": "catgirl",
+                "social": {
+                    "mode": "roleplay",
+                    "persona_preset": "frieren",
+                    "persona_prompt": "My saved legacy prompt",
+                },
+            },
+        }
+        loaded = json.loads(json.dumps(config))
+
+        config_manager._ensure_translation_config(config, loaded=loaded)
+
+        translation = config["translation"]
+        assert translation["asr_rewrite_style"] == "catgirl"
+        assert translation["rewrite_typed_text"] is True
+        assert translation["social"]["mode"] == "standard"
+        assert (
+            translation["social"]["persona_prompt"]
+            == "My saved legacy prompt"
+        )
+
+    def test_translation_rewrite_migration_promotes_known_legacy_style(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "openai",
+                "backend_source": "manual",
+                "asr_rewrite_style": "off",
+                "social": {
+                    "mode": "language_exchange",
+                    "persona_preset": "custom",
+                },
+            },
+        }
+        loaded = json.loads(json.dumps(config))
+
+        config_manager._ensure_translation_config(config, loaded=loaded)
+
+        translation = config["translation"]
+        assert translation["asr_rewrite_style"] == "language_exchange"
+        assert translation["rewrite_typed_text"] is True
+        assert translation["social"]["mode"] == "standard"
+
+    def test_translation_rewrite_migration_neutralizes_unknown_custom_persona(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "openai",
+                "backend_source": "manual",
+                "social": {
+                    "mode": "roleplay",
+                    "persona_preset": "custom",
+                    "persona_prompt": "Keep this user-authored prompt",
+                },
+            },
+        }
+        loaded = json.loads(json.dumps(config))
+
+        config_manager._ensure_translation_config(config, loaded=loaded)
+
+        translation = config["translation"]
+        assert translation["asr_rewrite_style"] == "off"
+        assert translation["rewrite_typed_text"] is False
+        assert translation["social"]["mode"] == "standard"
+        assert (
+            translation["social"]["persona_prompt"]
+            == "Keep this user-authored prompt"
+        )
+
+    def test_translation_rewrite_migration_preserves_explicit_typed_toggle(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "openai",
+                "backend_source": "manual",
+                "rewrite_typed_text": False,
+                "social": {
+                    "mode": "roleplay",
+                    "persona_preset": "frieren",
+                },
+            },
+        }
+        loaded = json.loads(json.dumps(config))
+
+        config_manager._ensure_translation_config(config, loaded=loaded)
+
+        translation = config["translation"]
+        assert translation["asr_rewrite_style"] == "frieren"
+        assert translation["rewrite_typed_text"] is False
+        assert translation["social"]["mode"] == "standard"
 
     def test_manual_language_pair_is_preserved(self):
         """User-selected source/target languages should not be overwritten by locale defaults."""
@@ -1344,7 +1442,7 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
 
-    def test_removed_gpt54_and_claude_opus_models_migrate_for_direct_and_proxy(self):
+    def test_removed_models_migrate_only_for_provider_owned_catalogs(self):
         config = {
             "translation": {
                 "backend": "openai_compatible",
@@ -1362,7 +1460,7 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
-        assert config["translation"]["openai_compatible"]["model"] == "gpt-5.6-sol"
+        assert config["translation"]["openai_compatible"]["model"] == "gpt-5.4-mini"
         assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
         assert (
             config["translation"]["anthropic_compatible"]["model"]

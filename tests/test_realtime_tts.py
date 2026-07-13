@@ -108,7 +108,7 @@ def test_qwen_tts_config_uses_translation_target_language_hint():
     assert engine_cfg["language_type"] == "Japanese"
 
 
-def test_qwen_tts_config_adds_roleplay_instructions_for_instruct_model():
+def test_qwen_tts_config_does_not_derive_instructions_from_legacy_persona():
     window = MainWindow.__new__(MainWindow)
     window._current_tgt_lang = "ja"
     window._config = {
@@ -135,10 +135,7 @@ def test_qwen_tts_config_adds_roleplay_instructions_for_instruct_model():
 
     engine_cfg = MainWindow._current_tts_engine_config(window)
 
-    assert "instructions" in engine_cfg
-    assert "Energetic Friend" in engine_cfg["instructions"]
-    assert "playful" in engine_cfg["instructions"]
-    assert engine_cfg["optimize_instructions"] is True
+    assert "instructions" not in engine_cfg
 
 
 def test_qwen_tts_config_preserves_explicit_instructions():

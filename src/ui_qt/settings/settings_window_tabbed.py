@@ -32,6 +32,11 @@ from src.utils import config_manager
 from src.utils.i18n import tr
 
 from .localized_tab import normalize_settings_language
+from src.ui_qt.credential_prompt import show_missing_credential_prompt
+from src.utils.credential_validation import (
+    MissingCredential,
+    first_missing_required_credential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +143,7 @@ class SettingsWindowTabbed(QDialog):
             self._config,
             self._ui_language,
             self._on_test_microphone,
+            on_open_api_settings=self._open_api_credential_settings,
         )
         self._quick_setup_tab.config_changed.connect(self._on_tab_config_changed)
         self._quick_setup_tab.language_changed.connect(self.set_ui_language)
@@ -149,6 +155,7 @@ class SettingsWindowTabbed(QDialog):
         self._api_models_tab = APIModelsTab(
             self._config,
             self._ui_language,
+            on_open_api_settings=self._open_api_credential_settings,
         )
         self._api_models_tab.config_changed.connect(self._on_tab_config_changed)
         self._tabs.addTab(
@@ -241,6 +248,17 @@ class SettingsWindowTabbed(QDialog):
         previous = copy.deepcopy(self._config)
         try:
             new_config = self._collect_config()
+            missing = first_missing_required_credential(
+                new_config,
+                scopes=("translation",),
+                ui_language=self._ui_language,
+                active_only=False,
+            )
+            if missing is not None:
+                self._saving = False
+                self._set_save_controls_enabled(True)
+                self._show_missing_credential(missing)
+                return
             self._config.clear()
             self._config.update(new_config)
             config_manager.save_config(self._config)
@@ -270,6 +288,18 @@ class SettingsWindowTabbed(QDialog):
         self.accept()
         if callable(self._on_close):
             self._on_close()
+
+    def _show_missing_credential(self, missing: MissingCredential) -> None:
+        show_missing_credential_prompt(
+            self,
+            missing,
+            ui_language=self._ui_language,
+            open_settings=lambda: self._open_api_credential_settings(missing),
+        )
+
+    def _open_api_credential_settings(self, missing: MissingCredential) -> None:
+        self.select_page("api")
+        self._api_models_tab.focus_credential(missing)
 
     def _collect_config(self) -> dict:
         """Collect and merge configuration from all tabs."""

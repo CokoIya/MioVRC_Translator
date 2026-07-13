@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QScrollArea, QSlider
+from PySide6.QtWidgets import QCheckBox, QScrollArea, QSlider
 
 from src.ui_qt.realtime_tweaks_panel import (
     PANEL_MAX_SIZE,
@@ -7,6 +7,7 @@ from src.ui_qt.realtime_tweaks_panel import (
     PANEL_SIZE,
     RealtimeTweaksPanel,
 )
+from src.utils.i18n import tr
 
 
 def _quick_switch_config() -> dict:
@@ -14,6 +15,8 @@ def _quick_switch_config() -> dict:
         "translation": {
             "backend": "qianwen",
             "output_format": "translated_with_original",
+            "asr_rewrite_style": "off",
+            "rewrite_typed_text": False,
             "qianwen": {"model": "custom-hot-switch-model"},
         },
         "tts": {
@@ -39,6 +42,7 @@ def test_realtime_tweaks_panel_is_bounded_and_uses_project_icon_assets(qtbot):
     assert panel.maximumSize().height() == PANEL_MAX_SIZE[1]
     assert panel.findChild(QScrollArea) is not None
     assert panel.findChild(QSlider) is not None
+    assert panel.findChild(QCheckBox) is not None
     assert not panel._close_btn.icon().isNull()
     assert "chevron-down-muted.svg" in panel.styleSheet()
     assert "slider-thumb.svg" in panel.styleSheet()
@@ -65,12 +69,11 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
         "tts_language",
         "tts_voice",
         "asr_rewrite_style",
-        "roleplay_profile",
     }
-    combo_order = tuple(panel._combos)
-    assert combo_order.index("asr_rewrite_style") < combo_order.index(
-        "roleplay_profile"
-    )
+    assert set(panel._toggles) == {"rewrite_typed_text"}
+    assert panel._toggles["rewrite_typed_text"].isChecked() is False
+    assert "frieren" in panel._combo_reverse["asr_rewrite_style"]
+    assert "language_exchange" in panel._combo_reverse["asr_rewrite_style"]
     assert not hasattr(panel, "mic_gain_slider")
     assert not hasattr(panel, "manual_close_toggle")
     assert panel._noise_slider is not None
@@ -85,6 +88,26 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
     panel._noise_slider.setValue(60)
 
     assert changes[-1] == ("noise_reduction", 0.6)
+
+    panel._toggles["rewrite_typed_text"].setChecked(True)
+
+    assert changes[-1] == ("rewrite_typed_text", True)
+
+
+def test_realtime_tweaks_panel_localizes_shared_rewrite_controls(qtbot):
+    panel = RealtimeTweaksPanel(None, _quick_switch_config(), "en", "dark")
+    qtbot.addWidget(panel)
+
+    for language in ("zh-CN", "en", "ja", "ru", "ko"):
+        panel.update_language(language)
+        assert panel._combo_labels["asr_rewrite_style"].text() == tr(
+            language,
+            "quick_switch_asr_rewrite_style",
+        )
+        assert panel._toggles["rewrite_typed_text"].text() == tr(
+            language,
+            "quick_switch_rewrite_typed_text",
+        )
 
 
 def test_realtime_tweaks_panel_hot_switches_translation_provider(qtbot):

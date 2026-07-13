@@ -8,6 +8,8 @@ from src.translators.factory import (
     OPENAI_COMPATIBLE_BACKENDS,
     create_translator,
 )
+from src.translators.anthropic_translator import ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S
+from src.translators.openai_translator import OPENAI_HTTP_KEEPALIVE_EXPIRY_S
 from src.utils.ui_config import (
     NVIDIA_TRANSLATION_BASE_URL,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
@@ -121,6 +123,8 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert translator._client.kwargs["base_url"] == "https://relay.example.com/v1"
     assert translator._client.kwargs["timeout"] == 9.0
     assert translator._client.kwargs["max_retries"] == 1
+    assert translator._client.kwargs["http_client"] is translator._http_client
+    assert OPENAI_HTTP_KEEPALIVE_EXPIRY_S == 60.0
     assert translator.model == "gpt-proxy-router"
 
 
@@ -211,6 +215,8 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
     assert translator._client.kwargs["timeout"] == 11.0
     assert translator._client.kwargs["max_retries"] == 2
+    assert translator._client.kwargs["http_client"] is translator._http_client
+    assert ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S == 60.0
     assert translator.model == "claude-router"
 
 
@@ -399,7 +405,7 @@ def test_translation_fallback_backend_is_used_after_primary_failure(monkeypatch)
     "backend",
     sorted([*OPENAI_COMPATIBLE_BACKENDS, "anthropic", "anthropic_compatible"]),
 )
-def test_ai_backends_receive_roleplay_prompt_profile(monkeypatch, backend):
+def test_ai_backends_ignore_legacy_translation_persona_config(monkeypatch, backend):
     monkeypatch.setitem(
         sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
     )
@@ -429,14 +435,11 @@ def test_ai_backends_receive_roleplay_prompt_profile(monkeypatch, backend):
 
     translator = create_translator(config)
 
-    assert translator._prompt_profile == {
-        "mode": "roleplay",
-        "politeness": "polite",
-        "tone": "cool",
-        "persona_name": "Frieren Preset",
-        "persona_prompt": "Use calm, understated wording.",
-        "glossary": ["Calm and restrained", "Short, plain wording"],
-    }
+    prompt = translator._build_prompt("hello", "en", "ja", context_source="manual")
+    assert translator._prompt_profile == {}
+    assert "Frieren Preset" not in prompt
+    assert "calm, understated" not in prompt
+    assert "social style instructions" not in prompt
 
 
 def test_standard_social_config_with_saved_preset_does_not_affect_translation(

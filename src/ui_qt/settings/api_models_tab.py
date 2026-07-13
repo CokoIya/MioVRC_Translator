@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -28,6 +29,11 @@ from src.utils.ui_config import (
     normalize_qwen_translation_region,
     qwen_translation_region_for_ui_language,
 )
+from src.ui_qt.credential_prompt import show_missing_credential_prompt
+from src.utils.credential_validation import (
+    MissingCredential,
+    first_missing_required_credential,
+)
 
 from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
@@ -44,10 +50,15 @@ class APIModelsTab(LocalizedSettingsTab):
         config: dict,
         ui_language: str,
         parent: QWidget | None = None,
+        *,
+        on_open_api_settings: Callable[[MissingCredential], None] | None = None,
     ):
         super().__init__(parent)
         self._config = config
         self._ui_language = normalize_settings_language(ui_language)
+        self._on_open_api_settings = on_open_api_settings
+        self._loading_config = False
+        self._suppress_credential_prompt = False
 
         self._init_ui()
 
@@ -125,6 +136,7 @@ class APIModelsTab(LocalizedSettingsTab):
 
         self._model_combo = QComboBox()
         self._model_combo.setEditable(True)
+        self._model_combo.activated.connect(self._on_model_selected)
         model_layout.addWidget(self._model_combo, 1)
 
         group_layout.addLayout(model_layout)
@@ -308,16 +320,75 @@ class APIModelsTab(LocalizedSettingsTab):
         self._model_combo.addItems(models)
 
         self.config_changed.emit()
+        if not self._loading_config and not self._suppress_credential_prompt:
+            self._prompt_for_missing_credential()
+
+    def _on_model_selected(self, _index: int) -> None:
+        """Validate credentials when the player selects a provider model."""
+        if not self._loading_config and not self._suppress_credential_prompt:
+            self._prompt_for_missing_credential()
+
+    def _prompt_for_missing_credential(self, provider_id: str | None = None) -> bool:
+        config = self.get_config()
+        if provider_id:
+            config["translation"]["backend"] = normalize_backend(provider_id)
+        missing = first_missing_required_credential(
+            config,
+            scopes=("translation",),
+            ui_language=self._ui_language,
+            active_only=False,
+        )
+        if missing is None:
+            return False
+
+        def open_api_settings() -> None:
+            if callable(self._on_open_api_settings):
+                self._on_open_api_settings(missing)
+            else:
+                self.focus_credential(missing)
+
+        show_missing_credential_prompt(
+            self,
+            missing,
+            ui_language=self._ui_language,
+            open_settings=open_api_settings,
+        )
+        return True
+
+    def focus_credential(self, missing: MissingCredential) -> None:
+        """Show the provider section and focus its secret input."""
+        backend = normalize_backend(missing.provider_id)
+        index = self._provider_combo.findData(backend)
+        if index >= 0 and index != self._provider_combo.currentIndex():
+            self._suppress_credential_prompt = True
+            try:
+                self._provider_combo.setCurrentIndex(index)
+            finally:
+                self._suppress_credential_prompt = False
+        key_inputs = {
+            "openai": self._openai_key_input,
+            "anthropic": self._anthropic_key_input,
+            "deepseek": self._deepseek_key_input,
+            "gemini": self._gemini_key_input,
+            "qianwen": self._qwen_key_input,
+        }
+        key_input = key_inputs.get(backend)
+        if key_input is not None:
+            key_input.setFocus()
 
     def _test_openai(self) -> None:
         """Test OpenAI connection."""
+        if self._prompt_for_missing_credential("openai"):
+            return
         logger.info("Testing OpenAI connection...")
-        # TODO: Implement actual API test
+        # Keep this button side-effect free until a real provider test exists.
 
     def _test_anthropic(self) -> None:
         """Test Anthropic connection."""
+        if self._prompt_for_missing_credential("anthropic"):
+            return
         logger.info("Testing Anthropic connection...")
-        # TODO: Implement actual API test
+        # Keep this button side-effect free until a real provider test exists.
 
     def get_config(self) -> dict:
         """Get current configuration from UI."""
@@ -356,6 +427,13 @@ class APIModelsTab(LocalizedSettingsTab):
 
     def load_config(self, config: dict) -> None:
         """Load configuration into UI."""
+        self._loading_config = True
+        try:
+            self._load_config_values(config)
+        finally:
+            self._loading_config = False
+
+    def _load_config_values(self, config: dict) -> None:
         trans_cfg = config.get("translation", {})
 
         # Load API keys

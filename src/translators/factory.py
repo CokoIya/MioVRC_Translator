@@ -154,46 +154,6 @@ class FallbackTranslator(BaseTranslator):
         super().close()
 
 
-def _parse_glossary_entries(raw_text: object) -> list[str]:
-    text = str(raw_text or "").strip()
-    if not text:
-        return []
-    parts = []
-    for chunk in text.replace("\r", "\n").replace(";", "\n").split("\n"):
-        entry = chunk.strip()
-        if entry:
-            parts.append(entry)
-    return parts
-
-
-def _translation_prompt_profile(trans_cfg: Mapping[str, object]) -> dict[str, object]:
-    social_cfg = trans_cfg.get("social", {})
-    if not isinstance(social_cfg, Mapping):
-        social_cfg = {}
-    social_mode = str(social_cfg.get("mode", "standard")).strip() or "standard"
-    if social_mode in {"", "standard"}:
-        return {}
-    if social_mode not in {"language_exchange", "roleplay"}:
-        return {}
-
-    persona_name = ""
-    persona_prompt = ""
-    glossary: list[str] = []
-    if social_mode == "roleplay":
-        persona_name = str(social_cfg.get("persona_name", "")).strip()
-        persona_prompt = str(social_cfg.get("persona_prompt", "")).strip()
-        glossary = _parse_glossary_entries(social_cfg.get("persona_glossary", ""))
-
-    return {
-        "mode": social_mode,
-        "politeness": str(social_cfg.get("politeness", "neutral")).strip() or "neutral",
-        "tone": str(social_cfg.get("tone", "natural")).strip() or "natural",
-        "persona_name": persona_name,
-        "persona_prompt": persona_prompt,
-        "glossary": glossary,
-    }
-
-
 def _require_text(value: str, label: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -312,7 +272,6 @@ def _create_openai_compatible_translator(
         prefer_max_completion_tokens=bool(
             spec.get("prefer_max_completion_tokens", False)
         ),
-        prompt_profile=_translation_prompt_profile(trans_cfg),
         context_store=context_store,
         provider_id=backend,
         allow_private_http=backend == "local_ai" and not configured_api_key,
@@ -439,7 +398,6 @@ def _create_translator_for_backend(
                 maximum=3,
             ),
             max_output_tokens=int(spec.get("max_output_tokens", 192)),
-            prompt_profile=_translation_prompt_profile(trans_cfg),
             context_store=context_store,
         )
 

@@ -210,7 +210,7 @@ def test_prompt_demands_natural_conversational_english():
     assert "contractions" in prompt
 
 
-def test_listen_prompt_does_not_apply_user_persona():
+def test_legacy_persona_is_not_injected_into_translation_prompts():
     translator = DummyTranslator(
         prompt_profile={
             "mode": "roleplay",
@@ -233,10 +233,10 @@ def test_listen_prompt_does_not_apply_user_persona():
     )
 
     assert "Cool Senpai" not in listen_prompt
-    assert "Cool Senpai" in mic_prompt
+    assert "Cool Senpai" not in mic_prompt
 
 
-def test_roleplay_profile_adds_persona_tone_and_safety_to_mic_prompt():
+def test_legacy_roleplay_profile_is_ignored_by_translation_prompt():
     translator = DummyTranslator(
         prompt_profile={
             "mode": "roleplay",
@@ -264,13 +264,9 @@ def test_roleplay_profile_adds_persona_tone_and_safety_to_mic_prompt():
         context_source="listen",
     )
 
-    assert "follow the social style instructions below" in mic_prompt
-    assert "Social mode: roleplay" in mic_prompt
-    assert "bright, friendly, energetic" in mic_prompt
-    assert "Persona name: Marin Preset" in mic_prompt
-    assert "Persona notes: Use bright, friendly wording." in mic_prompt
-    assert "Preferred glossary" in mic_prompt
-    assert "Persona safety" in mic_prompt
+    assert "social style instructions" not in mic_prompt
+    assert "Marin Preset" not in mic_prompt
+    assert "bright, friendly wording" not in mic_prompt
     assert "Marin Preset" not in listen_prompt
     assert "social style instructions" not in listen_prompt
 
@@ -387,7 +383,7 @@ def test_qwen_mt_options_are_disabled_for_english_target_quality():
     assert not translator._should_use_qwen_mt_translation_options("zh", "en")
 
 
-def test_qwen_mt_options_are_disabled_when_persona_is_active():
+def test_qwen_mt_options_remain_available_with_legacy_persona_config():
     translator = _openai_translator_stub(
         uses_qwen_mt=True,
         prompt_profile={
@@ -405,7 +401,7 @@ def test_qwen_mt_options_are_disabled_when_persona_is_active():
     translator._max_output_tokens = 192
     translator._is_reasoning_model = False
 
-    assert not translator._should_use_qwen_mt_translation_options("en", "ja")
+    assert translator._should_use_qwen_mt_translation_options("en", "ja")
     assert translator._translate_with_chat_completions(
         "hello",
         "en",
@@ -414,9 +410,11 @@ def test_qwen_mt_options_are_disabled_when_persona_is_active():
     ) == "ok"
 
     kwargs = translator._client.chat.completions.kwargs
-    assert "extra_body" not in kwargs
-    assert "Cool Senpai" in kwargs["messages"][0]["content"]
-    assert "translation_options" not in kwargs["messages"][0]["content"]
+    assert kwargs["extra_body"]["translation_options"] == {
+        "source_lang": "English",
+        "target_lang": "Japanese",
+    }
+    assert kwargs["messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_qwen_mt_request_uses_dashscope_translation_shape():
@@ -500,7 +498,7 @@ def test_openai_pro_responses_request_omits_temperature():
     assert "temperature" not in translator._client.responses.kwargs
 
 
-def test_openai_responses_request_includes_roleplay_profile():
+def test_openai_responses_request_ignores_legacy_roleplay_profile():
     translator = _openai_translator_stub(
         is_qwen=False,
         uses_qwen_mt=False,
@@ -521,12 +519,12 @@ def test_openai_responses_request_includes_roleplay_profile():
 
     assert translator._translate_with_responses("hello", "en", "zh") == "ok"
     prompt = translator._client.responses.kwargs["input"]
-    assert "Rem Preset" in prompt
-    assert "gentle, supportive" in prompt
-    assert "Persona safety" in prompt
+    assert "Rem Preset" not in prompt
+    assert "gentle, supportive" not in prompt
+    assert "Persona safety" not in prompt
 
 
-def test_anthropic_request_includes_roleplay_profile(monkeypatch):
+def test_anthropic_request_ignores_legacy_roleplay_profile(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=_AnthropicClient))
     translator = AnthropicTranslator(
         api_key="test-key",
@@ -544,9 +542,9 @@ def test_anthropic_request_includes_roleplay_profile(monkeypatch):
         translator.translate("hello", "en", "zh")
 
     prompt = translator._client.messages.kwargs["messages"][0]["content"]
-    assert "Holo Preset" in prompt
-    assert "wise, lightly playful" in prompt
-    assert "Persona safety" in prompt
+    assert "Holo Preset" not in prompt
+    assert "wise, lightly playful" not in prompt
+    assert "Persona safety" not in prompt
 
 
 def test_deepseek_v4_translation_disables_thinking(monkeypatch):
@@ -793,6 +791,47 @@ def test_context_detection_skips_long_standalone_text():
         context_source="mic",
         current_text="A" * 400,
     ) == ()
+
+
+def test_realtime_context_skips_short_standalone_utterance():
+    store = TranslationContextStore()
+    store.remember(
+        session_id="session",
+        text="earlier",
+        translated="before",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+    )
+    assert store.snapshot(
+        session_id="session",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+        current_text="hello everyone",
+        before_sequence=2,
+    ) == ()
+
+
+def test_realtime_pending_context_is_capped_to_turn_limit():
+    store = TranslationContextStore(max_turns=2)
+    for sequence in range(4):
+        store.stage_source(
+            session_id="session",
+            sequence=sequence,
+            text=f"source-{sequence}",
+            src_lang="en",
+            tgt_lang="ja",
+            context_source="mic",
+        )
+    assert store.snapshot(
+        session_id="session",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+        current_text="and then?",
+        before_sequence=4,
+    ) == (("source-2", ""), ("source-3", ""))
 
 
 def test_deepseek_empty_response_reports_provider_summary(monkeypatch):

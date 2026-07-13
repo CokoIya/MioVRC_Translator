@@ -56,12 +56,18 @@ from src.core.realtime_scheduler import (
     RealtimeScheduler,
     RealtimeTask,
 )
+from src.core.rewrite_coordinator import (
+    REWRITE_PRIORITY_REALTIME,
+    RewriteCallCoordinator,
+    provider_runtime_config_signature,
+)
 from src.translators.base import TranslationContextStore
 from src.translators.asr_rewriter import (
     ASR_REWRITE_DISABLED,
     normalize_asr_rewrite_style,
 )
 from src.ui_qt.font_config import apply_application_font
+from src.ui_qt.credential_prompt import show_missing_credential_prompt
 from src.ui_qt.qt_localization import install_qt_translations
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.styles import build_app_stylesheet, build_main_window_styles
@@ -73,6 +79,7 @@ from src.ui_qt.state_manager import AppState
 from src.tts.error_utils import is_tts_authentication_error, is_tts_network_error
 from src.utils import config_manager
 from src.utils.app_paths import resource_base_dirs
+from src.utils.credential_validation import first_missing_required_credential
 from src.utils.global_hotkey import GlobalHotkey, DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
 from src.utils.i18n import tr
 from src.utils.lang_detect import detect_language
@@ -83,7 +90,6 @@ from src.utils.localization import (
     translate_key_catalog,
 )
 from src.utils.translation_error_formatter import format_translation_error
-from src.utils.translation_config_validation import missing_required_translation_api_key
 from src.utils.ui_config import (
     LANGUAGE_DISPLAY_NAMES,
     OUTPUT_FORMAT_OPTIONS,
@@ -113,11 +119,12 @@ PARTIAL_TASK_QUEUE_MAXSIZE = 1
 FINAL_TASK_QUEUE_MAXSIZE = 8
 DESKTOP_FINAL_TASK_QUEUE_MAXSIZE = 8
 TRANSLATION_TASK_QUEUE_MAXSIZE = 12
-ASR_REWRITE_TASK_QUEUE_MAXSIZE = 12
+ASR_REWRITE_TASK_QUEUE_MAXSIZE = 4
 ASR_WORKER_CONCURRENCY = 2
 ASR_REWRITE_WORKER_CONCURRENCY = 2
 TRANSLATION_WORKER_CONCURRENCY = 2
 MIC_PRIORITY_BURST = 3
+DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S = 6.0
 WORKER_STOP_TIMEOUT_S = 5.0
 CONFIG_SAVE_DEBOUNCE_MS = 280
 MAIN_WINDOW_DEFAULT_SIZE = (940, 440)
@@ -688,6 +695,7 @@ class _RealtimeTranslationWorkerState:
 
     translator: Any = None
     config_snapshot: Mapping[str, Any] | None = None
+    runtime_signature: str | None = None
     config: dict[str, Any] | None = None
     dispatcher: OutputDispatcher | None = None
     mic_pipeline: MicPipeline | None = None
@@ -709,6 +717,7 @@ class _RealtimeTranslationWorkerState:
     def close(self) -> None:
         self.close_translator()
         self.config_snapshot = None
+        self.runtime_signature = None
         self.config = None
         self.dispatcher = None
         self.mic_pipeline = None
@@ -721,11 +730,13 @@ class _RealtimeRewriteWorkerState:
 
     translator: Any = None
     config_snapshot: Mapping[str, Any] | None = None
+    runtime_signature: str | None = None
 
     def close(self) -> None:
         translator = self.translator
         self.translator = None
         self.config_snapshot = None
+        self.runtime_signature = None
         close = getattr(translator, "close", None)
         if callable(close):
             try:
@@ -829,6 +840,12 @@ class MainWindow(QMainWindow):
         self._mic_pipeline: MicPipeline | None = None
         self._listen_pipeline: ListenPipeline | None = None
         self._manual_translation_controller: ManualTranslationController | None = None
+        self._rewrite_coordinator = RewriteCallCoordinator(
+            max_active_calls=ASR_REWRITE_WORKER_CONCURRENCY,
+            max_pending_leaders=ASR_REWRITE_TASK_QUEUE_MAXSIZE + 2,
+            cache_size=256,
+            realtime_burst=MIC_PRIORITY_BURST,
+        )
         self._sender: VRCOSCSender | None = None
         self._osc_service = None
         self._overlay_service: OverlayService | None = None
@@ -1123,23 +1140,79 @@ class MainWindow(QMainWindow):
             return
         QTimer.singleShot(delay_ms, self._preload_settings_window)
 
-    def show_settings(self, page_id: str | None = None) -> None:
+    @staticmethod
+    def _select_settings_page(
+        window: object,
+        page_id: str | None,
+        focus_target: str | None,
+    ) -> None:
+        if not page_id or not hasattr(window, "select_page"):
+            return
+        select_page = getattr(window, "select_page")
+        try:
+            select_page(page_id, focus_target=focus_target)
+        except TypeError:
+            # Keep compatibility with the feature-flagged tabbed settings UI
+            # and third-party embedding shims that expose the historical
+            # one-argument method.
+            select_page(page_id)
+            focus_credential = getattr(window, "focus_credential_target", None)
+            if focus_target and callable(focus_credential):
+                QTimer.singleShot(
+                    0,
+                    lambda target=focus_target: focus_credential(target),
+                )
+
+    def show_settings(
+        self,
+        page_id: str | None = None,
+        focus_target: str | None = None,
+    ) -> None:
         if self._settings_window is not None and getattr(self._settings_window, "_closing", False):
             self._settings_window = None
         if self._settings_window is not None:
             self._sync_settings_window_vrc_listen_state()
-            if page_id and hasattr(self._settings_window, "select_page"):
-                self._settings_window.select_page(page_id)
+            self._select_settings_page(
+                self._settings_window,
+                page_id,
+                focus_target,
+            )
             self._settings_window.show()
             self._settings_window.raise_()
             self._settings_window.activateWindow()
             return
         win = self._create_settings_window(defer_initial_page=True)
-        if page_id and hasattr(win, "select_page"):
-            win.select_page(page_id)
+        self._select_settings_page(win, page_id, focus_target)
         win.show()
         win.raise_()
         win.activateWindow()
+
+    def _prompt_for_missing_credential(
+        self,
+        scopes: tuple[str, ...],
+    ) -> bool:
+        ui_language = getattr(self, "_ui_lang", None) or get_ui_language(
+            getattr(self, "_config", {})
+        )
+        missing = first_missing_required_credential(
+            self._config,
+            scopes=scopes,
+            ui_language=ui_language,
+            active_only=True,
+        )
+        if missing is None:
+            return False
+
+        show_missing_credential_prompt(
+            self,
+            missing,
+            ui_language=ui_language,
+            open_settings=lambda item=missing: self.show_settings(
+                page_id=item.settings_page,
+                focus_target=item.focus_target,
+            ),
+        )
+        return True
 
     def open_mode_wizard(self) -> None:
         self._open_mode_wizard(mark_seen=True)
@@ -1195,6 +1268,9 @@ class MainWindow(QMainWindow):
                 pass
             self._sender = None
         self._close_manual_translation_controller()
+        coordinator = getattr(self, "_rewrite_coordinator", None)
+        if coordinator is not None:
+            coordinator.close()
         self._discard_ui_callbacks()
 
     def _stop_owned_timers(self) -> None:
@@ -2587,13 +2663,7 @@ class MainWindow(QMainWindow):
         retry_timer = getattr(self, "_pipeline_start_retry_timer", None)
         if retry_timer is not None and retry_timer.isActive():
             retry_timer.stop()
-        missing_api_key, _backend_label = missing_required_translation_api_key(self._config)
-        if missing_api_key:
-            QMessageBox.warning(
-                self,
-                tr(self._ui_lang, "api_missing_title"),
-                tr(self._ui_lang, "api_missing_message"),
-            )
+        if self._prompt_for_missing_credential(("translation", "asr", "tts")):
             self._set_status(self._t("status_error"), "danger", key="status_error")
             return
         self._start_btn.setEnabled(False)
@@ -3011,6 +3081,7 @@ class MainWindow(QMainWindow):
             sources=(MIC_SOURCE, DESKTOP_SOURCE),
             asr_handler=self._scheduler_asr_stage,
             rewrite_handler=self._scheduler_rewrite_stage,
+            rewrite_required=self._scheduler_rewrite_required,
             translation_handler=self._scheduler_translation_stage,
             delivery_handler=self._scheduler_delivery_stage,
             rewrite_state_factory=lambda _index: _RealtimeRewriteWorkerState(),
@@ -3020,6 +3091,10 @@ class MainWindow(QMainWindow):
             ingress_limits={
                 MIC_SOURCE: FINAL_TASK_QUEUE_MAXSIZE,
                 DESKTOP_SOURCE: DESKTOP_FINAL_TASK_QUEUE_MAXSIZE,
+            },
+            outstanding_limits={
+                MIC_SOURCE: 12,
+                DESKTOP_SOURCE: 12,
             },
             rewrite_queue_size=ASR_REWRITE_TASK_QUEUE_MAXSIZE,
             translation_queue_size=TRANSLATION_TASK_QUEUE_MAXSIZE,
@@ -4468,9 +4543,33 @@ class MainWindow(QMainWindow):
         runtime_config = copy.deepcopy(config)
         runtime_translation = runtime_config.get("translation", {})
         if isinstance(runtime_translation, dict):
+            try:
+                realtime_timeout = float(
+                    runtime_translation.get(
+                        "realtime_timeout_s",
+                        DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S,
+                    )
+                )
+            except (TypeError, ValueError):
+                realtime_timeout = DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S
+            realtime_timeout = max(2.0, min(realtime_timeout, 30.0))
             for backend_config in runtime_translation.values():
                 if isinstance(backend_config, dict):
                     backend_config["max_retries"] = 0
+                    if "timeout_s" in backend_config:
+                        try:
+                            configured_timeout = float(
+                                backend_config.get(
+                                    "timeout_s",
+                                    DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S,
+                                )
+                            )
+                        except (TypeError, ValueError):
+                            configured_timeout = DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S
+                        backend_config["timeout_s"] = min(
+                            max(configured_timeout, 1.0),
+                            realtime_timeout,
+                        )
         context_store = getattr(self, "_translation_context_store", None)
         try:
             return create_translator(
@@ -4519,29 +4618,46 @@ class MainWindow(QMainWindow):
             try:
                 if not isinstance(worker_state, _RealtimeRewriteWorkerState):
                     raise TypeError("Invalid realtime rewrite worker state")
+                runtime_signature = provider_runtime_config_signature(
+                    config_snapshot
+                )
                 if (
-                    worker_state.config_snapshot is not payload.config_snapshot
+                    worker_state.runtime_signature != runtime_signature
                     or worker_state.translator is None
                 ):
                     worker_state.close()
-                    worker_state.config_snapshot = payload.config_snapshot
                     worker_state.translator = self._create_realtime_translator(
                         config_snapshot
                     )
+                    worker_state.runtime_signature = runtime_signature
+                worker_state.config_snapshot = payload.config_snapshot
                 rewrite = getattr(worker_state.translator, "rewrite_asr", None)
                 if not callable(rewrite):
                     raise RuntimeError(
                         "The selected translation provider cannot rewrite ASR text"
                     )
-                rewritten = str(
-                    rewrite(
+                def rewrite_operation() -> object:
+                    return rewrite(
                         clean,
                         style,
                         language_hint=payload.source_language or "auto",
                         context_source=MIC_SOURCE,
                     )
-                    or ""
-                ).strip() or clean
+
+                coordinator = getattr(self, "_rewrite_coordinator", None)
+                if coordinator is None:
+                    rewrite_result = rewrite_operation()
+                else:
+                    rewrite_result = coordinator.execute(
+                        priority=REWRITE_PRIORITY_REALTIME,
+                        config=config_snapshot,
+                        style=style,
+                        language_hint=payload.source_language or "auto",
+                        text=clean,
+                        operation=rewrite_operation,
+                        wait_timeout_s=1.0,
+                    )
+                rewritten = str(rewrite_result or "").strip() or clean
             except Exception as exc:
                 rewritten = clean
                 logger.warning(
@@ -4553,8 +4669,32 @@ class MainWindow(QMainWindow):
                 )
                 logger.debug("ASR rewrite traceback", exc_info=True)
 
-        self._stage_realtime_source_context(task, payload, rewritten)
         return rewritten
+
+    def _scheduler_rewrite_required(
+        self,
+        task: RealtimeTask,
+        text: str,
+    ) -> bool:
+        """Keep no-op work out of the bounded provider rewrite queue."""
+
+        if task.source != MIC_SOURCE or not str(text or "").strip():
+            return False
+        payload = task.payload
+        if not isinstance(payload, _RealtimeAudioPayload):
+            return True
+        config_snapshot = _thaw_snapshot_value(payload.config_snapshot)
+        if not isinstance(config_snapshot, dict):
+            return False
+        translation_cfg = config_snapshot.get("translation", {})
+        if not isinstance(translation_cfg, Mapping):
+            return False
+        return normalize_asr_rewrite_style(
+            translation_cfg.get(
+                "asr_rewrite_style",
+                ASR_REWRITE_DISABLED,
+            )
+        ) != ASR_REWRITE_DISABLED
 
     def _stage_realtime_source_context(
         self,
@@ -4604,6 +4744,7 @@ class MainWindow(QMainWindow):
         clean = str(text or "").strip()
         if not clean or (task.source == DESKTOP_SOURCE and len(clean) < 2):
             return None
+        self._stage_realtime_source_context(task, payload, clean)
         if not isinstance(worker_state, _RealtimeTranslationWorkerState):
             raise TypeError("Invalid realtime translation worker state")
 
@@ -4612,13 +4753,16 @@ class MainWindow(QMainWindow):
             or worker_state.config is None
             or worker_state.dispatcher is None
         ):
-            worker_state.close_translator()
             config_snapshot = _thaw_snapshot_value(payload.config_snapshot)
             if not isinstance(config_snapshot, dict):
                 config_snapshot = {}
+            runtime_signature = provider_runtime_config_signature(config_snapshot)
+            if worker_state.runtime_signature != runtime_signature:
+                worker_state.close_translator()
 
             dispatcher = OutputDispatcher(config_snapshot)
             worker_state.config_snapshot = payload.config_snapshot
+            worker_state.runtime_signature = runtime_signature
             worker_state.config = config_snapshot
             worker_state.dispatcher = dispatcher
             worker_state.mic_pipeline = MicPipeline(
@@ -5362,6 +5506,7 @@ class MainWindow(QMainWindow):
             translator_factory=create_translator,
             language_detector=self._detect_source_lang,
             error_formatter=self._format_translation_error,
+            rewrite_coordinator=getattr(self, "_rewrite_coordinator", None),
         )
         controller.started.connect(self._on_manual_translate_started)
         controller.succeeded.connect(self._on_manual_translate_success)
@@ -5383,14 +5528,29 @@ class MainWindow(QMainWindow):
         src_text = self._src_text
         if not src_text:
             return
+        if self._prompt_for_missing_credential(("translation",)):
+            self._set_status(self._t("status_error"), "danger", key="status_error")
+            return
         controller = self._ensure_manual_translation_controller()
         controller.translator = getattr(self, "_translator", None)
+        translation_cfg = self._config.get("translation", {})
+        if not isinstance(translation_cfg, Mapping):
+            translation_cfg = {}
         request = ManualTranslationRequest(
             text=src_text,
             source_language=getattr(self, "_current_src_lang", None),
             target_language=getattr(self, "_current_tgt_lang", "ja") or "ja",
             second_target_language=getattr(self, "_current_tgt_lang_2", "en") or "en",
             third_target_language=getattr(self, "_current_tgt_lang_3", "") or "",
+            rewrite_typed_text=bool(
+                translation_cfg.get("rewrite_typed_text", False)
+            ),
+            rewrite_style=normalize_asr_rewrite_style(
+                translation_cfg.get(
+                    "asr_rewrite_style",
+                    ASR_REWRITE_DISABLED,
+                )
+            ),
         )
         generation = controller.start(request)
         self._translator = controller.translator
@@ -5693,24 +5853,7 @@ class MainWindow(QMainWindow):
             )
             if language_type:
                 resolved["language_type"] = language_type
-            self._apply_qwen_tts_persona_instructions(resolved)
         return resolved
-
-    def _apply_qwen_tts_persona_instructions(self, engine_cfg: dict) -> None:
-        from src.tts.persona_instructions import (
-            build_qwen_tts_persona_instructions,
-            qwen_tts_model_supports_instructions,
-        )
-
-        if engine_cfg.get("instructions"):
-            return
-        if not qwen_tts_model_supports_instructions(engine_cfg.get("model", "")):
-            return
-        instructions = build_qwen_tts_persona_instructions(self._config)
-        if not instructions:
-            return
-        engine_cfg["instructions"] = instructions
-        engine_cfg.setdefault("optimize_instructions", True)
 
     @staticmethod
     def _qwen_tts_language_type_from_target(target_language: object) -> str:
@@ -7763,30 +7906,10 @@ class MainWindow(QMainWindow):
             tts_cfg[engine] = engine_cfg
         engine_cfg["voice"] = str(value or "").strip()
 
-    def _set_quick_roleplay_profile(self, value: object) -> None:
-        selected = str(value or "standard").strip()
-        social_cfg = self._config.setdefault("translation", {}).setdefault("social", {})
-        if not isinstance(social_cfg, dict):
-            social_cfg = {}
-            self._config["translation"]["social"] = social_cfg
-        if selected.startswith("roleplay:"):
-            preset_id = selected.split(":", 1)[1] or "custom"
-            try:
-                from src.ui_qt.settings_window import ROLEPLAY_PRESETS
-
-                preset = ROLEPLAY_PRESETS.get(preset_id, ROLEPLAY_PRESETS.get("custom", {}))
-            except Exception:
-                preset = {}
-            social_cfg["mode"] = "roleplay"
-            social_cfg["persona_preset"] = preset_id
-            social_cfg["persona_name"] = str(preset.get("persona_name", ""))
-            social_cfg["persona_prompt"] = str(preset.get("persona_prompt", ""))
-        elif selected == "language_exchange":
-            social_cfg["mode"] = "language_exchange"
-        else:
-            social_cfg["mode"] = "standard"
-        self._clear_cached_translator()
-        self._reset_tts_manager_if_runtime_changed()
+    def _set_quick_rewrite_typed_text(self, value: object) -> None:
+        self._config.setdefault("translation", {})["rewrite_typed_text"] = bool(
+            value
+        )
 
     def _set_quick_noise_reduction(self, value: object) -> None:
         try:
@@ -7805,9 +7928,9 @@ class MainWindow(QMainWindow):
             "translation_model": self._set_quick_translation_model,
             "output_format": self._set_quick_output_format,
             "asr_rewrite_style": self._set_quick_asr_rewrite_style,
+            "rewrite_typed_text": self._set_quick_rewrite_typed_text,
             "tts_language": self._set_quick_tts_language,
             "tts_voice": self._set_quick_tts_voice,
-            "roleplay_profile": self._set_quick_roleplay_profile,
             "noise_reduction": self._set_quick_noise_reduction,
         }
         handler = handlers.get(str(key))
@@ -7819,7 +7942,6 @@ class MainWindow(QMainWindow):
             "translation_model",
             "output_format",
             "asr_rewrite_style",
-            "roleplay_profile",
         }:
             self._refresh_realtime_config_snapshot()
         self._schedule_config_save()
@@ -7829,7 +7951,7 @@ class MainWindow(QMainWindow):
         """Atomically publish configuration for future admitted sentences.
 
         Existing payloads retain their immutable old snapshot, so a provider,
-        model, output-format, or persona change never mutates work already in
+        model, output-format, or rewrite-style change never mutates work already in
         flight. Translation workers rebuild their private client state when the
         first task carrying the new snapshot reaches them.
         """
@@ -7887,6 +8009,8 @@ class MainWindow(QMainWindow):
         )
 
     def _ensure_tts_manager(self):
+        if self._prompt_for_missing_credential(("tts",)):
+            return None
         signature = self._tts_runtime_signature()
         if self._tts_manager is not None:
             if getattr(self, "_tts_manager_signature", None) != signature:

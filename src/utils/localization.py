@@ -18,6 +18,8 @@ FALLBACK_UI_LANGUAGE = "en"
 RESERVED_COMPATIBILITY_UI_KEYS = frozenset(
     {
         "app_language",
+        "api_missing_message",
+        "api_missing_title",
         "asr_api_key_separate_hint",
         "asr_dictionary",
         "asr_dictionary_hint",

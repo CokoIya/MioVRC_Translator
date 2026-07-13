@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -134,35 +135,6 @@ def _voice_entries(voices: object) -> list[tuple[str, str]]:
     return entries
 
 
-def _roleplay_entries(ui_language: str) -> list[tuple[str, str]]:
-    entries = [
-        (tr(ui_language, "quick_switch_roleplay_off"), "standard"),
-        (tr(ui_language, "quick_switch_roleplay_language_exchange"), "language_exchange"),
-    ]
-    try:
-        from src.ui_qt.settings_window import ROLEPLAY_PRESETS, _roleplay_preset_label
-
-        for preset_id in ROLEPLAY_PRESETS:
-            if preset_id == "custom":
-                continue
-            entries.append((_roleplay_preset_label(preset_id, ui_language), f"roleplay:{preset_id}"))
-    except Exception:
-        logger.debug("Failed to load roleplay presets for quick switch", exc_info=True)
-    return entries
-
-
-def _current_roleplay_value(config: Mapping[str, object]) -> str:
-    trans_cfg = _dict_section(config, "translation")
-    social_cfg = trans_cfg.get("social", {})
-    social_cfg = social_cfg if isinstance(social_cfg, dict) else {}
-    mode = str(social_cfg.get("mode", "standard") or "standard").strip()
-    if mode == "roleplay":
-        return f"roleplay:{str(social_cfg.get('persona_preset', 'custom') or 'custom')}"
-    if mode == "language_exchange":
-        return "language_exchange"
-    return "standard"
-
-
 class RealtimeTweaksPanel(QDialog):
     """Small floating quick-switch panel with bounded size and scrolling."""
 
@@ -187,6 +159,8 @@ class RealtimeTweaksPanel(QDialog):
         self._combo_label_keys: dict[str, str] = {}
         self._combo_codes: dict[str, dict[str, str]] = {}
         self._combo_reverse: dict[str, dict[str, str]] = {}
+        self._toggles: dict[str, QCheckBox] = {}
+        self._toggle_label_keys: dict[str, str] = {}
         self._section_frames: list[QFrame] = []
         self._section_labels: dict[str, QLabel] = {}
         self._noise_slider: QSlider | None = None
@@ -271,7 +245,11 @@ class RealtimeTweaksPanel(QDialog):
             "asr_rewrite_style",
             "quick_switch_asr_rewrite_style",
         )
-        self._add_combo(self._persona_section, "roleplay_profile", "quick_switch_roleplay_profile")
+        self._add_toggle(
+            self._persona_section,
+            "rewrite_typed_text",
+            "quick_switch_rewrite_typed_text",
+        )
 
         self._body_layout.addStretch(1)
         root_layout.addWidget(self._container)
@@ -316,6 +294,20 @@ class RealtimeTweaksPanel(QDialog):
         layout.addWidget(combo)
         self._combos[key] = combo
 
+    def _add_toggle(self, section: QFrame, key: str, label_key: str) -> None:
+        toggle = QCheckBox(tr(self._ui_lang, label_key))
+        toggle.setObjectName("quickSwitchToggle")
+        toggle.setMinimumHeight(30)
+        toggle.toggled.connect(
+            lambda checked, toggle_key=key: self._on_toggle_changed(
+                toggle_key,
+                checked,
+            )
+        )
+        section.layout().addWidget(toggle)
+        self._toggles[key] = toggle
+        self._toggle_label_keys[key] = label_key
+
     def _add_noise_slider(self, section: QFrame, label_key: str) -> None:
         layout = section.layout()
         row = QGridLayout()
@@ -354,6 +346,7 @@ class RealtimeTweaksPanel(QDialog):
         self._refreshing_controls = True
         try:
             self._refresh_combo_controls()
+            self._refresh_toggle_controls()
             self._refresh_noise_control()
         finally:
             self._refreshing_controls = False
@@ -395,7 +388,17 @@ class RealtimeTweaksPanel(QDialog):
             list(get_asr_rewrite_options(self._ui_lang)),
             rewrite_style,
         )
-        self._set_combo_options("roleplay_profile", _roleplay_entries(self._ui_lang), _current_roleplay_value(self._config))
+
+    def _refresh_toggle_controls(self) -> None:
+        trans_cfg = _dict_section(self._config, "translation")
+        toggle = self._toggles.get("rewrite_typed_text")
+        if toggle is None:
+            return
+        toggle.blockSignals(True)
+        try:
+            toggle.setChecked(bool(trans_cfg.get("rewrite_typed_text", False)))
+        finally:
+            toggle.blockSignals(False)
 
     def _refresh_noise_control(self) -> None:
         if self._noise_slider is None:
@@ -458,6 +461,11 @@ class RealtimeTweaksPanel(QDialog):
         if key in {"translation_provider", "tts_language"}:
             self._refresh_controls()
 
+    def _on_toggle_changed(self, key: str, checked: bool) -> None:
+        if self._refreshing_controls or self._on_change is None:
+            return
+        self._on_change(key, bool(checked))
+
     def _on_noise_slider_changed(self, value: int) -> None:
         self._update_noise_value_label(value)
         if self._refreshing_controls or self._on_change is None:
@@ -509,6 +517,23 @@ class RealtimeTweaksPanel(QDialog):
                 color: {tokens['TEXT_SECONDARY']};
                 font-size: 12px;
                 font-weight: 600;
+            }}
+            #quickSwitchToggle {{
+                color: {tokens['TEXT_SECONDARY']};
+                font-size: 12px;
+                font-weight: 600;
+                spacing: 9px;
+            }}
+            #quickSwitchToggle::indicator {{
+                width: 34px;
+                height: 18px;
+                border: 1px solid {tokens['FIELD_BORDER']};
+                border-radius: 9px;
+                background: {tokens['FIELD_BG']};
+            }}
+            #quickSwitchToggle::indicator:checked {{
+                border-color: {tokens['ACCENT_BORDER']};
+                background: {tokens['ACCENT']};
             }}
             #quickSwitchMeta {{
                 color: {tokens['TEXT_MUTED']};
@@ -645,5 +670,9 @@ class RealtimeTweaksPanel(QDialog):
             label_key = self._combo_label_keys.get(combo_key)
             if label_key:
                 label.setText(tr(self._ui_lang, label_key))
+        for toggle_key, toggle in self._toggles.items():
+            label_key = self._toggle_label_keys.get(toggle_key)
+            if label_key:
+                toggle.setText(tr(self._ui_lang, label_key))
         if self._noise_label is not None:
             self._noise_label.setText(tr(self._ui_lang, "quick_switch_noise_reduction"))

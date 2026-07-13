@@ -118,19 +118,12 @@
     "target_language_2": "en",
     "target_language_3": "",
     "asr_rewrite_style": "off",
+    "rewrite_typed_text": false,
     "output_format": "translated_with_original",
     "chatbox_template": "",
     "send_to_chatbox": true,
+    "realtime_timeout_s": 6.0,
     "fallback_backends": [],
-    "social": {
-      "mode": "standard",
-      "persona_preset": "custom",
-      "politeness": "neutral",
-      "tone": "natural",
-      "persona_name": "",
-      "persona_prompt": "",
-      "persona_glossary": ""
-    },
     "openai": {
       "api_key": "",
       "base_url": "https://api.openai.com/v1",

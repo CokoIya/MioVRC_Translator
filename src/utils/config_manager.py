@@ -82,7 +82,11 @@ _LAST_GOOD_CONFIG_SUFFIX = ".last-good"
 _REQUIRED_CONFIG_SECTIONS = frozenset(
     {"asr", "audio", "osc", "translation", "tts", "ui"}
 )
-from src.translators.asr_rewriter import normalize_asr_rewrite_style
+from src.translators.asr_rewriter import (
+    ASR_REWRITE_DISABLED,
+    legacy_social_rewrite_style,
+    normalize_asr_rewrite_style,
+)
 
 
 class SecretProtectionError(RuntimeError):
@@ -1257,6 +1261,7 @@ def _ensure_translation_config(
     prefer_auto_backend: bool = False,
 ) -> bool:
     changed = False
+    loaded_was_provided = isinstance(loaded, dict)
     trans_cfg = config.get("translation", {})
     if not isinstance(trans_cfg, dict):
         return False
@@ -1400,11 +1405,44 @@ def _ensure_translation_config(
     if "send_to_chatbox" not in trans_cfg:
         trans_cfg["send_to_chatbox"] = True
         changed = True
-    rewrite_style = normalize_asr_rewrite_style(
-        trans_cfg.get("asr_rewrite_style", "off")
+    social_cfg = trans_cfg.get("social", {})
+    legacy_social_mode = (
+        str(social_cfg.get("mode", "standard") or "standard").strip().lower()
+        if isinstance(social_cfg, dict)
+        else "standard"
     )
+    legacy_style = legacy_social_rewrite_style(social_cfg)
+    rewrite_style = normalize_asr_rewrite_style(
+        trans_cfg.get("asr_rewrite_style", ASR_REWRITE_DISABLED)
+    )
+    if rewrite_style == ASR_REWRITE_DISABLED and legacy_style != ASR_REWRITE_DISABLED:
+        rewrite_style = legacy_style
     if trans_cfg.get("asr_rewrite_style") != rewrite_style:
         trans_cfg["asr_rewrite_style"] = rewrite_style
+        changed = True
+    loaded_had_typed_rewrite = "rewrite_typed_text" in loaded_trans_cfg
+    if not loaded_was_provided:
+        loaded_had_typed_rewrite = "rewrite_typed_text" in trans_cfg
+    migrated_active_legacy_style = legacy_style != ASR_REWRITE_DISABLED
+    if not loaded_had_typed_rewrite:
+        typed_rewrite = migrated_active_legacy_style
+        if trans_cfg.get("rewrite_typed_text") is not typed_rewrite:
+            trans_cfg["rewrite_typed_text"] = typed_rewrite
+            changed = True
+    elif _coerce_bool_config(
+        trans_cfg,
+        "rewrite_typed_text",
+        migrated_active_legacy_style,
+    ):
+        changed = True
+    if (
+        isinstance(social_cfg, dict)
+        and legacy_social_mode in {"roleplay", "language_exchange"}
+        and social_cfg.get("mode") != "standard"
+    ):
+        # Retain legacy persona fields for compatibility and user recovery, but
+        # prevent the removed translation-prompt style from being applied again.
+        social_cfg["mode"] = "standard"
         changed = True
     if "chatbox_template" not in trans_cfg:
         trans_cfg["chatbox_template"] = ""
@@ -1483,7 +1521,10 @@ def _ensure_translation_config(
                 backend_cfg[key] = default_value
                 changed = True
 
-    for openai_backend in ("openai", "openai_compatible"):
+    # Official OpenAI model retirement rules must not rewrite model ids owned
+    # by a generic compatible relay. A proxy may continue routing an otherwise
+    # retired id, or use that string for a provider-specific model entirely.
+    for openai_backend in ("openai",):
         openai_cfg = trans_cfg.get(openai_backend, {})
         if not isinstance(openai_cfg, dict):
             continue

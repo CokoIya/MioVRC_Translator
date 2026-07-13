@@ -2,6 +2,22 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.2] - 2026-07-13
+
+### Credentials and setup
+
+- Added unified, localized credential validation for active translation, ASR, and TTS providers before starting realtime, manual-translation, or speech-output operations.
+- Added actionable missing-credential prompts that open the correct settings page and focus the relevant secret field without exposing credential values.
+- Improved quick setup and tabbed API settings so each provider retains its own key while switching providers or models.
+- Prevented official model-retirement migrations from rewriting model identifiers configured for generic compatible relay providers.
+
+### Realtime latency and translation quality
+
+- Added a bounded realtime translation timeout with retries disabled on latency-sensitive workers so stalled provider calls do not hold the ordered pipeline indefinitely.
+- Reused warm bounded HTTP connections for compatible translation providers and added per-stage, provider, sequence, prompt-size, and end-to-end latency diagnostics.
+- Removed text-length-dependent OSC delays so completed messages preserve FIFO order using only the configured VRChat-safe send interval.
+- Bounded concurrent context snapshots, improved contextual detection for short questions and follow-up phrases, and refined Japanese conversational translation behavior.
+
 ## [1.3.8.1] - 2026-07-12
 
 ### Localization and updates

@@ -12,8 +12,6 @@ from src.ui_qt import settings_window as settings_module
 from src.ui_qt.settings_window import (
     CapsuleSwitch,
     NAV_ITEMS,
-    ROLEPLAY_PRESET_DISPLAY_TEXTS,
-    ROLEPLAY_PRESETS,
     SETTINGS_UPDATE_BUTTON_PADDING,
     STYLE_BERT_TTS_TEST_TIMEOUT_MS,
     SettingsWindow,
@@ -24,6 +22,7 @@ from src.ui_qt.settings_window import (
 from src.tts.xtts_engine import XTTS_SUPPORTED_LANGUAGES
 from src.tts.api_tts_config import QWEN_TTS_BASE_URL_MAINLAND
 from src.updater.update_checker import UpdateInfo
+from src.utils.credential_validation import first_missing_required_credential
 from src.utils.i18n import tr
 from src.utils.ui_config import (
     DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
@@ -77,8 +76,8 @@ def _patch_dialog_deps(monkeypatch):
     monkeypatch.setattr("src.ui_qt.settings_window.create_tts_engine", lambda _engine: _DummyTTS())
     monkeypatch.setattr("src.ui_qt.settings_window.xtts_runtime_status", lambda **_kwargs: ready_status)
     monkeypatch.setattr(
-        "src.ui_qt.settings_window.missing_required_translation_api_key",
-        lambda _cfg, *_args, **_kwargs: (False, ""),
+        "src.ui_qt.settings_window.first_missing_required_credential",
+        lambda _cfg, *_args, **_kwargs: None,
     )
     monkeypatch.setattr("src.asr.model_manager.model_exists", lambda _spec: True)
     monkeypatch.setattr(
@@ -128,6 +127,173 @@ def _select_settings_page(qtbot, dialog: SettingsWindow, page_id: str) -> None:
 def _flush_deferred_qt_deletes() -> None:
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     QApplication.processEvents()
+
+
+def _capture_credential_prompts(monkeypatch, *, open_settings: bool = False):
+    prompts = []
+
+    # Keep the callback behavior explicit in each test without constructing a
+    # modal QMessageBox.
+    def prompt(_parent, missing, *, ui_language, open_settings=None):
+        prompts.append((missing, ui_language))
+        if open_settings is not None and bool(open_settings_flag[0]):
+            open_settings()
+            return True
+        return False
+
+    open_settings_flag = [open_settings]
+    monkeypatch.setattr(settings_module, "show_missing_credential_prompt", prompt)
+    return prompts
+
+
+def test_api_provider_and_model_selection_prompt_for_missing_key(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "api_config")
+    monkeypatch.setattr(
+        settings_module,
+        "first_missing_required_credential",
+        first_missing_required_credential,
+    )
+    prompts = _capture_credential_prompts(monkeypatch)
+
+    deepseek_label = next(
+        label for label, backend in dialog._backend_codes.items()
+        if backend == "deepseek"
+    )
+    dialog._backend_var.set(deepseek_label)
+    dialog._on_backend_changed(deepseek_label)
+
+    assert prompts[-1][0].provider_id == "deepseek"
+    assert prompts[-1][0].focus_target == "backend_api_key"
+
+    prompts.clear()
+    dialog._on_backend_model_changed("deepseek-v4-flash")
+    assert prompts[-1][0].provider_id == "deepseek"
+
+
+def test_online_asr_and_api_tts_selection_prompt_for_their_credential(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        settings_module,
+        "first_missing_required_credential",
+        first_missing_required_credential,
+    )
+    prompts = _capture_credential_prompts(monkeypatch)
+
+    qwen_asr_label = next(
+        label for label, engine in dialog._asr_codes.items()
+        if engine == "qwen3-asr"
+    )
+    dialog._asr_engine_var.set(qwen_asr_label)
+    dialog._on_asr_engine_changed(qwen_asr_label)
+    assert prompts[-1][0].provider_id == "qwen3-asr"
+    assert prompts[-1][0].focus_target == "qwen_api_key"
+
+    prompts.clear()
+    qwen_tts_label = next(
+        label for label, engine in dialog._tts_engine_codes.items()
+        if engine == "qwen_tts"
+    )
+    dialog._tts_engine_var.set(qwen_tts_label)
+    dialog._tts_api_key_var.set("")
+    dialog._on_tts_api_model_changed("qwen3-tts-flash")
+    assert prompts[-1][0].provider_id == "qwen_tts"
+    assert prompts[-1][0].focus_target == "tts_api_key"
+
+
+def test_missing_credential_action_navigates_and_focuses_api_field(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        settings_module,
+        "first_missing_required_credential",
+        first_missing_required_credential,
+    )
+    prompts = _capture_credential_prompts(monkeypatch, open_settings=True)
+    navigation = []
+    original_select_page = dialog.select_page
+
+    def record_select_page(page_id, focus_target=None):
+        navigation.append((page_id, focus_target))
+        original_select_page(page_id, focus_target=focus_target)
+
+    dialog.select_page = record_select_page
+    dialog._prompt_for_missing_credential("translation")
+    QApplication.processEvents()
+
+    assert prompts[-1][0].credential_id == "translation.openai.api_key"
+    assert navigation == [("api_config", "backend_api_key")]
+    assert dialog._backend_api_key_entry is not None
+    assert dialog.focus_credential_target("backend_api_key") is True
+
+
+def test_save_and_tts_test_stop_before_using_provider_without_key(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    config["translation"] = {
+        "backend": "local_ai",
+        "local_ai": {"api_key": ""},
+        "source_language": "auto",
+        "target_language": "ja",
+        "output_format": "translated_with_original",
+    }
+    config["asr"] = {
+        "engine": "qwen3-asr",
+        "qwen3_asr": {"api_key": ""},
+    }
+    config["tts"] = {
+        "enabled": True,
+        "engine": "qwen_tts",
+        "qwen_tts": {"api_key": "", "model": "qwen3-tts-flash"},
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        settings_module,
+        "first_missing_required_credential",
+        first_missing_required_credential,
+    )
+    prompts = _capture_credential_prompts(monkeypatch)
+    manager_created = []
+    monkeypatch.setattr(
+        settings_module,
+        "TTSManager",
+        lambda *args, **kwargs: manager_created.append((args, kwargs)),
+    )
+
+    dialog._save()
+    assert prompts[-1][0].scope == "asr"
+    assert dialog._saving is False
+
+    prompts.clear()
+    dialog._on_tts_test()
+    assert prompts[-1][0].scope == "tts"
+    assert dialog._tts_testing is False
+    assert manager_created == []
 
 
 def test_parent_owned_settings_windows_release_timers_and_qobjects_on_close(
@@ -406,80 +572,6 @@ def test_xtts_language_selection_is_localized_and_preserved_at_runtime(
 
     assert dialog._selected_xtts_language_code() == "ru"
     assert dialog._xtts_language_combo.currentText() == tr("ko", "xtts_language_russian")
-    dialog.reject()
-
-
-def test_roleplay_presets_are_popular_anime_character_labels():
-    expected_ids = [
-        "frieren",
-        "violet_evergarden",
-        "artoria_pendragon",
-        "marin_kitagawa",
-        "maomao",
-        "kurisu_makise",
-        "rem_rezero",
-        "holo",
-        "yor_forger",
-        "mikasa_ackerman",
-    ]
-    assert list(ROLEPLAY_PRESETS.keys()) == ["custom", *expected_ids]
-
-    for preset_id in expected_ids:
-        profile = ROLEPLAY_PRESETS[preset_id]
-        label = profile["labels"]["zh-CN"]
-        assert label.count(" / ") == 2
-        assert profile["persona_name"] == label
-        assert profile["persona_prompt"]
-        assert profile["persona_glossary"]
-
-
-def test_roleplay_preset_editors_are_localized_without_changing_model_prompt(
-    qtbot,
-    config,
-    monkeypatch,
-):
-    _patch_dialog_deps(monkeypatch)
-    canonical = ROLEPLAY_PRESETS["frieren"]
-    config["ui"]["language"] = "ru"
-    config["translation"]["social"] = {
-        "mode": "roleplay",
-        "persona_preset": "frieren",
-        "persona_name": canonical["persona_name"],
-        "persona_prompt": canonical["persona_prompt"],
-        "persona_glossary": canonical["persona_glossary"],
-    }
-
-    dialog = SettingsWindow(None, config)
-    qtbot.addWidget(dialog)
-
-    russian = ROLEPLAY_PRESET_DISPLAY_TEXTS["frieren"]
-    assert dialog._roleplay_prompt_var.value() == russian["persona_prompt"]["ru"]
-    assert dialog._roleplay_glossary_var.value() == russian["persona_glossary"]["ru"]
-    snapshot = dialog._config_with_current_roleplay_settings()["translation"]["social"]
-    assert snapshot["persona_prompt"] == canonical["persona_prompt"]
-    assert snapshot["persona_glossary"] == canonical["persona_glossary"]
-
-    dialog.update_language("ja")
-    assert dialog._roleplay_prompt_var.value() == russian["persona_prompt"]["ja"]
-    assert dialog._config_with_current_roleplay_settings()["translation"]["social"]["persona_prompt"] == canonical["persona_prompt"]
-    dialog.reject()
-
-
-def test_roleplay_preset_preserves_a_user_edited_prompt(qtbot, config, monkeypatch):
-    _patch_dialog_deps(monkeypatch)
-    config["translation"]["social"] = {
-        "mode": "roleplay",
-        "persona_preset": "frieren",
-        "persona_prompt": "My deliberately customized prompt",
-        "persona_glossary": "My glossary",
-    }
-    dialog = SettingsWindow(None, config)
-    qtbot.addWidget(dialog)
-
-    snapshot = dialog._config_with_current_roleplay_settings()["translation"]["social"]
-
-    assert snapshot["persona_prompt"] == "My deliberately customized prompt"
-    assert snapshot["persona_glossary"] == "My glossary"
     dialog.reject()
 
 

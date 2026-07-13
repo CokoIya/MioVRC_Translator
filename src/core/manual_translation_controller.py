@@ -8,6 +8,14 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, Signal
 
 from src.core.output_dispatcher import OutputDispatcher
+from src.core.rewrite_coordinator import (
+    REWRITE_PRIORITY_TYPED,
+    RewriteCallCoordinator,
+)
+from src.translators.asr_rewriter import (
+    ASR_REWRITE_DISABLED,
+    normalize_asr_rewrite_style,
+)
 from src.utils.lang_detect import detect_language
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import get_backend_config_value, get_backend_spec, normalize_backend
@@ -15,6 +23,7 @@ from src.utils.ui_config import get_backend_config_value, get_backend_spec, norm
 logger = logging.getLogger(__name__)
 
 _MAX_ACTIVE_WORKERS = 8
+_MAX_TYPED_REWRITE_QUEUE_WAIT_S = 2.0
 
 
 def _create_translator(config: dict):
@@ -30,6 +39,8 @@ class ManualTranslationRequest:
     target_language: str
     second_target_language: str = "en"
     third_target_language: str = ""
+    rewrite_typed_text: bool = False
+    rewrite_style: str = ASR_REWRITE_DISABLED
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,7 @@ class ManualTranslationController(QObject):
         translator_factory: Callable[[dict], Any] | None = None,
         language_detector: Callable[[str], str] = detect_language,
         error_formatter: Callable[[object], object] | None = None,
+        rewrite_coordinator: RewriteCallCoordinator | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -73,6 +85,7 @@ class ManualTranslationController(QObject):
         self._translator_factory = translator_factory or _create_translator
         self._language_detector = language_detector
         self._error_formatter = error_formatter
+        self._rewrite_coordinator = rewrite_coordinator
         self._translator = None
         self._generation = 0
         self._lock = threading.RLock()
@@ -122,8 +135,15 @@ class ManualTranslationController(QObject):
         target_language = request.target_language or "ja"
         second_target_language = request.second_target_language or "en"
         third_target_language = request.third_target_language or ""
+        rewrite_style = normalize_asr_rewrite_style(request.rewrite_style)
+        needs_rewrite = bool(request.rewrite_typed_text) and (
+            rewrite_style != ASR_REWRITE_DISABLED
+        )
 
-        if self._output_dispatcher.output_format() == "original_only":
+        output_original_only = (
+            self._output_dispatcher.output_format() == "original_only"
+        )
+        if output_original_only and not needs_rewrite:
             generation = self._next_generation()
             self._emit_if_open(
                 self.succeeded,
@@ -144,7 +164,12 @@ class ManualTranslationController(QObject):
         )
         include_third_target = bool(third_target_language) and self._output_dispatcher.chatbox_template_uses_third_target()
 
-        if source_language == target_language and not include_second_target and not include_third_target:
+        if (
+            source_language == target_language
+            and not include_second_target
+            and not include_third_target
+            and not needs_rewrite
+        ):
             generation = self._next_generation()
             self._emit_if_open(
                 self.succeeded,
@@ -159,21 +184,31 @@ class ManualTranslationController(QObject):
             self._emit_if_open(self.worker_finished, generation)
             return generation
 
-        needs_primary_translation = source_language != target_language
+        needs_primary_translation = (
+            not output_original_only and source_language != target_language
+        )
         needs_second_translation = (
-            include_second_target
+            not output_original_only
+            and include_second_target
             and source_language != second_target_language
             and second_target_language != target_language
         )
         needs_third_translation = (
-            include_third_target
+            not output_original_only
+            and include_third_target
             and bool(third_target_language)
             and source_language != third_target_language
             and third_target_language != target_language
             and not (third_target_language == second_target_language and include_second_target)
         )
 
-        if needs_primary_translation or needs_second_translation or needs_third_translation:
+        needs_provider = bool(
+            needs_rewrite
+            or needs_primary_translation
+            or needs_second_translation
+            or needs_third_translation
+        )
+        if needs_provider:
             with self._lock:
                 at_capacity = len(self._threads) >= _MAX_ACTIVE_WORKERS
             if at_capacity:
@@ -212,38 +247,88 @@ class ManualTranslationController(QObject):
 
         def run() -> None:
             try:
-                result = src_text
+                processed_text = src_text
+                if needs_rewrite:
+                    try:
+                        rewrite = getattr(translator, "rewrite_asr", None)
+                        if not callable(rewrite):
+                            raise RuntimeError(
+                                "The selected translation provider cannot rewrite typed text"
+                            )
+
+                        def rewrite_operation() -> object:
+                            return rewrite(
+                                src_text,
+                                rewrite_style,
+                                language_hint=source_language,
+                                context_source="manual",
+                            )
+
+                        coordinator = self._rewrite_coordinator
+                        if coordinator is None:
+                            rewritten = rewrite_operation()
+                        else:
+                            rewritten = coordinator.execute(
+                                priority=REWRITE_PRIORITY_TYPED,
+                                config=self._config,
+                                style=rewrite_style,
+                                language_hint=source_language,
+                                text=src_text,
+                                operation=rewrite_operation,
+                                wait_timeout_s=min(
+                                    self.timeout_seconds(),
+                                    _MAX_TYPED_REWRITE_QUEUE_WAIT_S,
+                                ),
+                            )
+                        processed_text = str(rewritten or "").strip() or src_text
+                    except Exception as exc:
+                        processed_text = src_text
+                        logger.warning(
+                            "Typed-text style rewrite failed open (style=%s): %s",
+                            rewrite_style,
+                            exc,
+                        )
+                        logger.debug(
+                            "Typed-text style rewrite traceback",
+                            exc_info=True,
+                        )
+
+                result = processed_text
                 if needs_primary_translation:
                     result = translator.translate(
-                        src_text,
+                        processed_text,
                         source_language,
                         target_language,
                         context_source="manual",
                     )
                 result2 = ""
-                if include_second_target:
+                if not output_original_only and include_second_target:
                     if second_target_language == source_language:
-                        result2 = src_text
+                        result2 = processed_text
                     elif second_target_language == target_language:
                         result2 = result
                     else:
                         result2 = translator.translate(
-                            src_text,
+                            processed_text,
                             source_language,
                             second_target_language,
                             context_source="manual",
                         )
                 result3 = ""
-                if include_third_target and third_target_language:
+                if (
+                    not output_original_only
+                    and include_third_target
+                    and third_target_language
+                ):
                     if third_target_language == source_language:
-                        result3 = src_text
+                        result3 = processed_text
                     elif third_target_language == target_language:
                         result3 = result
                     elif third_target_language == second_target_language and include_second_target:
                         result3 = result2
                     else:
                         result3 = translator.translate(
-                            src_text,
+                            processed_text,
                             source_language,
                             third_target_language,
                             context_source="manual",
@@ -253,7 +338,7 @@ class ManualTranslationController(QObject):
                     self.succeeded,
                     ManualTranslationResult(
                         generation=generation,
-                        original_text=src_text,
+                        original_text=processed_text,
                         source_language=source_language,
                         translated_text=result,
                         translated_text_2=result2,

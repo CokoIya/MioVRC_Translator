@@ -21,6 +21,7 @@ from src.ui_qt.main_window import (
     MIC_SOURCE,
     MainWindow,
     _RealtimeAudioPayload,
+    _RealtimeRewriteWorkerState,
     _RealtimeTranslationWorkerState,
     _freeze_snapshot_value,
 )
@@ -822,7 +823,47 @@ def test_translation_workers_keep_translators_confined_to_worker_state(monkeypat
     assert window._translator is main_window_translator
 
 
-def test_translation_worker_discards_old_client_on_config_snapshot_rollover(monkeypatch):
+def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
+    captured = {}
+
+    def fake_create_translator(config, *, context_store=None):
+        captured["config"] = config
+        captured["context_store"] = context_store
+        return object()
+
+    monkeypatch.setattr(main_window, "create_translator", fake_create_translator)
+    store = TranslationContextStore()
+    window = MainWindow.__new__(MainWindow)
+    window._translation_context_store = store
+    original = {
+        "translation": {
+            "backend": "openai_compatible",
+            "realtime_timeout_s": 6.0,
+            "openai_compatible": {
+                "timeout_s": 15.0,
+                "max_retries": 2,
+            },
+            "qianwen": {
+                "timeout_s": 20.0,
+                "max_retries": 1,
+            },
+        }
+    }
+
+    window._create_realtime_translator(original)
+
+    runtime_backend = captured["config"]["translation"]["openai_compatible"]
+    runtime_fallback = captured["config"]["translation"]["qianwen"]
+    assert runtime_backend["timeout_s"] == 6.0
+    assert runtime_backend["max_retries"] == 0
+    assert runtime_fallback["timeout_s"] == 6.0
+    assert runtime_fallback["max_retries"] == 0
+    assert captured["context_store"] is store
+    assert original["translation"]["openai_compatible"]["timeout_s"] == 15.0
+    assert original["translation"]["openai_compatible"]["max_retries"] == 2
+
+
+def test_translation_worker_rebuilds_only_when_provider_runtime_changes(monkeypatch):
     translator_inputs: list[object | None] = []
     created_translators: list[object] = []
 
@@ -842,6 +883,8 @@ def test_translation_worker_discards_old_client_on_config_snapshot_rollover(monk
 
         def translate_plan(self, _plan, translator, **_kwargs):
             translator_inputs.append(translator)
+            if translator is not None:
+                return SimpleNamespace(api_translation_used=False), translator
             created = Translator()
             created_translators.append(created)
             return SimpleNamespace(api_translation_used=False), created
@@ -861,6 +904,17 @@ def test_translation_worker_discards_old_client_on_config_snapshot_rollover(monk
     )
     second_snapshot = _freeze_snapshot_value(
         {"translation": {"backend": "qianwen", "qianwen": {"model": "second"}}}
+    )
+    style_only_snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "qianwen",
+                "qianwen": {"model": "second"},
+                "asr_rewrite_style": "frieren",
+                "rewrite_typed_text": True,
+                "output_format": "translated_only",
+            }
+        }
     )
 
     def task_for(sequence: int, snapshot):
@@ -900,12 +954,122 @@ def test_translation_worker_discards_old_client_on_config_snapshot_rollover(monk
         state,
         threading.Event(),
     )
+    second_translator = state.translator
+    window._scheduler_translation_stage(
+        task_for(2, style_only_snapshot),
+        "third",
+        state,
+        threading.Event(),
+    )
 
-    assert translator_inputs == [None, None]
+    assert translator_inputs == [None, None, second_translator]
     assert first_translator is created_translators[0]
     assert first_translator.closed == 1
-    assert state.translator is created_translators[1]
-    assert state.config_snapshot is second_snapshot
+    assert len(created_translators) == 2
+    assert second_translator is created_translators[1]
+    assert second_translator.closed == 0
+    assert state.translator is second_translator
+    assert state.config_snapshot is style_only_snapshot
+
+
+def test_rewrite_worker_keeps_warm_client_for_style_only_snapshot_changes():
+    created = []
+
+    class Translator:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def rewrite_asr(self, text, style, **_kwargs):
+            return f"{style}:{text}"
+
+        def close(self) -> None:
+            self.closed += 1
+
+    window = MainWindow.__new__(MainWindow)
+    window._realtime_task_active = lambda _task: True
+    window._rewrite_coordinator = None
+    window._create_realtime_translator = (
+        lambda _config: created.append(Translator()) or created[-1]
+    )
+
+    def task_for(sequence: int, snapshot):
+        return RealtimeTask(
+            source=MIC_SOURCE,
+            session_id=1,
+            sequence=sequence,
+            provider_key="provider",
+            payload=_RealtimeAudioPayload(
+                audio=b"audio",
+                asr_provider=object(),
+                asr_language=None,
+                source_language="en",
+                target_language="ja",
+                second_target_language="en",
+                third_target_language="",
+                listen_target_language="ja",
+                listen_prefix="",
+                send_to_chatbox=False,
+                config_snapshot=snapshot,
+            ),
+            submitted_at=time.monotonic(),
+        )
+
+    first_snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "openai",
+                "openai": {"model": "gpt-test", "api_key": "secret"},
+                "asr_rewrite_style": "catgirl",
+            }
+        }
+    )
+    style_only_snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "openai",
+                "openai": {"model": "gpt-test", "api_key": "secret"},
+                "asr_rewrite_style": "frieren",
+                "rewrite_typed_text": True,
+            }
+        }
+    )
+    provider_change_snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "openai",
+                "openai": {"model": "gpt-other", "api_key": "secret"},
+                "asr_rewrite_style": "frieren",
+            }
+        }
+    )
+
+    state = _RealtimeRewriteWorkerState()
+    assert window._scheduler_rewrite_stage(
+        task_for(0, first_snapshot),
+        "hello",
+        state,
+        threading.Event(),
+    ) == "catgirl:hello"
+    first = state.translator
+    assert window._scheduler_rewrite_stage(
+        task_for(1, style_only_snapshot),
+        "again",
+        state,
+        threading.Event(),
+    ) == "frieren:again"
+
+    assert len(created) == 1
+    assert state.translator is first
+    assert first.closed == 0
+
+    window._scheduler_rewrite_stage(
+        task_for(2, provider_change_snapshot),
+        "changed",
+        state,
+        threading.Event(),
+    )
+    assert len(created) == 2
+    assert first.closed == 1
 
 
 def test_invalidating_reverse_source_cancels_only_reverse_generation_and_context():

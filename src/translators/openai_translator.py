@@ -4,6 +4,8 @@ import os
 import logging
 import time
 
+import httpx
+
 from .base import (
     BaseTranslator,
     TranslationContextStore,
@@ -14,6 +16,8 @@ from src.utils.input_validation import validate_translation_text, ValidationErro
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
+
+OPENAI_HTTP_KEEPALIVE_EXPIRY_S = 60.0
 
 _QWEN_COLLOQUIAL_SYSTEM_ADDON = (
     "Qwen style calibration: use brief, fluent, natural live-VRChat speech; "
@@ -65,12 +69,30 @@ class OpenAITranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        self._client = OpenAI(
-            api_key=api_key,
-            base_url=validated_base_url,
-            timeout=self._timeout_s,
-            max_retries=self._max_retries,
+        # The realtime scheduler owns several long-lived translation workers.
+        # httpx otherwise expires idle connections after five seconds, so a
+        # worker rotation can turn nearly every conversational request into a
+        # fresh proxy/TCP/TLS handshake. Keep each worker's pool warm long
+        # enough to be reused across normal pauses between spoken sentences.
+        self._http_client = httpx.Client(
+            timeout=httpx.Timeout(self._timeout_s),
+            limits=httpx.Limits(
+                max_connections=4,
+                max_keepalive_connections=2,
+                keepalive_expiry=OPENAI_HTTP_KEEPALIVE_EXPIRY_S,
+            ),
         )
+        try:
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=validated_base_url,
+                timeout=self._timeout_s,
+                max_retries=self._max_retries,
+                http_client=self._http_client,
+            )
+        except BaseException:
+            self._http_client.close()
+            raise
         self.model = model
         self._provider_id = str(provider_id or "").strip().lower()
         self._base_url = validated_base_url.lower()
@@ -409,7 +431,7 @@ class OpenAITranslator(BaseTranslator):
         messages = self._chat_messages_for_backend(messages)
         output_tokens = min(
             self._max_output_tokens,
-            max(48, self._estimate_max_tokens(text) * 2),
+            max(32, self._estimate_max_tokens(text) + 12),
         )
         self._last_response_summary = ""
         if self._use_responses_api:
@@ -564,21 +586,32 @@ class OpenAITranslator(BaseTranslator):
             )
         except Exception as exc:
             elapsed = time.perf_counter() - started
+            active_context = self._active_context()
             logger.warning(
-                "Translation API request failed (model=%s base_url=%s elapsed=%.2fs error=%s)",
+                "Translation API request failed "
+                "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s error=%s)",
                 self.model,
                 self._base_url,
                 elapsed,
+                context_source,
+                active_context.sequence,
                 exc,
                 exc_info=True,
             )
             raise
         elapsed = time.perf_counter() - started
+        active_context = self._active_context()
         logger.info(
-            "Translation API request finished (model=%s base_url=%s elapsed=%.2fs)",
+            "Translation API request finished "
+            "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s "
+            "prompt_chars=%d context_turns=%d)",
             self.model,
             self._base_url,
             elapsed,
+            context_source,
+            active_context.sequence,
+            sum(len(str(message.get("content", ""))) for message in messages),
+            len(context_snapshot or ()),
         )
         output = self._chat_completion_output_text(response)
         translated = self._finalize_translation_output(
@@ -696,21 +729,32 @@ class OpenAITranslator(BaseTranslator):
             )
         except Exception as exc:
             elapsed = time.perf_counter() - started
+            active_context = self._active_context()
             logger.warning(
-                "Translation Responses API request failed (model=%s base_url=%s elapsed=%.2fs error=%s)",
+                "Translation Responses API request failed "
+                "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s error=%s)",
                 self.model,
                 self._base_url,
                 elapsed,
+                context_source,
+                active_context.sequence,
                 exc,
                 exc_info=True,
             )
             raise
         elapsed = time.perf_counter() - started
+        active_context = self._active_context()
         logger.info(
-            "Translation Responses API request finished (model=%s base_url=%s elapsed=%.2fs)",
+            "Translation Responses API request finished "
+            "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s "
+            "prompt_chars=%d context_turns=%d)",
             self.model,
             self._base_url,
             elapsed,
+            context_source,
+            active_context.sequence,
+            len(prompt),
+            len(context_snapshot or ()),
         )
         translated = self._finalize_translation_output(
             str(response.output_text or ""),
@@ -799,18 +843,6 @@ class OpenAITranslator(BaseTranslator):
             return 0.2
         return 0.0
 
-    def _has_custom_social_style(self, *, context_source: str = "default") -> bool:
-        if context_source == "listen" or not self._prompt_profile:
-            return False
-
-        profile = self._prompt_profile
-        social_mode = str(profile.get("mode", "standard")).strip()
-        if social_mode in {"", "standard"}:
-            return False
-        if social_mode not in {"language_exchange", "roleplay"}:
-            return False
-        return True
-
     def _should_use_qwen_mt_translation_options(
         self,
         src_lang: str,
@@ -818,11 +850,11 @@ class OpenAITranslator(BaseTranslator):
         *,
         context_source: str = "default",
     ) -> bool:
-        del src_lang
+        del src_lang, context_source
         if not self._uses_qwen_mt_translation_options:
             return False
         if self._normalize_language_code(tgt_lang) == "en":
             # Player reports point to English needing the richer colloquial
             # prompt/context path instead of the literal MT fast path.
             return False
-        return not self._has_custom_social_style(context_source=context_source)
+        return True

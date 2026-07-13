@@ -164,6 +164,7 @@ class _RecognizedWork:
 
 ASRHandler = Callable[[RealtimeTask, threading.Event], str | None]
 RewriteHandler = Callable[[RealtimeTask, str, Any, threading.Event], str | None]
+RewriteRequired = Callable[[RealtimeTask, str], bool]
 TranslationHandler = Callable[[RealtimeTask, str, Any, threading.Event], Any]
 DeliveryHandler = Callable[[RealtimeCompletion], None]
 RewriteStateFactory = Callable[[int], Any]
@@ -181,6 +182,7 @@ class RealtimeScheduler:
         sources: Sequence[str],
         asr_handler: ASRHandler,
         rewrite_handler: RewriteHandler | None = None,
+        rewrite_required: RewriteRequired | None = None,
         translation_handler: TranslationHandler,
         delivery_handler: DeliveryHandler,
         rewrite_state_factory: RewriteStateFactory | None = None,
@@ -223,6 +225,8 @@ class RealtimeScheduler:
             raise TypeError("Realtime stage handlers must be callable")
         if rewrite_handler is not None and not callable(rewrite_handler):
             raise TypeError("Realtime rewrite handler must be callable")
+        if rewrite_required is not None and not callable(rewrite_required):
+            raise TypeError("Realtime rewrite predicate must be callable")
 
         limits = dict(ingress_limits or {})
         configured_outstanding_limits = dict(outstanding_limits or {})
@@ -252,6 +256,7 @@ class RealtimeScheduler:
 
         self._asr_handler = asr_handler
         self._rewrite_handler = rewrite_handler
+        self._rewrite_required = rewrite_required
         self._translation_handler = translation_handler
         self._delivery_handler = delivery_handler
         self._rewrite_state_factory = rewrite_state_factory or (lambda _index: None)
@@ -1122,12 +1127,31 @@ class RealtimeScheduler:
             if work is None:
                 return
             if self._rewrite_queue is not None:
-                queued = self._put_stage_work(
-                    self._rewrite_queue,
-                    work,
-                    stage_name="rewrite",
-                    reserve_priority=True,
-                )
+                rewrite_required = True
+                predicate = self._rewrite_required
+                if predicate is not None:
+                    try:
+                        rewrite_required = bool(predicate(work.task, work.text))
+                    except Exception:
+                        logger.exception(
+                            "Realtime rewrite predicate failed; preserving rewrite "
+                            "source=%s sequence=%d",
+                            work.task.source,
+                            work.task.sequence,
+                        )
+                if rewrite_required:
+                    queued = self._put_stage_work(
+                        self._rewrite_queue,
+                        work,
+                        stage_name="rewrite",
+                        reserve_priority=True,
+                    )
+                else:
+                    # A bypassed item still enters the rewritten reorder buffer.
+                    # Publishing it straight to translation could let a later
+                    # bypassed sequence overtake an earlier provider rewrite.
+                    self._store_rewritten_work(work)
+                    queued = True
             else:
                 queued = self._put_translation_work(work)
             if not queued:
@@ -1617,6 +1641,11 @@ class RealtimeScheduler:
                 self._state_changed.notify_all()
 
             try:
+                delivery_started_at = self._clock()
+                ordered_wait_s = max(
+                    0.0,
+                    delivery_started_at - completion.completed_at,
+                )
                 with self._delivery_gate:
                     if self._cancel_event.is_set():
                         return
@@ -1636,6 +1665,30 @@ class RealtimeScheduler:
                     completion.task.sequence,
                 )
             finally:
+                delivery_finished_at = self._clock()
+                logger.info(
+                    "Realtime latency source=%s sequence=%d cancelled=%s "
+                    "asr_queue_ms=%.1f asr_ms=%.1f rewrite_queue_ms=%.1f "
+                    "rewrite_ms=%.1f translation_queue_ms=%.1f "
+                    "translation_ms=%.1f ordered_wait_ms=%.1f "
+                    "delivery_ms=%.1f end_to_end_ms=%.1f",
+                    completion.task.source,
+                    completion.task.sequence,
+                    completion.cancelled,
+                    completion.asr_queue_wait_s * 1000.0,
+                    completion.asr_duration_s * 1000.0,
+                    completion.rewrite_queue_wait_s * 1000.0,
+                    completion.rewrite_duration_s * 1000.0,
+                    completion.translation_queue_wait_s * 1000.0,
+                    completion.translation_duration_s * 1000.0,
+                    ordered_wait_s * 1000.0,
+                    max(0.0, delivery_finished_at - delivery_started_at) * 1000.0,
+                    max(
+                        0.0,
+                        delivery_finished_at - completion.task.submitted_at,
+                    )
+                    * 1000.0,
+                )
                 with self._state_lock:
                     self._delivery_running = max(0, self._delivery_running - 1)
                     self._outstanding[completion.task.source] = max(

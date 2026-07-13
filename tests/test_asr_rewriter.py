@@ -6,6 +6,7 @@ from src.translators.asr_rewriter import (
     ASR_REWRITE_DISABLED,
     build_asr_rewrite_messages,
     get_asr_rewrite_options,
+    legacy_social_rewrite_style,
     normalize_asr_rewrite_style,
 )
 from src.translators.base import BaseTranslator
@@ -15,6 +16,7 @@ from src.translators.openai_translator import OpenAITranslator
 def test_rewrite_presets_normalize_and_include_disabled_option():
     assert normalize_asr_rewrite_style(None) == ASR_REWRITE_DISABLED
     assert normalize_asr_rewrite_style("cat") == "catgirl"
+    assert normalize_asr_rewrite_style("roleplay:frieren") == "frieren"
     assert normalize_asr_rewrite_style("unknown") == ASR_REWRITE_DISABLED
 
     options = get_asr_rewrite_options("zh-CN")
@@ -25,7 +27,41 @@ def test_rewrite_presets_normalize_and_include_disabled_option():
         "catgirl",
         "hanlin_classical_chinese",
         "professor_humorous_analogy",
+        "language_exchange",
+        "frieren",
+        "violet_evergarden",
+        "artoria_pendragon",
+        "marin_kitagawa",
+        "maomao",
+        "kurisu_makise",
+        "rem_rezero",
+        "holo",
+        "yor_forger",
+        "mikasa_ackerman",
     ]
+
+
+def test_rewrite_preset_labels_cover_every_supported_ui_language():
+    expected_codes = [code for _label, code in get_asr_rewrite_options("en")]
+    for language in ("zh-CN", "en", "ja", "ru", "ko"):
+        options = get_asr_rewrite_options(language)
+        assert [code for _label, code in options] == expected_codes
+        assert all(label.strip() for label, _code in options)
+
+
+def test_legacy_social_style_maps_only_known_active_presets():
+    assert legacy_social_rewrite_style(
+        {"mode": "roleplay", "persona_preset": "frieren"}
+    ) == "frieren"
+    assert legacy_social_rewrite_style(
+        {"mode": "language_exchange", "persona_preset": "custom"}
+    ) == "language_exchange"
+    assert legacy_social_rewrite_style(
+        {"mode": "roleplay", "persona_preset": "custom"}
+    ) == ASR_REWRITE_DISABLED
+    assert legacy_social_rewrite_style(
+        {"mode": "standard", "persona_preset": "frieren"}
+    ) == ASR_REWRITE_DISABLED
 
 
 def test_rewrite_prompt_treats_transcript_as_json_data():
@@ -37,8 +73,8 @@ def test_rewrite_prompt_treats_transcript_as_json_data():
 
     assert messages[0]["role"] == "system"
     assert "untrusted quoted data" in messages[0]["content"]
-    assert "Do not translate" in messages[0]["content"]
-    assert "JSON string" in messages[1]["content"]
+    assert "do not translate" in messages[0]["content"]
+    assert "Input JSON" in messages[1]["content"]
     assert '\\"hello\\"' in messages[1]["content"]
 
 
@@ -99,6 +135,6 @@ def test_openai_rewrite_uses_dedicated_prompt_and_cache():
     assert rewritten == "Meow, hello there!"
     assert cached == rewritten
     assert completions.kwargs["model"] == "5.6-sol"
-    assert completions.kwargs["max_completion_tokens"] >= 48
+    assert completions.kwargs["max_completion_tokens"] >= 32
     assert "translation_options" not in completions.kwargs.get("extra_body", {})
-    assert "Transcript to rewrite" in completions.kwargs["messages"][-1]["content"]
+    assert "Input JSON" in completions.kwargs["messages"][-1]["content"]

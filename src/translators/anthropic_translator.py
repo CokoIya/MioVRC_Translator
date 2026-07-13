@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 import logging
 import urllib.parse
 
@@ -11,6 +13,9 @@ from .base import (
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
 from src.utils.secure_http import validate_api_base_url
+
+
+ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S = 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +66,26 @@ class AnthropicTranslator(BaseTranslator):
         except ImportError:
             raise RuntimeError("anthropic 未安装，请先执行: pip install anthropic")
         validated_base_url = normalize_anthropic_base_url(base_url)
-        self._client = anthropic.Anthropic(
-            api_key=api_key,
-            base_url=validated_base_url,
-            timeout=timeout_s,
-            max_retries=max(int(max_retries), 0),
+        self._timeout_s = max(float(timeout_s), 1.0)
+        self._http_client = httpx.Client(
+            timeout=httpx.Timeout(self._timeout_s),
+            limits=httpx.Limits(
+                max_connections=4,
+                max_keepalive_connections=2,
+                keepalive_expiry=ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S,
+            ),
         )
+        try:
+            self._client = anthropic.Anthropic(
+                api_key=api_key,
+                base_url=validated_base_url,
+                timeout=self._timeout_s,
+                max_retries=max(int(max_retries), 0),
+                http_client=self._http_client,
+            )
+        except BaseException:
+            self._http_client.close()
+            raise
         self.model = model
         self._base_url = validated_base_url
         self._max_output_tokens = max(int(max_output_tokens), 32)
@@ -193,7 +212,7 @@ class AnthropicTranslator(BaseTranslator):
         user = str(messages[1]["content"])
         output_tokens = min(
             self._max_output_tokens,
-            max(48, self._estimate_max_tokens(text) * 2),
+            max(32, self._estimate_max_tokens(text) + 12),
         )
         response = self._client.messages.create(
             model=self.model,
