@@ -3,11 +3,11 @@
   "installer_name": "MioTranslator-Setup-v1.3.8.2.exe",
   "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
   "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
-  "size_bytes": 463741527,
-  "sha256": "cb13bccb9f0a4307276ab75b3bd02f680f22e6dd01bbdf01529addc5b2fac80d",
+  "size_bytes": 463808338,
+  "sha256": "b4ddd9a1fe27f394771924f93ab7726c43491087cb46a17733b029e576b40e93",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "566f7a656b4255b0aa22f6821377a0cc2506bad5b783842bfc228da67bad6df1779a9e41d19474867733df3caa02db83c0f36ca80e362d6d31e1deee6ade8703",
+  "installer_signature": "6aa3d91678a67bff85bfe93c0254d570aed9321ce738a53c1f8d14300044b98ec03685e54c4c5227706c6946b35bfd2aec48b461a52df363d05e3e47fcef7a06",
   "notes": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
   "notes_i18n": {
     "zh-CN": "v1.3.8.2 新增本地化凭据检查并可直接定位到对应设置，使用有界超时和保温 HTTP 连接池减少实时翻译阻塞，移除 OSC 按文本长度附加的隐藏延迟，并改进有序流水线延迟诊断与上下文感知日语翻译。",
@@ -17,8 +17,8 @@
     "ko": "v1.3.8.2는 관련 설정으로 바로 이동하는 현지화된 자격 증명 검사를 추가하고, 제한된 시간 초과와 HTTP 연결 재사용으로 실시간 번역 정체를 줄입니다. 또한 텍스트 길이에 따른 숨겨진 OSC 지연을 제거하고 순서 보장 파이프라인 지연 진단과 문맥 기반 일본어 번역을 개선합니다."
   },
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-13T11:48:41+09:00",
+  "published_at": "2026-07-13T12:55:24+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "852dfdd1a5492b20ba402dea50aab2e8c5df11433f28b7ae1e4b28b60a8995c227dce1bf3ced80d33023cb96864c164e6943b3676a179fd57eb1d4e03e26d30b"
+  "signature": "9540a91773f880582156406cde6759caed4b5fb6e2ad11882ff8d483ba95017532a593018b50a3c02c3aaaac5e787b5c519cb14c977745787091be00ff97100c"
 }

@@ -2,11 +2,11 @@
   "version": "v1.3.8.2",
   "installer_name": "MioTranslator-Setup-v1.3.8.2.exe",
   "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
-  "size_bytes": 463741527,
-  "sha256": "cb13bccb9f0a4307276ab75b3bd02f680f22e6dd01bbdf01529addc5b2fac80d",
+  "size_bytes": 463808338,
+  "sha256": "b4ddd9a1fe27f394771924f93ab7726c43491087cb46a17733b029e576b40e93",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "566f7a656b4255b0aa22f6821377a0cc2506bad5b783842bfc228da67bad6df1779a9e41d19474867733df3caa02db83c0f36ca80e362d6d31e1deee6ade8703",
+  "installer_signature": "6aa3d91678a67bff85bfe93c0254d570aed9321ce738a53c1f8d14300044b98ec03685e54c4c5227706c6946b35bfd2aec48b461a52df363d05e3e47fcef7a06",
   "notes": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
   "notes_i18n": {
     "zh-CN": "v1.3.8.2 新增本地化凭据检查并可直接定位到对应设置，使用有界超时和保温 HTTP 连接池减少实时翻译阻塞，移除 OSC 按文本长度附加的隐藏延迟，并改进有序流水线延迟诊断与上下文感知日语翻译。",
@@ -18,8 +18,8 @@
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-13T11:48:41+09:00",
+  "published_at": "2026-07-13T12:55:24+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "6a6542e5cd830627fe31d43e4292df91264f52e016a577d477e30c6d7125dee019bc3feab4065cfb1f31b5c887dea539e6625abef503172a926145ba2b4be701"
+  "signature": "b5ac823506376dbd67dbed8dea577a64492ee673f7d70c0f8b96092eab41027919e0d579880d6c06e40d41684024958ec72a8012735622c7d405a9e934295b0e"
 }
