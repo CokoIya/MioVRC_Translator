@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.asr.base import ASRProvider
-from src.asr.errors import ASRMissingAPIKeyError
+from src.asr.errors import ASRMissingAPIKeyError, ASRTemporaryUnavailableError
 from src.asr.fallback_asr import FallbackASR
 
 
@@ -70,3 +71,31 @@ def test_fallback_asr_forwards_browser_capture_control():
         ("primary", True),
         ("fallback", True),
     ]
+
+
+def test_realtime_timeout_fails_fast_without_loading_slow_local_fallback():
+    class TemporaryFailureASR(_FallbackASR):
+        def transcribe(self, audio, sample_rate=16000, language=None, is_final=True):
+            raise ASRTemporaryUnavailableError("hard timeout")
+
+    fallback = _FallbackASR()
+    asr = FallbackASR(TemporaryFailureASR(), fallback, auto_fallback=True)
+
+    with pytest.raises(ASRTemporaryUnavailableError, match="hard timeout"):
+        asr.transcribe_realtime(np.zeros(1600, dtype=np.float32))
+
+    assert fallback.loaded is False
+    assert asr._using_fallback is False
+
+
+def test_fallback_asr_forwards_pending_request_cancellation_once_per_provider():
+    events: list[str] = []
+    primary = _FallbackASR()
+    fallback = _FallbackASR()
+    primary.cancel_pending_requests = lambda: events.append("primary")
+    fallback.cancel_pending_requests = lambda: events.append("fallback")
+    asr = FallbackASR(primary, fallback)
+
+    asr.cancel_pending_requests()
+
+    assert events == ["primary", "fallback"]

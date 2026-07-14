@@ -2220,7 +2220,7 @@ def test_settings_check_update_opens_update_window(qtbot, config, monkeypatch):
         on_update(
             UpdateInfo(
                 version="v9.9.9",
-                download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+                download_url="https://miovrc.com/MioTranslator-Setup.exe",
                 notes="Update notes",
                 sha256="a" * 64,
             )
@@ -2258,7 +2258,7 @@ def test_settings_delegates_update_dialog_to_application_owner(
     qtbot.addWidget(dialog)
     info = UpdateInfo(
         version="v9.9.9",
-        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        download_url="https://miovrc.com/MioTranslator-Setup.exe",
         sha256="a" * 64,
     )
 
@@ -2535,7 +2535,7 @@ def test_xtts_runtime_repair_opens_full_installer_update_window(qtbot, config, m
     opened: list[tuple[object, UpdateInfo, str]] = []
     info = UpdateInfo(
         version="v1.3.7.8",
-        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        download_url="https://miovrc.com/MioTranslator-Setup.exe",
         sha256="a" * 64,
     )
 

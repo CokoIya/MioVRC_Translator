@@ -60,11 +60,11 @@ _MANIFEST_HEADERS = {
     "Accept-Encoding": "identity",
     "Cache-Control": "no-cache, no-store, max-age=0",
     "Pragma": "no-cache",
-    "User-Agent": f"MioTranslator/{APP_VERSION} (+https://78hejiu.top)",
+    "User-Agent": f"MioTranslator/{APP_VERSION} (+https://miovrc.com)",
 }
 _TRUSTED_DIRECT_DOWNLOAD_HOSTS = {
-    "78hejiu.top",
-    "download.78hejiu.top",
+    "miovrc.com",
+    "download.miovrc.com",
 }
 _TRUSTED_MANIFEST_HOSTS = frozenset(_TRUSTED_DIRECT_DOWNLOAD_HOSTS)
 _TRUSTED_GITHUB_OWNER = "cokoiya"

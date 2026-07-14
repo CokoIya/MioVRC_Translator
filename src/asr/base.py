@@ -3,8 +3,9 @@ from __future__ import annotations
 import gc
 import logging
 import sys
+import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Optional
 
 import numpy as np
@@ -79,6 +80,36 @@ class ASRProvider(ABC):
 
     def close(self) -> None:
         pass
+
+    def transcribe_realtime(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        language: Optional[str] = None,
+        is_final: bool = True,
+        *,
+        request_context: Mapping[str, object] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        """Optional cancellable final-recognition entry point.
+
+        Providers with asynchronous network transports can override this to
+        honor the scheduler cancellation event and attach request diagnostics.
+        Local and legacy providers keep the historical synchronous behavior.
+        """
+
+        del request_context, cancel_event
+        return self.transcribe(
+            audio,
+            sample_rate=sample_rate,
+            language=language,
+            is_final=is_final,
+        )
+
+    def cancel_pending_requests(self) -> None:
+        """Best-effort interruption hook used before realtime worker joins."""
+
+        return None
 
     @property
     def is_loaded(self) -> bool:

@@ -28,7 +28,7 @@ GITHUB_CATALOG_URL = (
     "https://raw.githubusercontent.com/"
     "CokoIya/MioVRC_Translator/main/docs/catalog.json"
 )
-MIRROR_CATALOG_URL = "https://78hejiu.top/catalog.json"
+MIRROR_CATALOG_URL = "https://miovrc.com/catalog.json"
 CATALOG_SOURCE_URLS = (
     GITHUB_CATALOG_URL,
     MIRROR_CATALOG_URL,

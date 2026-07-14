@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.asr.errors import ASRMissingAPIKeyError, ASRTemporaryUnavailableError
 from src.asr.model_registry import ASR_ENGINE_FOLLOW_MAIN, LISTEN_SELECTABLE_ASR_ENGINES, get_asr_runtime_spec, normalize_asr_engine
 from src.audio.device_inventory import (
     default_input_device_name as inventory_default_input_device_name,
@@ -123,6 +124,7 @@ ASR_REWRITE_TASK_QUEUE_MAXSIZE = 4
 ASR_WORKER_CONCURRENCY = 2
 ASR_REWRITE_WORKER_CONCURRENCY = 2
 TRANSLATION_WORKER_CONCURRENCY = 2
+MAX_REALTIME_ASR_QUEUE_AGE_S = 15.0
 MIC_PRIORITY_BURST = 3
 DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S = 6.0
 WORKER_STOP_TIMEOUT_S = 5.0
@@ -193,6 +195,7 @@ DEFAULT_LISTEN_SEGMENT_DURATION_S = 2.0
 DEFAULT_LISTEN_TAIL_SILENCE_S = 0.65
 LISTEN_DIAGNOSTIC_IDLE_S = 15.0
 MIC_DIAGNOSTIC_LOG_INTERVAL_S = 60.0
+MIC_DIGITAL_SILENCE_RECOVERY_S = 60.0
 LISTEN_VIRTUAL_OUTPUT_TOKENS = (
     "mixline",
     "mix line",
@@ -432,6 +435,27 @@ MAIN_COPY = {
         "ja": "音声処理が混み合っています。少し待ってから話してください",
         "ru": "Обработка речи перегружена; сделайте короткую паузу",
         "ko": "음성 처리 대기열이 가득 찼습니다. 잠시 후 다시 말해 주세요",
+    },
+    "asr_temporary_failure": {
+        "zh-CN": "语音识别暂时失败，连接正在恢复；请再说一次",
+        "en": "Speech recognition temporarily failed and is recovering; please try that sentence again",
+        "ja": "音声認識が一時的に失敗しました。接続を復旧中です。もう一度話してください",
+        "ru": "Распознавание речи временно недоступно и восстанавливается; повторите фразу",
+        "ko": "음성 인식이 일시적으로 실패해 연결을 복구 중입니다. 문장을 다시 말해 주세요",
+    },
+    "asr_queue_expired": {
+        "zh-CN": "语音在识别队列中等待过久，请再说一次",
+        "en": "Speech waited too long in the recognition queue; please repeat that sentence",
+        "ja": "音声認識の待ち時間が長すぎました。もう一度話してください",
+        "ru": "Фраза слишком долго ожидала распознавания; повторите её",
+        "ko": "음성이 인식 대기열에서 너무 오래 기다렸습니다. 다시 말해 주세요",
+    },
+    "asr_credential_failure": {
+        "zh-CN": "语音识别凭据不可用，请在设置中检查对应的 API Key",
+        "en": "The speech-recognition credential is unavailable; check its API key in Settings",
+        "ja": "音声認識の認証情報を使用できません。設定で該当する API Key を確認してください",
+        "ru": "Учётные данные распознавания речи недоступны; проверьте API-ключ в настройках",
+        "ko": "음성 인식 인증 정보를 사용할 수 없습니다. 설정에서 해당 API 키를 확인해 주세요",
     },
     "update_badge": {
         "zh-CN": "新版本",
@@ -1716,6 +1740,36 @@ class MainWindow(QMainWindow):
                 "resume" if enabled else "pause",
                 exc_info=True,
             )
+
+    def _cancel_pending_asr_requests(self, *, reason: str) -> None:
+        """Interrupt cancellable provider calls before joining scheduler workers."""
+
+        providers: list[Any] = []
+        for provider in (
+            getattr(self, "_asr", None),
+            getattr(self, "_listen_asr", None),
+        ):
+            if provider is None or any(existing is provider for existing in providers):
+                continue
+            providers.append(provider)
+        for provider in providers:
+            cancel = getattr(provider, "cancel_pending_requests", None)
+            if not callable(cancel):
+                continue
+            try:
+                cancel()
+                logger.info(
+                    "Cancelled pending ASR provider requests provider=%s reason=%s",
+                    getattr(provider, "provider_id", type(provider).__name__),
+                    reason,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to cancel pending ASR provider requests provider=%s reason=%s",
+                    getattr(provider, "provider_id", type(provider).__name__),
+                    reason,
+                    exc_info=True,
+                )
 
     def _set_app_mode(self, mode: AppMode, *, persist: bool) -> None:
         try:
@@ -3103,6 +3157,7 @@ class MainWindow(QMainWindow):
             translation_concurrency=self._realtime_translation_worker_concurrency(),
             priority_source=MIC_SOURCE,
             priority_burst=MIC_PRIORITY_BURST,
+            max_asr_queue_age_s=MAX_REALTIME_ASR_QUEUE_AGE_S,
             thread_name_prefix=f"realtime-{self._listen_session}",
         )
         self._realtime_scheduler = scheduler
@@ -3183,6 +3238,8 @@ class MainWindow(QMainWindow):
 
         for work_queue in partial_queues:
             self._enqueue_latest(work_queue, None)
+
+        self._cancel_pending_asr_requests(reason="realtime-worker-stop")
 
         deadline = time.monotonic() + WORKER_STOP_TIMEOUT_S
         scheduler_stopped = True
@@ -4213,6 +4270,35 @@ class MainWindow(QMainWindow):
             bool(getattr(self, "_mic_muted", False)),
             self._get_output_format(),
         )
+        silence_anchor = max(
+            last_non_silent_at,
+            float(self.__dict__.get("_last_mic_started_at", 0.0) or 0.0),
+        )
+        try:
+            peak_rms = float(stats.get("peak_frame_rms") or 0.0)
+            frames_processed = int(stats.get("frames_processed") or 0)
+        except (TypeError, ValueError):
+            peak_rms = 0.0
+            frames_processed = 0
+        if (
+            audio_state == "no_mic_audio"
+            and silence_anchor > 0
+            and (now - silence_anchor) >= MIC_DIGITAL_SILENCE_RECOVERY_S
+            and peak_rms >= 0.02
+            and frames_processed >= 100
+        ):
+            # A stream that previously carried real speech but now supplies
+            # digital silence can remain "running" indefinitely on Windows.
+            # Reopen it once for this outage; a new recorder resets peak_rms,
+            # preventing repeated restarts during an intentionally quiet room.
+            logger.warning(
+                "Recovering microphone after sustained digital silence "
+                "silent_for=%.1fs active_device=%s frames_processed=%d",
+                now - silence_anchor,
+                stats.get("active_device"),
+                frames_processed,
+            )
+            self._restart_microphone_capture("sustained digital silence")
 
     def _restart_microphone_capture(self, reason: str) -> None:
         if (
@@ -4412,7 +4498,6 @@ class MainWindow(QMainWindow):
             if getattr(self, "_mic_muted", False):
                 self._reset_streaming_state(MIC_SOURCE)
                 return None
-            self._last_mic_result_at = time.monotonic()
             self._reset_streaming_state(MIC_SOURCE)
             asr_lang = self._current_asr_lang
             selected_src_lang = self._current_src_lang
@@ -4454,6 +4539,10 @@ class MainWindow(QMainWindow):
                     else None
                 )
             )
+        elif admission.status is AdmissionStatus.ACCEPTED and source == MIC_SOURCE:
+            # Diagnostics distinguish captured-and-admitted speech from a final
+            # segment that was dropped at the scheduler capacity boundary.
+            self._last_mic_result_at = time.monotonic()
         elif admission.status not in {AdmissionStatus.ACCEPTED, AdmissionStatus.STOPPED}:
             logger.warning(
                 "Final sentence admission rejected source=%s status=%s",
@@ -4536,6 +4625,12 @@ class MainWindow(QMainWindow):
             payload.audio,
             payload.asr_language,
             is_final=True,
+            request_context={
+                "source": task.source,
+                "sequence": task.sequence,
+                "session_id": task.session_id,
+            },
+            cancel_event=cancel_event,
         )
         return text
 
@@ -4938,12 +5033,52 @@ class MainWindow(QMainWindow):
 
         task = completion.task
         payload = task.payload
-        if not isinstance(payload, _RealtimeAudioPayload):
-            return
         if bool(getattr(completion, "cancelled", False)) or not self._realtime_task_active(task):
             return
 
         try:
+            if completion.asr_error is not None:
+                asr_error = completion.asr_error
+                credential_error = isinstance(asr_error, ASRMissingAPIKeyError)
+                message_key = (
+                    "asr_credential_failure"
+                    if credential_error
+                    else (
+                        "asr_queue_expired"
+                        if bool(getattr(completion, "stale_asr", False))
+                        else "asr_temporary_failure"
+                    )
+                )
+                message = self._copy(message_key)
+                logger.warning(
+                    "Realtime ASR terminal failure source=%s sequence=%d error_type=%s "
+                    "temporary=%s",
+                    task.source,
+                    task.sequence,
+                    type(asr_error).__name__,
+                    isinstance(asr_error, ASRTemporaryUnavailableError),
+                )
+                if credential_error:
+                    self._prompt_for_missing_credential(("asr",))
+                if task.source == DESKTOP_SOURCE:
+                    self._set_bottom(
+                        message,
+                        "warning",
+                        key=message_key,
+                    )
+                    self._show_listen_translation(message, source="error")
+                else:
+                    self._set_bottom(
+                        message,
+                        "danger" if credential_error else "warning",
+                        key=message_key,
+                    )
+                    self._pulse_avatar_error()
+                return
+
+            if not isinstance(payload, _RealtimeAudioPayload):
+                return
+
             error = completion.error
             if error is not None:
                 friendly = self._format_translation_error(error)
@@ -5173,10 +5308,26 @@ class MainWindow(QMainWindow):
         asr_language: str | None,
         *,
         is_final: bool,
+        request_context: Mapping[str, object] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         if asr is None:
             raise RuntimeError("ASR is not ready")
-        if self._asr_provider_concurrency(asr) > 1:
+        diagnostic_context = request_context or {"source": source}
+
+        def recognize() -> str:
+            realtime = getattr(asr, "transcribe_realtime", None)
+            if is_final and callable(realtime):
+                return str(
+                    realtime(
+                        audio,
+                        language=asr_language,
+                        is_final=True,
+                        request_context=diagnostic_context,
+                        cancel_event=cancel_event,
+                    )
+                    or ""
+                ).strip()
             return str(
                 asr.transcribe(
                     audio,
@@ -5185,6 +5336,9 @@ class MainWindow(QMainWindow):
                 )
                 or ""
             ).strip()
+
+        if self._asr_provider_concurrency(asr) > 1:
+            return recognize()
         lock = self._asr_transcribe_lock_for(asr)
         if is_final:
             lock.acquire()
@@ -5198,9 +5352,7 @@ class MainWindow(QMainWindow):
             if not lock.acquire(blocking=False):
                 return ""
         try:
-            return str(
-                asr.transcribe(audio, language=asr_language, is_final=is_final) or ""
-            ).strip()
+            return recognize()
         finally:
             lock.release()
 

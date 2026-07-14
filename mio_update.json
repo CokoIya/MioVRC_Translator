@@ -1,24 +1,24 @@
 {
-  "version": "v1.3.8.2",
-  "installer_name": "MioTranslator-Setup-v1.3.8.2.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.2/MioTranslator-Setup-v1.3.8.2.exe",
-  "size_bytes": 463808338,
-  "sha256": "b4ddd9a1fe27f394771924f93ab7726c43491087cb46a17733b029e576b40e93",
+  "version": "v1.3.8.3",
+  "installer_name": "MioTranslator-Setup-v1.3.8.3.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.3/MioTranslator-Setup-v1.3.8.3.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.3/MioTranslator-Setup-v1.3.8.3.exe",
+  "size_bytes": 463852183,
+  "sha256": "2a2ff43aefcb3539f60d8d68672eec7c522581f54235b3d4080076d86fd62b4c",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "6aa3d91678a67bff85bfe93c0254d570aed9321ce738a53c1f8d14300044b98ec03685e54c4c5227706c6946b35bfd2aec48b461a52df363d05e3e47fcef7a06",
-  "notes": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
+  "installer_signature": "58d88ee7ddc965ddcaae3854014e097bdd2e740386146694022010a0d7868f473d75aea94555489b419cccdb9097e68862d7103d3120de0e9b0c0f709e195b08",
+  "notes": "v1.3.8.3 hardens realtime Qwen3-ASR with cancellable persistent transport, hard deadlines, connection reuse, and recovery isolation; drops stale ASR queue items, improves recorder overflow and worker recovery, and migrates official services to miovrc.com.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.2 新增本地化凭据检查并可直接定位到对应设置，使用有界超时和保温 HTTP 连接池减少实时翻译阻塞，移除 OSC 按文本长度附加的隐藏延迟，并改进有序流水线延迟诊断与上下文感知日语翻译。",
-    "en": "v1.3.8.2 adds localized credential checks with direct settings focus, reduces realtime translation stalls through bounded timeouts and warm HTTP pools, removes hidden OSC text-length delays, and improves ordered latency diagnostics and context-aware Japanese translation.",
-    "ja": "v1.3.8.2 では、設定項目へ直接移動できるローカライズ済み認証情報チェックを追加し、上限付きタイムアウトと接続再利用でリアルタイム翻訳の停滞を軽減しました。また、OSC の文字数依存遅延を廃止し、順序付きパイプラインの遅延診断と文脈対応の日本語翻訳を改善しました。",
-    "ru": "v1.3.8.2 добавляет локализованную проверку учетных данных с переходом к нужной настройке, сокращает задержки перевода с помощью ограниченных тайм-аутов и повторного использования HTTP-соединений, убирает скрытую OSC-задержку по длине текста и улучшает диагностику упорядоченного конвейера и контекстный перевод на японский.",
-    "ko": "v1.3.8.2는 관련 설정으로 바로 이동하는 현지화된 자격 증명 검사를 추가하고, 제한된 시간 초과와 HTTP 연결 재사용으로 실시간 번역 정체를 줄입니다. 또한 텍스트 길이에 따른 숨겨진 OSC 지연을 제거하고 순서 보장 파이프라인 지연 진단과 문맥 기반 일본어 번역을 개선합니다."
+    "zh-CN": "v1.3.8.3 强化实时 Qwen3-ASR：引入可取消的持久异步传输、硬超时、连接复用与故障代际隔离；自动丢弃过期 ASR 队列任务，改进录音队列溢出和工作线程恢复，并将官方服务迁移至 miovrc.com。",
+    "en": "v1.3.8.3 hardens realtime Qwen3-ASR with cancellable persistent transport, hard deadlines, connection reuse, and recovery isolation; drops stale ASR queue items, improves recorder overflow and worker recovery, and migrates official services to miovrc.com.",
+    "ja": "v1.3.8.3 では、キャンセル可能な常駐非同期通信、ハードタイムアウト、接続再利用、障害世代の分離によってリアルタイム Qwen3-ASR を強化しました。期限切れの ASR キューを破棄し、録音キューのオーバーフローとワーカー復旧を改善し、公式サービスを miovrc.com へ移行しました。",
+    "ru": "v1.3.8.3 усиливает Qwen3-ASR для реального времени: добавляет отменяемый постоянный транспорт, жёсткие тайм-ауты, повторное использование соединений и изоляцию восстановления; удаляет устаревшие задачи ASR, улучшает переполнение очереди записи и восстановление рабочих потоков, а также переносит официальные сервисы на miovrc.com.",
+    "ko": "v1.3.8.3은 취소 가능한 상시 비동기 전송, 강제 시간 제한, 연결 재사용과 복구 세대 격리로 실시간 Qwen3-ASR을 강화합니다. 만료된 ASR 대기열 작업을 제거하고 녹음 대기열 오버플로 및 작업자 복구를 개선하며 공식 서비스를 miovrc.com으로 이전합니다."
   },
-  "homepage_url": "https://78hejiu.top",
-  "published_at": "2026-07-13T12:55:24+09:00",
+  "homepage_url": "https://miovrc.com",
+  "published_at": "2026-07-14T16:46:08+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "9540a91773f880582156406cde6759caed4b5fb6e2ad11882ff8d483ba95017532a593018b50a3c02c3aaaac5e787b5c519cb14c977745787091be00ff97100c"
+  "signature": "f3596b28f7605d2829eb5575c4bd5f3dc3e63a4e7b34c17746ae76bdebe5151ee4aa9cfbb6392e19a0d2d77e9b7be93fab66dea9fd1e1238b4a9a76a0c1c3201"
 }

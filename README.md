@@ -3,16 +3,16 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./docs/README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./docs/README.en.md)
-[![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+[![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-miovrc.com-ff6b35?style=for-the-badge)](https://miovrc.com)
 [![License: GPLv3-or-later](https://img.shields.io/badge/License-GPLv3--or--later-blue.svg?style=for-the-badge)](./LICENSE)
 
 ## 官网下载
 
-### [https://78hejiu.top/](https://78hejiu.top/)
+### [https://miovrc.com/](https://miovrc.com/)
 
 > 面向 VRChat / VRC 用户的本地实时语音翻译工具、VRChat Chatbox 翻译助手
 > 作者：`ここ_Mio` / 官方版本永久免费 / 代码采用 GPLv3-or-later 开源
-> 下载官网：[https://78hejiu.top/](https://78hejiu.top/)
+> 下载官网：[https://miovrc.com/](https://miovrc.com/)
 
 ## 简介
 
@@ -38,7 +38,7 @@
 
 ## 下载
 
-- 官方下载站：[https://78hejiu.top/](https://78hejiu.top/)
+- 官方下载站：[https://miovrc.com/](https://miovrc.com/)
 - 正式版提供单一安装包 `MioTranslator-Setup-vX.exe`
 - 首次使用时，所需模型会由应用内下载器准备；已有模型会保留，不会重复下载
 - GitHub 仓库主要用于源代码、问题反馈和开发记录
@@ -120,7 +120,7 @@ $env:MODELSCOPE_CACHE = "./models"
 
 `Mio RealTime Translator`、`Mio Translator`、项目 Logo、应用图标、官网素材、发布页素材和其他品牌资产不随 GPL 授权。未经许可，不得使用这些名称或素材发布换皮版、付费版、镜像版，或让用户误以为非官方构建是官方版本。详细规则见 [BRANDING.md](./BRANDING.md)。
 
-官方版本永久免费。请优先从 [https://78hejiu.top/](https://78hejiu.top/) 或官方 GitHub Release 下载。
+官方版本永久免费。请优先从 [https://miovrc.com/](https://miovrc.com/) 或官方 GitHub Release 下载。
 
 ## 致谢
 

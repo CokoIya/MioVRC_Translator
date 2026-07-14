@@ -179,12 +179,12 @@ class UpdateCheckerTests(unittest.TestCase):
 
     def test_manifest_request_url_adds_cache_buster(self):
         url = _manifest_request_url(
-            "https://78hejiu.top/installer_manifest.json?lang=zh&_mio_update_check=old",
+            "https://miovrc.com/installer_manifest.json?lang=zh&_mio_update_check=old",
             timestamp_ms=12345,
         )
         self.assertEqual(
             url,
-            "https://78hejiu.top/installer_manifest.json?lang=zh&_mio_update_check=12345",
+            "https://miovrc.com/installer_manifest.json?lang=zh&_mio_update_check=12345",
         )
 
     def test_fetch_update_info_accepts_utf8_bom_manifest(self):
@@ -206,7 +206,7 @@ class UpdateCheckerTests(unittest.TestCase):
 
         class FakeResponse:
             status_code = 200
-            url = "https://78hejiu.top/installer_manifest.json"
+            url = "https://miovrc.com/installer_manifest.json"
             headers = {"content-length": str(len(payload))}
 
             def __init__(self):
@@ -227,7 +227,7 @@ class UpdateCheckerTests(unittest.TestCase):
              patch.object(update_checker, "UPDATE_MANIFEST_PUBLIC_KEY_ID", key_id), \
              patch.object(update_checker, "TRUSTED_INSTALLER_PUBLIC_KEYS", ((key_id, public_key_from_seed(seed)),)), \
              patch("src.updater.update_checker.requests.get", return_value=response) as request:
-            info = update_checker._fetch_update_info("https://78hejiu.top/installer_manifest.json")
+            info = update_checker._fetch_update_info("https://miovrc.com/installer_manifest.json")
 
         self.assertIsNotNone(info)
         self.assertEqual(info.version, "v9.9.9")
@@ -237,7 +237,7 @@ class UpdateCheckerTests(unittest.TestCase):
 
     def test_fetch_update_info_rejects_untrusted_intermediate_redirect(self):
         response = _FakeManifestResponse(
-            url="https://78hejiu.top/installer_manifest.json",
+            url="https://miovrc.com/installer_manifest.json",
             status_code=302,
             headers={"Location": "https://evil.example/installer_manifest.json"},
         )
@@ -247,7 +247,7 @@ class UpdateCheckerTests(unittest.TestCase):
         ) as request:
             with self.assertRaisesRegex(RuntimeError, "redirect URL is not trusted"):
                 update_checker._fetch_update_info(
-                    "https://78hejiu.top/installer_manifest.json"
+                    "https://miovrc.com/installer_manifest.json"
                 )
 
         self.assertEqual(request.call_count, 1)
@@ -256,7 +256,7 @@ class UpdateCheckerTests(unittest.TestCase):
 
     def test_fetch_update_info_rejects_oversized_manifest_and_closes_response(self):
         response = _FakeManifestResponse(
-            url="https://78hejiu.top/installer_manifest.json",
+            url="https://miovrc.com/installer_manifest.json",
             payload=b"123456789",
             headers={"Content-Length": "9"},
         )
@@ -266,7 +266,7 @@ class UpdateCheckerTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "maximum allowed size"):
                 update_checker._fetch_update_info(
-                    "https://78hejiu.top/installer_manifest.json"
+                    "https://miovrc.com/installer_manifest.json"
                 )
 
         self.assertTrue(response.closed)
@@ -290,7 +290,7 @@ class UpdateCheckerTests(unittest.TestCase):
         manifest[SIGNATURE_FIELD] = sign_manifest(manifest, seed)
         payload = json.dumps(manifest).encode("utf-8")
         first = _FakeManifestResponse(
-            url="https://78hejiu.top/installer_manifest.json",
+            url="https://miovrc.com/installer_manifest.json",
             status_code=302,
             headers={
                 "Location": (
@@ -325,7 +325,7 @@ class UpdateCheckerTests(unittest.TestCase):
             side_effect=[first, second],
         ) as request:
             info = update_checker._fetch_update_info(
-                "https://78hejiu.top/installer_manifest.json"
+                "https://miovrc.com/installer_manifest.json"
             )
 
         self.assertEqual(info.version, "v9.9.9")
@@ -456,9 +456,9 @@ class UpdateCheckerTests(unittest.TestCase):
     def test_select_newest_update_info_uses_highest_version(self):
         newest = _select_newest_update_info(
             [
-                UpdateInfo(version="v1.3.1", download_url="https://78hejiu.top/old.exe", sha256="a" * 64),
-                UpdateInfo(version="v1.3.2.3", download_url="https://78hejiu.top/new.exe", sha256="b" * 64),
-                UpdateInfo(version="v1.3.2-beta1", download_url="https://78hejiu.top/beta.exe", sha256="c" * 64),
+                UpdateInfo(version="v1.3.1", download_url="https://miovrc.com/old.exe", sha256="a" * 64),
+                UpdateInfo(version="v1.3.2.3", download_url="https://miovrc.com/new.exe", sha256="b" * 64),
+                UpdateInfo(version="v1.3.2-beta1", download_url="https://miovrc.com/beta.exe", sha256="c" * 64),
             ]
         )
         self.assertIsNotNone(newest)
@@ -467,12 +467,12 @@ class UpdateCheckerTests(unittest.TestCase):
     def test_latest_installer_fetch_accepts_current_version_for_repair(self):
         current = UpdateInfo(
             version=update_checker.APP_VERSION,
-            download_url="https://78hejiu.top/current.exe",
+            download_url="https://miovrc.com/current.exe",
             sha256="a" * 64,
         )
         older = UpdateInfo(
             version="v1.0.0",
-            download_url="https://78hejiu.top/older.exe",
+            download_url="https://miovrc.com/older.exe",
             sha256="b" * 64,
         )
 
@@ -485,7 +485,7 @@ class UpdateCheckerTests(unittest.TestCase):
     def test_latest_installer_fetch_rejects_signed_downgrade(self):
         older = UpdateInfo(
             version="v1.0.0",
-            download_url="https://78hejiu.top/older.exe",
+            download_url="https://miovrc.com/older.exe",
             sha256="b" * 64,
         )
 
@@ -551,7 +551,7 @@ class UpdateCheckerTests(unittest.TestCase):
                 raise OSError("temporary network failure")
             return UpdateInfo(
                 version=update_checker.APP_VERSION,
-                download_url="https://78hejiu.top/current.exe",
+                download_url="https://miovrc.com/current.exe",
                 size_bytes=1,
                 sha256="a" * 64,
             )
@@ -677,7 +677,7 @@ class UpdateCheckerTests(unittest.TestCase):
         second_results: list[UpdateInfo] = []
         update_info = UpdateInfo(
             version=update_checker.APP_VERSION,
-            download_url="https://78hejiu.top/current.exe",
+            download_url="https://miovrc.com/current.exe",
             size_bytes=1,
             sha256="a" * 64,
         )
@@ -822,8 +822,8 @@ class TestTrustedDownloadURL(unittest.TestCase):
     """Test trusted download URL validation."""
 
     def test_trusted_url_78hejiu(self):
-        """Should trust 78hejiu.top."""
-        self.assertTrue(is_trusted_download_url("https://78hejiu.top/file.exe"))
+        """Should trust miovrc.com."""
+        self.assertTrue(is_trusted_download_url("https://miovrc.com/file.exe"))
 
     def test_trusted_url_github(self):
         """Should trust github.com."""
@@ -845,9 +845,9 @@ class TestTrustedDownloadURL(unittest.TestCase):
 
     def test_rejects_credentials_nonstandard_port_and_fragment(self):
         urls = (
-            "https://user@78hejiu.top/file.exe",
-            "https://78hejiu.top:444/file.exe",
-            "https://78hejiu.top/file.exe#fragment",
+            "https://user@miovrc.com/file.exe",
+            "https://miovrc.com:444/file.exe",
+            "https://miovrc.com/file.exe#fragment",
         )
         for url in urls:
             with self.subTest(url=url):
@@ -855,7 +855,7 @@ class TestTrustedDownloadURL(unittest.TestCase):
 
     def test_untrusted_url_http(self):
         """Should not trust HTTP URLs."""
-        self.assertFalse(is_trusted_download_url("http://78hejiu.top/file.exe"))
+        self.assertFalse(is_trusted_download_url("http://miovrc.com/file.exe"))
 
     def test_untrusted_url_unknown_host(self):
         """Should not trust unknown hosts."""

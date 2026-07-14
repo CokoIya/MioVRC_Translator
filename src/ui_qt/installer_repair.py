@@ -12,7 +12,7 @@ from src.updater.update_checker import UpdateInfo
 from src.utils.i18n import tr
 from src.utils.localization import normalize_ui_language
 
-MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
+MIO_RELEASE_DOWNLOAD_URL = "https://miovrc.com/#download"
 _SUPPORTED_REPAIR_NOTE_LANGUAGES = ("zh-CN", "en", "ja", "ru", "ko")
 logger = logging.getLogger(__name__)
 

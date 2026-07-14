@@ -21,12 +21,12 @@ from src.utils.app_paths import (
 )
 from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 
-DEFAULT_MANIFEST_URL = "https://78hejiu.top/dictionaries/asr_dictionary_manifest.json"
+DEFAULT_MANIFEST_URL = "https://miovrc.com/dictionaries/asr_dictionary_manifest.json"
 LEGACY_MANIFEST_URLS = {
     "https://raw.githubusercontent.com/CokoIya/MioVRC_Translator/main/"
     "assets/dictionaries/asr_dictionary_manifest.json",
 }
-TRUSTED_DICTIONARY_DOMAINS = frozenset({"78hejiu.top", "raw.githubusercontent.com"})
+TRUSTED_DICTIONARY_DOMAINS = frozenset({"miovrc.com", "raw.githubusercontent.com"})
 _MAX_MANIFEST_BYTES = 1024 * 1024
 _MAX_DICTIONARY_BYTES = 16 * 1024 * 1024
 _MAX_LOCAL_DICTIONARY_BYTES = 16 * 1024 * 1024

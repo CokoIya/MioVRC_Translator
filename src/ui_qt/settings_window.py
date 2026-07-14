@@ -423,7 +423,7 @@ MIXLINE_DOWNLOAD_URL = "https://www.logitechg.com/en-us/software/mixline.html"
 VOICEVOX_DOWNLOAD_URL = "https://voicevox.hiroshiba.jp/"
 AIVIS_SPEECH_DOWNLOAD_URL = "https://aivis-project.com/AivisSpeech"
 NVIDIA_DRIVER_DOWNLOAD_URL = "https://www.nvidia.com/Download/index.aspx"
-MIO_RELEASE_DOWNLOAD_URL = "https://78hejiu.top/#download"
+MIO_RELEASE_DOWNLOAD_URL = "https://miovrc.com/#download"
 
 
 def _api_tts_voice_ids(engine: str) -> tuple[str, ...]:
@@ -8242,7 +8242,9 @@ class SettingsWindow(QDialog):
             qwen_cfg.setdefault("tail_silence_seconds", 0.7)
             qwen_cfg.setdefault("overlap_ms", 300)
             qwen_cfg.setdefault("timeout_seconds", 25)
+            qwen_cfg.setdefault("hard_timeout_seconds", 12)
             qwen_cfg.setdefault("max_retries", 0)
+            qwen_cfg.setdefault("max_concurrent_transcriptions", 1)
         gemini_cfg = asr_cfg.setdefault("gemini_live", {})
         if isinstance(gemini_cfg, dict):
             gemini_cfg["api_key"] = self._gemini_api_key_var.value().strip()

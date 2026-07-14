@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Optional
 
 import numpy as np
@@ -196,6 +196,49 @@ class FallbackASR(ASRProvider):
         except ASRError:
             raise
 
+    def transcribe_realtime(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        language: Optional[str] = None,
+        is_final: bool = True,
+        *,
+        request_context: Mapping[str, object] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Fallback ASR provider is closed")
+            active = self._ensure_fallback() if self._using_fallback else self.primary
+
+        def recognize(provider: ASRProvider) -> str:
+            method = getattr(provider, "transcribe_realtime", None)
+            if callable(method):
+                return method(
+                    audio,
+                    sample_rate=sample_rate,
+                    language=language,
+                    is_final=is_final,
+                    request_context=request_context,
+                    cancel_event=cancel_event,
+                )
+            return provider.transcribe(
+                audio,
+                sample_rate=sample_rate,
+                language=language,
+                is_final=is_final,
+            )
+
+        try:
+            return recognize(active)
+        except _FALLBACK_ERRORS as exc:
+            with self._lock:
+                self._activate_fallback(exc)
+                fallback = self._ensure_fallback()
+            return recognize(fallback)
+        except ASRError:
+            raise
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
@@ -223,3 +266,22 @@ class FallbackASR(ASRProvider):
             setter = getattr(provider, "set_capture_enabled", None)
             if callable(setter):
                 setter(bool(enabled))
+
+    def cancel_pending_requests(self) -> None:
+        """Interrupt network work before scheduler shutdown waits for workers."""
+
+        if self._closed:
+            return
+        providers = [self.primary]
+        if self._fallback is not None and self._fallback is not self.primary:
+            providers.append(self._fallback)
+        for provider in providers:
+            cancel = getattr(provider, "cancel_pending_requests", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    logger.debug(
+                        "Failed to cancel nested ASR provider requests",
+                        exc_info=True,
+                    )

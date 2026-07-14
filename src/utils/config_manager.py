@@ -1755,7 +1755,9 @@ def _ensure_asr_config(config: dict) -> bool:
         "tail_silence_seconds": 0.7,
         "overlap_ms": 300,
         "timeout_seconds": 25,
+        "hard_timeout_seconds": 12,
         "max_retries": 0,
+        "max_concurrent_transcriptions": 1,
     }
     for key, value in qwen_defaults.items():
         if key not in qwen_cfg:

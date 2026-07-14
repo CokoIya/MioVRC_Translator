@@ -133,6 +133,12 @@ class AudioRecorder:
         self._running = False
         self._stream: Optional[sd.InputStream] = None
         self._worker_thread: Optional[threading.Thread] = None
+        self._last_worker_error: str | None = None
+        self._last_worker_error_at = 0.0
+        self._worker_failure_count = 0
+        self._frame_queue_dropped = 0
+        self._frame_queue_high_watermark = 0
+        self._stale_frames_discarded = 0
         self._capture_rate: int = sample_rate
         self._capture_channels: int = 1
         self._capture_dtype: str = "int16"
@@ -166,44 +172,64 @@ class AudioRecorder:
             if self._running:
                 return
             previous_worker = self._worker_thread
-            if previous_worker is not None:
-                if previous_worker.is_alive():
-                    raise RuntimeError(
-                        "Previous audio processing thread is still stopping"
-                    )
+        if (
+            previous_worker is not None
+            and previous_worker is not threading.current_thread()
+            and previous_worker.is_alive()
+        ):
+            previous_worker.join(timeout=2)
+        with self._lifecycle_lock:
+            if self._running:
+                return
+            if previous_worker is not None and previous_worker.is_alive():
+                raise RuntimeError("Previous audio processing thread is still stopping")
+            if self._worker_thread is previous_worker:
                 self._worker_thread = None
             self._running = True
-        self.vad.reset()
-        self._buffer.clear()
-        self._pre_speech_buffer.clear()
-        self._speech_samples = 0
-        self._was_in_speech = False
-        self._capture_rate = self.sample_rate
-        self._reset_streaming_resampler()
-        self._frames_processed = 0
-        self._segments_emitted = 0
-        self._last_frame_rms = 0.0
-        self._peak_frame_rms = 0.0
-        self._last_non_silent_at = 0.0
-        self._clear_frame_queue()
-        self._denoiser.reset()
-        if self._chunk_streamer is not None:
-            self._chunk_streamer.reset()
-
+        worker: threading.Thread | None = None
         try:
-            self._stream = self._open_stream(self.input_device, self.extra_settings)
-        except Exception:
-            self._running = False
-            self._stream = None
-            self._active_device_name = None
+            self.vad.reset()
+            self._buffer.clear()
+            self._pre_speech_buffer.clear()
+            self._speech_samples = 0
+            self._was_in_speech = False
+            self._capture_rate = self.sample_rate
+            self._reset_streaming_resampler()
+            self._frames_processed = 0
+            self._segments_emitted = 0
+            self._last_frame_rms = 0.0
+            self._peak_frame_rms = 0.0
+            self._last_non_silent_at = 0.0
             self._clear_frame_queue()
+            self._last_worker_error = None
+            self._last_worker_error_at = 0.0
+            self._frame_queue_dropped = 0
+            self._frame_queue_high_watermark = 0
+            self._stale_frames_discarded = 0
+            self._denoiser.reset()
+            if self._chunk_streamer is not None:
+                self._chunk_streamer.reset()
+
+            self._stream = self._open_stream(self.input_device, self.extra_settings)
+            worker = threading.Thread(
+                target=self._worker_main,
+                daemon=True,
+                name="audio-recorder-worker",
+            )
+            self._worker_thread = worker
+            worker.start()
+        except BaseException:
+            with self._lifecycle_lock:
+                self._running = False
+                stream = self._stream
+                self._stream = None
+                if worker is None or self._worker_thread is worker:
+                    self._worker_thread = None
+            self._close_input_stream(stream)
+            self._clear_frame_queue(count_as_stale=True)
+            self._release_processing_state()
+            self._active_device_name = None
             raise
-        self._worker_thread = threading.Thread(
-            target=self._worker_main,
-            daemon=True,
-            name="audio-recorder-worker",
-        )
-        self._worker_thread.start()
         logger.info(
             "AudioRecorder started (input_device=%s active_device=%s capture_rate=%s target_rate=%s)",
             self.input_device,
@@ -215,6 +241,15 @@ class AudioRecorder:
     @property
     def is_running(self) -> bool:
         return bool(self._running)
+
+    @property
+    def worker_alive(self) -> bool:
+        worker = self._worker_thread
+        return bool(worker is not None and worker.is_alive())
+
+    @property
+    def last_worker_error(self) -> str | None:
+        return self._last_worker_error
 
     @property
     def active_input_device_name(self) -> str | None:
@@ -233,6 +268,16 @@ class AudioRecorder:
         snapshot = {
             "active_device": self._active_device_name,
             "running": self.is_running,
+            "worker_alive": self.worker_alive,
+            "last_worker_error": self._last_worker_error,
+            "last_worker_error_at": self._last_worker_error_at,
+            "worker_failure_count": self._worker_failure_count,
+            "stream_open": self._stream is not None,
+            "frame_queue_size": self._frame_queue.qsize(),
+            "frame_queue_capacity": self._frame_queue.maxsize,
+            "frame_queue_high_watermark": self._frame_queue_high_watermark,
+            "frame_queue_dropped": self._frame_queue_dropped,
+            "stale_frames_discarded": self._stale_frames_discarded,
             "frames_processed": self._frames_processed,
             "segments_emitted": self._segments_emitted,
             "last_frame_rms": round(self._last_frame_rms, 6),
@@ -498,24 +543,7 @@ class AudioRecorder:
             self._stream = None
             worker = self._worker_thread
         self._enqueue_frame(None)
-        if stream:
-            stopped = False
-            abort = getattr(stream, "abort", None)
-            if callable(abort):
-                try:
-                    abort()
-                    stopped = True
-                except Exception:
-                    pass
-            try:
-                if not stopped:
-                    stream.stop()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
+        self._close_input_stream(stream)
         worker_stopped = worker is None
         if worker is not None:
             if worker is not threading.current_thread():
@@ -528,22 +556,97 @@ class AudioRecorder:
                 logger.warning(
                     "Audio processing thread did not stop in time; retaining it until exit"
                 )
-        self._clear_frame_queue()
+        self._clear_frame_queue(count_as_stale=True)
         if worker_stopped:
             self._release_processing_state()
         logger.info("AudioRecorder stopped (active_device=%s)", self._active_device_name)
         self._active_device_name = None
 
     def _worker_main(self) -> None:
+        worker_error: BaseException | None = None
         try:
             self._process_loop()
+        except BaseException as exc:
+            worker_error = exc
+            logger.exception(
+                "AudioRecorder processing worker failed "
+                "(active_device=%s queue_size=%s frames_processed=%s "
+                "segments_emitted=%s): %s",
+                self._active_device_name,
+                self._frame_queue.qsize(),
+                self._frames_processed,
+                self._segments_emitted,
+                exc,
+            )
         finally:
-            if not self._running:
+            if worker_error is None:
+                with self._lifecycle_lock:
+                    if self._running:
+                        worker_error = RuntimeError(
+                            "Audio processing loop exited while capture was still running"
+                        )
+            if worker_error is not None:
+                self._handle_worker_failure(worker_error)
+            else:
                 self._release_processing_state()
+
+    def _handle_worker_failure(self, exc: BaseException) -> None:
+        message = str(exc).strip() or exc.__class__.__name__
+        error_text = f"{exc.__class__.__name__}: {message}"
+        with self._lifecycle_lock:
+            self._last_worker_error = error_text
+            self._last_worker_error_at = time.time()
+            self._worker_failure_count += 1
+            self._running = False
+            stream = self._stream
+            self._stream = None
+            active_device_name = self._active_device_name
+
+        # Mark capture stopped before touching the native stream so callbacks
+        # stop admitting frames. Closing the stream waits out any callback that
+        # was already in flight; clearing afterward guarantees no stale audio
+        # can survive into a subsequent start.
+        self._close_input_stream(stream)
+        discarded = self._clear_frame_queue(count_as_stale=True)
+        self._release_processing_state()
+        self._active_device_name = None
+        logger.error(
+            "AudioRecorder worker failure cleanup completed "
+            "(active_device=%s error=%s discarded_frames=%s queue_dropped=%s)",
+            active_device_name,
+            error_text,
+            discarded,
+            self._frame_queue_dropped,
+        )
+
+    @staticmethod
+    def _close_input_stream(stream) -> None:
+        if stream is None:
+            return
+        stopped = False
+        abort = getattr(stream, "abort", None)
+        if callable(abort):
+            try:
+                abort()
+                stopped = True
+            except Exception:
+                logger.debug("Failed to abort input stream", exc_info=True)
+        if not stopped:
+            try:
+                stream.stop()
+            except Exception:
+                logger.debug("Failed to stop input stream", exc_info=True)
+        try:
+            stream.close()
+        except Exception:
+            logger.debug("Failed to close input stream", exc_info=True)
 
     def _release_processing_state(self) -> None:
         """Drop queued/partial audio once no processing callback is using it."""
 
+        notify_vad_idle = self._was_in_speech or bool(
+            getattr(self.vad, "in_speech", False)
+        )
         self._buffer.clear()
         self._pre_speech_buffer.clear()
         self._speech_samples = 0
@@ -552,10 +655,27 @@ class AudioRecorder:
             self.vad.reset()
         except Exception:
             logger.debug("Failed to reset VAD during recorder shutdown", exc_info=True)
-        self._denoiser.reset()
+        try:
+            self._denoiser.reset()
+        except Exception:
+            logger.debug("Failed to reset denoiser during recorder shutdown", exc_info=True)
         self._reset_streaming_resampler()
         if self._chunk_streamer is not None:
-            self._chunk_streamer.reset()
+            try:
+                self._chunk_streamer.reset()
+            except Exception:
+                logger.debug(
+                    "Failed to reset chunk streamer during recorder shutdown",
+                    exc_info=True,
+                )
+        if notify_vad_idle and self.on_vad_state is not None:
+            try:
+                self.on_vad_state(False)
+            except Exception:
+                logger.debug(
+                    "Failed to report idle VAD state during recorder shutdown",
+                    exc_info=True,
+                )
 
     def _sd_callback(self, indata, frames, time_info, status):
         del frames
@@ -681,26 +801,55 @@ class AudioRecorder:
     def _enqueue_frame(self, frame: np.ndarray | None) -> None:
         try:
             self._frame_queue.put_nowait(frame)
+            self._frame_queue_high_watermark = max(
+                self._frame_queue_high_watermark,
+                self._frame_queue.qsize(),
+            )
             return
-        except queue.Full:
-            logger.debug("AudioRecorder frame queue full; dropping oldest frame")
-
-        try:
-            self._frame_queue.get_nowait()
-        except queue.Empty:
-            return
-
-        try:
-            self._frame_queue.put_nowait(frame)
         except queue.Full:
             pass
 
-    def _clear_frame_queue(self) -> None:
+        try:
+            dropped = self._frame_queue.get_nowait()
+        except queue.Empty:
+            dropped = None
+        else:
+            if dropped is not None:
+                self._frame_queue_dropped += 1
+                logger.debug(
+                    "AudioRecorder frame queue full; dropping oldest frame "
+                    "(dropped=%s capacity=%s)",
+                    self._frame_queue_dropped,
+                    self._frame_queue.maxsize,
+                )
+
+        try:
+            self._frame_queue.put_nowait(frame)
+            self._frame_queue_high_watermark = max(
+                self._frame_queue_high_watermark,
+                self._frame_queue.qsize(),
+            )
+        except queue.Full:
+            if frame is not None:
+                self._frame_queue_dropped += 1
+                logger.debug(
+                    "AudioRecorder frame queue remained full; dropping incoming frame "
+                    "(dropped=%s capacity=%s)",
+                    self._frame_queue_dropped,
+                    self._frame_queue.maxsize,
+                )
+
+    def _clear_frame_queue(self, *, count_as_stale: bool = False) -> int:
+        discarded = 0
         while True:
             try:
-                self._frame_queue.get_nowait()
+                frame = self._frame_queue.get_nowait()
             except queue.Empty:
-                return
+                if count_as_stale:
+                    self._stale_frames_discarded += discarded
+                return discarded
+            if frame is not None:
+                discarded += 1
 
     def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
         audio = np.asarray(frame)

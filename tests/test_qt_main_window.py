@@ -1345,6 +1345,74 @@ def test_microphone_watch_tracks_default_changes_while_using_fallback():
     assert restarted == ["fallback default microphone changed"]
 
 
+def test_microphone_diagnostics_reopens_previously_working_digital_silence(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._mic_muted = False
+    window._last_mic_diagnostic_log_at = 0.0
+    window._last_mic_result_at = 100.0
+    window._last_mic_started_at = 100.0
+    window._active_mic_input_device_name = "Pico Mic"
+    window._resolve_mic_input_device_name = lambda **_kwargs: "Pico Mic"
+    window._get_output_format = lambda: "original_only"
+    window._recorder = type(
+        "Recorder",
+        (),
+        {
+            "diagnostics_snapshot": lambda _self: {
+                "active_device": "Pico Mic",
+                "running": True,
+                "worker_alive": True,
+                "frames_processed": 4000,
+                "segments_emitted": 20,
+                "last_frame_rms": 0.0,
+                "peak_frame_rms": 0.3,
+                "last_non_silent_at": 120.0,
+            }
+        },
+    )()
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+    monkeypatch.setattr("src.ui_qt.main_window.time.monotonic", lambda: 200.0)
+
+    window._maybe_log_mic_diagnostics()
+
+    assert restarted == ["sustained digital silence"]
+
+
+def test_microphone_diagnostics_does_not_restart_a_never_used_quiet_stream(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._mic_muted = False
+    window._last_mic_diagnostic_log_at = 0.0
+    window._last_mic_result_at = 100.0
+    window._last_mic_started_at = 100.0
+    window._active_mic_input_device_name = "Quiet Mic"
+    window._resolve_mic_input_device_name = lambda **_kwargs: "Quiet Mic"
+    window._get_output_format = lambda: "original_only"
+    window._recorder = type(
+        "Recorder",
+        (),
+        {
+            "diagnostics_snapshot": lambda _self: {
+                "active_device": "Quiet Mic",
+                "running": True,
+                "worker_alive": True,
+                "frames_processed": 4000,
+                "segments_emitted": 0,
+                "last_frame_rms": 0.0,
+                "peak_frame_rms": 0.0,
+                "last_non_silent_at": 0.0,
+            }
+        },
+    )()
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+    monkeypatch.setattr("src.ui_qt.main_window.time.monotonic", lambda: 200.0)
+
+    window._maybe_log_mic_diagnostics()
+
+    assert restarted == []
+
+
 def test_main_device_combo_restarts_microphone_while_running(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._running = True

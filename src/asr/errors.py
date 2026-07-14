@@ -17,6 +17,16 @@ class ASRNetworkError(ASRError):
     """The provider could not be reached or timed out."""
 
 
+class ASRTemporaryUnavailableError(ASRError):
+    """A realtime provider request was cancelled or exceeded its hard deadline.
+
+    This is intentionally separate from :class:`ASRNetworkError`: automatic
+    local-model fallback can take many seconds to initialize and would turn a
+    short realtime timeout into another queue stall.  Callers should surface a
+    temporary failure and allow the next sentence to retry the provider.
+    """
+
+
 class ASRProviderError(ASRError):
     """The provider returned an unexpected error."""
 

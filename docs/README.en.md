@@ -3,13 +3,13 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
-[![Stable / Beta Download](https://img.shields.io/badge/Stable%20%2F%20Beta%20Download-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+[![Stable / Beta Download](https://img.shields.io/badge/Stable%20%2F%20Beta%20Download-miovrc.com-ff6b35?style=for-the-badge)](https://miovrc.com)
 
-**Official download: <https://78hejiu.top>**
+**Official download: <https://miovrc.com>**
 
 > A local real-time translation tool for VRChat users
 > Author: `ここ_Mio` / Official builds are free / Source code is GPLv3-or-later
-> Download site: <https://78hejiu.top>
+> Download site: <https://miovrc.com>
 
 ## Overview
 
@@ -25,7 +25,7 @@ Current main pipelines:
 
 ## Download
 
-- Official download site: <https://78hejiu.top>
+- Official download site: <https://miovrc.com>
 - Stable builds, beta builds, and all future updates are distributed through the official website
 - GitHub Releases also provide the `full` installer and the `lite` update installer
 - New players should download `full`; existing users and online updates can use `lite`

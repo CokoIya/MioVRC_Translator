@@ -619,6 +619,8 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["qwen3_asr"]["base_url"] == (
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
         )
+        assert config["asr"]["qwen3_asr"]["hard_timeout_seconds"] == 12
+        assert config["asr"]["qwen3_asr"]["max_concurrent_transcriptions"] == 1
         assert (
             config["asr"]["whisper"]["model_id"]
             == "iic/speech_whisper-small_asr_english"

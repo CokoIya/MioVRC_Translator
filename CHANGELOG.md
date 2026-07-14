@@ -2,6 +2,20 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.3] - 2026-07-14
+
+### Realtime ASR and capture resilience
+
+- Reworked Qwen3-ASR around a persistent cancellable async transport with bounded connection pools, warm connection reuse, hard request deadlines, and transport-generation isolation after timeouts or network failures.
+- Added explicit provider cancellation and request-context diagnostics so stopped sessions cannot leave stale cloud recognition requests blocking newer speech.
+- Added bounded ASR queue age handling that retires expired sentences without disturbing ordered completion delivery for later sentences.
+- Hardened microphone capture with deterministic worker ownership, native-stream shutdown, bounded frame overflow handling, queue diagnostics, worker-failure recovery, and digital-silence detection.
+- Prevented temporary realtime Qwen failures from triggering a slow local-model fallback that would amplify queue latency.
+
+### Official service migration
+
+- Migrated the official website, update manifests, dictionary assets, catalog and sponsor mirrors, repair links, request identity, and trusted-host allowlists to `https://miovrc.com`.
+
 ## [1.3.8.2] - 2026-07-13
 
 ### Credentials and setup

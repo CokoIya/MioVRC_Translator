@@ -179,7 +179,7 @@ def test_xtts_download_dialog_runtime_button_opens_update_window(qtbot, monkeypa
         on_installer_available(
             UpdateInfo(
                 version="v1.3.7.8",
-                download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+                download_url="https://miovrc.com/MioTranslator-Setup.exe",
                 sha256="a" * 64,
             )
         )
@@ -322,7 +322,7 @@ def test_xtts_runtime_import_error_details_are_not_exposed_to_users():
 def test_runtime_repair_notes_do_not_mix_languages():
     info = UpdateInfo(
         version="v9.9.9",
-        download_url="https://78hejiu.top/MioTranslator-Setup.exe",
+        download_url="https://miovrc.com/MioTranslator-Setup.exe",
         sha256="a" * 64,
     )
 

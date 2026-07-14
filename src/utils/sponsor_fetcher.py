@@ -28,7 +28,7 @@ GITHUB_SPONSORS_URL = (
     "https://raw.githubusercontent.com/"
     "CokoIya/MioVRC_Translator/main/docs/sponsors.json"
 )
-MIRROR_SPONSORS_URL = "https://78hejiu.top/sponsors.json"
+MIRROR_SPONSORS_URL = "https://miovrc.com/sponsors.json"
 SPONSOR_SOURCE_URLS = (
     GITHUB_SPONSORS_URL,
     MIRROR_SPONSORS_URL,

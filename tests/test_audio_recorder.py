@@ -1,10 +1,11 @@
 import collections
+import threading
 import unittest
 
 import numpy as np
 
 import src.audio.recorder as recorder_module
-from src.audio.recorder import AudioRecorder
+from src.audio.recorder import FRAME_QUEUE_MAXSIZE, AudioRecorder
 
 
 class AudioRecorderTests(unittest.TestCase):
@@ -111,6 +112,182 @@ class AudioRecorderTests(unittest.TestCase):
 
         self.assertFalse(recorder.is_running)
         self.assertIsNone(recorder._stream)
+
+    def test_start_reset_failure_does_not_strand_running_state_and_can_retry(self):
+        recorder = AudioRecorder(lambda _audio: None)
+
+        class FakeStream:
+            def __init__(self):
+                self.aborted = False
+                self.closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        original_reset = recorder.vad.reset
+        reset_calls = 0
+
+        def fail_first_reset():
+            nonlocal reset_calls
+            reset_calls += 1
+            if reset_calls == 1:
+                raise RuntimeError("synthetic reset failure")
+            original_reset()
+
+        stream = FakeStream()
+        recorder.vad.reset = fail_first_reset
+        recorder._open_stream = lambda *_args, **_kwargs: stream
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic reset failure"):
+            recorder.start()
+
+        self.assertFalse(recorder.is_running)
+        self.assertFalse(recorder.worker_alive)
+        self.assertIsNone(recorder._stream)
+        self.assertIsNone(recorder._worker_thread)
+
+        recorder.start()
+        self.assertTrue(recorder.is_running)
+        self.assertTrue(recorder.worker_alive)
+        recorder.stop()
+
+        self.assertFalse(recorder.is_running)
+        self.assertFalse(recorder.worker_alive)
+        self.assertTrue(stream.aborted)
+        self.assertTrue(stream.closed)
+
+    def test_worker_failure_stops_capture_and_discards_partial_audio(self):
+        vad_states = []
+        recorder = AudioRecorder(
+            lambda _audio: None,
+            on_vad_state=vad_states.append,
+        )
+
+        class FakeStream:
+            def __init__(self):
+                self.aborted = False
+                self.closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        stream = FakeStream()
+        recorder._stream = stream
+        recorder._active_device_name = "Failure Mic"
+        recorder._running = True
+        recorder._buffer.append(np.ones(480, dtype=np.float32))
+        recorder._pre_speech_buffer.append(np.ones(480, dtype=np.float32))
+        recorder._speech_samples = 480
+        recorder._was_in_speech = True
+        recorder._enqueue_frame(np.ones(480, dtype=np.float32))
+
+        def fail_processing():
+            raise RuntimeError("synthetic VAD failure")
+
+        recorder._process_loop = fail_processing
+        worker = threading.Thread(target=recorder._worker_main, daemon=True)
+        recorder._worker_thread = worker
+        worker.start()
+        worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(recorder.is_running)
+        self.assertTrue(stream.aborted)
+        self.assertTrue(stream.closed)
+        self.assertIsNone(recorder._stream)
+        self.assertIsNone(recorder.active_input_device_name)
+        self.assertEqual(recorder._buffer, [])
+        self.assertEqual(list(recorder._pre_speech_buffer), [])
+        self.assertEqual(recorder._speech_samples, 0)
+        self.assertFalse(recorder._was_in_speech)
+        self.assertEqual(vad_states, [False])
+
+        snapshot = recorder.diagnostics_snapshot()
+        self.assertFalse(snapshot["worker_alive"])
+        self.assertFalse(snapshot["stream_open"])
+        self.assertEqual(snapshot["frame_queue_size"], 0)
+        self.assertEqual(snapshot["stale_frames_discarded"], 1)
+        self.assertEqual(snapshot["worker_failure_count"], 1)
+        self.assertGreater(snapshot["last_worker_error_at"], 0.0)
+        self.assertIn("RuntimeError: synthetic VAD failure", snapshot["last_worker_error"])
+
+    def test_recorder_can_restart_after_worker_failure_and_repeated_stops(self):
+        recorder = AudioRecorder(lambda _audio: None)
+        streams = []
+
+        class FakeStream:
+            def __init__(self):
+                self.aborted = False
+                self.closed = False
+
+            def abort(self):
+                self.aborted = True
+
+            def close(self):
+                self.closed = True
+
+        def open_stream(*_args, **_kwargs):
+            stream = FakeStream()
+            streams.append(stream)
+            return stream
+
+        original_process_loop = recorder._process_loop
+        fail_first_worker = True
+
+        def process_loop():
+            nonlocal fail_first_worker
+            if fail_first_worker:
+                fail_first_worker = False
+                raise RuntimeError("fail once")
+            original_process_loop()
+
+        recorder._open_stream = open_stream
+        recorder._process_loop = process_loop
+
+        recorder.start()
+        failed_worker = recorder._worker_thread
+        self.assertIsNotNone(failed_worker)
+        failed_worker.join(timeout=2)
+        self.assertFalse(recorder.is_running)
+        self.assertIn("fail once", recorder.last_worker_error)
+
+        for _index in range(3):
+            recorder.start()
+            self.assertTrue(recorder.is_running)
+            self.assertTrue(recorder.worker_alive)
+            self.assertIsNone(recorder.last_worker_error)
+            recorder.stop()
+            self.assertFalse(recorder.is_running)
+            self.assertFalse(recorder.worker_alive)
+
+        self.assertEqual(len(streams), 4)
+        self.assertTrue(all(stream.aborted for stream in streams))
+        self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_frame_queue_saturation_drops_oldest_without_blocking(self):
+        recorder = AudioRecorder(lambda _audio: None)
+        overflow = 7
+
+        for index in range(FRAME_QUEUE_MAXSIZE + overflow):
+            recorder._enqueue_frame(np.asarray([index], dtype=np.float32))
+
+        snapshot = recorder.diagnostics_snapshot()
+        self.assertEqual(snapshot["frame_queue_size"], FRAME_QUEUE_MAXSIZE)
+        self.assertEqual(snapshot["frame_queue_capacity"], FRAME_QUEUE_MAXSIZE)
+        self.assertEqual(snapshot["frame_queue_high_watermark"], FRAME_QUEUE_MAXSIZE)
+        self.assertEqual(snapshot["frame_queue_dropped"], overflow)
+
+        retained = []
+        while not recorder._frame_queue.empty():
+            retained.append(int(recorder._frame_queue.get_nowait()[0]))
+        self.assertEqual(retained[0], overflow)
+        self.assertEqual(retained[-1], FRAME_QUEUE_MAXSIZE + overflow - 1)
 
     def test_fixed_device_does_not_fall_back_to_default(self):
         original_sd = recorder_module.sd

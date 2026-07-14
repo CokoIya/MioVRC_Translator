@@ -3,13 +3,13 @@
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)
-[![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-78hejiu.top-ff6b35?style=for-the-badge)](https://78hejiu.top)
+[![稳定版 / Beta 下载](https://img.shields.io/badge/稳定版%20%2F%20Beta%20下载-miovrc.com-ff6b35?style=for-the-badge)](https://miovrc.com)
 
-**官网下载安装：<https://78hejiu.top>**
+**官网下载安装：<https://miovrc.com>**
 
 > 面向 VRChat 用户的本地实时语音翻译工具
 > 作者：`ここ_Mio` / 官方版本永久免费 / 代码采用 GPLv3-or-later 开源
-> 下载官网：<https://78hejiu.top>
+> 下载官网：<https://miovrc.com>
 
 ## 简介
 
@@ -25,7 +25,7 @@
 
 ## 下载
 
-- 官方下载站：<https://78hejiu.top>
+- 官方下载站：<https://miovrc.com>
 - 稳定版、beta 测试版，以及未来所有更新，统一在官网提供下载
 - GitHub Release 同步提供 `full` 完整包和 `lite` 更新包
 - 新玩家建议下载 `full` 完整包，老玩家和在线更新使用 `lite` 轻量包

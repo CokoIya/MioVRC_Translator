@@ -10,7 +10,7 @@ The following project identity assets are reserved by the project maintainer unl
 
 - The names `Mio RealTime Translator`, `Mio Translator`, and confusingly similar names used for a VRChat or game translation tool
 - The project logo, application icon, release artwork, and website visual assets
-- The official website and download identity: `https://78hejiu.top/`
+- The official website and download identity: `https://miovrc.com/`
 - Official release names, package names, and installer presentation that imply a build is published by `ここ_Mio`, `酒寄 みお`, or the official Mio RealTime Translator project
 
 ## Permitted Uses
@@ -49,7 +49,7 @@ Without separate written permission, you may not:
 
 Official releases are published through channels controlled by the project maintainer, currently including:
 
-- Official website: `https://78hejiu.top/`
+- Official website: `https://miovrc.com/`
 - Official GitHub repository and releases: `https://github.com/CokoIya/MioVRC_Translator`
 
 Users should treat builds from other sources as unofficial unless the project maintainer explicitly says otherwise.

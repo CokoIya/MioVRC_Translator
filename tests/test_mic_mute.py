@@ -129,6 +129,19 @@ def test_final_backpressure_is_exposed_without_evicting_prior_work():
     assert window._bottom_events == [("realtime_queue_full", "warning")]
 
 
+def test_rejected_final_does_not_masquerade_as_successful_mic_activity():
+    window, _scheduler = _window_for_mute(
+        muted=False,
+        statuses=[AdmissionStatus.FULL],
+    )
+    window._last_mic_result_at = 123.0
+
+    admission = window._on_audio_segment("dropped sentence", MIC_SOURCE)
+
+    assert admission.status is AdmissionStatus.FULL
+    assert window._last_mic_result_at == 123.0
+
+
 def test_mic_vad_state_reports_speaking_status():
     window = MainWindow.__new__(MainWindow)
     status_events: list[tuple[str | None, str, str]] = []

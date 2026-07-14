@@ -85,7 +85,9 @@
       "tail_silence_seconds": 0.7,
       "overlap_ms": 300,
       "timeout_seconds": 25,
-      "max_retries": 0
+      "hard_timeout_seconds": 12,
+      "max_retries": 0,
+      "max_concurrent_transcriptions": 1
     },
     "gemini_live": {
       "api_key": "",
@@ -99,7 +101,7 @@
     },
     "correction": {
       "enabled": true,
-      "official_manifest_url": "https://78hejiu.top/dictionaries/asr_dictionary_manifest.json"
+      "official_manifest_url": "https://miovrc.com/dictionaries/asr_dictionary_manifest.json"
     },
     "streaming": {
       "chunk_interval_ms": 250,

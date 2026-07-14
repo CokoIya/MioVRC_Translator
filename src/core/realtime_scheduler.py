@@ -8,7 +8,9 @@ reordering, translation, and ordered delivery.  A slow translation therefore
 cannot stop capture or ASR admission for the next sentence, while a faster ASR
 request cannot push a later sentence into translation before the preceding
 source sentence has finished recognition.  It owns every worker thread it
-creates and never evicts a final task that has already been admitted.
+creates.  When explicitly configured with a maximum ASR queue age, stale
+admitted work is replaced by an ordered terminal marker instead of leaving a
+sequence hole or retaining its audio payload indefinitely.
 """
 
 from __future__ import annotations
@@ -45,6 +47,10 @@ class SchedulerHealth(str, Enum):
     STALLED = "stalled"
     STOPPED = "stopped"
     CANCELLED = "cancelled"
+
+
+class RealtimeASRQueueExpiredError(TimeoutError):
+    """An admitted sentence expired before its ASR request could start."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +96,7 @@ class RealtimeCompletion:
     translation_duration_s: float = 0.0
     completed_at: float = 0.0
     cancelled: bool = False
+    stale_asr: bool = False
 
     @property
     def error(self) -> BaseException | None:
@@ -122,6 +129,8 @@ class SchedulerSnapshot:
     accepted: int
     rejected_full: int
     rejected_stopped: int
+    stale_asr_dropped: int
+    stale_asr_dropped_by_source: Mapping[str, int]
     health: SchedulerHealth
     oldest_task_age_s: float
     oldest_by_source: Mapping[str, float]
@@ -201,6 +210,7 @@ class RealtimeScheduler:
         thread_name_prefix: str = "realtime",
         clock: Callable[[], float] = time.monotonic,
         stale_task_age_s: float = 30.0,
+        max_asr_queue_age_s: float | None = None,
         backlog_ratio: float = 0.75,
         health_check_interval_s: float = 1.0,
     ) -> None:
@@ -219,6 +229,16 @@ class RealtimeScheduler:
             raise ValueError("Priority burst must be at least one")
         if stale_task_age_s <= 0 or health_check_interval_s <= 0:
             raise ValueError("Realtime health timing values must be positive")
+        normalized_max_asr_queue_age = (
+            None
+            if max_asr_queue_age_s is None
+            else float(max_asr_queue_age_s)
+        )
+        if (
+            normalized_max_asr_queue_age is not None
+            and normalized_max_asr_queue_age <= 0
+        ):
+            raise ValueError("max_asr_queue_age_s must be positive when configured")
         if not 0 < backlog_ratio <= 1:
             raise ValueError("backlog_ratio must be within (0, 1]")
         if not callable(asr_handler) or not callable(translation_handler) or not callable(delivery_handler):
@@ -271,6 +291,7 @@ class RealtimeScheduler:
         self._thread_name_prefix = str(thread_name_prefix or "realtime")
         self._clock = clock
         self._stale_task_age_s = float(stale_task_age_s)
+        self._max_asr_queue_age_s = normalized_max_asr_queue_age
         self._backlog_ratio = float(backlog_ratio)
         self._health_check_interval_s = float(health_check_interval_s)
 
@@ -345,6 +366,10 @@ class RealtimeScheduler:
         self._accepted_count = 0
         self._rejected_full_count = 0
         self._rejected_stopped_count = 0
+        self._stale_asr_dropped_count = 0
+        self._stale_asr_dropped_by_source = {
+            source: 0 for source in self._sources
+        }
         self._started = False
         self._accepting = False
         self._threads: list[threading.Thread] = []
@@ -462,9 +487,10 @@ class RealtimeScheduler:
                 self._rejected_stopped_count += 1
                 logger.debug("Realtime admission rejected: scheduler stopped source=%s", source)
                 return AdmissionResult(AdmissionStatus.STOPPED)
-            source_queue = self._ingress.get(source)
-            if source_queue is None:
+            if source not in self._ingress:
                 return AdmissionResult(AdmissionStatus.INVALID_SOURCE)
+            self._drop_stale_asr_tasks_locked(self._clock())
+            source_queue = self._ingress[source]
             ingress_full = len(source_queue) >= self._ingress_limits[source]
             outstanding_full = (
                 self._outstanding[source] >= self._outstanding_limits[source]
@@ -595,6 +621,9 @@ class RealtimeScheduler:
             )
             provider_claimed = MappingProxyType(dict(self._provider_claimed))
             outstanding = MappingProxyType(dict(self._outstanding))
+            stale_asr_dropped_by_source = MappingProxyType(
+                dict(self._stale_asr_dropped_by_source)
+            )
             recognized_pending = MappingProxyType(
                 {
                     source: len(items)
@@ -682,6 +711,8 @@ class RealtimeScheduler:
                 accepted=self._accepted_count,
                 rejected_full=self._rejected_full_count,
                 rejected_stopped=self._rejected_stopped_count,
+                stale_asr_dropped=self._stale_asr_dropped_count,
+                stale_asr_dropped_by_source=stale_asr_dropped_by_source,
                 health=health,
                 oldest_task_age_s=oldest_task_age,
                 oldest_by_source=oldest_by_source,
@@ -691,7 +722,14 @@ class RealtimeScheduler:
     def _health_monitor(self) -> None:
         previous: SchedulerHealth | None = None
         last_stalled_report = 0.0
-        while not self._cancel_event.wait(self._health_check_interval_s):
+        check_interval = self._health_check_interval_s
+        if self._max_asr_queue_age_s is not None:
+            check_interval = min(
+                check_interval,
+                max(0.05, min(self._max_asr_queue_age_s / 4.0, 0.5)),
+            )
+        while not self._cancel_event.wait(check_interval):
+            self._drop_stale_asr_tasks()
             snapshot = self.snapshot()
             health = snapshot.health
             now = self._clock()
@@ -704,7 +742,7 @@ class RealtimeScheduler:
                     logger.warning(
                         "Realtime pipeline health=%s oldest_ms=%.0f utilization=%.0f%% "
                         "pending=%d running=%d outstanding=%s translation_pending=%s "
-                        "translation_running=%s",
+                        "translation_running=%s stale_asr_dropped=%d",
                         health.value,
                         snapshot.oldest_task_age_s * 1000.0,
                         snapshot.capacity_utilization * 100.0,
@@ -713,6 +751,7 @@ class RealtimeScheduler:
                         dict(snapshot.outstanding),
                         dict(snapshot.translation_pending_by_source),
                         dict(snapshot.translation_running_by_source),
+                        snapshot.stale_asr_dropped,
                     )
                     if health is SchedulerHealth.STALLED:
                         last_stalled_report = now
@@ -825,6 +864,135 @@ class RealtimeScheduler:
     def _task_cancelled(self, task: RealtimeTask) -> bool:
         with self._state_lock:
             return self._task_cancelled_locked(task)
+
+    def _release_outstanding_task_locked(self, task: RealtimeTask) -> bool:
+        admitted = self._admitted_tasks[task.source]
+        if admitted.pop(task.sequence, None) is None:
+            return False
+        self._outstanding[task.source] = max(
+            0,
+            self._outstanding[task.source] - 1,
+        )
+        return True
+
+    @staticmethod
+    def _without_payload(task: RealtimeTask) -> RealtimeTask:
+        """Keep ordered identity while releasing a stale audio payload."""
+
+        return RealtimeTask(
+            source=task.source,
+            session_id=task.session_id,
+            sequence=task.sequence,
+            provider_key=task.provider_key,
+            payload=None,
+            submitted_at=task.submitted_at,
+            provider_concurrency=task.provider_concurrency,
+        )
+
+    def _mark_stale_asr_task_locked(
+        self,
+        task: RealtimeTask,
+        *,
+        now: float,
+        claimed: bool,
+    ) -> bool:
+        max_age = self._max_asr_queue_age_s
+        if max_age is None or self._cancel_event.is_set():
+            return False
+        queue_age = max(0.0, now - task.submitted_at)
+        if queue_age < max_age:
+            return False
+
+        source = task.source
+        sequence = task.sequence
+        if (
+            sequence < self._next_delivery_sequence[source]
+            or sequence in self._cancelled_sequences[source]
+            or sequence not in self._admitted_tasks[source]
+        ):
+            return False
+
+        marker_task = self._without_payload(task)
+        self._cancelled_sequences[source].add(sequence)
+        # Retain the outstanding slot until ordered delivery consumes the
+        # marker. This bounds terminal-marker cardinality by the configured
+        # outstanding limit even if an earlier provider call never returns,
+        # while replacing the admitted task releases the stale audio payload.
+        self._admitted_tasks[source][sequence] = marker_task
+        self._completed[source][sequence] = RealtimeCompletion(
+            task=marker_task,
+            asr_error=RealtimeASRQueueExpiredError(
+                "ASR request expired before provider admission"
+            ),
+            asr_queue_wait_s=queue_age,
+            completed_at=now,
+            stale_asr=True,
+        )
+        self._stale_asr_dropped_count += 1
+        self._stale_asr_dropped_by_source[source] += 1
+
+        self._work_available.notify_all()
+        self._recognized_available.notify_all()
+        self._translation_available.notify_all()
+        self._delivery_available.notify_all()
+        self._state_changed.notify_all()
+        logger.warning(
+            "Realtime ASR stale queue drop source=%s sequence=%d session_id=%d "
+            "provider=%r claimed=%s queue_age_ms=%.1f max_queue_age_ms=%.1f "
+            "ingress_depth=%d outstanding=%d provider_claimed=%d total_dropped=%d",
+            source,
+            sequence,
+            task.session_id,
+            task.provider_key,
+            claimed,
+            queue_age * 1000.0,
+            max_age * 1000.0,
+            len(self._ingress[source]),
+            self._outstanding[source],
+            self._provider_claimed.get(task.provider_key, 0),
+            self._stale_asr_dropped_count,
+        )
+        return True
+
+    def _drop_stale_asr_tasks_locked(self, now: float) -> int:
+        if self._max_asr_queue_age_s is None or self._cancel_event.is_set():
+            return 0
+
+        dropped = 0
+        for source in self._sources:
+            source_queue = self._ingress[source]
+            if not source_queue:
+                continue
+            retained: deque[RealtimeTask] = deque()
+            for task in source_queue:
+                if self._mark_stale_asr_task_locked(
+                    task,
+                    now=now,
+                    claimed=False,
+                ):
+                    dropped += 1
+                else:
+                    retained.append(task)
+            if len(retained) != len(source_queue):
+                self._ingress[source] = retained
+        return dropped
+
+    def _drop_stale_asr_tasks(self) -> int:
+        with self._work_available:
+            return self._drop_stale_asr_tasks_locked(self._clock())
+
+    def _drop_claimed_stale_asr_task(
+        self,
+        task: RealtimeTask,
+        *,
+        now: float,
+    ) -> bool:
+        with self._delivery_available:
+            return self._mark_stale_asr_task_locked(
+                task,
+                now=now,
+                claimed=True,
+            )
 
     def _prune_cancelled_sequences_locked(self, source: str) -> None:
         cancelled = self._cancelled_sequences[source]
@@ -942,6 +1110,7 @@ class RealtimeScheduler:
     def _take_asr_task(self) -> RealtimeTask | None:
         with self._work_available:
             while not self._cancel_event.is_set():
+                self._drop_stale_asr_tasks_locked(self._clock())
                 source = self._select_source_locked()
                 if source is not None:
                     task = self._ingress[source].popleft()
@@ -983,7 +1152,12 @@ class RealtimeScheduler:
 
     def _asr_worker(self, worker_index: int) -> None:
         del worker_index
+        task: RealtimeTask | None = None
         while not self._cancel_event.is_set():
+            # Release the previous task (and potentially large audio payload)
+            # before blocking for more work. This matters when a claimed task
+            # expires and its ordered marker intentionally carries no payload.
+            task = None
             task = self._take_asr_task()
             if task is None:
                 return
@@ -995,6 +1169,9 @@ class RealtimeScheduler:
             queue_wait = max(0.0, started_at - task.submitted_at)
             try:
                 if self._cancel_event.is_set() or self._task_cancelled(task):
+                    self._finish_asr_pipeline_task(task)
+                    continue
+                if self._drop_claimed_stale_asr_task(task, now=started_at):
                     self._finish_asr_pipeline_task(task)
                     continue
                 with self._state_lock:
@@ -1667,7 +1844,7 @@ class RealtimeScheduler:
             finally:
                 delivery_finished_at = self._clock()
                 logger.info(
-                    "Realtime latency source=%s sequence=%d cancelled=%s "
+                    "Realtime latency source=%s sequence=%d cancelled=%s stale_asr=%s "
                     "asr_queue_ms=%.1f asr_ms=%.1f rewrite_queue_ms=%.1f "
                     "rewrite_ms=%.1f translation_queue_ms=%.1f "
                     "translation_ms=%.1f ordered_wait_ms=%.1f "
@@ -1675,6 +1852,7 @@ class RealtimeScheduler:
                     completion.task.source,
                     completion.task.sequence,
                     completion.cancelled,
+                    completion.stale_asr,
                     completion.asr_queue_wait_s * 1000.0,
                     completion.asr_duration_s * 1000.0,
                     completion.rewrite_queue_wait_s * 1000.0,
@@ -1691,13 +1869,7 @@ class RealtimeScheduler:
                 )
                 with self._state_lock:
                     self._delivery_running = max(0, self._delivery_running - 1)
-                    self._outstanding[completion.task.source] = max(
-                        0, self._outstanding[completion.task.source] - 1
-                    )
-                    self._admitted_tasks[completion.task.source].pop(
-                        completion.task.sequence,
-                        None,
-                    )
+                    self._release_outstanding_task_locked(completion.task)
                     self._prune_cancelled_sequences_locked(
                         completion.task.source
                     )

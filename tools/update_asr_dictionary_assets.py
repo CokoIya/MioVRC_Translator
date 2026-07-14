@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-DEFAULT_DICTIONARY_URL = "https://78hejiu.top/dictionaries/asr_terms.official.json"
+DEFAULT_DICTIONARY_URL = "https://miovrc.com/dictionaries/asr_terms.official.json"
 
 
 def _project_root() -> Path:

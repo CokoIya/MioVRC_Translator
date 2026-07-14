@@ -58,7 +58,7 @@ from src.version import (
 
 
 RELEASE_TIMEZONE = dt.timezone(dt.timedelta(hours=9), name="JST")
-_HOMEPAGE_URL = "https://78hejiu.top"
+_HOMEPAGE_URL = "https://miovrc.com"
 _DEFAULT_MODEL_RUNTIME_DIR = (
     r"%LOCALAPPDATA%\Mio RealTime Translator\runtime_models\iic--SenseVoiceSmall"
 )

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.asr.errors import ASRTemporaryUnavailableError
 from src.core.realtime_pipelines import RealtimeTranslationResult
 from src.core.realtime_scheduler import (
     AdmissionStatus,
@@ -493,6 +494,92 @@ def test_scheduler_completion_is_applied_as_one_ordered_ui_transaction():
     ]
 
 
+def test_qwen_asr_timeout_uses_localized_asr_failure_instead_of_translation_error():
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 11
+    window._copy = lambda key, **_kwargs: {
+        "asr_temporary_failure": "ASR is recovering",
+    }.get(key, key)
+    bottom = []
+    window._set_bottom = lambda message, color="default", **kwargs: bottom.append(
+        (message, color, kwargs.get("key"))
+    )
+    window._pulse_avatar_error = lambda: None
+    window._restore_runtime_status = lambda *_keys: None
+    window._format_translation_error = lambda _error: (_ for _ in ()).throw(
+        AssertionError("ASR failures must not use translation error formatting")
+    )
+
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=False,
+        config_snapshot={},
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=11,
+        sequence=3,
+        provider_key="qwen3-asr",
+        payload=payload,
+        submitted_at=time.monotonic(),
+    )
+    completion = RealtimeCompletion(
+        task=task,
+        asr_error=ASRTemporaryUnavailableError("hard timeout"),
+    )
+
+    window._deliver_scheduler_completion_ui(completion)
+
+    assert bottom == [
+        ("ASR is recovering", "warning", "asr_temporary_failure")
+    ]
+
+
+def test_stale_asr_marker_without_audio_payload_reports_localized_failure():
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 11
+    window._copy = lambda key, **_kwargs: {
+        "asr_queue_expired": "ASR queue expired",
+    }.get(key, key)
+    bottom = []
+    window._set_bottom = lambda message, color="default", **kwargs: bottom.append(
+        (message, color, kwargs.get("key"))
+    )
+    window._pulse_avatar_error = lambda: None
+
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=11,
+        sequence=4,
+        provider_key="qwen3-asr",
+        payload=None,
+        submitted_at=time.monotonic(),
+    )
+    completion = RealtimeCompletion(
+        task=task,
+        asr_error=TimeoutError("expired before provider admission"),
+        stale_asr=True,
+    )
+
+    window._deliver_scheduler_completion_ui(completion)
+
+    assert bottom == [
+        ("ASR queue expired", "warning", "asr_queue_expired")
+    ]
+
+
 def test_ordered_delivery_holds_scheduler_slot_until_ui_acknowledges():
     window = MainWindow.__new__(MainWindow)
     window._running = True
@@ -572,12 +659,20 @@ def test_stop_workers_cancels_pending_ui_delivery_before_joining_scheduler():
 
     cancel_event = threading.Event()
     pending_cancelled = threading.Event()
+    provider_cancelled = threading.Event()
+
+    class Provider:
+        provider_id = "qwen3-asr"
+
+        def cancel_pending_requests(self):
+            provider_cancelled.set()
 
     class Scheduler:
         threads: tuple = ()
 
         def stop(self, timeout=5.0):
             assert cancel_event.is_set()
+            assert provider_cancelled.is_set()
             return True
 
     window = MainWindow.__new__(MainWindow)
@@ -590,6 +685,8 @@ def test_stop_workers_cancels_pending_ui_delivery_before_joining_scheduler():
         )
     )
     window._realtime_scheduler = Scheduler()
+    window._asr = Provider()
+    window._listen_asr = window._asr
     window._partial_task_queues = {}
     window._partial_workers = {}
     window._final_task_queues = {}
@@ -598,6 +695,7 @@ def test_stop_workers_cancels_pending_ui_delivery_before_joining_scheduler():
     assert window._stop_workers() is None
     assert cancel_event.is_set()
     assert pending_cancelled.is_set()
+    assert provider_cancelled.is_set()
     assert window._ui_priority_callback_queue.empty()
 
 

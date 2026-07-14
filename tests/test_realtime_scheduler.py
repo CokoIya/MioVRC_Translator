@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import gc
 import queue
 import threading
 import time
+import weakref
 from types import SimpleNamespace
 
 import pytest
 
 from src.core.realtime_scheduler import (
     AdmissionStatus,
+    RealtimeASRQueueExpiredError,
     RealtimeTask,
     RealtimeScheduler,
     SchedulerHealth,
@@ -39,6 +42,7 @@ def _scheduler(
     translation_queue_size=8,
     priority_burst=3,
     stale_task_age_s=30.0,
+    max_asr_queue_age_s=None,
     health_check_interval_s=1.0,
     clock=time.monotonic,
 ):
@@ -64,6 +68,7 @@ def _scheduler(
         priority_burst=priority_burst,
         thread_name_prefix="test-realtime",
         stale_task_age_s=stale_task_age_s,
+        max_asr_queue_age_s=max_asr_queue_age_s,
         health_check_interval_s=health_check_interval_s,
         clock=clock,
     )
@@ -78,6 +83,15 @@ def _submit(scheduler, value, *, source=MIC, provider="provider"):
         provider_key=provider,
         payload=value,
     )
+
+
+def _wait_for(predicate, *, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
 
 
 def test_stop_cannot_leave_rewrite_work_enqueued_after_queue_drain():
@@ -461,6 +475,262 @@ def test_overflow_rejects_without_evicting_an_accepted_final_sentence():
     finally:
         release.set()
         assert scheduler.stop(timeout=2)
+
+
+def test_stale_asr_reaper_bounds_markers_until_ordered_head_finishes(caplog):
+    first_started = threading.Event()
+    release_first = threading.Event()
+    asr_payloads: list[str] = []
+    delivered = []
+
+    def asr(task, _cancel):
+        asr_payloads.append(task.payload)
+        first_started.set()
+        release_first.wait(timeout=3)
+        return task.payload
+
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+        asr_concurrency=1,
+        ingress_limits={MIC: 1, DESKTOP: 1},
+        outstanding_limits={MIC: 2, DESKTOP: 2},
+        max_asr_queue_age_s=0.05,
+        health_check_interval_s=0.01,
+    )
+    try:
+        assert _submit(scheduler, "running", provider="shared").accepted
+        assert first_started.wait(timeout=1)
+
+        with caplog.at_level("WARNING", logger="src.core.realtime_scheduler"):
+            stale = _submit(scheduler, "stale", provider="shared")
+            assert stale.accepted
+            assert _submit(
+                scheduler,
+                "overflow",
+                provider="shared",
+            ).status is AdmissionStatus.FULL
+            assert _wait_for(
+                lambda: scheduler.snapshot().stale_asr_dropped == 1,
+                timeout=1,
+            )
+            for index in range(20):
+                assert _submit(
+                    scheduler,
+                    f"still-bounded-{index}",
+                    provider="shared",
+                ).status is AdmissionStatus.FULL
+
+            snapshot = scheduler.snapshot()
+            assert snapshot.ingress_pending[MIC] == 0
+            assert snapshot.outstanding[MIC] == 2
+            assert snapshot.provider_claimed == {"shared": 1}
+            assert len(scheduler._completed[MIC]) == 1
+            marker = scheduler._completed[MIC][stale.task.sequence]
+            assert marker.task.payload is None
+            assert marker.cancelled is False
+            assert isinstance(marker.asr_error, RealtimeASRQueueExpiredError)
+
+        stale_messages = [
+            record.getMessage()
+            for record in caplog.records
+            if "Realtime ASR stale queue drop" in record.getMessage()
+        ]
+        assert len(stale_messages) == 1
+        assert all("source=mic" in message for message in stale_messages)
+        assert all("claimed=False" in message for message in stale_messages)
+        assert all("queue_age_ms=" in message for message in stale_messages)
+        assert all("provider_claimed=1" in message for message in stale_messages)
+
+        release_first.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        recovered = _submit(scheduler, "recovered", provider="shared")
+        assert recovered.accepted
+        assert scheduler.wait_until_idle(timeout=2)
+        snapshot = scheduler.snapshot()
+        assert asr_payloads == ["running", "recovered"]
+        assert [item.task.sequence for item in delivered] == [0, 1, 2]
+        assert isinstance(delivered[1].asr_error, RealtimeASRQueueExpiredError)
+        assert snapshot.stale_asr_dropped == 1
+        assert snapshot.stale_asr_dropped_by_source == {MIC: 1, DESKTOP: 0}
+        assert snapshot.outstanding[MIC] == 0
+        assert snapshot.provider_claimed == {}
+    finally:
+        release_first.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_stale_asr_marker_preserves_strict_delivery_order():
+    now = [100.0]
+    first_started = threading.Event()
+    third_finished_asr = threading.Event()
+    release_first = threading.Event()
+    asr_sequences: list[int] = []
+    delivered: list[tuple[int, str]] = []
+
+    def asr(task, _cancel):
+        asr_sequences.append(task.sequence)
+        if task.sequence == 0:
+            first_started.set()
+            release_first.wait(timeout=3)
+        elif task.sequence == 2:
+            third_finished_asr.set()
+        return task.payload
+
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=lambda completion: delivered.append(
+            (completion.task.sequence, completion.result)
+        ),
+        asr_concurrency=2,
+        translation_concurrency=2,
+        max_asr_queue_age_s=1.0,
+        health_check_interval_s=60.0,
+        clock=lambda: now[0],
+    )
+    try:
+        assert _submit(scheduler, "first", provider="shared").accepted
+        assert first_started.wait(timeout=1)
+        stale = _submit(scheduler, bytearray(b"stale-audio"), provider="shared")
+        assert stale.accepted
+
+        now[0] = 102.0
+        assert _submit(scheduler, "third", provider="other").accepted
+        assert third_finished_asr.wait(timeout=1)
+        assert _wait_for(
+            lambda: scheduler.snapshot().delivery_pending >= 1,
+            timeout=1,
+        )
+
+        assert delivered == []
+        assert asr_sequences == [0, 2]
+        snapshot = scheduler.snapshot()
+        assert snapshot.stale_asr_dropped == 1
+        assert snapshot.recognized_pending[MIC] == 1
+        stale_marker = scheduler._completed[MIC][stale.task.sequence]
+        assert stale_marker.cancelled is False
+        assert stale_marker.stale_asr is True
+        assert stale_marker.task.payload is None
+        assert isinstance(stale_marker.asr_error, RealtimeASRQueueExpiredError)
+
+        release_first.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert delivered == [(0, "first"), (1, None), (2, "third")]
+    finally:
+        release_first.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_claimed_task_that_turns_stale_releases_provider_claim():
+    now = [10.0]
+    claimed = threading.Event()
+    release_claim = threading.Event()
+    asr_called = threading.Event()
+
+    scheduler = RealtimeScheduler(
+        sources=(MIC,),
+        asr_handler=lambda _task, _cancel: asr_called.set(),
+        translation_handler=lambda _task, text, _state, _cancel: text,
+        delivery_handler=lambda _completion: None,
+        ingress_limits={MIC: 1},
+        outstanding_limits={MIC: 1},
+        asr_concurrency=1,
+        translation_concurrency=1,
+        max_asr_queue_age_s=1.0,
+        health_check_interval_s=60.0,
+        clock=lambda: now[0],
+        thread_name_prefix="test-claimed-stale",
+    )
+    original_take = scheduler._take_asr_task
+
+    class AudioPayload:
+        pass
+
+    payload = AudioPayload()
+    payload_ref = weakref.ref(payload)
+
+    def gated_take():
+        task = original_take()
+        if task is not None:
+            claimed.set()
+            release_claim.wait(timeout=3)
+        return task
+
+    scheduler._take_asr_task = gated_take
+    scheduler.start()
+    try:
+        assert _submit(scheduler, payload).accepted
+        del payload
+        assert claimed.wait(timeout=1)
+        snapshot = scheduler.snapshot()
+        assert snapshot.asr_claimed == 1
+        assert snapshot.provider_claimed == {"provider": 1}
+
+        now[0] = 12.0
+        release_claim.set()
+        assert scheduler.wait_until_idle(timeout=2)
+
+        snapshot = scheduler.snapshot()
+        assert not asr_called.is_set()
+        assert snapshot.stale_asr_dropped == 1
+        assert snapshot.asr_claimed == 0
+        assert snapshot.asr_running == 0
+        assert snapshot.provider_claimed == {}
+        assert snapshot.outstanding[MIC] == 0
+        assert scheduler._asr_inflight_sequences == set()
+        gc.collect()
+        assert payload_ref() is None
+    finally:
+        release_claim.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_stale_marker_remains_safe_across_source_cancel_and_stop():
+    now = [20.0]
+    first_started = threading.Event()
+    release_first = threading.Event()
+    delivered = []
+
+    def asr(task, _cancel):
+        first_started.set()
+        release_first.wait(timeout=3)
+        return task.payload
+
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+        asr_concurrency=1,
+        outstanding_limits={MIC: 2, DESKTOP: 2},
+        max_asr_queue_age_s=1.0,
+        health_check_interval_s=60.0,
+        clock=lambda: now[0],
+    )
+    try:
+        assert _submit(scheduler, "running", provider="shared").accepted
+        assert first_started.wait(timeout=1)
+        assert _submit(scheduler, bytearray(b"stale"), provider="shared").accepted
+
+        now[0] = 22.0
+        assert scheduler._drop_stale_asr_tasks() == 1
+        assert scheduler.cancel_source(MIC) == 2
+        release_first.set()
+        assert scheduler.wait_until_idle(timeout=2)
+
+        snapshot = scheduler.snapshot()
+        assert delivered == []
+        assert snapshot.stale_asr_dropped == 1
+        assert snapshot.outstanding[MIC] == 0
+        assert snapshot.provider_claimed == {}
+        assert scheduler._admitted_tasks[MIC] == {}
+        assert scheduler._completed[MIC] == {}
+        assert scheduler._cancelled_sequences[MIC] == set()
+    finally:
+        release_first.set()
+        assert scheduler.stop(timeout=2)
+        assert all(not thread.is_alive() for thread in scheduler.threads)
 
 
 def test_same_provider_asr_concurrency_is_limited_to_one():
