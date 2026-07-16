@@ -11,7 +11,7 @@ import time
 import unicodedata
 import weakref
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -56,6 +56,7 @@ from src.core.realtime_scheduler import (
     RealtimeCompletion,
     RealtimeScheduler,
     RealtimeTask,
+    RealtimeTranslationQueueExpiredError,
 )
 from src.core.rewrite_coordinator import (
     REWRITE_PRIORITY_REALTIME,
@@ -124,9 +125,12 @@ ASR_REWRITE_TASK_QUEUE_MAXSIZE = 4
 ASR_WORKER_CONCURRENCY = 2
 ASR_REWRITE_WORKER_CONCURRENCY = 2
 TRANSLATION_WORKER_CONCURRENCY = 2
-MAX_REALTIME_ASR_QUEUE_AGE_S = 15.0
+MAX_REALTIME_ASR_QUEUE_AGE_S = 5.0
+MAX_REVERSE_TRANSLATION_QUEUE_AGE_S = 4.0
 MIC_PRIORITY_BURST = 3
 DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S = 6.0
+DEFAULT_REVERSE_TRANSLATION_TIMEOUT_S = 4.0
+DEFAULT_REVERSE_ASR_TIMEOUT_S = 5.0
 WORKER_STOP_TIMEOUT_S = 5.0
 CONFIG_SAVE_DEBOUNCE_MS = 280
 MAIN_WINDOW_DEFAULT_SIZE = (940, 440)
@@ -450,6 +454,13 @@ MAIN_COPY = {
         "ru": "Фраза слишком долго ожидала распознавания; повторите её",
         "ko": "음성이 인식 대기열에서 너무 오래 기다렸습니다. 다시 말해 주세요",
     },
+    "translation_queue_expired": {
+        "zh-CN": "逆向翻译等待过久，已丢弃该句以恢复实时处理",
+        "en": "Reverse translation waited too long and was discarded so realtime processing can recover",
+        "ja": "逆翻訳の待機時間が長すぎたため、リアルタイム処理を復旧するためにこの文を破棄しました",
+        "ru": "Обратный перевод ждал слишком долго; фраза отброшена для восстановления обработки в реальном времени",
+        "ko": "역번역 대기 시간이 너무 길어 실시간 처리를 복구하기 위해 해당 문장을 폐기했습니다",
+    },
     "asr_credential_failure": {
         "zh-CN": "语音识别凭据不可用，请在设置中检查对应的 API Key",
         "en": "The speech-recognition credential is unavailable; check its API key in Settings",
@@ -628,10 +639,41 @@ def _create_asr_pair(config: dict):
         # desktop-listen feature ready. Enabling a distinct listen engine while
         # running performs a controlled pipeline restart below.
         return main_asr, main_asr
-    if _listen_asr_reuses_main(config) and _asr_runtime_signature(config, listen_engine) == _asr_runtime_signature(config, main_engine):
+    matching_runtime = (
+        _listen_asr_reuses_main(config)
+        and _asr_runtime_signature(config, listen_engine)
+        == _asr_runtime_signature(config, main_engine)
+    )
+    # Qwen reverse recognition gets its own persistent runtime. Sharing the
+    # same semaphore/HTTP client with microphone recognition serialized both
+    # directions and let a slow mic request block every reverse sentence.
+    isolate_qwen_listen = bool(matching_runtime and listen_engine == "qwen3-asr")
+    if matching_runtime and not isolate_qwen_listen:
         return main_asr, main_asr
+    listen_config = config
+    if listen_engine == "qwen3-asr":
+        listen_config = copy.deepcopy(config)
+        listen_cfg = listen_config.get("vrc_listen", {})
+        if not isinstance(listen_cfg, Mapping):
+            listen_cfg = {}
+        try:
+            reverse_timeout = float(
+                listen_cfg.get(
+                    "asr_timeout_s",
+                    DEFAULT_REVERSE_ASR_TIMEOUT_S,
+                )
+            )
+        except (TypeError, ValueError):
+            reverse_timeout = DEFAULT_REVERSE_ASR_TIMEOUT_S
+        reverse_timeout = max(2.0, min(reverse_timeout, 12.0))
+        qwen_cfg = listen_config.setdefault("asr", {}).setdefault(
+            "qwen3_asr", {}
+        )
+        if isinstance(qwen_cfg, dict):
+            qwen_cfg["hard_timeout_seconds"] = reverse_timeout
+            qwen_cfg["max_retries"] = 0
     try:
-        listen_asr = create_asr(config, engine=listen_engine)
+        listen_asr = create_asr(listen_config, engine=listen_engine)
     except Exception:
         try:
             main_asr.close()
@@ -711,6 +753,7 @@ class _RealtimeAudioPayload:
     send_to_chatbox: bool
     config_snapshot: Mapping[str, Any]
     source_generation: int = 0
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -718,6 +761,7 @@ class _RealtimeTranslationWorkerState:
     """Worker-confined translator state; never shared across translation threads."""
 
     translator: Any = None
+    listen_translator: Any = None
     config_snapshot: Mapping[str, Any] | None = None
     runtime_signature: str | None = None
     config: dict[str, Any] | None = None
@@ -725,11 +769,25 @@ class _RealtimeTranslationWorkerState:
     mic_pipeline: MicPipeline | None = None
     listen_pipeline: ListenPipeline | None = None
 
-    def close_translator(self) -> None:
-        translator = self.translator
-        self.translator = None
-        close = getattr(translator, "close", None)
-        if callable(close):
+    def close_translator(self, source: str | None = None) -> None:
+        if source == DESKTOP_SOURCE:
+            translators = (self.listen_translator,)
+            self.listen_translator = None
+        elif source == MIC_SOURCE:
+            translators = (self.translator,)
+            self.translator = None
+        else:
+            translators = (self.translator, self.listen_translator)
+            self.translator = None
+            self.listen_translator = None
+        closed: list[Any] = []
+        for translator in translators:
+            if translator is None or any(translator is item for item in closed):
+                continue
+            closed.append(translator)
+            close = getattr(translator, "close", None)
+            if not callable(close):
+                continue
             try:
                 close()
             except Exception:
@@ -913,6 +971,12 @@ class MainWindow(QMainWindow):
         self._last_listen_result_at = 0.0
         self._last_listen_diagnostic_log_at = 0.0
         self._last_desktop_device_signature = None
+        self._desktop_recovery_attempt = 0
+        self._desktop_recovery_timer = QTimer(self)
+        self._desktop_recovery_timer.setSingleShot(True)
+        self._desktop_recovery_timer.timeout.connect(
+            self._restart_desktop_capture
+        )
 
         # --- Language ---
         self._current_tgt_lang: str = config.get("translation", {}).get("target_language", "ja")
@@ -1862,7 +1926,10 @@ class MainWindow(QMainWindow):
         listen_asr = getattr(self, "_listen_asr", None)
         if main_asr is None or listen_asr is not main_asr:
             return False
-        return not _listen_asr_reuses_main(self._config)
+        return bool(
+            not _listen_asr_reuses_main(self._config)
+            or _listen_asr_engine(self._config) == "qwen3-asr"
+        )
 
     def _set_desktop_capture_enabled(self, enabled: bool, *, persist: bool) -> None:
         new_value = bool(enabled)
@@ -1883,17 +1950,22 @@ class MainWindow(QMainWindow):
                 self._start_listen()
             except Exception as exc:
                 logger.warning("Desktop listen failed to start: %s", exc)
-                self._desktop_capture_enabled = False
+                self._desktop_capture_enabled = True
                 self._listen_in_speech = False
-                self._config.setdefault("vrc_listen", {})["enabled"] = False
+                self._config.setdefault("vrc_listen", {})["enabled"] = True
                 self._refresh_desktop_capture_button()
                 self._refresh_floating_window_status(False)
                 self._sync_settings_window_vrc_listen_state()
                 self._set_bottom(self._t("main_desktop_listen_failed"), "warning")
+                self._schedule_desktop_capture_recovery(str(exc))
                 if persist:
                     self._schedule_config_save()
                 return
         elif not new_value:
+            recovery_timer = getattr(self, "_desktop_recovery_timer", None)
+            if recovery_timer is not None:
+                recovery_timer.stop()
+            self._desktop_recovery_attempt = 0
             self._stop_listen()
 
         self._desktop_capture_enabled = new_value
@@ -2870,8 +2942,6 @@ class MainWindow(QMainWindow):
                         self._start_listen()
                     except Exception as exc:
                         logger.warning("Desktop listen did not start: %s", exc)
-                        self._desktop_capture_enabled = False
-                        self._config.setdefault("vrc_listen", {})["enabled"] = False
                         self._call_in_ui(
                             lambda sid=session_id: (
                                 self._set_bottom(
@@ -2885,6 +2955,13 @@ class MainWindow(QMainWindow):
                         self._call_in_ui(
                             lambda sid=session_id: (
                                 self._refresh_desktop_capture_button()
+                                if self._running and sid == self._listen_session
+                                else None
+                            )
+                        )
+                        self._call_in_ui(
+                            lambda sid=session_id, detail=str(exc): (
+                                self._schedule_desktop_capture_recovery(detail)
                                 if self._running and sid == self._listen_session
                                 else None
                             )
@@ -3155,9 +3232,12 @@ class MainWindow(QMainWindow):
             asr_concurrency=self._realtime_asr_worker_concurrency(),
             rewrite_concurrency=self._realtime_rewrite_worker_concurrency(),
             translation_concurrency=self._realtime_translation_worker_concurrency(),
-            priority_source=MIC_SOURCE,
+            priority_source=DESKTOP_SOURCE,
             priority_burst=MIC_PRIORITY_BURST,
             max_asr_queue_age_s=MAX_REALTIME_ASR_QUEUE_AGE_S,
+            max_translation_queue_age_s={
+                DESKTOP_SOURCE: MAX_REVERSE_TRANSLATION_QUEUE_AGE_S,
+            },
             thread_name_prefix=f"realtime-{self._listen_session}",
         )
         self._realtime_scheduler = scheduler
@@ -3570,6 +3650,10 @@ class MainWindow(QMainWindow):
             self._last_listen_result_at = self._last_listen_started_at
             self._last_listen_diagnostic_log_at = 0.0
             self._last_desktop_device_signature = (tuple(sorted(self._desktop_devices)), device_name)
+            self._desktop_recovery_attempt = 0
+            recovery_timer = getattr(self, "_desktop_recovery_timer", None)
+            if recovery_timer is not None:
+                recovery_timer.stop()
             self._log_listen_environment("after_start")
             logger.info("Desktop listen started successfully on output device: %s", device_name)
         except Exception:
@@ -3602,7 +3686,33 @@ class MainWindow(QMainWindow):
             else self._t("main_desktop_listen_stopped"),
             "warning",
         )
-        self._set_desktop_capture_enabled(False, persist=True)
+        self._schedule_desktop_capture_recovery(detail)
+
+    def _schedule_desktop_capture_recovery(self, message: str = "") -> None:
+        if (
+            getattr(self, "_destroying", False)
+            or not getattr(self, "_running", False)
+            or not getattr(self, "_desktop_capture_enabled", False)
+        ):
+            return
+        timer = getattr(self, "_desktop_recovery_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._restart_desktop_capture)
+            self._desktop_recovery_timer = timer
+        if timer.isActive():
+            return
+        attempt = int(getattr(self, "_desktop_recovery_attempt", 0)) + 1
+        self._desktop_recovery_attempt = attempt
+        delay_ms = min(500 * (2 ** min(attempt - 1, 4)), 8000)
+        logger.warning(
+            "Scheduling desktop capture recovery attempt=%d delay_ms=%d reason=%s",
+            attempt,
+            delay_ms,
+            message or "capture stopped",
+        )
+        timer.start(delay_ms)
 
     def _desktop_capture_config(self) -> dict:
         cfg = self._config.setdefault("vrc_listen", {})
@@ -3874,9 +3984,9 @@ class MainWindow(QMainWindow):
     def _listen_tail_silence_s(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
         try:
-            return max(0.2, float(listen_cfg.get("tail_silence_s", 0.65)))
+            return max(0.2, float(listen_cfg.get("tail_silence_s", 0.40)))
         except (TypeError, ValueError):
-            return 0.65
+            return 0.40
 
     def _listen_self_suppress_seconds(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
@@ -3979,11 +4089,7 @@ class MainWindow(QMainWindow):
             self._start_listen()
         except Exception as exc:
             logger.warning("Desktop listen failed to restart: %s", exc)
-            self._desktop_capture_enabled = False
             self._listen_in_speech = False
-            listen_cfg = self._config.setdefault("vrc_listen", {})
-            if isinstance(listen_cfg, dict):
-                listen_cfg["enabled"] = False
             self._refresh_desktop_capture_button()
             self._refresh_floating_window_status(False)
             self._sync_settings_window_vrc_listen_state()
@@ -3992,6 +4098,7 @@ class MainWindow(QMainWindow):
                 self._t("main_desktop_listen_failed"),
                 "warning",
             )
+            self._schedule_desktop_capture_recovery(message or str(exc))
 
     def _maybe_log_listen_diagnostics(self) -> None:
         now = time.monotonic()
@@ -4468,6 +4575,18 @@ class MainWindow(QMainWindow):
         config_snapshot = getattr(self, "_realtime_config_snapshot", None)
         if not isinstance(config_snapshot, Mapping):
             config_snapshot = _freeze_snapshot_value(copy.deepcopy(self._config))
+        recorder = (
+            getattr(self, "_listen_recorder", None)
+            if source == DESKTOP_SOURCE
+            else getattr(self, "_recorder", None)
+        )
+        segment_timing = getattr(recorder, "last_segment_timing", {})
+        diagnostics = (
+            dict(segment_timing)
+            if isinstance(segment_timing, Mapping)
+            else {}
+        )
+        diagnostics["payload_built_at"] = time.monotonic()
         return _RealtimeAudioPayload(
             audio=_immutable_audio_snapshot(audio),
             asr_provider=provider,
@@ -4489,6 +4608,7 @@ class MainWindow(QMainWindow):
             source_generation=int(
                 getattr(self, "_realtime_source_generations", {}).get(source, 0)
             ),
+            diagnostics=diagnostics,
         )
 
     def _on_audio_segment(self, audio, source: str = MIC_SOURCE):
@@ -4525,6 +4645,7 @@ class MainWindow(QMainWindow):
             session_id=self._listen_session,
             provider_key=self._asr_provider_key(payload.asr_provider),
             payload=payload,
+            diagnostics=payload.diagnostics,
             provider_concurrency=self._asr_provider_concurrency(
                 payload.asr_provider
             ),
@@ -4629,24 +4750,42 @@ class MainWindow(QMainWindow):
                 "source": task.source,
                 "sequence": task.sequence,
                 "session_id": task.session_id,
+                "timing": payload.diagnostics,
             },
             cancel_event=cancel_event,
         )
         return text
 
-    def _create_realtime_translator(self, config: dict):
+    def _create_realtime_translator(
+        self,
+        config: dict,
+        *,
+        source: str = MIC_SOURCE,
+    ):
         runtime_config = copy.deepcopy(config)
         runtime_translation = runtime_config.get("translation", {})
         if isinstance(runtime_translation, dict):
+            listen_cfg = runtime_config.get("vrc_listen", {})
+            if not isinstance(listen_cfg, Mapping):
+                listen_cfg = {}
+            timeout_key = (
+                "translation_timeout_s"
+                if source == DESKTOP_SOURCE
+                else "realtime_timeout_s"
+            )
+            timeout_default = (
+                DEFAULT_REVERSE_TRANSLATION_TIMEOUT_S
+                if source == DESKTOP_SOURCE
+                else DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S
+            )
             try:
                 realtime_timeout = float(
-                    runtime_translation.get(
-                        "realtime_timeout_s",
-                        DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S,
-                    )
+                    listen_cfg.get(timeout_key, timeout_default)
+                    if source == DESKTOP_SOURCE
+                    else runtime_translation.get(timeout_key, timeout_default)
                 )
             except (TypeError, ValueError):
-                realtime_timeout = DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S
+                realtime_timeout = timeout_default
             realtime_timeout = max(2.0, min(realtime_timeout, 30.0))
             for backend_config in runtime_translation.values():
                 if isinstance(backend_config, dict):
@@ -4863,12 +5002,18 @@ class MainWindow(QMainWindow):
             worker_state.mic_pipeline = MicPipeline(
                 config_snapshot,
                 dispatcher,
-                translator_factory=self._create_realtime_translator,
+                translator_factory=lambda cfg: self._create_realtime_translator(
+                    cfg,
+                    source=MIC_SOURCE,
+                ),
             )
             worker_state.listen_pipeline = ListenPipeline(
                 config_snapshot,
                 dispatcher,
-                translator_factory=self._create_realtime_translator,
+                translator_factory=lambda cfg: self._create_realtime_translator(
+                    cfg,
+                    source=DESKTOP_SOURCE,
+                ),
             )
 
         if task.source == DESKTOP_SOURCE:
@@ -4898,10 +5043,15 @@ class MainWindow(QMainWindow):
             return None
 
         try:
+            active_translator = (
+                worker_state.listen_translator
+                if task.source == DESKTOP_SOURCE
+                else worker_state.translator
+            )
             try:
                 result, translator = pipeline.translate_plan(
                     plan,
-                    worker_state.translator,
+                    active_translator,
                     context_session_id=task.session_id,
                     defer_context_commit=True,
                     context_sequence=task.sequence,
@@ -4914,16 +5064,32 @@ class MainWindow(QMainWindow):
                     raise
                 result, translator = pipeline.translate_plan(
                     plan,
-                    worker_state.translator,
+                    active_translator,
                 )
-            worker_state.translator = translator
+            if task.source == DESKTOP_SOURCE:
+                worker_state.listen_translator = translator
+            else:
+                worker_state.translator = translator
+            metrics_getter = getattr(translator, "translation_metrics", None)
+            if callable(metrics_getter):
+                try:
+                    metrics = metrics_getter()
+                except Exception:
+                    metrics = {}
+                if isinstance(metrics, Mapping):
+                    payload.diagnostics.update(
+                        {
+                            f"translation_{key}": value
+                            for key, value in metrics.items()
+                        }
+                    )
             if result.api_translation_used:
                 self._record_source_translation_success(task.source)
             return result
         except Exception as exc:
             friendly = self._format_translation_error(exc)
             self._record_source_translation_failure(task.source, friendly)
-            worker_state.close_translator()
+            worker_state.close_translator(task.source)
             raise
 
     def _scheduler_delivery_stage(self, completion: RealtimeCompletion) -> None:
@@ -4936,16 +5102,29 @@ class MainWindow(QMainWindow):
 
         acknowledged = threading.Event()
         cancel_event = getattr(self, "_realtime_delivery_cancel_event", None)
+        ui_enqueued_at = time.monotonic()
+        ui_timing = {
+            "started_at": ui_enqueued_at,
+            "finished_at": ui_enqueued_at,
+        }
 
         def deliver_on_ui() -> None:
+            ui_timing["started_at"] = time.monotonic()
             try:
                 if cancel_event is None or not cancel_event.is_set():
                     self._deliver_scheduler_completion_ui(completion)
             finally:
+                ui_timing["finished_at"] = time.monotonic()
                 acknowledged.set()
 
         if threading.get_ident() == getattr(self, "_ui_thread_id", None):
             deliver_on_ui()
+            self._log_reverse_latency(
+                completion,
+                ui_enqueued_at=ui_enqueued_at,
+                ui_started_at=ui_timing["started_at"],
+                ui_finished_at=ui_timing["finished_at"],
+            )
             return
         if not self._call_in_ui(deliver_on_ui, priority=True):
             return
@@ -4955,6 +5134,76 @@ class MainWindow(QMainWindow):
                 return
             if not self._realtime_task_active(task):
                 return
+        self._log_reverse_latency(
+            completion,
+            ui_enqueued_at=ui_enqueued_at,
+            ui_started_at=ui_timing["started_at"],
+            ui_finished_at=ui_timing["finished_at"],
+        )
+
+    def _log_reverse_latency(
+        self,
+        completion: RealtimeCompletion,
+        *,
+        ui_enqueued_at: float,
+        ui_started_at: float,
+        ui_finished_at: float,
+    ) -> None:
+        task = completion.task
+        if getattr(task, "source", None) != DESKTOP_SOURCE:
+            return
+        diagnostics = task.diagnostics
+        if not isinstance(diagnostics, Mapping):
+            diagnostics = {}
+
+        def seconds(name: str, default: float = 0.0) -> float:
+            try:
+                return max(0.0, float(diagnostics.get(name, default) or default))
+            except (TypeError, ValueError):
+                return max(0.0, float(default))
+
+        context_s = seconds("translation_context_lookup_s") + seconds(
+            "translation_prompt_build_s"
+        )
+        provider_s = seconds("translation_provider_s")
+        if provider_s <= 0.0:
+            provider_s = max(0.0, completion.translation_duration_s - context_s)
+        speech_ended_at = seconds("speech_ended_at")
+        total_anchor = speech_ended_at or task.submitted_at
+        reorder_s = (
+            completion.recognition_reorder_wait_s
+            + completion.rewrite_reorder_wait_s
+            + completion.ordered_delivery_wait_s
+        )
+        logger.info(
+            "Reverse latency source=%s sequence=%d stale_asr=%s stale_translation=%s "
+            "vad_ms=%.1f capture_to_admission_ms=%.1f asr_queue_ms=%.1f "
+            "asr_event_loop_queue_ms=%.1f asr_provider_queue_ms=%.1f "
+            "asr_provider_ms=%.1f translation_context_ms=%.1f "
+            "translation_queue_ms=%.1f translation_provider_ms=%.1f "
+            "reorder_ms=%.1f ui_queue_ms=%.1f ui_delivery_ms=%.1f "
+            "tts_wait_ms=0.0 tts_queued=false asr_connection_reused=%s "
+            "total_ms=%.1f",
+            task.source,
+            task.sequence,
+            completion.stale_asr,
+            completion.stale_translation,
+            seconds("vad_finalization_s") * 1000.0,
+            max(0.0, task.submitted_at - seconds("segment_emitted_at", task.submitted_at))
+            * 1000.0,
+            completion.asr_queue_wait_s * 1000.0,
+            seconds("asr_event_loop_queue_s") * 1000.0,
+            seconds("asr_provider_queue_s") * 1000.0,
+            seconds("asr_provider_s", completion.asr_duration_s) * 1000.0,
+            context_s * 1000.0,
+            completion.translation_queue_wait_s * 1000.0,
+            provider_s * 1000.0,
+            reorder_s * 1000.0,
+            max(0.0, ui_started_at - ui_enqueued_at) * 1000.0,
+            max(0.0, ui_finished_at - ui_started_at) * 1000.0,
+            diagnostics.get("asr_connection_reused", "unknown"),
+            max(0.0, ui_finished_at - total_anchor) * 1000.0,
+        )
 
     def _commit_realtime_translation_context(
         self,
@@ -5081,6 +5330,16 @@ class MainWindow(QMainWindow):
 
             error = completion.error
             if error is not None:
+                if isinstance(error, RealtimeTranslationQueueExpiredError):
+                    message = self._copy("translation_queue_expired")
+                    self._set_bottom(
+                        message,
+                        "warning",
+                        key="translation_queue_expired",
+                    )
+                    if task.source == DESKTOP_SOURCE:
+                        self._show_listen_translation(message, source="error")
+                    return
                 friendly = self._format_translation_error(error)
                 if task.source == DESKTOP_SOURCE:
                     self._set_bottom(

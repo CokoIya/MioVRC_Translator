@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import logging
 import os
 import queue
@@ -109,6 +110,7 @@ from src.ui_qt.styles import build_settings_window_styles
 from src.ui_qt.theme import MAIN_THEME_CONFIG_KEY, icon_tint, normalize_theme_preference, resolve_theme, theme_tokens
 from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
+from src.translators.factory import test_translation_connection
 from src.updater.update_checker import UpdateInfo, check_for_update, fetch_latest_installer_info
 from src.utils import config_manager
 from src.utils.config_manager import normalize_style_bert_bert_language
@@ -124,6 +126,9 @@ from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
 from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
 from src.utils.i18n import tr
+from src.utils.openai_compat import normalize_openai_custom_headers
+from src.utils.secure_http import validate_api_base_url
+from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
@@ -135,6 +140,7 @@ from src.utils.ui_config import (
     backend_base_url_is_editable,
     backend_has_service_regions,
     backend_model_is_selectable,
+    backend_model_is_editable,
     backend_region_for_ui_language,
     backend_region_from_base_url,
     get_backend_api_key_hint,
@@ -1147,9 +1153,14 @@ QT_SETTINGS_COPY.update({
         "ja": "補正辞書",
     },
     "settings_dictionary_hint": {
-        "zh-CN": "只用来修正语音识别错字。平时不会联网，只有你点更新时才会下载官方词典。",
-        "en": "Only used to fix speech-to-text mistakes. It stays offline until you click update.",
-        "ja": "音声認識の誤字修正用です。更新ボタンを押した時だけオンライン取得します。",
+        "zh-CN": "启用时会在改写和翻译前修正语音识别错字。关闭不会删除任何词典数据，只有点击更新时才会联网。",
+        "en": "When enabled, ASR mistakes are corrected before rewrite and translation. Disabling it keeps all dictionary data. It only goes online when you click update.",
+        "ja": "有効にすると、書き換えや翻訳の前に音声認識の誤りを補正します。無効にしても辞書データは保持され、更新時だけオンライン接続します。",
+    },
+    "settings_dictionary_enabled": {
+        "zh-CN": "启用纠错词典",
+        "en": "Enable Correction Dictionary",
+        "ja": "補正辞書を有効にする",
     },
     "settings_dictionary_update": {
         "zh-CN": "更新词典",
@@ -1871,9 +1882,10 @@ _SETTINGS_COMPLETE_RU_KO_COPY = {
     "tail_silence": {"ru": "Конечная тишина (с)", "ko": "끝 무음 시간(초)"},
     "tts_no_virtual_device": {"ru": "Виртуальный микрофон MixLine не обнаружен.", "ko": "MixLine 가상 마이크를 찾지 못했습니다."},
     "settings_dictionary": {"ru": "Словарь исправлений", "ko": "교정 사전"},
+    "settings_dictionary_enabled": {"ru": "Включить словарь исправлений", "ko": "교정 사전 사용"},
     "settings_dictionary_hint": {
-        "ru": "Используется только для исправления ошибок распознавания речи. Словарь работает офлайн и выходит в сеть лишь при обновлении.",
-        "ko": "음성 인식 오류를 교정할 때만 사용합니다. 업데이트를 누르기 전까지 오프라인으로 동작합니다.",
+        "ru": "Когда включено, ошибки распознавания исправляются до перезаписи и перевода. Отключение не удаляет данные словаря; сеть используется только при обновлении.",
+        "ko": "켜면 재작성 및 번역 전에 음성 인식 오류를 교정합니다. 꺼도 사전 데이터는 유지되며 업데이트할 때만 네트워크를 사용합니다.",
     },
     "settings_dictionary_update": {"ru": "Обновить словарь", "ko": "사전 업데이트"},
     "settings_dictionary_custom": {"ru": "Пользовательский словарь", "ko": "사용자 사전"},
@@ -2306,6 +2318,7 @@ _BACKEND_API_HINT_KEYS = {
     backend: f"backend_api_hint_{backend}"
     for backend in (
         "openai_compatible",
+        "grok_compatible",
         "local_ai",
         "deepl",
         "libretranslate",
@@ -2321,6 +2334,7 @@ _BACKEND_MODEL_HINT_KEYS = {
     backend: f"backend_model_hint_{backend}"
     for backend in (
         "openai_compatible",
+        "grok_compatible",
         "local_ai",
         "google_web",
         "mymemory",
@@ -2342,6 +2356,7 @@ for _backend, _key in _BACKEND_MODEL_HINT_KEYS.items():
 _BACKEND_HINT_TRANSLATIONS = {
     "zh-CN": {
         "backend_api_hint_openai_compatible": "用于兼容 OpenAI 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
+        "backend_api_hint_grok_compatible": "可使用 xAI 密钥或任意 Grok 兼容中继服务提供的凭据。Base URL 不限于 xAI 官方端点。",
         "backend_api_hint_local_ai": "本地服务不需要密钥时请留空；只有服务器要求时才填写。",
         "backend_api_hint_deepl": "请使用 DeepL API Free 密钥；付费密钥应改用 https://api.deepl.com/v2。",
         "backend_api_hint_libretranslate": "可选。本地或自建 LibreTranslate 不需要密钥时请留空。",
@@ -2352,6 +2367,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "托管端点使用 NVIDIA API Catalog 密钥；自建 NIM 或代理请选择自定义。",
         "backend_api_hint_anthropic_compatible": "用于兼容 Claude 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
         "backend_model_hint_openai_compatible": "选择代理公开的模型 ID；已保存的自定义模型会继续保留在列表中。",
+        "backend_model_hint_grok_compatible": "默认模型为 grok-4.5。中继服务的自定义模型名称会按输入内容原样保存，不会被改写。",
         "backend_model_hint_local_ai": "填写本地 OpenAI 兼容服务器公开的模型名称。",
         "backend_model_hint_google_web": "无需 API Key。使用 Google 公共网页翻译；可访问地区质量较好，中国大陆连接可能不稳定。",
         "backend_model_hint_mymemory": "无需 API Key。适合作为零配置备用方案，但公共配额和不同语种的质量会波动。",
@@ -2365,6 +2381,7 @@ _BACKEND_HINT_TRANSLATIONS = {
     },
     "ja": {
         "backend_api_hint_openai_compatible": "OpenAI 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
+        "backend_api_hint_grok_compatible": "xAI キーまたは任意の Grok 互換中継サービスの認証情報を使用できます。Base URL は xAI 公式エンドポイントに限定されません。",
         "backend_api_hint_local_ai": "ローカルサーバーが API キーを要求しない場合は空欄にしてください。",
         "backend_api_hint_deepl": "DeepL API Free キーを使用します。有料キーでは https://api.deepl.com/v2 を指定してください。",
         "backend_api_hint_libretranslate": "任意指定です。ローカル／自前の LibreTranslate がキー不要なら空欄にします。",
@@ -2375,6 +2392,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "ホスト型は NVIDIA API Catalog キー、自前の NIM／プロキシはカスタムを使用します。",
         "backend_api_hint_anthropic_compatible": "Claude 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
         "backend_model_hint_openai_compatible": "プロキシが公開するモデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
+        "backend_model_hint_grok_compatible": "既定は grok-4.5 です。中継サービス固有のモデル名は入力どおり保存され、書き換えられません。",
         "backend_model_hint_local_ai": "ローカルの OpenAI 互換サーバーが公開するモデル名を入力します。",
         "backend_model_hint_google_web": "API キー不要の Google 公開翻訳です。利用可能地域では高品質ですが、中国本土では接続が不安定な場合があります。",
         "backend_model_hint_mymemory": "API キー不要の予備手段です。公開枠と翻訳メモリの品質は言語ペアにより変動します。",
@@ -2388,6 +2406,7 @@ _BACKEND_HINT_TRANSLATIONS = {
     },
     "ru": {
         "backend_api_hint_openai_compatible": "Для прокси и шлюзов, совместимых с OpenAI. Укажите Base URL и идентификатор модели от провайдера.",
+        "backend_api_hint_grok_compatible": "Можно использовать ключ xAI или учётные данные любого Grok-совместимого шлюза. Base URL не ограничен официальными адресами xAI.",
         "backend_api_hint_local_ai": "Оставьте пустым, если локальный сервер не требует API-ключ.",
         "backend_api_hint_deepl": "Используйте ключ DeepL API Free; для платного ключа задайте https://api.deepl.com/v2.",
         "backend_api_hint_libretranslate": "Необязательно. Оставьте пустым для локального LibreTranslate без API-ключа.",
@@ -2398,6 +2417,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "Для хостинга используйте ключ NVIDIA API Catalog; для своего NIM или прокси выберите пользовательский адрес.",
         "backend_api_hint_anthropic_compatible": "Для прокси и шлюзов, совместимых с Claude. Укажите Base URL и идентификатор модели от провайдера.",
         "backend_model_hint_openai_compatible": "Выберите ID модели, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
+        "backend_model_hint_grok_compatible": "Модель по умолчанию — grok-4.5. Пользовательские имена моделей шлюза сохраняются без изменений.",
         "backend_model_hint_local_ai": "Введите имя модели, которое предоставляет локальный OpenAI-совместимый сервер.",
         "backend_model_hint_google_web": "API-ключ не нужен. Используется публичный перевод Google; в Китае доступ может быть нестабильным.",
         "backend_model_hint_mymemory": "API-ключ не нужен. Удобный резерв без настройки, но квота и качество зависят от языковой пары.",
@@ -2411,6 +2431,7 @@ _BACKEND_HINT_TRANSLATIONS = {
     },
     "ko": {
         "backend_api_hint_openai_compatible": "OpenAI 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
+        "backend_api_hint_grok_compatible": "xAI 키 또는 Grok 호환 중계 서비스가 발급한 자격 증명을 사용할 수 있습니다. Base URL은 xAI 공식 엔드포인트로 제한되지 않습니다.",
         "backend_api_hint_local_ai": "로컬 서버가 API 키를 요구하지 않으면 비워 두세요.",
         "backend_api_hint_deepl": "DeepL API Free 키를 사용합니다. 유료 키는 https://api.deepl.com/v2 를 지정하세요.",
         "backend_api_hint_libretranslate": "선택 사항입니다. 로컬 또는 자체 LibreTranslate가 키를 요구하지 않으면 비워 두세요.",
@@ -2421,6 +2442,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "호스팅은 NVIDIA API Catalog 키를, 자체 NIM 또는 프록시는 사용자 지정을 사용합니다.",
         "backend_api_hint_anthropic_compatible": "Claude 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
         "backend_model_hint_openai_compatible": "프록시가 제공하는 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
+        "backend_model_hint_grok_compatible": "기본 모델은 grok-4.5입니다. 중계 서비스의 사용자 지정 모델 이름은 입력한 그대로 저장되며 변경되지 않습니다.",
         "backend_model_hint_local_ai": "로컬 OpenAI 호환 서버가 제공하는 모델 이름을 입력합니다.",
         "backend_model_hint_google_web": "API 키가 필요 없는 Google 공개 번역입니다. 사용 가능한 지역에서는 품질이 좋지만 중국 본토에서는 불안정할 수 있습니다.",
         "backend_model_hint_mymemory": "API 키가 필요 없는 대체 수단입니다. 공개 할당량과 번역 메모리 품질은 언어 조합에 따라 달라집니다.",
@@ -2911,6 +2933,7 @@ class SettingsWindow(QDialog):
     update_check_no_update = Signal()
     update_check_failed = Signal(str)
     tts_test_finished = Signal(int, bool, str)
+    translation_connection_test_finished = Signal(int, bool, object)
     ui_callback_requested = Signal()
 
     def __init__(
@@ -2977,6 +3000,8 @@ class SettingsWindow(QDialog):
         self._backend_model_var = _StrVar()
         self._backend_timeout_var = _StrVar()
         self._backend_retries_var = _StrVar()
+        self._backend_custom_headers_var = _StrVar()
+        self._backend_streaming_var = _BoolVar(False)
         self._fallback_backends_var = _StrVar()
         self._qwen_translation_region_var = _StrVar()
         self._src_lang_var = _StrVar()
@@ -3061,6 +3086,7 @@ class SettingsWindow(QDialog):
         self._avatar_muted_var = _StrVar()
         self._avatar_error_var = _StrVar()
         self._avatar_target_language_var = _StrVar()
+        self._dictionary_enabled_var = _BoolVar(True)
         self._dictionary_custom_replacement_var = _StrVar()
         self._dictionary_custom_patterns_var = _StrVar()
 
@@ -3137,6 +3163,10 @@ class SettingsWindow(QDialog):
         self._backend_model_badge_labels: dict[str, QLabel] = {}
         self._backend_base_url_entry: QLineEdit | None = None
         self._backend_api_key_entry: QLineEdit | None = None
+        self._translation_connection_test_btn: QPushButton | None = None
+        self._translation_connection_test_generation = 0
+        self._translation_connection_testing = False
+        self._translation_connection_test_backend = ""
         self._qwen_api_key_entry: QLineEdit | None = None
         self._gemini_api_key_entry: QLineEdit | None = None
         self._qwen_model_hint_label: QLabel | None = None
@@ -3172,6 +3202,9 @@ class SettingsWindow(QDialog):
         self.update_check_no_update.connect(self._on_update_check_no_update)
         self.update_check_failed.connect(self._on_update_check_failed)
         self.tts_test_finished.connect(self._finish_tts_test)
+        self.translation_connection_test_finished.connect(
+            self._finish_translation_connection_test
+        )
         self.ui_callback_requested.connect(self._drain_ui_callback_queue)
         if self._preloaded:
             QTimer.singleShot(120, self._prebuild_next_page)
@@ -3289,6 +3322,10 @@ class SettingsWindow(QDialog):
         self._asr_engine_var.set(asr_label)
         self._init_asr_device_vars(asr_cfg)
         self._init_asr_provider_vars(asr_cfg)
+        correction_cfg = asr_cfg.get("correction", {})
+        if not isinstance(correction_cfg, dict):
+            correction_cfg = {}
+        self._dictionary_enabled_var.set(bool(correction_cfg.get("enabled", True)))
 
         mode_auto = self._copy("input_device_mode_auto")
         mode_fixed = self._copy("input_device_mode_fixed")
@@ -3343,7 +3380,7 @@ class SettingsWindow(QDialog):
         self._listen_self_suppress_var.set(bool(vrc_cfg.get("self_suppress", False)))
         self._listen_self_suppress_seconds_var.set(self._format_numeric_input(vrc_cfg.get("self_suppress_seconds", 0.65)))
         self._listen_segment_duration_var.set(self._format_numeric_input(vrc_cfg.get("segment_duration_s", 2.0)))
-        self._listen_tail_silence_var.set(self._format_numeric_input(vrc_cfg.get("tail_silence_s", 0.65)))
+        self._listen_tail_silence_var.set(self._format_numeric_input(vrc_cfg.get("tail_silence_s", 0.40)))
         self._listen_vad_min_rms_var.set(self._format_numeric_input(vrc_cfg.get("vad_min_rms", 0.02)))
         listen_src = str(vrc_cfg.get("source_language", "auto"))
         listen_tgt = str(vrc_cfg.get("target_language", "zh"))
@@ -3774,6 +3811,12 @@ class SettingsWindow(QDialog):
         trans_cfg = self._config.get("translation", {})
         if not isinstance(trans_cfg, dict):
             trans_cfg = {}
+        backend_cfg = (
+            trans_cfg.get(backend, {})
+            if isinstance(trans_cfg.get(backend, {}), dict)
+            else {}
+        )
+        spec = get_backend_spec(backend)
         self._backend_api_key_var.set(get_backend_config_value(trans_cfg, backend, "api_key"))
         self._backend_base_url_var.set(get_backend_config_value(trans_cfg, backend, "base_url"))
         self._backend_model_var.set(get_backend_config_value(trans_cfg, backend, "model"))
@@ -3787,6 +3830,29 @@ class SettingsWindow(QDialog):
                 get_backend_config_value(trans_cfg, backend, "max_retries")
             )
         )
+        custom_headers = backend_cfg.get("custom_headers", {})
+        if isinstance(custom_headers, dict) and custom_headers:
+            self._backend_custom_headers_var.set(
+                json.dumps(
+                    custom_headers,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            self._backend_custom_headers_var.set("")
+        raw_streaming = backend_cfg.get("streaming", spec.get("streaming", False))
+        if isinstance(raw_streaming, str):
+            streaming = raw_streaming.strip().casefold() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+                "enabled",
+            }
+        else:
+            streaming = bool(raw_streaming)
+        self._backend_streaming_var.set(streaming)
         if backend_has_service_regions(backend):
             self._set_backend_region_vars(backend, trans_cfg)
         else:
@@ -5229,6 +5295,11 @@ class SettingsWindow(QDialog):
 
     def _build_dictionary_page(self, layout: QVBoxLayout) -> None:
         self._section_title(layout, self._copy("settings_dictionary"))
+        self._build_switch_row(
+            layout,
+            self._copy("settings_dictionary_enabled"),
+            self._dictionary_enabled_var,
+        )
         hint = QLabel(self._copy("settings_dictionary_hint"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
@@ -5453,6 +5524,7 @@ class SettingsWindow(QDialog):
         self._clear_layout(self._backend_fields_layout)
         self._backend_api_key_entry = None
         self._backend_base_url_entry = None
+        self._translation_connection_test_btn = None
 
         spec = get_backend_spec(backend)
         api_key_input = str(spec.get("api_key_input", "entry")).strip().lower()
@@ -5506,6 +5578,9 @@ class SettingsWindow(QDialog):
         model_options = list(get_backend_model_options(backend, self._backend_model_var.value()))
         if backend_model_is_selectable(backend) and model_options:
             model_widget = self._combo("backend_model", self._backend_model_var, model_options, self._on_backend_model_changed)
+            if backend_model_is_editable(backend):
+                model_widget.setEditable(True)
+                model_widget.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
         else:
             model_widget = self._line_edit("backend_model", self._backend_model_var)
@@ -5521,6 +5596,45 @@ class SettingsWindow(QDialog):
             self._backend_fields_layout.addWidget(model_hint_label)
         self._row_layout(self._backend_fields_layout, self._copy("request_timeout"), self._line_edit("backend_timeout", self._backend_timeout_var, 120))
         self._row_layout(self._backend_fields_layout, self._copy("request_retries"), self._line_edit("backend_retries", self._backend_retries_var, 120))
+        if spec.get("custom_headers_input"):
+            headers_entry = self._line_edit(
+                "backend_custom_headers",
+                self._backend_custom_headers_var,
+            )
+            headers_entry.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+            headers_entry.setPlaceholderText(
+                tr(self._ui_lang, "custom_request_headers_example")
+            )
+            self._row_layout(
+                self._backend_fields_layout,
+                tr(self._ui_lang, "custom_request_headers"),
+                headers_entry,
+            )
+            headers_hint = QLabel(tr(self._ui_lang, "custom_request_headers_hint"))
+            headers_hint.setObjectName("hintLabel")
+            headers_hint.setWordWrap(True)
+            self._backend_fields_layout.addWidget(headers_hint)
+        if spec.get("streaming_input"):
+            self._row_layout(
+                self._backend_fields_layout,
+                tr(self._ui_lang, "streaming_responses"),
+                self._check("backend_streaming", self._backend_streaming_var),
+            )
+            streaming_hint = QLabel(tr(self._ui_lang, "streaming_responses_hint"))
+            streaming_hint.setObjectName("hintLabel")
+            streaming_hint.setWordWrap(True)
+            self._backend_fields_layout.addWidget(streaming_hint)
+
+        test_row = QHBoxLayout()
+        test_row.addStretch(1)
+        test_btn = QPushButton(tr(self._ui_lang, "test_connection"))
+        test_btn.setObjectName("secondaryButton")
+        self._fit_button_to_text(test_btn, min_width=150, height=36, padding=34)
+        test_btn.clicked.connect(self._test_translation_connection)
+        test_btn.setEnabled(not self._translation_connection_testing)
+        self._translation_connection_test_btn = test_btn
+        test_row.addWidget(test_btn)
+        self._backend_fields_layout.addLayout(test_row)
         self._build_backend_model_info_card(self._backend_fields_layout)
 
     def _build_backend_model_info_card(self, parent: QVBoxLayout) -> None:
@@ -5615,6 +5729,130 @@ class SettingsWindow(QDialog):
             return False
         self._show_missing_credential(missing)
         return True
+
+    def _translation_connection_config(self) -> dict:
+        cfg = copy.deepcopy(self._config)
+        trans_cfg = cfg.setdefault("translation", {})
+        backend = self._backend_code()
+        trans_cfg["backend"] = backend
+        trans_cfg["fallback_backends"] = []
+        backend_cfg = trans_cfg.setdefault(backend, {})
+        if not isinstance(backend_cfg, dict):
+            backend_cfg = {}
+            trans_cfg[backend] = backend_cfg
+        backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
+        backend_cfg["base_url"] = (
+            self._backend_base_url_var.value().strip().rstrip("/")
+            or get_backend_value(backend, "base_url")
+        )
+        backend_cfg["model"] = (
+            self._backend_model_var.value().strip()
+            or get_backend_value(backend, "model")
+        )
+        backend_cfg["timeout_s"] = self._parse_float_range(
+            self._backend_timeout_var.value(),
+            self._copy("request_timeout"),
+            3.0,
+            120.0,
+        )
+        backend_cfg["max_retries"] = int(
+            self._parse_float_range(
+                self._backend_retries_var.value(),
+                self._copy("request_retries"),
+                0.0,
+                3.0,
+            )
+        )
+        spec = get_backend_spec(backend)
+        if spec.get("custom_headers_input"):
+            try:
+                backend_cfg["custom_headers"] = normalize_openai_custom_headers(
+                    self._backend_custom_headers_var.value()
+                )
+            except ValueError as exc:
+                raise ValueError(tr(self._ui_lang, "invalid_custom_headers")) from exc
+        if spec.get("streaming_input"):
+            backend_cfg["streaming"] = self._backend_streaming_var.value()
+        return cfg
+
+    def _test_translation_connection(self) -> None:
+        if self._translation_connection_testing:
+            return
+        if self._prompt_for_missing_credential("translation"):
+            return
+        try:
+            snapshot = self._translation_connection_config()
+        except ValueError as exc:
+            message = str(exc)
+            QMessageBox.warning(
+                self,
+                tr(self._ui_lang, "connection_test_failed"),
+                message,
+            )
+            return
+
+        self._translation_connection_testing = True
+        self._translation_connection_test_generation += 1
+        generation = self._translation_connection_test_generation
+        self._translation_connection_test_backend = self._backend_code()
+        button = self._translation_connection_test_btn
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(tr(self._ui_lang, "connection_test_running"))
+
+        def worker() -> None:
+            try:
+                result = test_translation_connection(snapshot)
+            except Exception as exc:
+                self.translation_connection_test_finished.emit(
+                    generation,
+                    False,
+                    exc,
+                )
+            else:
+                self.translation_connection_test_finished.emit(
+                    generation,
+                    True,
+                    result,
+                )
+
+        threading.Thread(
+            target=worker,
+            name="translation-connection-test",
+            daemon=True,
+        ).start()
+
+    def _finish_translation_connection_test(
+        self,
+        generation: int,
+        success: bool,
+        result: object,
+    ) -> None:
+        if generation != self._translation_connection_test_generation:
+            return
+        self._translation_connection_testing = False
+        button = self._translation_connection_test_btn
+        if button is not None:
+            button.setEnabled(True)
+            button.setText(tr(self._ui_lang, "test_connection"))
+            self._fit_button_to_text(button, min_width=150, height=36, padding=34)
+        if success:
+            QMessageBox.information(
+                self,
+                tr(self._ui_lang, "test_connection"),
+                tr(self._ui_lang, "connection_test_success"),
+            )
+            return
+        friendly = format_translation_error(
+            result,
+            backend=self._translation_connection_test_backend,
+            ui_language=self._ui_lang,
+        )
+        QMessageBox.warning(
+            self,
+            tr(self._ui_lang, "connection_test_failed"),
+            friendly.detailed_message,
+        )
 
     def _refresh_backend_model_info(self) -> None:
         if self._backend_model_info_title_label is None or self._backend_model_info_note_label is None:
@@ -8224,6 +8462,11 @@ class SettingsWindow(QDialog):
         )
         asr_cfg["engine_source"] = "manual"
         asr_cfg["user_selected_engine"] = True
+        correction_cfg = asr_cfg.setdefault("correction", {})
+        if not isinstance(correction_cfg, dict):
+            correction_cfg = {}
+            asr_cfg["correction"] = correction_cfg
+        correction_cfg["enabled"] = self._dictionary_enabled_var.value()
         qwen_cfg = asr_cfg.setdefault("qwen3_asr", {})
         if isinstance(qwen_cfg, dict):
             qwen_region = self._selected_qwen_region()
@@ -8257,6 +8500,31 @@ class SettingsWindow(QDialog):
         try:
             backend_timeout_s = self._parse_float_range(self._backend_timeout_var.value(), self._copy("request_timeout"), 3.0, 120.0)
             backend_retries = int(self._parse_float_range(self._backend_retries_var.value(), self._copy("request_retries"), 0.0, 3.0))
+            backend_spec = get_backend_spec(backend)
+            backend_custom_headers: dict[str, str] | None = None
+            if backend == "grok_compatible":
+                try:
+                    backend_cfg["base_url"] = validate_api_base_url(
+                        backend_cfg.get("base_url", ""),
+                        label="Grok-compatible API",
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        format_translation_error(
+                            exc,
+                            backend=backend,
+                            ui_language=self._ui_lang,
+                        ).detailed_message
+                    ) from exc
+            if backend_spec.get("custom_headers_input"):
+                try:
+                    backend_custom_headers = normalize_openai_custom_headers(
+                        self._backend_custom_headers_var.value()
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        tr(self._ui_lang, "invalid_custom_headers")
+                    ) from exc
             vad_threshold = self._parse_positive_float(self._vad_var.value(), self._copy("vad_seconds"))
             chunk_interval_ms = int(
                 self._parse_float_range(
@@ -8313,6 +8581,10 @@ class SettingsWindow(QDialog):
         if isinstance(backend_cfg, dict):
             backend_cfg["timeout_s"] = backend_timeout_s
             backend_cfg["max_retries"] = backend_retries
+            if backend_custom_headers is not None:
+                backend_cfg["custom_headers"] = backend_custom_headers
+            if backend_spec.get("streaming_input"):
+                backend_cfg["streaming"] = self._backend_streaming_var.value()
 
         if chunk_window_s * 1000 < chunk_interval_ms:
             QMessageBox.warning(self, self._copy("save_failed"), self._copy("recognition_window_too_short"))

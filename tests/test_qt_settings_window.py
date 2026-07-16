@@ -759,6 +759,144 @@ def test_settings_window_voice_page_shows_dictionary_status(qtbot, config, monke
     dialog.reject()
 
 
+def test_dictionary_switch_loads_localizes_and_saves_without_deleting_data(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["translation"]["openai"] = {"api_key": "test-key"}
+    config["asr"]["correction"] = {
+        "enabled": True,
+        "official_manifest_url": "https://miovrc.com/dictionaries/asr_dictionary_manifest.json",
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._dictionary_enabled_var.value() is True
+    for language in ("zh-CN", "en", "ja", "ru", "ko"):
+        assert settings_module.QT_SETTINGS_COPY["settings_dictionary_enabled"][language]
+
+    dialog._dictionary_enabled_var.set(False)
+    dialog._save()
+
+    assert config["asr"]["correction"]["enabled"] is False
+    assert config["asr"]["correction"]["official_manifest_url"].startswith(
+        "https://miovrc.com/"
+    )
+    qtbot.waitUntil(lambda: not dialog._saving, timeout=1000)
+
+
+def test_grok_compatible_settings_preserve_custom_relay_fields(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr(
+        "src.ui_qt.settings_window.config_manager.save_config",
+        lambda _cfg: None,
+    )
+    config["translation"]["grok_compatible"] = {
+        "api_key": "relay-key",
+        "base_url": "https://relay.example.com/openai/v1",
+        "model": "Custom-GROK/router:model-001",
+        "timeout_s": 19,
+        "max_retries": 0,
+        "streaming": True,
+        "custom_headers": {"X-Relay-Token": "secret"},
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "api_config")
+
+    grok_label = settings_module.get_backend_label("grok_compatible", dialog._ui_lang)
+    dialog._backend_var.set(grok_label)
+    dialog._render_backend_fields()
+
+    assert dialog._backend_code() == "grok_compatible"
+    assert dialog._backend_base_url_var.value() == "https://relay.example.com/openai/v1"
+    assert dialog._backend_model_var.value() == "Custom-GROK/router:model-001"
+    assert dialog._backend_custom_headers_var.value() == '{"X-Relay-Token":"secret"}'
+    assert dialog._backend_streaming_var.value() is True
+
+    dialog._backend_model_var.set("relay/Grok-Exact-Name:Preview")
+    dialog._backend_timeout_var.set("23")
+    dialog._backend_custom_headers_var.set('{"X-Tenant":"player-one"}')
+    dialog._backend_streaming_var.set(False)
+    dialog._save()
+
+    saved = config["translation"]["grok_compatible"]
+    assert saved["base_url"] == "https://relay.example.com/openai/v1"
+    assert saved["model"] == "relay/Grok-Exact-Name:Preview"
+    assert saved["timeout_s"] == 23.0
+    assert saved["custom_headers"] == {"X-Tenant": "player-one"}
+    assert saved["streaming"] is False
+    for language in ("zh-CN", "en", "ja", "ru", "ko"):
+        assert settings_module.QT_SETTINGS_COPY[
+            "backend_api_hint_grok_compatible"
+        ][language]
+        assert settings_module.QT_SETTINGS_COPY[
+            "backend_model_hint_grok_compatible"
+        ][language]
+
+
+def test_grok_connection_test_uses_unsaved_settings_without_blocking_ui(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["translation"]["grok_compatible"] = {
+        "api_key": "relay-key",
+        "base_url": "https://relay.example.com/v1",
+        "model": "grok-4.5",
+        "timeout_s": 15,
+        "max_retries": 0,
+        "streaming": True,
+        "custom_headers": {},
+    }
+    captured = []
+    monkeypatch.setattr(
+        settings_module,
+        "test_translation_connection",
+        lambda snapshot: captured.append(snapshot) or "ok",
+    )
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "information",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "warning",
+        lambda *_args, **_kwargs: None,
+    )
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "api_config")
+    dialog._backend_var.set(
+        settings_module.get_backend_label("grok_compatible", dialog._ui_lang)
+    )
+    dialog._render_backend_fields()
+    dialog._backend_base_url_var.set("https://custom-relay.example/api/v1")
+    dialog._backend_model_var.set("relay-grok-custom")
+    dialog._backend_timeout_var.set("11")
+    dialog._backend_custom_headers_var.set('{"X-Tenant":"test"}')
+
+    dialog._test_translation_connection()
+
+    qtbot.waitUntil(
+        lambda: not dialog._translation_connection_testing,
+        timeout=2000,
+    )
+    tested = captured[0]["translation"]["grok_compatible"]
+    assert tested["base_url"] == "https://custom-relay.example/api/v1"
+    assert tested["model"] == "relay-grok-custom"
+    assert tested["timeout_s"] == 11.0
+    assert tested["custom_headers"] == {"X-Tenant": "test"}
+
+
 def test_dictionary_status_localizes_layer_order_and_large_counts(
     qtbot,
     config,

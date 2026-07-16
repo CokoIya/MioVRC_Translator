@@ -77,6 +77,39 @@ def test_listen_asr_builds_separate_provider_when_engine_is_explicit(monkeypatch
     assert mic_asr is not listen_asr
 
 
+def test_enabled_follow_main_qwen_uses_isolated_low_latency_runtime(monkeypatch):
+    calls: list[tuple[str | None, float | None]] = []
+
+    def fake_create_asr(config, engine=None):
+        timeout = config.get("asr", {}).get("qwen3_asr", {}).get(
+            "hard_timeout_seconds"
+        )
+        calls.append((engine, timeout))
+        return object()
+
+    monkeypatch.setattr(main_window, "create_asr", fake_create_asr)
+    config = {
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {
+                "model": "qwen3-asr-flash",
+                "hard_timeout_seconds": 12.0,
+            },
+        },
+        "vrc_listen": {
+            "enabled": True,
+            "asr_engine": "same_as_main",
+            "asr_timeout_s": 4.5,
+        },
+    }
+
+    mic_asr, listen_asr = main_window._create_asr_pair(config)
+
+    assert mic_asr is not listen_asr
+    assert calls == [("qwen3-asr", 12.0), ("qwen3-asr", 4.5)]
+    assert config["asr"]["qwen3_asr"]["hard_timeout_seconds"] == 12.0
+
+
 def test_disabled_listen_does_not_construct_a_second_heavy_provider(monkeypatch):
     calls: list[str | None] = []
     provider = object()

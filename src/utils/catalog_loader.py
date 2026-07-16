@@ -47,8 +47,11 @@ _REMOTE_PROTECTED_BACKEND_FIELDS = frozenset(
         "base_url_input",
         "api_key_required",
         "api_key_input",
+        "custom_headers_input",
         "extra_body",
         "prefer_max_completion_tokens",
+        "streaming",
+        "streaming_input",
     }
 )
 _REMOTE_MUTABLE_BACKEND_FIELDS = frozenset(
@@ -153,7 +156,7 @@ def _sanitize_remote_backend(
             )
         elif key == "model_input":
             normalized = str(value or "").strip().lower()
-            if normalized in {"entry", "select"}:
+            if normalized in {"editable", "entry", "select"}:
                 cleaned[key] = normalized
         else:
             max_chars = _MAX_MODEL_ID_CHARS if key == "model" else _MAX_BACKEND_TEXT_CHARS

@@ -12,6 +12,7 @@ import pytest
 from src.core.realtime_scheduler import (
     AdmissionStatus,
     RealtimeASRQueueExpiredError,
+    RealtimeTranslationQueueExpiredError,
     RealtimeTask,
     RealtimeScheduler,
     SchedulerHealth,
@@ -40,9 +41,11 @@ def _scheduler(
     outstanding_limits=None,
     rewrite_queue_size=8,
     translation_queue_size=8,
+    priority_source=MIC,
     priority_burst=3,
     stale_task_age_s=30.0,
     max_asr_queue_age_s=None,
+    max_translation_queue_age_s=None,
     health_check_interval_s=1.0,
     clock=time.monotonic,
 ):
@@ -64,11 +67,12 @@ def _scheduler(
         asr_concurrency=asr_concurrency,
         rewrite_concurrency=rewrite_concurrency,
         translation_concurrency=translation_concurrency,
-        priority_source=MIC,
+        priority_source=priority_source,
         priority_burst=priority_burst,
         thread_name_prefix="test-realtime",
         stale_task_age_s=stale_task_age_s,
         max_asr_queue_age_s=max_asr_queue_age_s,
+        max_translation_queue_age_s=max_translation_queue_age_s,
         health_check_interval_s=health_check_interval_s,
         clock=clock,
     )
@@ -1094,6 +1098,49 @@ def test_microphone_priority_has_desktop_starvation_protection():
         assert scheduler.stop(timeout=2)
 
 
+def test_reverse_priority_dispatches_waiting_desktop_before_microphone():
+    blocker_started = threading.Event()
+    release_blocker = threading.Event()
+    starts = []
+
+    def asr(task, _cancel):
+        starts.append((task.source, task.sequence, task.payload))
+        if task.payload == "blocker":
+            blocker_started.set()
+            release_blocker.wait(timeout=2)
+        return task.payload
+
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=lambda _completion: None,
+        asr_concurrency=1,
+        translation_concurrency=1,
+        priority_source=DESKTOP,
+    )
+    try:
+        assert _submit(scheduler, "blocker", source=MIC, provider="shared").accepted
+        assert blocker_started.wait(timeout=1)
+        assert _submit(scheduler, "mic-next", source=MIC, provider="shared").accepted
+        assert _submit(
+            scheduler,
+            "reverse-next",
+            source=DESKTOP,
+            provider="shared",
+        ).accepted
+
+        release_blocker.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert [item[2] for item in starts] == [
+            "blocker",
+            "reverse-next",
+            "mic-next",
+        ]
+    finally:
+        release_blocker.set()
+        scheduler.stop()
+
+
 def test_partial_asr_yields_to_pending_and_running_final_work():
     asr_started = threading.Event()
     release = threading.Event()
@@ -1337,7 +1384,7 @@ def test_translation_worker_state_is_finalized_exactly_once_on_stop():
     assert {id(state) for state in finalized} == {id(state) for state in states}
 
 
-def test_slow_reverse_translation_keeps_a_worker_reserved_for_microphone():
+def test_idle_priority_lane_does_not_permanently_reserve_a_translation_worker():
     first_reverse_started = threading.Event()
     second_reverse_started = threading.Event()
     microphone_started = threading.Event()
@@ -1349,6 +1396,7 @@ def test_slow_reverse_translation_keeps_a_worker_reserved_for_microphone():
             release_reverse.wait(timeout=3)
         elif task.source == DESKTOP:
             second_reverse_started.set()
+            release_reverse.wait(timeout=3)
         else:
             microphone_started.set()
         return text
@@ -1365,18 +1413,74 @@ def test_slow_reverse_translation_keeps_a_worker_reserved_for_microphone():
         assert _submit(scheduler, "reverse-0", source=DESKTOP, provider="d0").accepted
         assert _submit(scheduler, "reverse-1", source=DESKTOP, provider="d1").accepted
         assert first_reverse_started.wait(timeout=1)
-        time.sleep(0.05)
-        assert not second_reverse_started.is_set()
+        assert second_reverse_started.wait(timeout=1)
 
         assert _submit(scheduler, "mic", source=MIC, provider="mic").accepted
-        assert microphone_started.wait(timeout=1)
-        assert not second_reverse_started.is_set()
+        assert not microphone_started.wait(timeout=0.1)
 
         release_reverse.set()
         assert scheduler.wait_until_idle(timeout=2)
-        assert second_reverse_started.is_set()
+        assert microphone_started.is_set()
     finally:
         release_reverse.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_translation_queue_expiry_releases_payload_and_preserves_delivery_order():
+    class AudioPayload:
+        pass
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    delivered = []
+
+    def translate(task, text, _state, _cancel):
+        if task.sequence == 0:
+            first_started.set()
+            release_first.wait(timeout=2)
+        return text
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=translate,
+        deliver=delivered.append,
+        asr_concurrency=2,
+        translation_concurrency=1,
+        max_translation_queue_age_s={DESKTOP: 0.05},
+        health_check_interval_s=0.02,
+    )
+    try:
+        assert _submit(scheduler, "first", source=DESKTOP, provider="d0").accepted
+        assert first_started.wait(timeout=1)
+        stale_audio = AudioPayload()
+        stale_ref = weakref.ref(stale_audio)
+        assert _submit(
+            scheduler,
+            stale_audio,
+            source=DESKTOP,
+            provider="d1",
+        ).accepted
+        del stale_audio
+
+        assert _wait_for(
+            lambda: scheduler.snapshot().stale_translation_dropped == 1,
+            timeout=1,
+        )
+        gc.collect()
+        assert stale_ref() is None
+
+        release_first.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert [item.task.sequence for item in delivered] == [0, 1]
+        assert delivered[0].successful is True
+        assert delivered[1].stale_translation is True
+        assert isinstance(
+            delivered[1].translation_error,
+            RealtimeTranslationQueueExpiredError,
+        )
+        assert delivered[1].task.payload is None
+    finally:
+        release_first.set()
         assert scheduler.stop(timeout=2)
 
 

@@ -2,6 +2,23 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.4] - 2026-07-16
+
+### Grok-compatible translation
+
+- Added a dedicated Grok-compatible provider for official xAI access and OpenAI-compatible Grok relays, with editable model IDs, Base URLs, bounded timeouts, optional streaming, and provider-specific connection testing.
+- Added validated custom relay headers with strict name/value limits, forbidden transport-header rejection, protected-secret failure handling, masked settings display, and no credential logging.
+- Added streaming-response assembly with an automatic non-streaming retry when a compatible endpoint rejects streaming controls.
+- Updated the signed provider catalog with the `grok-4.5` default while preserving relay-specific custom model identifiers exactly as entered.
+
+### Pipeline latency and recovery
+
+- Added per-source translation queue expiry so stale reverse-translation work is discarded without blocking or reordering newer realtime results.
+- Isolated reverse Qwen ASR timeouts and provider state from microphone recognition, and added dedicated reverse-ASR and reverse-translation latency limits.
+- Improved ordered-stage timing metrics for recognition, rewriting, translation, UI delivery, provider queues, connection reuse, and context/prompt preparation.
+- Improved desktop-audio worker ownership, VAD prewarming, automatic capture restart, microphone segment timing, and cancellation cleanup.
+- Reduced translation context to bounded inert reference data and strengthened prompt rules so prior text cannot be treated as current instructions or reproduced as output.
+
 ## [1.3.8.3] - 2026-07-14
 
 ### Realtime ASR and capture resilience

@@ -13,6 +13,7 @@ from .base import (
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
+from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,8 @@ class OpenAITranslator(BaseTranslator):
         context_store: TranslationContextStore | None = None,
         provider_id: str = "",
         allow_private_http: bool = False,
+        custom_headers: object = None,
+        streaming: bool = False,
     ):
         super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
@@ -69,6 +72,7 @@ class OpenAITranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
+        self._custom_headers = normalize_openai_custom_headers(custom_headers)
         # The realtime scheduler owns several long-lived translation workers.
         # httpx otherwise expires idle connections after five seconds, so a
         # worker rotation can turn nearly every conversational request into a
@@ -83,13 +87,16 @@ class OpenAITranslator(BaseTranslator):
             ),
         )
         try:
-            self._client = OpenAI(
+            client_kwargs = dict(
                 api_key=api_key,
                 base_url=validated_base_url,
                 timeout=self._timeout_s,
                 max_retries=self._max_retries,
                 http_client=self._http_client,
             )
+            if self._custom_headers:
+                client_kwargs["default_headers"] = dict(self._custom_headers)
+            self._client = OpenAI(**client_kwargs)
         except BaseException:
             self._http_client.close()
             raise
@@ -133,6 +140,8 @@ class OpenAITranslator(BaseTranslator):
         self._managed_no_thinking_extra_keys: set[str] = set()
         self._no_thinking_request_supported = True
         self._extra_body = self._translation_extra_body(extra_body or {}, model_name)
+        self._streaming_enabled = bool(streaming)
+        self._streaming_supported = True
         self._last_response_summary = ""
 
     def _translation_extra_body(self, extra_body: dict, model_name: str) -> dict:
@@ -315,6 +324,88 @@ class OpenAITranslator(BaseTranslator):
                 raise
         raise RuntimeError("Translation request compatibility retry limit exceeded")
 
+    @staticmethod
+    def _stream_delta_text(delta: object) -> str:
+        content = getattr(delta, "content", None)
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, (list, tuple)):
+            return ""
+        fragments: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                fragments.append(part)
+                continue
+            if isinstance(part, dict):
+                text = part.get("text") or part.get("content")
+            else:
+                text = getattr(part, "text", None) or getattr(part, "content", None)
+            if text:
+                fragments.append(str(text))
+        return "".join(fragments)
+
+    def _chat_completion_request(self, kwargs: dict) -> tuple[str, object]:
+        if not getattr(self, "_streaming_enabled", False) or not getattr(
+            self,
+            "_streaming_supported",
+            True,
+        ):
+            response = self._create_with_control_fallback(
+                self._client.chat.completions.create,
+                kwargs,
+            )
+            return self._chat_completion_output_text(response), response
+
+        stream_kwargs = dict(kwargs)
+        stream_kwargs["stream"] = True
+        try:
+            stream = self._create_with_control_fallback(
+                self._client.chat.completions.create,
+                stream_kwargs,
+            )
+        except Exception as exc:
+            if not self._unsupported_request_parameter(exc, ("stream", "streaming")):
+                raise
+            self._streaming_supported = False
+            logger.warning(
+                "Translation provider rejected streaming; retrying without it "
+                "(model=%s base_url=%s)",
+                self.model,
+                self._base_url,
+            )
+            response = self._create_with_control_fallback(
+                self._client.chat.completions.create,
+                kwargs,
+            )
+            return self._chat_completion_output_text(response), response
+
+        fragments: list[str] = []
+        chunk_count = 0
+        try:
+            for chunk in stream:
+                chunk_count += 1
+                try:
+                    choices = list(getattr(chunk, "choices", []) or [])
+                except TypeError:
+                    choices = []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                text = self._stream_delta_text(delta)
+                if text:
+                    fragments.append(text)
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        output = "".join(fragments)
+        if not output:
+            self._last_response_summary = (
+                f"model={self.model}, base_url={self._base_url}, "
+                f"stream_chunks={chunk_count}"
+            )
+        return output, stream
+
     def translate(
         self,
         text: str,
@@ -322,6 +413,8 @@ class OpenAITranslator(BaseTranslator):
         tgt_lang: str,
         context_source: str = "default",
     ) -> str:
+        call_started = time.perf_counter()
+        self._reset_translation_metrics()
         # Validate and sanitize input
         try:
             text = validate_translation_text(text)
@@ -330,11 +423,16 @@ class OpenAITranslator(BaseTranslator):
         if self._source_matches_target(src_lang, tgt_lang):
             return text
 
+        context_started = time.perf_counter()
         context_snapshot = self._context_snapshot(
             src_lang,
             tgt_lang,
             context_source=context_source,
             current_text=text,
+        )
+        self._record_translation_metrics(
+            context_lookup_s=max(0.0, time.perf_counter() - context_started),
+            context_turns=len(context_snapshot),
         )
         if (
             self._uses_qwen_mt_translation_options
@@ -354,6 +452,11 @@ class OpenAITranslator(BaseTranslator):
             context_source=context_source,
         )
         if cached is not None:
+            self._record_translation_metrics(
+                cache_hit=True,
+                total_s=max(0.0, time.perf_counter() - call_started),
+                provider_s=0.0,
+            )
             return cached
 
         self._last_response_summary = ""
@@ -393,6 +496,10 @@ class OpenAITranslator(BaseTranslator):
             src_lang,
             tgt_lang,
             context_source=context_source,
+        )
+        self._record_translation_metrics(
+            cache_hit=False,
+            total_s=max(0.0, time.perf_counter() - call_started),
         )
         return translated
 
@@ -483,18 +590,17 @@ class OpenAITranslator(BaseTranslator):
             extra_body = self._request_extra_body()
             if extra_body:
                 kwargs["extra_body"] = extra_body
-            response = self._create_with_control_fallback(
-                self._client.chat.completions.create,
-                kwargs,
-            )
-            output = self._chat_completion_output_text(response)
+            output, response = self._chat_completion_request(kwargs)
 
         rewritten = self._finalize_asr_rewrite_output(
             output,
             source_text=text,
         )
         if not rewritten:
-            self._last_response_summary = self._response_debug_summary(response)
+            self._last_response_summary = (
+                self._last_response_summary
+                or self._response_debug_summary(response)
+            )
             raise RuntimeError(
                 "ASR rewrite API returned an empty response"
                 + (
@@ -520,6 +626,7 @@ class OpenAITranslator(BaseTranslator):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
         context_source: str = "default",
     ) -> str:
+        prompt_started = time.perf_counter()
         extra_body = self._request_extra_body()
         uses_translation_options = self._should_use_qwen_mt_translation_options(
             src_lang,
@@ -577,15 +684,19 @@ class OpenAITranslator(BaseTranslator):
             kwargs["reasoning_effort"] = "none"
         if extra_body:
             kwargs["extra_body"] = extra_body
+        self._record_translation_metrics(
+            prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
+            prompt_chars=sum(
+                len(str(message.get("content", ""))) for message in messages
+            ),
+        )
 
         started = time.perf_counter()
         try:
-            response = self._create_with_control_fallback(
-                self._client.chat.completions.create,
-                kwargs,
-            )
+            output, response = self._chat_completion_request(kwargs)
         except Exception as exc:
             elapsed = time.perf_counter() - started
+            self._record_translation_metrics(provider_s=elapsed)
             active_context = self._active_context()
             logger.warning(
                 "Translation API request failed "
@@ -600,6 +711,7 @@ class OpenAITranslator(BaseTranslator):
             )
             raise
         elapsed = time.perf_counter() - started
+        self._record_translation_metrics(provider_s=elapsed)
         active_context = self._active_context()
         logger.info(
             "Translation API request finished "
@@ -613,13 +725,15 @@ class OpenAITranslator(BaseTranslator):
             sum(len(str(message.get("content", ""))) for message in messages),
             len(context_snapshot or ()),
         )
-        output = self._chat_completion_output_text(response)
         translated = self._finalize_translation_output(
             output,
             source_text=text,
         )
         if not translated:
-            self._last_response_summary = self._response_debug_summary(response)
+            self._last_response_summary = (
+                self._last_response_summary
+                or self._response_debug_summary(response)
+            )
             logger.warning(
                 "Translation API returned empty content (%s)",
                 self._last_response_summary,
@@ -690,6 +804,7 @@ class OpenAITranslator(BaseTranslator):
         context_snapshot: tuple[tuple[str, str], ...] | None = None,
         context_source: str = "default",
     ) -> str:
+        prompt_started = time.perf_counter()
         prompt_body = self._build_prompt(
             text,
             src_lang,
@@ -720,6 +835,10 @@ class OpenAITranslator(BaseTranslator):
         extra_body = self._request_extra_body()
         if extra_body:
             kwargs["extra_body"] = extra_body
+        self._record_translation_metrics(
+            prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
+            prompt_chars=len(prompt),
+        )
 
         started = time.perf_counter()
         try:
@@ -729,6 +848,7 @@ class OpenAITranslator(BaseTranslator):
             )
         except Exception as exc:
             elapsed = time.perf_counter() - started
+            self._record_translation_metrics(provider_s=elapsed)
             active_context = self._active_context()
             logger.warning(
                 "Translation Responses API request failed "
@@ -743,6 +863,7 @@ class OpenAITranslator(BaseTranslator):
             )
             raise
         elapsed = time.perf_counter() - started
+        self._record_translation_metrics(provider_s=elapsed)
         active_context = self._active_context()
         logger.info(
             "Translation Responses API request finished "
@@ -761,7 +882,10 @@ class OpenAITranslator(BaseTranslator):
             source_text=text,
         )
         if not translated:
-            self._last_response_summary = self._response_debug_summary(response)
+            self._last_response_summary = (
+                self._last_response_summary
+                or self._response_debug_summary(response)
+            )
             logger.warning(
                 "Translation Responses API returned empty content (%s)",
                 self._last_response_summary,

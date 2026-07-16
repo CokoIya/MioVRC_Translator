@@ -474,7 +474,26 @@ class TestConfigValidation(unittest.TestCase):
         changed = config_manager._ensure_vrc_listen_config(config, loaded={})
 
         assert changed is True
-        assert config["vrc_listen"]["tail_silence_s"] == 0.65
+        assert config["vrc_listen"]["tail_silence_s"] == 0.4
+        assert config["vrc_listen"]["latency_profile_version"] == 1
+
+    def test_vrc_listen_latency_profile_migrates_only_legacy_default(self):
+        legacy = {"vrc_listen": {"tail_silence_s": 0.65}}
+        custom = {"vrc_listen": {"tail_silence_s": 0.8}}
+
+        assert config_manager._ensure_vrc_listen_config(
+            legacy,
+            loaded={"vrc_listen": {"tail_silence_s": 0.65}},
+        )
+        assert config_manager._ensure_vrc_listen_config(
+            custom,
+            loaded={"vrc_listen": {"tail_silence_s": 0.8}},
+        )
+
+        assert legacy["vrc_listen"]["tail_silence_s"] == 0.4
+        assert custom["vrc_listen"]["tail_silence_s"] == 0.8
+        assert legacy["vrc_listen"]["asr_timeout_s"] == 5.0
+        assert legacy["vrc_listen"]["translation_timeout_s"] == 4.0
 
     def test_vrc_listen_defaults_follow_main_asr(self):
         config = {}

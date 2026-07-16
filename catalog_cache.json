@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-07-12",
+  "updated": "2026-07-16",
   "translation_backends": {
     "openai": {
       "label": "GPT",
@@ -22,6 +22,21 @@
       "base_url_input": "entry",
       "api_key_hint": "Use this for OpenAI-compatible proxy or relay providers. Enter the Base URL and model id supplied by that provider.",
       "model_hint": "Choose the model id exposed by your proxy. If your saved model is not in the preset list, Mio keeps it available in this dropdown."
+    },
+    "grok_compatible": {
+      "label": "Grok Compatible",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.5",
+      "timeout_s": 15.0,
+      "max_output_tokens": 192,
+      "max_retries": 0,
+      "model_input": "editable",
+      "base_url_input": "entry",
+      "custom_headers_input": true,
+      "streaming_input": true,
+      "streaming": true,
+      "api_key_hint": "Use an xAI key or the credential issued by any Grok-compatible OpenAI relay. The Base URL is not restricted to official xAI endpoints.",
+      "model_hint": "grok-4.5 is the default. Relay-specific model names are preserved exactly as entered and are never rewritten to an official xAI id."
     },
     "local_ai": {
       "label": "Local AI",
@@ -226,6 +241,7 @@
   "translation_model_presets": {
     "openai": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
     "openai_compatible": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+    "grok_compatible": ["grok-4.5"],
     "google_web": ["google-web"],
     "mymemory": ["mymemory"],
     "deepl": ["deepl-api"],
@@ -252,6 +268,9 @@
       "gpt-5.5": {"speed": "balanced", "quality": "high", "fit": "recommended", "note": "general_high_quality"}
     },
     "openai_compatible": {},
+    "grok_compatible": {
+      "grok-4.5": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "live_default"}
+    },
     "google_web": {
       "google-web": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "no_key_simple"}
     },

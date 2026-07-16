@@ -883,43 +883,58 @@ class DesktopAudioRecorder(AudioRecorder):
             self._total_frames = 0
             self._non_silent_frames = 0
 
-        # Pre-warm Silero VAD model in the background while capture initializes.
-        # This avoids blocking the first audio frame with torch.jit.load.
-        if (
-            isinstance(self.vad, SileroVADDetector)
-            and self._vad_prewarm_thread is None
-        ):
-            self._vad_prewarm_thread = threading.Thread(
-                target=self.vad.prewarm,
-                name="vad-prewarm",
+        try:
+            # Pre-warm Silero VAD model in the background while capture
+            # initializes. Thread creation is part of the same exception-safe
+            # lifecycle transaction as capture and processing startup.
+            if (
+                isinstance(self.vad, SileroVADDetector)
+                and self._vad_prewarm_thread is None
+            ):
+                self._vad_prewarm_thread = threading.Thread(
+                    target=self.vad.prewarm,
+                    name="vad-prewarm",
+                    daemon=True,
+                )
+                self._vad_prewarm_thread.start()
+
+            self._worker_thread = threading.Thread(
+                target=self._worker_main,
                 daemon=True,
+                name="desktop-audio-worker",
             )
-            self._vad_prewarm_thread.start()
+            self._worker_thread.start()
+            self._capture_thread = threading.Thread(
+                target=self._capture_loop,
+                daemon=True,
+                name="desktop-audio-capture",
+            )
+            self._capture_thread.start()
 
-        self._worker_thread = threading.Thread(
-            target=self._worker_main,
-            daemon=True,
-            name="desktop-audio-worker",
-        )
-        self._worker_thread.start()
-        self._capture_thread = threading.Thread(
-            target=self._capture_loop,
-            daemon=True,
-            name="desktop-audio-capture",
-        )
-        self._capture_thread.start()
+            if not self._capture_ready_event.wait(timeout=_CAPTURE_START_TIMEOUT_S):
+                error = RuntimeError(
+                    "Desktop audio capture did not become ready in time"
+                )
+                self._capture_start_error = error
+                self._report_runtime_error(error)
+                raise error
 
-        if not self._capture_ready_event.wait(timeout=_CAPTURE_START_TIMEOUT_S):
-            error = RuntimeError("Desktop audio capture did not become ready in time")
-            self._capture_start_error = error
-            self.stop()
-            self._report_runtime_error(error)
-            raise error
-
-        if self._capture_start_error is not None:
-            error = self._capture_start_error
-            self.stop()
-            raise error
+            if self._capture_start_error is not None:
+                raise self._capture_start_error
+        except BaseException:
+            # Thread creation, backend initialization, and readiness failures
+            # must leave no live capture/worker state behind. The owner creates
+            # a fresh recorder for the next bounded recovery attempt.
+            self._running = False
+            self._enqueue_frame(None)
+            try:
+                self.stop()
+            except Exception:
+                logger.debug(
+                    "DesktopAudioRecorder startup cleanup failed",
+                    exc_info=True,
+                )
+            raise
 
         logger.info(
             "DesktopAudioRecorder started (requested_output=%s loopback_device=%s rate=%s channels=%s)",

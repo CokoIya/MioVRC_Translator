@@ -29,6 +29,7 @@ from src.utils.app_paths import (
 )
 from src.utils.ui_language_detection import bootstrap_ui_language
 from src.utils.locale_detect import select_default_asr_engine
+from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.global_hotkey import (
     DEFAULT_MIC_MUTE_HOTKEY,
     DEFAULT_TEXT_INPUT_HOTKEY,
@@ -95,7 +96,9 @@ class SecretProtectionError(RuntimeError):
 
 _DEFAULT_DENOISE_STRENGTH = 0.0
 _DEFAULT_MIC_TAIL_SILENCE_S = 0.65
-_DEFAULT_LISTEN_TAIL_SILENCE_S = 0.65
+_LEGACY_LISTEN_TAIL_SILENCE_S = 0.65
+_DEFAULT_LISTEN_TAIL_SILENCE_S = 0.40
+_LISTEN_LATENCY_PROFILE_VERSION = 1
 _DEFAULT_VAD_SENSITIVITY = 2
 _DEFAULT_VAD_SPEECH_RATIO = 0.6
 _DEFAULT_VAD_ACTIVATION_THRESHOLD_S = 0.2
@@ -422,6 +425,12 @@ def _contains_plaintext_api_key(config: dict | None) -> bool:
         api_key = str(backend_cfg.get("api_key", "") or "")
         if api_key and not api_key.startswith(_PROTECTED_SECRET_PREFIX):
             return True
+        custom_headers = backend_cfg.get("custom_headers", {})
+        if isinstance(custom_headers, dict):
+            for header_value in custom_headers.values():
+                text = str(header_value or "")
+                if text and not text.startswith(_PROTECTED_SECRET_PREFIX):
+                    return True
     return False
 
 
@@ -431,6 +440,14 @@ def _unprotect_config_for_runtime(config: dict | None) -> dict | None:
     for backend_cfg in _walk_secret_configs(config):
         if "api_key" in backend_cfg:
             backend_cfg["api_key"] = _unprotect_secret(backend_cfg.get("api_key"))
+        custom_headers = backend_cfg.get("custom_headers", {})
+        if isinstance(custom_headers, dict):
+            backend_cfg["custom_headers"] = {
+                str(name): _unprotect_secret(
+                    str(value) if value is not None else ""
+                )
+                for name, value in custom_headers.items()
+            }
     return config
 
 
@@ -439,6 +456,14 @@ def _protect_config_for_storage(config: dict) -> dict:
     for backend_cfg in _walk_secret_configs(payload):
         if "api_key" in backend_cfg:
             backend_cfg["api_key"] = _protect_secret(backend_cfg.get("api_key"))
+        custom_headers = backend_cfg.get("custom_headers", {})
+        if isinstance(custom_headers, dict):
+            backend_cfg["custom_headers"] = {
+                str(name): _protect_secret(
+                    str(value) if value is not None else ""
+                )
+                for name, value in custom_headers.items()
+            }
     return payload
 
 
@@ -715,6 +740,8 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "target_language": "zh",
         "segment_duration_s": 2.0,
         "tail_silence_s": _DEFAULT_LISTEN_TAIL_SILENCE_S,
+        "asr_timeout_s": 5.0,
+        "translation_timeout_s": 4.0,
         "self_suppress": False,
         "self_suppress_seconds": 0.65,
         "show_overlay": False,
@@ -864,6 +891,33 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         except (TypeError, ValueError):
             vrc_cfg["tail_silence_s"] = _DEFAULT_LISTEN_TAIL_SILENCE_S
             changed = True
+    try:
+        latency_profile_version = int(
+            loaded_vrc_cfg.get("latency_profile_version", 0) or 0
+        )
+    except (TypeError, ValueError):
+        latency_profile_version = 0
+    if latency_profile_version < _LISTEN_LATENCY_PROFILE_VERSION:
+        try:
+            current_tail_s = float(
+                vrc_cfg.get("tail_silence_s", _DEFAULT_LISTEN_TAIL_SILENCE_S)
+            )
+        except (TypeError, ValueError):
+            current_tail_s = _DEFAULT_LISTEN_TAIL_SILENCE_S
+        if abs(current_tail_s - _LEGACY_LISTEN_TAIL_SILENCE_S) < 0.001:
+            vrc_cfg["tail_silence_s"] = _DEFAULT_LISTEN_TAIL_SILENCE_S
+        vrc_cfg["latency_profile_version"] = _LISTEN_LATENCY_PROFILE_VERSION
+        changed = True
+    if _coerce_float_range_config(vrc_cfg, "asr_timeout_s", 5.0, 2.0, 12.0):
+        changed = True
+    if _coerce_float_range_config(
+        vrc_cfg,
+        "translation_timeout_s",
+        4.0,
+        2.0,
+        12.0,
+    ):
+        changed = True
     if _coerce_bool_config(vrc_cfg, "self_suppress", False):
         changed = True
     if _coerce_float_range_config(vrc_cfg, "self_suppress_seconds", 0.65, 0.05, 10.0):
@@ -1520,6 +1574,25 @@ def _ensure_translation_config(
             if default_value is not None and key not in backend_cfg:
                 backend_cfg[key] = default_value
                 changed = True
+        backend_spec = _catalog_backends().get(backend_code, {})
+        if backend_spec.get("custom_headers_input"):
+            custom_headers = backend_cfg.get("custom_headers", {})
+            if isinstance(custom_headers, str):
+                try:
+                    custom_headers = normalize_openai_custom_headers(custom_headers)
+                except ValueError:
+                    custom_headers = {}
+                backend_cfg["custom_headers"] = custom_headers
+                changed = True
+            elif not isinstance(custom_headers, dict):
+                backend_cfg["custom_headers"] = {}
+                changed = True
+        if backend_spec.get("streaming_input") and _coerce_bool_config(
+            backend_cfg,
+            "streaming",
+            bool(backend_spec.get("streaming", False)),
+        ):
+            changed = True
 
     # Official OpenAI model retirement rules must not rewrite model ids owned
     # by a generic compatible relay. A proxy may continue routing an otherwise

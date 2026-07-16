@@ -262,6 +262,19 @@ class SettingsWindowTabbed(QDialog):
             self._config.clear()
             self._config.update(new_config)
             config_manager.save_config(self._config)
+        except ValueError as exc:
+            logger.warning("Tabbed settings validation failed: %s", exc)
+            self._config.clear()
+            self._config.update(previous)
+            self._saving = False
+            self._set_save_controls_enabled(True)
+            message = str(exc)
+            QMessageBox.warning(
+                self,
+                tr(self._ui_language, "save_failed"),
+                message,
+            )
+            return
         except Exception as exc:
             logger.exception("Failed to save tabbed settings")
             self._config.clear()

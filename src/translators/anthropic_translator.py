@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 import logging
+import time
 import urllib.parse
 
 from .base import (
@@ -98,6 +99,8 @@ class AnthropicTranslator(BaseTranslator):
         tgt_lang: str,
         context_source: str = "default",
     ) -> str:
+        call_started = time.perf_counter()
+        self._reset_translation_metrics()
         # Validate and sanitize input
         try:
             text = validate_translation_text(text)
@@ -106,11 +109,16 @@ class AnthropicTranslator(BaseTranslator):
         if self._source_matches_target(src_lang, tgt_lang):
             return text
 
+        context_started = time.perf_counter()
         context_snapshot = self._context_snapshot(
             src_lang,
             tgt_lang,
             context_source=context_source,
             current_text=text,
+        )
+        self._record_translation_metrics(
+            context_lookup_s=max(0.0, time.perf_counter() - context_started),
+            context_turns=len(context_snapshot),
         )
         cached = self._get_cached_translation(
             text,
@@ -121,9 +129,27 @@ class AnthropicTranslator(BaseTranslator):
             context_source=context_source,
         )
         if cached is not None:
+            self._record_translation_metrics(
+                cache_hit=True,
+                total_s=max(0.0, time.perf_counter() - call_started),
+                provider_s=0.0,
+            )
             return cached
 
         self._last_response_summary = ""
+        prompt_started = time.perf_counter()
+        prompt = self._build_prompt(
+            text,
+            src_lang,
+            tgt_lang,
+            context_snapshot=context_snapshot,
+            context_source=context_source,
+        )
+        self._record_translation_metrics(
+            prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
+            prompt_chars=len(prompt) + len(_TRANSLATION_SYSTEM_PROMPT),
+        )
+        provider_started = time.perf_counter()
         message = self._client.messages.create(
             model=self.model,
             system=_TRANSLATION_SYSTEM_PROMPT,
@@ -131,15 +157,12 @@ class AnthropicTranslator(BaseTranslator):
             messages=[
                 {
                     "role": "user",
-                    "content": self._build_prompt(
-                        text,
-                        src_lang,
-                        tgt_lang,
-                        context_snapshot=context_snapshot,
-                        context_source=context_source,
-                    ),
+                    "content": prompt,
                 }
             ],
+        )
+        self._record_translation_metrics(
+            provider_s=max(0.0, time.perf_counter() - provider_started)
         )
         output = self._message_output_text(message)
         translated = self._finalize_translation_output(
@@ -173,6 +196,10 @@ class AnthropicTranslator(BaseTranslator):
             src_lang,
             tgt_lang,
             context_source=context_source,
+        )
+        self._record_translation_metrics(
+            cache_hit=False,
+            total_s=max(0.0, time.perf_counter() - call_started),
         )
         return translated
 

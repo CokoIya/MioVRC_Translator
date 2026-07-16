@@ -60,7 +60,14 @@ class QuickSetupTab(LocalizedSettingsTab):
             config.get("translation", {}) if isinstance(config, dict) else {}
         )
         self._provider_api_keys = {}
-        for provider in ("openai", "anthropic", "deepseek", "gemini", "qianwen"):
+        for provider in (
+            "openai",
+            "anthropic",
+            "deepseek",
+            "gemini",
+            "qianwen",
+            "grok_compatible",
+        ):
             provider_cfg = translation_cfg.get(provider, {})
             if provider == "qianwen" and not isinstance(provider_cfg, dict):
                 provider_cfg = translation_cfg.get("qwen", {})
@@ -266,6 +273,7 @@ class QuickSetupTab(LocalizedSettingsTab):
             ("provider_deepseek", "deepseek"),
             ("provider_gemini", "gemini"),
             ("provider_qwen", "qianwen"),
+            ("provider_grok", "grok_compatible"),
         ):
             self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
@@ -379,6 +387,7 @@ class QuickSetupTab(LocalizedSettingsTab):
             2: "sk-...",  # DeepSeek
             3: "AI...",  # Gemini
             4: "sk-...",  # Qwen
+            5: "xai-...",  # Grok-compatible relay
         }
         self._api_key_input.setPlaceholderText(placeholders.get(provider_index, ""))
         self._on_config_change()
@@ -491,6 +500,7 @@ class QuickSetupTab(LocalizedSettingsTab):
             "gemini": 3,
             "qianwen": 4,
             "qwen": 4,
+            "grok_compatible": 5,
         }
 
         source = config.get("source_language", "auto")

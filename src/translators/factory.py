@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Callable
 import logging
@@ -38,6 +39,7 @@ OPENAI_COMPATIBLE_BACKENDS = {
     "doubao",
     "nvidia",
     "openai_compatible",
+    "grok_compatible",
 }
 
 
@@ -54,6 +56,7 @@ class FallbackTranslator(BaseTranslator):
         self._primary = primary
         self._fallback_factories = list(fallback_factories)
         self._fallbacks: dict[str, BaseTranslator] = {}
+        self._last_metrics_translator: BaseTranslator = primary
 
     def translate(
         self,
@@ -63,12 +66,14 @@ class FallbackTranslator(BaseTranslator):
         context_source: str = "default",
     ) -> str:
         try:
-            return self._primary.translate(
+            result = self._primary.translate(
                 text,
                 src_lang,
                 tgt_lang,
                 context_source=context_source,
             )
+            self._last_metrics_translator = self._primary
+            return result
         except Exception as primary_exc:
             logger.warning(
                 "Primary translation backend failed; trying fallbacks: %s",
@@ -80,12 +85,14 @@ class FallbackTranslator(BaseTranslator):
                     if translator is None:
                         translator = factory()
                         self._fallbacks[backend] = translator
-                    return translator.translate(
+                    result = translator.translate(
                         text,
                         src_lang,
                         tgt_lang,
                         context_source=context_source,
                     )
+                    self._last_metrics_translator = translator
+                    return result
                 except Exception as fallback_exc:
                     logger.warning(
                         "Fallback translation backend failed (backend=%s): %s",
@@ -93,6 +100,12 @@ class FallbackTranslator(BaseTranslator):
                         fallback_exc,
                     )
             raise primary_exc
+
+    def translation_metrics(self) -> dict[str, object]:
+        metrics = getattr(self._last_metrics_translator, "translation_metrics", None)
+        if callable(metrics):
+            return dict(metrics())
+        return super().translation_metrics()
 
     def rewrite_asr(
         self,
@@ -190,6 +203,19 @@ def _int_setting(value: object, default: object, *, minimum: int, maximum: int) 
     return max(minimum, min(parsed, maximum))
 
 
+def _bool_setting(value: object, default: object = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    normalized = str(value).strip().casefold()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
+
+
 def _backend_cfg(trans_cfg: Mapping[str, object], backend: str) -> Mapping[str, object]:
     backend_cfg = trans_cfg.get(backend, {})
     if isinstance(backend_cfg, Mapping):
@@ -275,6 +301,11 @@ def _create_openai_compatible_translator(
         context_store=context_store,
         provider_id=backend,
         allow_private_http=backend == "local_ai" and not configured_api_key,
+        custom_headers=backend_cfg.get("custom_headers", {}),
+        streaming=_bool_setting(
+            backend_cfg.get("streaming"),
+            spec.get("streaming", False),
+        ),
     )
 
 
@@ -439,3 +470,30 @@ def create_translator(
         factories,
         context_store=context_store,
     )
+
+
+def test_translation_connection(config: dict) -> str:
+    """Run a minimal primary-provider request using the current Settings values."""
+
+    snapshot = copy.deepcopy(config)
+    trans_cfg = snapshot.setdefault("translation", {})
+    if not isinstance(trans_cfg, dict):
+        raise ValueError("Translation configuration is not configured")
+    # A connection test must report the selected provider's own failure rather
+    # than succeeding through an unrelated fallback backend.
+    trans_cfg["fallback_backends"] = []
+    translator = create_translator(snapshot)
+    try:
+        result = translator.translate(
+            "Connection test.",
+            "en",
+            "ja",
+            context_source="connection_test",
+        )
+        if not str(result or "").strip():
+            raise RuntimeError("Translation API returned an empty response")
+        return str(result)
+    finally:
+        close = getattr(translator, "close", None)
+        if callable(close):
+            close()

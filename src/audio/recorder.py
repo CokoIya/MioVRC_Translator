@@ -148,6 +148,7 @@ class AudioRecorder:
         self._active_device_name: str | None = None
         self._frames_processed = 0
         self._segments_emitted = 0
+        self._last_segment_timing: dict[str, float] = {}
         self._last_frame_rms = 0.0
         self._peak_frame_rms = 0.0
         self._last_non_silent_at = 0.0
@@ -197,6 +198,7 @@ class AudioRecorder:
             self._reset_streaming_resampler()
             self._frames_processed = 0
             self._segments_emitted = 0
+            self._last_segment_timing = {}
             self._last_frame_rms = 0.0
             self._peak_frame_rms = 0.0
             self._last_non_silent_at = 0.0
@@ -255,6 +257,12 @@ class AudioRecorder:
     def active_input_device_name(self) -> str | None:
         return self._active_device_name
 
+    @property
+    def last_segment_timing(self) -> dict[str, float]:
+        """Return lightweight timing for the segment currently being emitted."""
+
+        return dict(self._last_segment_timing)
+
     def diagnostics_snapshot(self) -> dict[str, object]:
         activation_window = getattr(self.vad, "_activation_window", None)
         try:
@@ -280,6 +288,7 @@ class AudioRecorder:
             "stale_frames_discarded": self._stale_frames_discarded,
             "frames_processed": self._frames_processed,
             "segments_emitted": self._segments_emitted,
+            "last_segment_timing": dict(self._last_segment_timing),
             "last_frame_rms": round(self._last_frame_rms, 6),
             "peak_frame_rms": round(self._peak_frame_rms, 6),
             "last_non_silent_at": self._last_non_silent_at,
@@ -793,6 +802,18 @@ class AudioRecorder:
             if segment is None or speech_samples < self._min_segment_samples:
                 continue
             try:
+                emitted_at = time.monotonic()
+                audio_duration_s = float(segment.size) / max(self.sample_rate, 1)
+                vad_finalization_s = min(
+                    max(float(self.silence_threshold_s), 0.0),
+                    audio_duration_s,
+                )
+                self._last_segment_timing = {
+                    "speech_ended_at": emitted_at - vad_finalization_s,
+                    "segment_emitted_at": emitted_at,
+                    "vad_finalization_s": vad_finalization_s,
+                    "audio_duration_s": audio_duration_s,
+                }
                 self._segments_emitted += 1
                 self.on_segment(segment)
             except Exception as exc:

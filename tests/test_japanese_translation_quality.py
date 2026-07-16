@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from src.translators.anthropic_translator import AnthropicTranslator
 from src.translators.base import (
     BaseTranslator,
     TranslationContextStore,
+    _TRANSLATION_SYSTEM_PROMPT,
     translation_context_scope,
 )
 from src.translators.openai_translator import OpenAITranslator
@@ -811,6 +813,49 @@ def test_realtime_context_skips_short_standalone_utterance():
         current_text="hello everyone",
         before_sequence=2,
     ) == ()
+
+
+def test_context_skips_standalone_question_without_reference_marker():
+    store = TranslationContextStore()
+    store.remember(
+        session_id="session",
+        text="earlier opinion",
+        translated="以前の意見",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+    )
+
+    assert store.snapshot(
+        session_id="session",
+        src_lang="en",
+        tgt_lang="ja",
+        context_source="mic",
+        current_text="Do you enjoy VRChat?",
+        before_sequence=2,
+    ) == ()
+
+
+def test_translation_prompt_keeps_history_in_inert_json_reference_fields():
+    translator = DummyTranslator()
+    prompt = translator._build_prompt(
+        "What about her?",
+        "en",
+        "ja",
+        context_snapshot=(("Alice joined earlier", "アリスは先ほど参加した"),),
+        context_source="listen",
+    )
+
+    payload = json.loads(prompt.splitlines()[-1])
+    assert payload["task"] == "translate_current_input_only"
+    assert payload["current_input"] == "What about her?"
+    assert payload["reference_context"] == [
+        {
+            "source": "Alice joined earlier",
+            "translation": "アリスは先ほど参加した",
+        }
+    ]
+    assert "never answer it" in _TRANSLATION_SYSTEM_PROMPT
 
 
 def test_realtime_pending_context_is_capped_to_turn_limit():

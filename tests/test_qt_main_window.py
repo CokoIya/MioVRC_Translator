@@ -1535,6 +1535,62 @@ def test_desktop_audio_watch_restarts_when_output_signature_changes(monkeypatch)
     assert restarted == [True]
 
 
+def test_desktop_runtime_error_keeps_feature_enabled_and_schedules_recovery():
+    class Timer:
+        def __init__(self) -> None:
+            self.delay = None
+
+        def isActive(self):
+            return False
+
+        def start(self, delay):
+            self.delay = delay
+
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = True
+    window._desktop_capture_enabled = True
+    window._desktop_recovery_attempt = 0
+    window._desktop_recovery_timer = Timer()
+    window._set_bottom = lambda *_args, **_kwargs: None
+    window._t = lambda key: key
+
+    window._handle_desktop_capture_runtime_error("provider stream failed")
+
+    assert window._desktop_capture_enabled is True
+    assert window._desktop_recovery_attempt == 1
+    assert window._desktop_recovery_timer.delay == 500
+
+
+def test_failed_desktop_restart_uses_bounded_backoff_without_disabling(
+    monkeypatch,
+):
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = True
+    window._desktop_capture_enabled = True
+    window._listen_in_speech = True
+    window._stop_listen = lambda: None
+    window._start_listen = lambda: (_ for _ in ()).throw(RuntimeError("busy"))
+    window._refresh_desktop_capture_button = lambda: None
+    window._refresh_floating_window_status = lambda _active: None
+    window._sync_settings_window_vrc_listen_state = lambda: None
+    window._set_bottom = lambda *_args, **_kwargs: None
+    window._t = lambda key: key
+    scheduled = []
+    monkeypatch.setattr(
+        window,
+        "_schedule_desktop_capture_recovery",
+        lambda message="": scheduled.append(message),
+    )
+
+    window._restart_desktop_capture("capture failed")
+
+    assert window._desktop_capture_enabled is True
+    assert window._listen_in_speech is False
+    assert scheduled == ["capture failed"]
+
+
 def test_trilingual_output_format_uses_second_translation():
     window = MainWindow.__new__(MainWindow)
     window._config = {

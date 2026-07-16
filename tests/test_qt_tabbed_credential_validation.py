@@ -172,3 +172,41 @@ def test_api_prompt_action_selects_and_focuses_matching_key_input(
 
     assert tab._prompt_for_missing_credential("anthropic") is True
     assert opened == ["anthropic"]
+
+
+def test_tabbed_grok_provider_preserves_custom_model_and_relay_settings(
+    qtbot,
+    monkeypatch,
+):
+    prompts = []
+    monkeypatch.setattr(
+        api_models_tab,
+        "show_missing_credential_prompt",
+        _recording_prompt(prompts),
+    )
+    config = _translation_config(backend="grok_compatible")
+    config["translation"]["grok_compatible"] = {
+        "api_key": "relay-key",
+        "base_url": "https://relay.example.com/openai/v1",
+        "model": "Custom-GROK/router:model-001",
+        "timeout_s": 21,
+        "custom_headers": {"X-Tenant": "player-one"},
+        "streaming": False,
+    }
+    tab = APIModelsTab(config, "en")
+    qtbot.addWidget(tab)
+    tab.load_config(config)
+
+    assert tab._provider_combo.currentData() == "grok_compatible"
+    assert tab._model_combo.currentText() == "Custom-GROK/router:model-001"
+    assert tab._grok_url_input.text() == "https://relay.example.com/openai/v1"
+    assert tab._grok_headers_input.text() == '{"X-Tenant":"player-one"}'
+    assert tab._grok_streaming_check.isChecked() is False
+
+    saved = tab.get_config()["translation"]["grok_compatible"]
+    assert saved["model"] == "Custom-GROK/router:model-001"
+    assert saved["base_url"] == "https://relay.example.com/openai/v1"
+    assert saved["timeout_s"] == 21.0
+    assert saved["custom_headers"] == {"X-Tenant": "player-one"}
+    assert saved["streaming"] is False
+    assert prompts == []

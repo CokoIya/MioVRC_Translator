@@ -95,6 +95,33 @@ def test_desktop_capture_treats_unanticipated_host_error_as_transient():
     )
 
 
+def test_desktop_start_thread_failure_releases_lifecycle_state(monkeypatch):
+    class FailingThread:
+        def start(self):
+            raise RuntimeError("thread start failed")
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            del timeout
+
+    monkeypatch.setattr(
+        desktop_recorder.threading,
+        "Thread",
+        lambda *args, **kwargs: FailingThread(),
+    )
+    recorder = DesktopAudioRecorder(on_segment=lambda _audio: None)
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        recorder.start()
+
+    assert recorder.is_running is False
+    assert recorder._worker_thread is None
+    assert recorder._capture_thread is None
+    assert recorder._frame_queue.empty()
+
+
 def test_desktop_prepare_frame_avoids_stereo_phase_cancellation():
     recorder = DesktopAudioRecorder(on_segment=lambda _audio: None)
     recorder._capture_dtype = "float32"

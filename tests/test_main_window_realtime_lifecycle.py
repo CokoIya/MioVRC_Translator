@@ -699,6 +699,60 @@ def test_stop_workers_cancels_pending_ui_delivery_before_joining_scheduler():
     assert window._ui_priority_callback_queue.empty()
 
 
+def test_reverse_latency_log_separates_provider_queue_reorder_ui_and_tts(caplog):
+    now = time.monotonic()
+    diagnostics = {
+        "speech_ended_at": now - 1.0,
+        "segment_emitted_at": now - 0.6,
+        "vad_finalization_s": 0.4,
+        "asr_event_loop_queue_s": 0.01,
+        "asr_provider_queue_s": 0.02,
+        "asr_provider_s": 0.20,
+        "asr_connection_reused": True,
+        "translation_context_lookup_s": 0.003,
+        "translation_prompt_build_s": 0.004,
+        "translation_provider_s": 0.15,
+    }
+    task = RealtimeTask(
+        source=DESKTOP_SOURCE,
+        session_id=9,
+        sequence=3,
+        provider_key="qwen",
+        payload=None,
+        submitted_at=now - 0.55,
+        diagnostics=diagnostics,
+    )
+    completion = RealtimeCompletion(
+        task=task,
+        asr_queue_wait_s=0.03,
+        asr_duration_s=0.25,
+        translation_queue_wait_s=0.04,
+        translation_duration_s=0.17,
+        recognition_reorder_wait_s=0.01,
+        rewrite_reorder_wait_s=0.02,
+        ordered_delivery_wait_s=0.03,
+        completed_at=now - 0.05,
+    )
+    window = MainWindow.__new__(MainWindow)
+
+    with caplog.at_level("INFO", logger="src.ui_qt.main_window"):
+        window._log_reverse_latency(
+            completion,
+            ui_enqueued_at=now - 0.02,
+            ui_started_at=now - 0.01,
+            ui_finished_at=now,
+        )
+
+    message = caplog.records[-1].getMessage()
+    assert "asr_provider_queue_ms=" in message
+    assert "translation_context_ms=" in message
+    assert "translation_provider_ms=" in message
+    assert "reorder_ms=" in message
+    assert "ui_queue_ms=" in message
+    assert "tts_wait_ms=0.0 tts_queued=false" in message
+    assert "asr_connection_reused=True" in message
+
+
 def test_stale_startup_cleanup_cannot_touch_newer_session():
     window = MainWindow.__new__(MainWindow)
     current_event = threading.Event()
@@ -921,6 +975,32 @@ def test_translation_workers_keep_translators_confined_to_worker_state(monkeypat
     assert window._translator is main_window_translator
 
 
+def test_translation_worker_keeps_reverse_client_separate_from_microphone():
+    class Translator:
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def close(self) -> None:
+            self.closed += 1
+
+    mic = Translator()
+    listen = Translator()
+    state = _RealtimeTranslationWorkerState(
+        translator=mic,
+        listen_translator=listen,
+    )
+
+    state.close_translator(DESKTOP_SOURCE)
+
+    assert state.translator is mic
+    assert state.listen_translator is None
+    assert mic.closed == 0
+    assert listen.closed == 1
+
+    state.close()
+    assert mic.closed == 1
+
+
 def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
     captured = {}
 
@@ -957,6 +1037,37 @@ def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
     assert runtime_fallback["timeout_s"] == 6.0
     assert runtime_fallback["max_retries"] == 0
     assert captured["context_store"] is store
+    assert original["translation"]["openai_compatible"]["timeout_s"] == 15.0
+
+
+def test_reverse_translator_uses_separate_short_timeout(monkeypatch):
+    captured = {}
+
+    def fake_create_translator(config, *, context_store=None):
+        captured["config"] = config
+        captured["context_store"] = context_store
+        return object()
+
+    monkeypatch.setattr(main_window, "create_translator", fake_create_translator)
+    window = MainWindow.__new__(MainWindow)
+    window._translation_context_store = TranslationContextStore()
+    original = {
+        "translation": {
+            "backend": "openai_compatible",
+            "realtime_timeout_s": 8.0,
+            "openai_compatible": {
+                "timeout_s": 15.0,
+                "max_retries": 2,
+            },
+        },
+        "vrc_listen": {"translation_timeout_s": 3.5},
+    }
+
+    window._create_realtime_translator(original, source=DESKTOP_SOURCE)
+
+    runtime = captured["config"]["translation"]["openai_compatible"]
+    assert runtime["timeout_s"] == 3.5
+    assert runtime["max_retries"] == 0
     assert original["translation"]["openai_compatible"]["timeout_s"] == 15.0
     assert original["translation"]["openai_compatible"]["max_retries"] == 2
 

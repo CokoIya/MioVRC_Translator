@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.8.3",
-  "installer_name": "MioTranslator-Setup-v1.3.8.3.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.3/MioTranslator-Setup-v1.3.8.3.exe",
-  "size_bytes": 463852183,
-  "sha256": "2a2ff43aefcb3539f60d8d68672eec7c522581f54235b3d4080076d86fd62b4c",
+  "version": "v1.3.8.4",
+  "installer_name": "MioTranslator-Setup-v1.3.8.4.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.4/MioTranslator-Setup-v1.3.8.4.exe",
+  "size_bytes": 463847910,
+  "sha256": "982cdd9d32aa34600d24c82114f37f10d4f90f6e00a579fdf471af78fe550a11",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "58d88ee7ddc965ddcaae3854014e097bdd2e740386146694022010a0d7868f473d75aea94555489b419cccdb9097e68862d7103d3120de0e9b0c0f709e195b08",
-  "notes": "v1.3.8.3 hardens realtime Qwen3-ASR with cancellable persistent transport, hard deadlines, connection reuse, and recovery isolation; drops stale ASR queue items, improves recorder overflow and worker recovery, and migrates official services to miovrc.com.",
+  "installer_signature": "98dca6d2a212e6666e3109cbf5a9f101c2ada491a2798962b5731bea676758a47b34b5832950bb10436685c819b4f8394a413091568839a88818c28c5c762f09",
+  "notes": "v1.3.8.4 adds a secure Grok-compatible provider with relay headers, streaming fallback, and connection testing; bounds stale translation and reverse-processing queues, improves desktop/audio recovery and end-to-end latency diagnostics, and tightens translation context isolation.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.3 强化实时 Qwen3-ASR：引入可取消的持久异步传输、硬超时、连接复用与故障代际隔离；自动丢弃过期 ASR 队列任务，改进录音队列溢出和工作线程恢复，并将官方服务迁移至 miovrc.com。",
-    "en": "v1.3.8.3 hardens realtime Qwen3-ASR with cancellable persistent transport, hard deadlines, connection reuse, and recovery isolation; drops stale ASR queue items, improves recorder overflow and worker recovery, and migrates official services to miovrc.com.",
-    "ja": "v1.3.8.3 では、キャンセル可能な常駐非同期通信、ハードタイムアウト、接続再利用、障害世代の分離によってリアルタイム Qwen3-ASR を強化しました。期限切れの ASR キューを破棄し、録音キューのオーバーフローとワーカー復旧を改善し、公式サービスを miovrc.com へ移行しました。",
-    "ru": "v1.3.8.3 усиливает Qwen3-ASR для реального времени: добавляет отменяемый постоянный транспорт, жёсткие тайм-ауты, повторное использование соединений и изоляцию восстановления; удаляет устаревшие задачи ASR, улучшает переполнение очереди записи и восстановление рабочих потоков, а также переносит официальные сервисы на miovrc.com.",
-    "ko": "v1.3.8.3은 취소 가능한 상시 비동기 전송, 강제 시간 제한, 연결 재사용과 복구 세대 격리로 실시간 Qwen3-ASR을 강화합니다. 만료된 ASR 대기열 작업을 제거하고 녹음 대기열 오버플로 및 작업자 복구를 개선하며 공식 서비스를 miovrc.com으로 이전합니다."
+    "zh-CN": "v1.3.8.4 新增安全的 Grok 兼容服务商配置，支持中继请求头、流式回退和连接测试；限制过期翻译与逆向处理队列，改进桌面音频恢复和端到端延迟诊断，并加强翻译上下文隔离。",
+    "en": "v1.3.8.4 adds a secure Grok-compatible provider with relay headers, streaming fallback, and connection testing; bounds stale translation and reverse-processing queues, improves desktop/audio recovery and end-to-end latency diagnostics, and tightens translation context isolation.",
+    "ja": "v1.3.8.4 では、安全な Grok 互換プロバイダーを追加し、リレー用ヘッダー、ストリーミングのフォールバック、接続テストに対応しました。期限切れの翻訳および逆方向処理キューを制限し、デスクトップ音声の復旧とエンドツーエンド遅延診断を改善し、翻訳コンテキストの分離を強化しました。",
+    "ru": "v1.3.8.4 добавляет безопасного Grok-совместимого провайдера с заголовками для шлюзов, резервным нестриминговым режимом и проверкой подключения; ограничивает устаревшие очереди перевода и обратной обработки, улучшает восстановление аудио и сквозную диагностику задержек, а также усиливает изоляцию контекста перевода.",
+    "ko": "v1.3.8.4는 릴레이 헤더, 스트리밍 폴백 및 연결 테스트를 지원하는 안전한 Grok 호환 공급자를 추가합니다. 만료된 번역 및 역방향 처리 대기열을 제한하고 데스크톱 오디오 복구와 종단 간 지연 진단을 개선하며 번역 문맥 격리를 강화합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-14T16:46:08+09:00",
+  "published_at": "2026-07-16T15:02:24+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "551753c35d7d8d87f7c0f779ba04f7e69ccc0ad708092ce809aaa5014adbb65c681b92d0406e1a87cf24cade82ad1b749d648145e7d239c6778020a8ca949907"
+  "signature": "d0a6bc2198b084fa04a2dedf184590298d667ba27189a96db6b1f8096c35a6e6b09dce162074936e18b1487acdf3929ea04e91712c1cb5afcb12a0b725ee1006"
 }

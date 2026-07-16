@@ -89,6 +89,26 @@ def test_user_dictionary_entries_are_applied(tmp_path, monkeypatch):
     assert corrector.apply("say me oh custom now") == "say MioCustomTerm now"
 
 
+def test_disabled_dictionary_preserves_data_without_applying_entries(
+    tmp_path,
+    monkeypatch,
+):
+    _isolate_dictionary_dir(tmp_path, monkeypatch)
+    text_corrections.upsert_user_dictionary_entry(
+        "MioCustomTerm",
+        "me oh custom",
+    )
+    path = text_corrections.user_dictionary_path()
+    before = path.read_bytes()
+
+    corrector = text_corrections.LayeredASRCorrector(
+        {"asr": {"correction": {"enabled": False}}}
+    )
+
+    assert corrector.apply("say me oh custom now") == "say me oh custom now"
+    assert path.read_bytes() == before
+
+
 def test_upsert_user_dictionary_entry_keeps_invalid_json_intact(tmp_path, monkeypatch):
     _isolate_dictionary_dir(tmp_path, monkeypatch)
     path = text_corrections.user_dictionary_path()

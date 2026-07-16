@@ -170,6 +170,7 @@ def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(
         )
     )
     caplog.set_level(logging.INFO, logger="src.asr.qwen3_asr")
+    timing = {}
 
     try:
         text = provider.transcribe_realtime(
@@ -179,6 +180,7 @@ def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(
                 "source": "mic",
                 "sequence": 42,
                 "session_id": "session-a",
+                "timing": timing,
             },
         )
 
@@ -208,6 +210,11 @@ def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(
         assert "provider_ms=" in caplog.text
         assert "request_ms=" in caplog.text
         assert "cleanup_ms=" in caplog.text
+        assert timing["asr_outcome"] == "success"
+        assert timing["asr_provider_s"] >= 0.0
+        assert timing["asr_provider_queue_s"] >= 0.0
+        assert timing["asr_request_id"] == "qwen-1-1"
+        assert provider.concurrency_key[0] == "qwen3-asr"
     finally:
         provider.close()
 

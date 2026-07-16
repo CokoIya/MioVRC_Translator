@@ -21,7 +21,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Hashable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Any
@@ -53,6 +53,10 @@ class RealtimeASRQueueExpiredError(TimeoutError):
     """An admitted sentence expired before its ASR request could start."""
 
 
+class RealtimeTranslationQueueExpiredError(TimeoutError):
+    """A recognized sentence expired before its translation request could start."""
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeTask:
     """Immutable identity and input snapshot for one admitted sentence."""
@@ -63,6 +67,7 @@ class RealtimeTask:
     provider_key: Hashable
     payload: Any
     submitted_at: float
+    diagnostics: Any = None
     provider_concurrency: int = 1
 
 
@@ -92,11 +97,15 @@ class RealtimeCompletion:
     asr_duration_s: float = 0.0
     rewrite_queue_wait_s: float = 0.0
     rewrite_duration_s: float = 0.0
+    recognition_reorder_wait_s: float = 0.0
+    rewrite_reorder_wait_s: float = 0.0
     translation_queue_wait_s: float = 0.0
     translation_duration_s: float = 0.0
+    ordered_delivery_wait_s: float = 0.0
     completed_at: float = 0.0
     cancelled: bool = False
     stale_asr: bool = False
+    stale_translation: bool = False
 
     @property
     def error(self) -> BaseException | None:
@@ -131,6 +140,8 @@ class SchedulerSnapshot:
     rejected_stopped: int
     stale_asr_dropped: int
     stale_asr_dropped_by_source: Mapping[str, int]
+    stale_translation_dropped: int
+    stale_translation_dropped_by_source: Mapping[str, int]
     health: SchedulerHealth
     oldest_task_age_s: float
     oldest_by_source: Mapping[str, float]
@@ -168,6 +179,8 @@ class _RecognizedWork:
     asr_duration_s: float
     rewrite_queue_wait_s: float
     rewrite_duration_s: float
+    recognition_reorder_wait_s: float
+    rewrite_reorder_wait_s: float
     enqueued_at: float
 
 
@@ -211,6 +224,7 @@ class RealtimeScheduler:
         clock: Callable[[], float] = time.monotonic,
         stale_task_age_s: float = 30.0,
         max_asr_queue_age_s: float | None = None,
+        max_translation_queue_age_s: Mapping[str, float] | None = None,
         backlog_ratio: float = 0.75,
         health_check_interval_s: float = 1.0,
     ) -> None:
@@ -239,6 +253,17 @@ class RealtimeScheduler:
             and normalized_max_asr_queue_age <= 0
         ):
             raise ValueError("max_asr_queue_age_s must be positive when configured")
+        normalized_translation_queue_ages: dict[str, float] = {}
+        for source, value in dict(max_translation_queue_age_s or {}).items():
+            normalized_source = str(source)
+            if normalized_source not in normalized_sources:
+                continue
+            age = float(value)
+            if age <= 0:
+                raise ValueError(
+                    "max_translation_queue_age_s values must be positive"
+                )
+            normalized_translation_queue_ages[normalized_source] = age
         if not 0 < backlog_ratio <= 1:
             raise ValueError("backlog_ratio must be within (0, 1]")
         if not callable(asr_handler) or not callable(translation_handler) or not callable(delivery_handler):
@@ -292,6 +317,7 @@ class RealtimeScheduler:
         self._clock = clock
         self._stale_task_age_s = float(stale_task_age_s)
         self._max_asr_queue_age_s = normalized_max_asr_queue_age
+        self._max_translation_queue_age_s = normalized_translation_queue_ages
         self._backlog_ratio = float(backlog_ratio)
         self._health_check_interval_s = float(health_check_interval_s)
 
@@ -368,6 +394,10 @@ class RealtimeScheduler:
         self._rejected_stopped_count = 0
         self._stale_asr_dropped_count = 0
         self._stale_asr_dropped_by_source = {
+            source: 0 for source in self._sources
+        }
+        self._stale_translation_dropped_count = 0
+        self._stale_translation_dropped_by_source = {
             source: 0 for source in self._sources
         }
         self._started = False
@@ -469,6 +499,7 @@ class RealtimeScheduler:
         session_id: int,
         provider_key: Hashable,
         payload: Any,
+        diagnostics: Any = None,
         provider_concurrency: int = 1,
     ) -> AdmissionResult:
         source = str(source)
@@ -516,6 +547,7 @@ class RealtimeScheduler:
                 provider_key=provider_key,
                 payload=payload,
                 submitted_at=self._clock(),
+                diagnostics=diagnostics,
                 provider_concurrency=provider_limit,
             )
             source_queue.append(task)
@@ -624,6 +656,9 @@ class RealtimeScheduler:
             stale_asr_dropped_by_source = MappingProxyType(
                 dict(self._stale_asr_dropped_by_source)
             )
+            stale_translation_dropped_by_source = MappingProxyType(
+                dict(self._stale_translation_dropped_by_source)
+            )
             recognized_pending = MappingProxyType(
                 {
                     source: len(items)
@@ -713,6 +748,10 @@ class RealtimeScheduler:
                 rejected_stopped=self._rejected_stopped_count,
                 stale_asr_dropped=self._stale_asr_dropped_count,
                 stale_asr_dropped_by_source=stale_asr_dropped_by_source,
+                stale_translation_dropped=self._stale_translation_dropped_count,
+                stale_translation_dropped_by_source=(
+                    stale_translation_dropped_by_source
+                ),
                 health=health,
                 oldest_task_age_s=oldest_task_age,
                 oldest_by_source=oldest_by_source,
@@ -728,8 +767,17 @@ class RealtimeScheduler:
                 check_interval,
                 max(0.05, min(self._max_asr_queue_age_s / 4.0, 0.5)),
             )
+        if self._max_translation_queue_age_s:
+            shortest_translation_age = min(
+                self._max_translation_queue_age_s.values()
+            )
+            check_interval = min(
+                check_interval,
+                max(0.05, min(shortest_translation_age / 4.0, 0.5)),
+            )
         while not self._cancel_event.wait(check_interval):
             self._drop_stale_asr_tasks()
+            self._drop_stale_translation_tasks()
             snapshot = self.snapshot()
             health = snapshot.health
             now = self._clock()
@@ -742,7 +790,8 @@ class RealtimeScheduler:
                     logger.warning(
                         "Realtime pipeline health=%s oldest_ms=%.0f utilization=%.0f%% "
                         "pending=%d running=%d outstanding=%s translation_pending=%s "
-                        "translation_running=%s stale_asr_dropped=%d",
+                        "translation_running=%s stale_asr_dropped=%d "
+                        "stale_translation_dropped=%d",
                         health.value,
                         snapshot.oldest_task_age_s * 1000.0,
                         snapshot.capacity_utilization * 100.0,
@@ -752,6 +801,7 @@ class RealtimeScheduler:
                         dict(snapshot.translation_pending_by_source),
                         dict(snapshot.translation_running_by_source),
                         snapshot.stale_asr_dropped,
+                        snapshot.stale_translation_dropped,
                     )
                     if health is SchedulerHealth.STALLED:
                         last_stalled_report = now
@@ -886,6 +936,7 @@ class RealtimeScheduler:
             provider_key=task.provider_key,
             payload=None,
             submitted_at=task.submitted_at,
+            diagnostics=task.diagnostics,
             provider_concurrency=task.provider_concurrency,
         )
 
@@ -1158,6 +1209,8 @@ class RealtimeScheduler:
             # before blocking for more work. This matters when a claimed task
             # expires and its ordered marker intentionally carries no payload.
             task = None
+            raw_text = None
+            work = None
             task = self._take_asr_task()
             if task is None:
                 return
@@ -1213,6 +1266,8 @@ class RealtimeScheduler:
                 asr_duration_s=duration,
                 rewrite_queue_wait_s=0.0,
                 rewrite_duration_s=0.0,
+                recognition_reorder_wait_s=0.0,
+                rewrite_reorder_wait_s=0.0,
                 enqueued_at=self._clock(),
             )
             logger.debug(
@@ -1303,12 +1358,23 @@ class RealtimeScheduler:
             work = self._take_next_recognized_work(source)
             if work is None:
                 return
+            stage_enqueued_at = self._clock()
+            downstream = replace(
+                work,
+                recognition_reorder_wait_s=(
+                    work.recognition_reorder_wait_s
+                    + max(0.0, stage_enqueued_at - work.enqueued_at)
+                ),
+                enqueued_at=stage_enqueued_at,
+            )
             if self._rewrite_queue is not None:
                 rewrite_required = True
                 predicate = self._rewrite_required
                 if predicate is not None:
                     try:
-                        rewrite_required = bool(predicate(work.task, work.text))
+                        rewrite_required = bool(
+                            predicate(downstream.task, downstream.text)
+                        )
                     except Exception:
                         logger.exception(
                             "Realtime rewrite predicate failed; preserving rewrite "
@@ -1319,21 +1385,29 @@ class RealtimeScheduler:
                 if rewrite_required:
                     queued = self._put_stage_work(
                         self._rewrite_queue,
-                        work,
+                        downstream,
                         stage_name="rewrite",
-                        reserve_priority=True,
+                        # Rewrite eligibility may differ by source (desktop
+                        # audio deliberately bypasses persona rewriting), so a
+                        # global source-priority slot would permanently reduce
+                        # effective rewrite capacity.
+                        reserve_priority=False,
                     )
                 else:
                     # A bypassed item still enters the rewritten reorder buffer.
                     # Publishing it straight to translation could let a later
                     # bypassed sequence overtake an earlier provider rewrite.
-                    self._store_rewritten_work(work)
+                    self._store_rewritten_work(downstream)
                     queued = True
             else:
-                queued = self._put_translation_work(work)
+                queued = self._put_translation_work(downstream)
             if not queued:
                 return
             self._mark_recognized_work_enqueued(work)
+            # Do not retain the last task's audio payload while this feeder
+            # blocks waiting for the next ordered sequence.
+            work = None
+            downstream = None
 
     def _put_stage_work(
         self,
@@ -1408,7 +1482,7 @@ class RealtimeScheduler:
                 if (
                     self._priority_source is not None
                     and source != self._priority_source
-                    and not self._translation_queues[self._priority_source]
+                    and self._translation_queues[self._priority_source]
                 ):
                     capacity -= self._translation_reserved_priority_slots
                 if pending < max(capacity, 1):
@@ -1450,6 +1524,8 @@ class RealtimeScheduler:
             while True:
                 if self._cancel_event.is_set() and rewrite_queue.empty():
                     return
+                work = None
+                rewritten = None
                 try:
                     work = rewrite_queue.get(timeout=0.1)
                 except queue.Empty:
@@ -1507,6 +1583,10 @@ class RealtimeScheduler:
                         asr_duration_s=work.asr_duration_s,
                         rewrite_queue_wait_s=queue_wait,
                         rewrite_duration_s=max(0.0, finished_at - rewrite_started),
+                        recognition_reorder_wait_s=(
+                            work.recognition_reorder_wait_s
+                        ),
+                        rewrite_reorder_wait_s=work.rewrite_reorder_wait_s,
                         enqueued_at=finished_at,
                     )
                     if not self._cancel_event.is_set():
@@ -1607,9 +1687,108 @@ class RealtimeScheduler:
             work = self._take_next_rewritten_work(source)
             if work is None:
                 return
-            if not self._put_translation_work(work):
+            translation_enqueued_at = self._clock()
+            downstream = replace(
+                work,
+                rewrite_reorder_wait_s=(
+                    work.rewrite_reorder_wait_s
+                    + max(0.0, translation_enqueued_at - work.enqueued_at)
+                ),
+                enqueued_at=translation_enqueued_at,
+            )
+            if not self._put_translation_work(downstream):
                 return
             self._mark_rewritten_work_enqueued(work)
+            # Translation queue expiry replaces the task with a payload-free
+            # marker; the feeder must not keep a second hidden audio reference.
+            work = None
+            downstream = None
+
+    def _mark_stale_translation_work_locked(
+        self,
+        work: _RecognizedWork,
+        *,
+        now: float,
+    ) -> bool:
+        source = work.task.source
+        max_age = self._max_translation_queue_age_s.get(source)
+        if max_age is None or self._cancel_event.is_set():
+            return False
+        queue_age = max(0.0, now - work.enqueued_at)
+        if queue_age < max_age:
+            return False
+        sequence = work.task.sequence
+        if (
+            sequence < self._next_delivery_sequence[source]
+            or sequence in self._cancelled_sequences[source]
+            or sequence not in self._admitted_tasks[source]
+            or (source, sequence) in self._translation_active_sequences
+        ):
+            return False
+
+        marker_task = self._without_payload(work.task)
+        self._cancelled_sequences[source].add(sequence)
+        self._admitted_tasks[source][sequence] = marker_task
+        self._completed[source][sequence] = RealtimeCompletion(
+            task=marker_task,
+            recognized_text=work.recognized_text,
+            rewritten_text=work.text,
+            asr_error=work.error,
+            rewrite_error=work.rewrite_error,
+            translation_error=RealtimeTranslationQueueExpiredError(
+                "Translation request expired before provider admission"
+            ),
+            asr_queue_wait_s=work.asr_queue_wait_s,
+            asr_duration_s=work.asr_duration_s,
+            rewrite_queue_wait_s=work.rewrite_queue_wait_s,
+            rewrite_duration_s=work.rewrite_duration_s,
+            recognition_reorder_wait_s=work.recognition_reorder_wait_s,
+            rewrite_reorder_wait_s=work.rewrite_reorder_wait_s,
+            translation_queue_wait_s=queue_age,
+            completed_at=now,
+            stale_translation=True,
+        )
+        self._stale_translation_dropped_count += 1
+        self._stale_translation_dropped_by_source[source] += 1
+        self._delivery_available.notify_all()
+        self._translation_available.notify_all()
+        self._state_changed.notify_all()
+        logger.warning(
+            "Realtime translation stale queue drop source=%s sequence=%d "
+            "session_id=%d queue_age_ms=%.1f max_queue_age_ms=%.1f "
+            "source_depth=%d total_depth=%d total_dropped=%d",
+            source,
+            sequence,
+            work.task.session_id,
+            queue_age * 1000.0,
+            max_age * 1000.0,
+            len(self._translation_queues[source]),
+            self._translation_pending_count_locked(),
+            self._stale_translation_dropped_count,
+        )
+        return True
+
+    def _drop_stale_translation_tasks_locked(self, now: float) -> int:
+        if not self._max_translation_queue_age_s or self._cancel_event.is_set():
+            return 0
+        dropped = 0
+        for source in self._sources:
+            pending = self._translation_queues[source]
+            if not pending or source not in self._max_translation_queue_age_s:
+                continue
+            retained: deque[_RecognizedWork] = deque()
+            for work in pending:
+                if self._mark_stale_translation_work_locked(work, now=now):
+                    dropped += 1
+                else:
+                    retained.append(work)
+            if len(retained) != len(pending):
+                self._translation_queues[source] = retained
+        return dropped
+
+    def _drop_stale_translation_tasks(self) -> int:
+        with self._translation_available:
+            return self._drop_stale_translation_tasks_locked(self._clock())
 
     def _select_translation_source_locked(self) -> str | None:
         for source, pending in self._translation_queues.items():
@@ -1621,11 +1800,13 @@ class RealtimeScheduler:
             for source, count in self._translation_running_by_source.items()
             if source != self._priority_source
         )
-        nonpriority_limit = (
-            self._translation_concurrency
-            if self._priority_source is None or self._translation_concurrency <= 1
-            else self._translation_concurrency - 1
+        priority_waiting = bool(
+            self._priority_source is not None
+            and self._translation_queues[self._priority_source]
         )
+        nonpriority_limit = self._translation_concurrency
+        if priority_waiting and self._translation_concurrency > 1:
+            nonpriority_limit -= 1
         dispatchable = [
             source
             for source in self._sources
@@ -1663,6 +1844,7 @@ class RealtimeScheduler:
     def _take_translation_work(self) -> _RecognizedWork | None:
         with self._translation_available:
             while not self._cancel_event.is_set():
+                self._drop_stale_translation_tasks_locked(self._clock())
                 source = self._select_translation_source_locked()
                 if source is not None:
                     work = self._translation_queues[source].popleft()
@@ -1705,6 +1887,9 @@ class RealtimeScheduler:
 
         try:
             while True:
+                work = None
+                result = None
+                completion = None
                 work = self._take_translation_work()
                 if work is None:
                     return
@@ -1753,6 +1938,10 @@ class RealtimeScheduler:
                         asr_duration_s=work.asr_duration_s,
                         rewrite_queue_wait_s=work.rewrite_queue_wait_s,
                         rewrite_duration_s=work.rewrite_duration_s,
+                        recognition_reorder_wait_s=(
+                            work.recognition_reorder_wait_s
+                        ),
+                        rewrite_reorder_wait_s=work.rewrite_reorder_wait_s,
                         translation_queue_wait_s=queue_wait,
                         translation_duration_s=max(0.0, finished_at - translation_started),
                         completed_at=finished_at,
@@ -1807,6 +1996,8 @@ class RealtimeScheduler:
 
     def _delivery_worker(self) -> None:
         while not self._cancel_event.is_set():
+            completion = None
+            delivered_completion = None
             with self._delivery_available:
                 completion = self._pop_deliverable_locked()
                 while completion is None and not self._cancel_event.is_set():
@@ -1823,11 +2014,15 @@ class RealtimeScheduler:
                     0.0,
                     delivery_started_at - completion.completed_at,
                 )
+                delivered_completion = replace(
+                    completion,
+                    ordered_delivery_wait_s=ordered_wait_s,
+                )
                 with self._delivery_gate:
                     if self._cancel_event.is_set():
                         return
                     if not completion.cancelled:
-                        self._delivery_handler(completion)
+                        self._delivery_handler(delivered_completion)
                 logger.debug(
                     "Realtime delivery source=%s sequence=%d cancelled=%s end_to_end_ms=%.1f",
                     completion.task.source,
@@ -1845,18 +2040,22 @@ class RealtimeScheduler:
                 delivery_finished_at = self._clock()
                 logger.info(
                     "Realtime latency source=%s sequence=%d cancelled=%s stale_asr=%s "
+                    "stale_translation=%s recognition_reorder_ms=%.1f "
                     "asr_queue_ms=%.1f asr_ms=%.1f rewrite_queue_ms=%.1f "
-                    "rewrite_ms=%.1f translation_queue_ms=%.1f "
+                    "rewrite_ms=%.1f rewrite_reorder_ms=%.1f translation_queue_ms=%.1f "
                     "translation_ms=%.1f ordered_wait_ms=%.1f "
                     "delivery_ms=%.1f end_to_end_ms=%.1f",
                     completion.task.source,
                     completion.task.sequence,
                     completion.cancelled,
                     completion.stale_asr,
+                    completion.stale_translation,
+                    completion.recognition_reorder_wait_s * 1000.0,
                     completion.asr_queue_wait_s * 1000.0,
                     completion.asr_duration_s * 1000.0,
                     completion.rewrite_queue_wait_s * 1000.0,
                     completion.rewrite_duration_s * 1000.0,
+                    completion.rewrite_reorder_wait_s * 1000.0,
                     completion.translation_queue_wait_s * 1000.0,
                     completion.translation_duration_s * 1000.0,
                     ordered_wait_s * 1000.0,

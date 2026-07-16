@@ -140,6 +140,15 @@
       "timeout_s": 15.0,
       "max_retries": 0
     },
+    "grok_compatible": {
+      "api_key": "",
+      "base_url": "https://api.x.ai/v1",
+      "model": "grok-4.5",
+      "timeout_s": 15.0,
+      "max_retries": 0,
+      "streaming": true,
+      "custom_headers": {}
+    },
     "local_ai": {
       "api_key": "",
       "base_url": "http://127.0.0.1:11434/v1",
@@ -274,7 +283,10 @@
     "source_language": "auto",
     "target_language": "zh",
     "segment_duration_s": 2.0,
-    "tail_silence_s": 0.65,
+    "tail_silence_s": 0.4,
+    "latency_profile_version": 1,
+    "asr_timeout_s": 5.0,
+    "translation_timeout_s": 4.0,
     "self_suppress": false,
     "self_suppress_seconds": 0.65,
     "show_overlay": false,

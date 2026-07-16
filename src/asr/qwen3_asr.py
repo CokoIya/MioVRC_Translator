@@ -185,6 +185,10 @@ class Qwen3ASRProvider(ASRProvider):
             1,
             2,
         )
+        # Separate persistent Qwen runtimes may serve microphone and reverse
+        # audio concurrently. A shared instance still serializes itself through
+        # this stable per-instance scheduler key and its internal semaphore.
+        self.concurrency_key = (self.provider_id, id(self))
         self._corrector = corrector
         self._client = None
         self._http_client = None
@@ -313,12 +317,16 @@ class Qwen3ASRProvider(ASRProvider):
         context = _HTTP_REQUEST_CONTEXT.get() or {}
         request_id = context.get("request_id", "unknown")
         started_at = float(context.get("provider_started_at", 0.0) or 0.0)
+        timing = context.get("timing")
         stream = getattr(response, "extensions", {}).get("network_stream")
         stream_id = id(stream) if stream is not None else 0
         with self._lock:
             reused = bool(stream_id and stream_id in self._seen_network_streams)
             if stream_id:
                 self._seen_network_streams.add(stream_id)
+        if isinstance(timing, dict):
+            timing["connection_reused"] = reused
+            timing["http_response_at"] = time.monotonic()
         provider_request_id = ""
         try:
             provider_request_id = str(
@@ -415,6 +423,9 @@ class Qwen3ASRProvider(ASRProvider):
             self._request_counter += 1
             request_number = self._request_counter
             context = dict(request_context or {})
+            external_timing = context.get("timing")
+            if not isinstance(external_timing, dict):
+                external_timing = None
             source = str(context.get("source", "unknown") or "unknown")
             sequence = context.get("sequence", "unknown")
             session_id = context.get("session_id", "unknown")
@@ -591,6 +602,25 @@ class Qwen3ASRProvider(ASRProvider):
                 failures,
                 timeouts,
             )
+            if external_timing is not None:
+                external_timing.update(
+                    {
+                        "asr_event_loop_queue_s": event_loop_queue_s,
+                        "asr_provider_queue_s": provider_queue_wait_s,
+                        "asr_provider_s": provider_elapsed_s,
+                        "asr_request_s": max(
+                            0.0,
+                            request_terminal_at - submitted_at,
+                        ),
+                        "asr_cleanup_s": cleanup_duration_s,
+                        "asr_outcome": outcome,
+                        "asr_request_id": request_id,
+                    }
+                )
+                if "connection_reused" in request_timing:
+                    external_timing["asr_connection_reused"] = bool(
+                        request_timing["connection_reused"]
+                    )
         content = completion.choices[0].message.content if completion.choices else ""
         text = clean_asr_text(str(content or ""))
         if text and self._corrector is not None:
@@ -618,6 +648,7 @@ class Qwen3ASRProvider(ASRProvider):
                 {
                     "request_id": request_id,
                     "provider_started_at": provider_started_at,
+                    "timing": timing,
                 }
             )
             try:

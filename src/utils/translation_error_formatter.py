@@ -271,6 +271,42 @@ _TEXTS: dict[str, dict[str, str]] = {
     },
 }
 
+_GROK_ERROR_TEXTS = {
+    "zh-CN": {
+        "endpoint_short": "翻译失败：API Base URL 无效",
+        "endpoint_inline": "{prefix} API Base URL 无效或不安全，请检查设置。",
+        "endpoint_detail": "API Base URL 无效。\n\n请填写中继服务提供的完整 HTTPS 地址；本机服务也可以使用 localhost HTTP。{detail_suffix}",
+        "auth_hint_grok_compatible": "请填写 xAI 或 Grok 兼容中继服务提供的有效 API Key，并确认自定义请求头配置正确。",
+    },
+    "en": {
+        "endpoint_short": "Translation failed: invalid API Base URL",
+        "endpoint_inline": "{prefix} The API Base URL is invalid or unsafe. Check Settings.",
+        "endpoint_detail": "The API Base URL is invalid.\n\nEnter the complete HTTPS URL supplied by the relay. Localhost HTTP endpoints are also supported.{detail_suffix}",
+        "auth_hint_grok_compatible": "Use a valid xAI or Grok-compatible relay API key and verify any custom request headers.",
+    },
+    "ja": {
+        "endpoint_short": "翻訳失敗：API Base URL が無効です",
+        "endpoint_inline": "{prefix} API Base URL が無効または安全ではありません。設定を確認してください。",
+        "endpoint_detail": "API Base URL が無効です。\n\n中継サービスから指定された完全な HTTPS URL を入力してください。ローカルホストの HTTP も使用できます。{detail_suffix}",
+        "auth_hint_grok_compatible": "xAI または Grok 互換中継サービスの有効な API キーを入力し、カスタムリクエストヘッダーも確認してください。",
+    },
+    "ru": {
+        "endpoint_short": "Ошибка перевода: неверный API Base URL",
+        "endpoint_inline": "{prefix} API Base URL неверен или небезопасен. Проверьте настройки.",
+        "endpoint_detail": "API Base URL указан неверно.\n\nВведите полный HTTPS-адрес, предоставленный шлюзом. Для localhost также поддерживается HTTP.{detail_suffix}",
+        "auth_hint_grok_compatible": "Укажите действительный ключ xAI или Grok-совместимого шлюза и проверьте пользовательские заголовки.",
+    },
+    "ko": {
+        "endpoint_short": "번역 실패: API Base URL이 잘못되었습니다",
+        "endpoint_inline": "{prefix} API Base URL이 잘못되었거나 안전하지 않습니다. 설정을 확인하세요.",
+        "endpoint_detail": "API Base URL이 잘못되었습니다.\n\n중계 서비스가 제공한 전체 HTTPS 주소를 입력하세요. localhost HTTP 엔드포인트도 지원합니다.{detail_suffix}",
+        "auth_hint_grok_compatible": "유효한 xAI 또는 Grok 호환 중계 서비스 API 키를 입력하고 사용자 지정 요청 헤더도 확인하세요.",
+    },
+}
+for _language, _values in _GROK_ERROR_TEXTS.items():
+    _TEXTS[_language].update(_values)
+
+
 _PROVIDER_NAMES = {
     "openai": "OpenAI",
     "local_ai": "Local AI",
@@ -281,6 +317,7 @@ _PROVIDER_NAMES = {
     "gemini": "Gemini",
     "kimi": "Kimi",
     "xai": "xAI",
+    "grok_compatible": "Grok Compatible",
     "mistral": "Mistral",
     "doubao": "Doubao / Ark",
     "nvidia": "NVIDIA AI",
@@ -345,6 +382,14 @@ _NETWORK_KEYWORDS = (
     "connection reset",
     "remote end closed connection",
 )
+_ENDPOINT_KEYWORDS = (
+    "base url is not configured",
+    "base url is malformed",
+    "base url has an invalid port",
+    "base url must use https",
+    "invalid base url",
+    "invalid url",
+)
 
 
 def format_translation_error(
@@ -373,7 +418,15 @@ def format_translation_error(
             detail=detail,
         )
 
-    if _contains_any(combined, "not configured", "is not configured", "missing api key", "api key is required", "model is required"):
+    if _contains_any(
+        combined,
+        "not configured",
+        "is not configured",
+        "missing api key",
+        "api key is required",
+        "model is required",
+        "custom request headers",
+    ):
         category = "config"
         return FriendlyTranslationError(
             short_message=texts["config_short"],
@@ -423,6 +476,20 @@ def format_translation_error(
             detailed_message=texts["parameter_detail"].format(
                 subject=subject,
                 detail_suffix=detail_suffix,
+            ),
+            category=category,
+            detail=detail,
+        )
+
+    if _contains_any(combined, *_ENDPOINT_KEYWORDS):
+        category = "endpoint"
+        return FriendlyTranslationError(
+            short_message=texts["endpoint_short"],
+            inline_message=texts["endpoint_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["endpoint_detail"].format(
+                detail_suffix=detail_suffix
             ),
             category=category,
             detail=detail,

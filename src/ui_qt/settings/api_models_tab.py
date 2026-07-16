@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import logging
+import json
+import threading
 from collections.abc import Callable
 
 from PySide6.QtCore import Signal
@@ -19,10 +21,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QComboBox,
     QLineEdit,
+    QCheckBox,
     QGroupBox,
     QScrollArea,
+    QMessageBox,
 )
 
+from src.translators.factory import test_translation_connection
+from src.utils.openai_compat import normalize_openai_custom_headers
+from src.utils.secure_http import validate_api_base_url
+from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     get_backend_model_options,
     normalize_backend,
@@ -44,6 +52,7 @@ class APIModelsTab(LocalizedSettingsTab):
     """API & Models configuration tab."""
 
     config_changed = Signal()
+    connection_test_finished = Signal(str, bool, object)
 
     def __init__(
         self,
@@ -61,6 +70,7 @@ class APIModelsTab(LocalizedSettingsTab):
         self._suppress_credential_prompt = False
 
         self._init_ui()
+        self.connection_test_finished.connect(self._finish_connection_test)
 
     def _init_ui(self) -> None:
         """Initialize the API & Models UI."""
@@ -97,6 +107,9 @@ class APIModelsTab(LocalizedSettingsTab):
         # Qwen Section
         self._add_qwen_section(layout)
 
+        # Grok-compatible relay section
+        self._add_grok_section(layout)
+
         layout.addStretch()
 
         scroll.setWidget(container)
@@ -122,6 +135,7 @@ class APIModelsTab(LocalizedSettingsTab):
             ("provider_deepseek", "deepseek"),
             ("provider_gemini", "gemini"),
             ("provider_qwen", "qianwen"),
+            ("provider_grok", "grok_compatible"),
         ):
             self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
@@ -296,6 +310,62 @@ class APIModelsTab(LocalizedSettingsTab):
 
         layout.addWidget(self._qwen_group)
 
+    def _add_grok_section(self, layout: QVBoxLayout) -> None:
+        """Add Grok-compatible OpenAI relay configuration."""
+
+        self._grok_group = QGroupBox(self._t("grok_config"))
+        group_layout = QVBoxLayout(self._grok_group)
+
+        key_layout = QHBoxLayout()
+        key_layout.addWidget(QLabel(self._t("api_key")))
+        self._grok_key_input = QLineEdit()
+        self._grok_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_layout.addWidget(self._grok_key_input, 1)
+        show_btn = QPushButton(self._t("show_api_key"))
+        show_btn.setMinimumWidth(72)
+        show_btn.clicked.connect(lambda: self._toggle_password(self._grok_key_input))
+        key_layout.addWidget(show_btn)
+        group_layout.addLayout(key_layout)
+
+        url_layout = QHBoxLayout()
+        url_layout.addWidget(QLabel(self._t("base_url")))
+        self._grok_url_input = QLineEdit()
+        self._grok_url_input.setPlaceholderText("https://api.x.ai/v1")
+        url_layout.addWidget(self._grok_url_input, 1)
+        group_layout.addLayout(url_layout)
+
+        timeout_layout = QHBoxLayout()
+        timeout_layout.addWidget(QLabel(self._t("request_timeout")))
+        self._grok_timeout_input = QLineEdit()
+        self._grok_timeout_input.setPlaceholderText("15")
+        timeout_layout.addWidget(self._grok_timeout_input, 1)
+        group_layout.addLayout(timeout_layout)
+
+        headers_layout = QHBoxLayout()
+        headers_layout.addWidget(QLabel(self._t("custom_request_headers")))
+        self._grok_headers_input = QLineEdit()
+        self._grok_headers_input.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        self._grok_headers_input.setPlaceholderText(
+            self._t("custom_request_headers_example")
+        )
+        headers_layout.addWidget(self._grok_headers_input, 1)
+        group_layout.addLayout(headers_layout)
+        headers_hint = QLabel(self._t("custom_request_headers_hint"))
+        headers_hint.setWordWrap(True)
+        group_layout.addWidget(headers_hint)
+
+        self._grok_streaming_check = QCheckBox(self._t("streaming_responses"))
+        self._grok_streaming_check.setChecked(True)
+        group_layout.addWidget(self._grok_streaming_check)
+        streaming_hint = QLabel(self._t("streaming_responses_hint"))
+        streaming_hint.setWordWrap(True)
+        group_layout.addWidget(streaming_hint)
+
+        self._grok_test_btn = QPushButton(self._t("test_connection"))
+        self._grok_test_btn.clicked.connect(self._test_grok)
+        group_layout.addWidget(self._grok_test_btn)
+        layout.addWidget(self._grok_group)
+
     def _toggle_password(self, line_edit: QLineEdit) -> None:
         """Toggle password visibility."""
         if line_edit.echoMode() == QLineEdit.EchoMode.Password:
@@ -306,14 +376,19 @@ class APIModelsTab(LocalizedSettingsTab):
     def _on_provider_changed(self, index: int) -> None:
         """Handle provider selection change."""
         # Show/hide relevant sections
-        self._openai_group.setVisible(index == 0)
-        self._anthropic_group.setVisible(index == 1)
-        self._deepseek_group.setVisible(index == 2)
-        self._gemini_group.setVisible(index == 3)
-        self._qwen_group.setVisible(index == 4)
+        backend = str(self._provider_combo.itemData(index) or "")
+        groups = {
+            "openai": self._openai_group,
+            "anthropic": self._anthropic_group,
+            "deepseek": self._deepseek_group,
+            "gemini": self._gemini_group,
+            "qianwen": self._qwen_group,
+            "grok_compatible": self._grok_group,
+        }
+        for provider_id, group in groups.items():
+            group.setVisible(provider_id == backend)
 
         # Update model options
-        backend = str(self._provider_combo.itemData(index) or "")
         models = list(get_backend_model_options(backend)) if backend else []
 
         self._model_combo.clear()
@@ -329,9 +404,26 @@ class APIModelsTab(LocalizedSettingsTab):
             self._prompt_for_missing_credential()
 
     def _prompt_for_missing_credential(self, provider_id: str | None = None) -> bool:
-        config = self.get_config()
-        if provider_id:
-            config["translation"]["backend"] = normalize_backend(provider_id)
+        backend = normalize_backend(
+            provider_id or self._provider_combo.currentData()
+        )
+        key_inputs = {
+            "openai": self._openai_key_input,
+            "anthropic": self._anthropic_key_input,
+            "deepseek": self._deepseek_key_input,
+            "gemini": self._gemini_key_input,
+            "qianwen": self._qwen_key_input,
+            "grok_compatible": self._grok_key_input,
+        }
+        key_input = key_inputs.get(backend)
+        config = {
+            "translation": {
+                "backend": backend,
+                backend: {
+                    "api_key": key_input.text().strip() if key_input is not None else ""
+                },
+            }
+        }
         missing = first_missing_required_credential(
             config,
             scopes=("translation",),
@@ -371,6 +463,7 @@ class APIModelsTab(LocalizedSettingsTab):
             "deepseek": self._deepseek_key_input,
             "gemini": self._gemini_key_input,
             "qianwen": self._qwen_key_input,
+            "grok_compatible": self._grok_key_input,
         }
         key_input = key_inputs.get(backend)
         if key_input is not None:
@@ -390,6 +483,89 @@ class APIModelsTab(LocalizedSettingsTab):
         logger.info("Testing Anthropic connection...")
         # Keep this button side-effect free until a real provider test exists.
 
+    def _test_grok(self) -> None:
+        """Test the configured Grok-compatible relay without exposing secrets."""
+
+        if self._prompt_for_missing_credential("grok_compatible"):
+            return
+        try:
+            timeout_s = float(self._grok_timeout_input.text().strip() or "15")
+            if not 3.0 <= timeout_s <= 120.0:
+                raise ValueError
+        except (TypeError, ValueError):
+            QMessageBox.warning(
+                self,
+                self._t("connection_test_failed"),
+                self._t("request_timeout_invalid"),
+            )
+            return
+        try:
+            custom_headers = normalize_openai_custom_headers(
+                self._grok_headers_input.text()
+            )
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                self._t("connection_test_failed"),
+                self._t("invalid_custom_headers"),
+            )
+            return
+
+        config = self.get_config()
+        grok_cfg = config["translation"].setdefault("grok_compatible", {})
+        grok_cfg["timeout_s"] = timeout_s
+        grok_cfg["custom_headers"] = custom_headers
+        grok_cfg["streaming"] = self._grok_streaming_check.isChecked()
+        config["translation"]["backend"] = "grok_compatible"
+        self._grok_test_btn.setEnabled(False)
+        self._grok_test_btn.setText(self._t("connection_test_running"))
+
+        def worker() -> None:
+            try:
+                result = test_translation_connection(config)
+            except Exception as exc:
+                self.connection_test_finished.emit("grok_compatible", False, exc)
+            else:
+                self.connection_test_finished.emit(
+                    "grok_compatible",
+                    True,
+                    result,
+                )
+
+        threading.Thread(
+            target=worker,
+            name="grok-connection-test",
+            daemon=True,
+        ).start()
+
+    def _finish_connection_test(
+        self,
+        backend: str,
+        success: bool,
+        result: object,
+    ) -> None:
+        button = getattr(self, "_grok_test_btn", None)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText(self._t("test_connection"))
+        if success:
+            QMessageBox.information(
+                self,
+                self._t("test_connection"),
+                self._t("connection_test_success"),
+            )
+            return
+        friendly = format_translation_error(
+            result,
+            backend=backend,
+            ui_language=self._ui_language,
+        )
+        QMessageBox.warning(
+            self,
+            self._t("connection_test_failed"),
+            friendly.detailed_message,
+        )
+
     def get_config(self) -> dict:
         """Get current configuration from UI."""
         backend = normalize_backend(self._provider_combo.currentData())
@@ -397,6 +573,31 @@ class APIModelsTab(LocalizedSettingsTab):
         selected_region = normalize_qwen_translation_region(
             self._qwen_region_combo.currentData()
         )
+        try:
+            grok_timeout = float(self._grok_timeout_input.text().strip() or "15")
+            if not 3.0 <= grok_timeout <= 120.0:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError(self._t("request_timeout_invalid")) from exc
+        try:
+            grok_headers = normalize_openai_custom_headers(
+                self._grok_headers_input.text()
+            )
+        except ValueError as exc:
+            raise ValueError(self._t("invalid_custom_headers")) from exc
+        try:
+            grok_base_url = validate_api_base_url(
+                self._grok_url_input.text().strip() or "https://api.x.ai/v1",
+                label="Grok-compatible API",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                format_translation_error(
+                    exc,
+                    backend="grok_compatible",
+                    ui_language=self._ui_language,
+                ).detailed_message
+            ) from exc
 
         config = {
             "translation": {
@@ -417,6 +618,19 @@ class APIModelsTab(LocalizedSettingsTab):
                 "qianwen": {
                     "api_key": self._qwen_key_input.text().strip(),
                     "region": selected_region,
+                },
+                "grok_compatible": {
+                    "api_key": self._grok_key_input.text().strip(),
+                    "base_url": grok_base_url,
+                    "model": (
+                        selected_model
+                        if backend == "grok_compatible" and selected_model
+                        else "grok-4.5"
+                    ),
+                    "timeout_s": grok_timeout,
+                    "max_retries": 0,
+                    "custom_headers": grok_headers,
+                    "streaming": self._grok_streaming_check.isChecked(),
                 },
             }
         }
@@ -459,6 +673,24 @@ class APIModelsTab(LocalizedSettingsTab):
         region_index = self._qwen_region_combo.findData(region)
         self._qwen_region_combo.setCurrentIndex(max(0, region_index))
 
+        grok_cfg = trans_cfg.get("grok_compatible", {})
+        if not isinstance(grok_cfg, dict):
+            grok_cfg = {}
+        self._grok_key_input.setText(str(grok_cfg.get("api_key", "") or ""))
+        self._grok_url_input.setText(
+            str(grok_cfg.get("base_url", "https://api.x.ai/v1") or "")
+        )
+        self._grok_timeout_input.setText(
+            str(grok_cfg.get("timeout_s", 15.0) or 15.0)
+        )
+        grok_headers = grok_cfg.get("custom_headers", {})
+        self._grok_headers_input.setText(
+            json.dumps(grok_headers, ensure_ascii=False, separators=(",", ":"))
+            if isinstance(grok_headers, dict) and grok_headers
+            else ""
+        )
+        self._grok_streaming_check.setChecked(bool(grok_cfg.get("streaming", True)))
+
         # Set provider
         backend = trans_cfg.get("backend", "openai")
         provider_map_reverse = {
@@ -468,8 +700,10 @@ class APIModelsTab(LocalizedSettingsTab):
             "gemini": 3,
             "qianwen": 4,
             "qwen": 4,
+            "grok_compatible": 5,
         }
         self._provider_combo.setCurrentIndex(provider_map_reverse.get(normalize_backend(backend), 0))
+        self._on_provider_changed(self._provider_combo.currentIndex())
         selected_backend = normalize_backend(backend)
         backend_cfg = trans_cfg.get(selected_backend, {})
         selected_model = str(backend_cfg.get("model", "") or "").strip()

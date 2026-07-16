@@ -588,6 +588,27 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
             "not in the preset list, Mio keeps it available in this dropdown."
         ),
     },
+    "grok_compatible": {
+        "label": "Grok Compatible",
+        "base_url": "https://api.x.ai/v1",
+        "model": "grok-4.5",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable",
+        "base_url_input": "entry",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": True,
+        "api_key_hint": (
+            "Use an xAI key or the credential issued by any Grok-compatible "
+            "OpenAI relay. The Base URL is not restricted to official xAI endpoints."
+        ),
+        "model_hint": (
+            "grok-4.5 is the default. Relay-specific model names are preserved "
+            "exactly as entered and are never rewritten to an official xAI id."
+        ),
+    },
     "local_ai": {
         "label": "Local AI",
         "base_url": "http://127.0.0.1:11434/v1",
@@ -845,6 +866,7 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "gpt-5.6-luna",
         "gpt-5.5",
     ),
+    "grok_compatible": ("grok-4.5",),
     "google_web": ("google-web",),
     "mymemory": ("mymemory",),
     "deepl": ("deepl-api",),
@@ -938,6 +960,14 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "openai_compatible": {},
+    "grok_compatible": {
+        "grok-4.5": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "live_default",
+        },
+    },
     "google_web": {
         "google-web": {
             "speed": "very_fast",
@@ -1183,6 +1213,13 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
 
 TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
     "openai": {"zh-CN": "GPT", "en": "GPT", "ja": "GPT", "ru": "GPT", "ko": "GPT"},
+    "grok_compatible": {
+        "zh-CN": "Grok 兼容服务",
+        "en": "Grok Compatible",
+        "ja": "Grok 互換サービス",
+        "ru": "Grok-совместимый сервис",
+        "ko": "Grok 호환 서비스",
+    },
     "openai_compatible": {
         "zh-CN": "GPT 兼容服务",
         "en": "GPT Compatible",
@@ -1256,6 +1293,9 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "gpt-5.5": "9.5",
     },
     "openai_compatible": {},
+    "grok_compatible": {
+        "grok-4.5": "9.0",
+    },
     "google_web": {
         "google-web": "8.6",
     },
@@ -1599,7 +1639,14 @@ def get_backend_value(backend: str | None, key: str) -> str:
 
 
 def backend_model_is_selectable(backend: str | None) -> bool:
-    return str(get_backend_spec(backend).get("model_input", "select")) == "select"
+    return str(get_backend_spec(backend).get("model_input", "select")) in {
+        "select",
+        "editable",
+    }
+
+
+def backend_model_is_editable(backend: str | None) -> bool:
+    return str(get_backend_spec(backend).get("model_input", "select")) == "editable"
 
 
 def get_backend_model_hint(backend: str | None) -> str:
