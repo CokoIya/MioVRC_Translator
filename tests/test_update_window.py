@@ -513,10 +513,18 @@ def test_update_window_ready_button_launches_installer_once(qtbot, tmp_path, mon
     launched: list[object] = []
     destroyed: list[bool] = []
 
+    class Process:
+        pid = 1234
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(update_window, "verify_installer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         update_window,
         "_launch_installer",
-        lambda path, **kwargs: launched.append((path, kwargs)),
+        lambda path, **kwargs: launched.append((path, kwargs)) or Process(),
     )
 
     window = UpdateWindow(None, _update_info(), "en")
@@ -538,6 +546,101 @@ def test_update_window_ready_button_launches_installer_once(qtbot, tmp_path, mon
     assert destroyed == [True]
 
 
+def test_install_now_verifies_quiesces_revalidates_then_exits(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
+    installer = tmp_path / "app.exe"
+    installer.write_bytes(b"installer")
+    events: list[str] = []
+
+    class Process:
+        pid = 1238
+
+        @staticmethod
+        def poll():
+            return None
+
+    class Parent(update_window.QWidget):
+        def _prepare_for_update_install(self):
+            events.append("prepare")
+            return True
+
+        def _abort_update_install_preparation(self):
+            events.append("abort")
+
+    parent = Parent()
+    qtbot.addWidget(parent)
+    monkeypatch.setattr(
+        update_window,
+        "verify_installer",
+        lambda *_args, **_kwargs: events.append("verify"),
+    )
+    monkeypatch.setattr(
+        update_window.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: events.append("popen") or Process(),
+    )
+    window = UpdateWindow(parent, _update_info(), "en")
+    qtbot.addWidget(window)
+    window._installer_path = installer
+    window._destroy_master_if_alive = lambda: events.append("destroy")
+    window._switch_to_ready()
+
+    window._run_installer()
+
+    assert events == ["verify", "prepare", "verify", "popen", "destroy"]
+
+
+def test_failed_quiesce_keeps_mio_open_and_does_not_launch(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
+    installer = tmp_path / "app.exe"
+    installer.write_bytes(b"installer")
+    launched: list[bool] = []
+    destroyed: list[bool] = []
+
+    class Parent(update_window.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.abort_calls = 0
+
+        @staticmethod
+        def _prepare_for_update_install():
+            return False
+
+        def _abort_update_install_preparation(self):
+            self.abort_calls += 1
+
+    parent = Parent()
+    qtbot.addWidget(parent)
+    monkeypatch.setattr(update_window, "verify_installer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        update_window,
+        "_launch_installer",
+        lambda *_args, **_kwargs: launched.append(True),
+    )
+    window = UpdateWindow(parent, _update_info(), "en")
+    qtbot.addWidget(window)
+    window._installer_path = installer
+    window._destroy_master_if_alive = lambda: destroyed.append(True)
+    window._switch_to_ready()
+
+    window._run_installer()
+
+    assert parent.abort_calls == 1
+    assert launched == []
+    assert destroyed == []
+    assert window._sub_label.text() == update_window.tr(
+        "en", "update_shutdown_failed"
+    )
+
+
 def test_installer_launch_failure_keeps_mio_open_and_reports_localized_error(
     qtbot,
     tmp_path,
@@ -551,6 +654,7 @@ def test_installer_launch_failure_keeps_mio_open_and_reports_localized_error(
     def fail_launch(*_args, **_kwargs):
         raise OSError("process creation failed")
 
+    monkeypatch.setattr(update_window, "verify_installer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(update_window, "_launch_installer", fail_launch)
     window = UpdateWindow(None, _update_info(), "ko")
     qtbot.addWidget(window)
@@ -564,6 +668,90 @@ def test_installer_launch_failure_keeps_mio_open_and_reports_localized_error(
     assert window._view_state == "error"
     assert window._sub_label.text() == update_window.tr(
         "ko", "update_installer_launch_failed"
+    )
+    assert window._btn_secondary.text() == update_window.tr("ko", "update_install_later")
+
+
+def test_install_now_reentrant_click_launches_only_one_process(
+    qtbot,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
+    installer = tmp_path / "app.exe"
+    installer.write_bytes(b"installer")
+    launched: list[Path] = []
+    destroyed: list[bool] = []
+
+    class Process:
+        pid = 1235
+
+        @staticmethod
+        def poll():
+            return None
+
+    monkeypatch.setattr(update_window, "verify_installer", lambda *_args, **_kwargs: None)
+    window = UpdateWindow(None, _update_info(), "en")
+    qtbot.addWidget(window)
+    window._installer_path = installer
+    window._destroy_master_if_alive = lambda: destroyed.append(True)
+
+    def launch(path, **_kwargs):
+        launched.append(path)
+        window._run_installer()
+        return Process()
+
+    monkeypatch.setattr(update_window, "_launch_installer", launch)
+    window._switch_to_ready()
+
+    window._run_installer()
+    window._run_installer()
+
+    assert launched == [installer]
+    assert destroyed == [True]
+
+
+def test_invalid_installer_never_quiesces_or_launches(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
+    installer = tmp_path / "app.exe"
+    installer.write_bytes(b"installer")
+    launched: list[bool] = []
+
+    class Parent(update_window.QWidget):
+        def __init__(self):
+            super().__init__()
+            self.prepared = 0
+
+        def _prepare_for_update_install(self):
+            self.prepared += 1
+            return True
+
+    parent = Parent()
+    qtbot.addWidget(parent)
+    monkeypatch.setattr(
+        update_window,
+        "verify_installer",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            update_window.InstallerVerificationError("signature mismatch")
+        ),
+    )
+    monkeypatch.setattr(
+        update_window,
+        "_launch_installer",
+        lambda *_args, **_kwargs: launched.append(True),
+    )
+    window = UpdateWindow(parent, _update_info(), "en")
+    qtbot.addWidget(window)
+    window._installer_path = installer
+    window._switch_to_ready()
+
+    window._run_installer()
+
+    assert parent.prepared == 0
+    assert launched == []
+    assert window._view_state == "error"
+    assert window._sub_label.text() == update_window.tr(
+        "en", "update_error_verification"
     )
 
 
@@ -608,75 +796,23 @@ def test_restored_repair_installer_keeps_repair_specific_note(
     )
 
 
-def test_windows_update_helper_waits_installs_and_restarts(tmp_path, monkeypatch):
-    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
-    installer = tmp_path / "MioTranslator-Setup.exe"
-    restart_exe = tmp_path / "MioTranslator.exe"
+@pytest.mark.parametrize("language", ("zh-CN", "en", "ja", "ru", "ko"))
+def test_install_copy_describes_a_visible_installer(language):
+    note = update_window.tr(language, "update_install_note")
+    launching = update_window.tr(language, "update_launching_note")
 
-    helper = update_window._write_windows_update_helper(
-        installer,
-        restart_exe,
-        expected_sha256="a" * 64,
-        expected_size=123,
-    )
-
-    script = helper.read_text(encoding="utf-8-sig")
-    assert "WaitForExit(90000)" in script
-    assert "$PSModuleAutoLoadingPreference = 'None'" in script
-    assert "Microsoft.PowerShell.Security.psd1" not in script
-    assert "/SP-" in script
-    assert "/VERYSILENT" in script
-    assert "/SUPPRESSMSGBOXES" in script
-    assert "/NORESTART" in script
-    assert "/CLOSEAPPLICATIONS" in script
-    assert "/RESTARTAPPLICATIONS" in script
-    assert "$resultStatus = 'failed'" in script
-    assert "$resultStatus = 'success'" in script
-    assert "[System.IO.FileMode]::CreateNew" in script
-    assert "--mio-update-result=" in script
-    assert "[System.IO.File]::Exists($restartExe)" in script
-    assert "[System.Diagnostics.Process]::Start($restartInfo)" in script
-    assert "Start-Process -FilePath $restartExe" in script
-    assert script.index("Start-Process -FilePath $restartExe") > script.index(
-        "[System.Diagnostics.Process]::Start($restartInfo)"
-    )
-    assert "$expectedSha256 = '" + "a" * 64 + "'" in script
-    assert "$expectedSize = [Int64]123" in script
-    locked_hash = "Get-FileHash -InputStream $launchStream -Algorithm SHA256"
-    assert script.count(locked_hash) == 1
-    assert script.count("Get-FileHash") == 1
-    final_hash_offset = script.index(locked_hash)
-    launch_offset = script.index("$process = Start-Process")
-    assert script.index("$arguments = @(") < final_hash_offset
-    assert final_hash_offset < launch_offset
-    assert "[System.IO.FileShare]::Read" in script
-    assert "Get-AuthenticodeSignature" not in script
-    assert "$launchStream.Dispose()" in script
-    assert script.index("$launchStream.Dispose()") > launch_offset
-    assert script.index("$resultJson =") > launch_offset
-    assert script.index("[System.Diagnostics.Process]::Start($restartInfo)") > script.index(
-        "$resultJson ="
-    )
-    assert "ReparsePoint" in script
-    assert str(helper.with_suffix(".log")) in script
-    assert str(helper.with_suffix(".result.json")) in script
-
-
-def test_windows_update_helper_supports_install_without_app_restart(tmp_path, monkeypatch):
-    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
-
-    helper = update_window._write_windows_update_helper(
-        tmp_path / "MioTranslator-Setup.exe",
-        None,
-        expected_sha256="a" * 64,
-        expected_size=123,
-    )
-
-    script = helper.read_text(encoding="utf-8-sig")
-    assert "$restartExe = $null" in script
-    assert "$installDir = $null" in script
-    assert "if ($null -ne $installDir) {" in script
-    assert "if (($null -ne $restartExe) -and" in script
+    assert note
+    assert launching
+    assert update_window.tr(language, "update_shutdown_failed")
+    forbidden = {
+        "zh-CN": "后台",
+        "en": "background",
+        "ja": "バックグラウンド",
+        "ru": "фонов",
+        "ko": "백그라운드",
+    }
+    assert forbidden[language].casefold() not in note.casefold()
+    assert forbidden[language].casefold() not in launching.casefold()
 
 
 @pytest.mark.parametrize(
@@ -800,28 +936,28 @@ def test_successful_update_result_uses_non_modal_main_window_status(monkeypatch)
     ]
 
 
-def test_windows_update_helper_does_not_clobber_predictable_hardlink(tmp_path, monkeypatch):
-    monkeypatch.setattr(update_window, "app_temp_dir", lambda: tmp_path)
-    sensitive = tmp_path / "sensitive.txt"
-    sensitive.write_bytes(b"preserve this file")
-    predictable = tmp_path / f"mio-update-install-{os.getpid()}.ps1"
-    try:
-        os.link(sensitive, predictable)
-    except (OSError, NotImplementedError):
-        pytest.skip("hardlink creation is unavailable")
+def test_installer_process_confirmation_rejects_invalid_or_failed_startup():
+    with pytest.raises(OSError):
+        update_window._confirm_installer_process_started(None)
 
-    helper = update_window._write_windows_update_helper(
-        tmp_path / "MioTranslator-Setup.exe",
-        tmp_path / "MioTranslator.exe",
-        expected_sha256="a" * 64,
-        expected_size=123,
-    )
+    class FailedProcess:
+        pid = 42
 
-    assert helper != predictable
-    assert helper.parent == tmp_path
-    assert helper.name.startswith("mio-update-install-")
-    assert sensitive.read_bytes() == b"preserve this file"
-    assert predictable.read_bytes() == b"preserve this file"
+        @staticmethod
+        def poll():
+            return 1
+
+    with pytest.raises(OSError):
+        update_window._confirm_installer_process_started(FailedProcess())
+
+    class BootstrapProcess:
+        pid = 43
+
+        @staticmethod
+        def poll():
+            return 0
+
+    update_window._confirm_installer_process_started(BootstrapProcess())
 
 class _RecordedSignal:
     def __init__(self):
@@ -1162,76 +1298,55 @@ def test_download_promotes_only_after_shared_verification(qtbot, tmp_path, monke
     assert window._final_path.read_bytes() == payload
 
 
-def test_windows_launch_uses_resolved_absolute_powershell(tmp_path, monkeypatch):
+def test_windows_launch_revalidates_then_starts_visible_installer_directly(
+    tmp_path,
+    monkeypatch,
+):
     installer = tmp_path / "setup.exe"
     installer.write_bytes(b"installer")
-    restart_exe = tmp_path / "MioTranslator.exe"
-    restart_exe.write_bytes(b"app")
-    helper = tmp_path / "random-helper.ps1"
-    helper.write_text("# helper", encoding="utf-8")
-    powershell = (
-        tmp_path
-        / "Windows"
-        / "System32"
-        / "WindowsPowerShell"
-        / "v1.0"
-        / "powershell.exe"
-    )
-    launches = []
-
-    monkeypatch.setattr(update_window, "os", SimpleNamespace(name="nt"))
-    monkeypatch.setattr(update_window, "verify_installer", lambda *args, **kwargs: None)
-    monkeypatch.setattr(update_window, "_restart_executable", lambda: restart_exe)
-    monkeypatch.setattr(update_window, "windows_powershell_executable", lambda: powershell)
-    monkeypatch.setattr(update_window, "_write_windows_update_helper", lambda *args, **kwargs: helper)
-    monkeypatch.setattr(
-        update_window.subprocess,
-        "Popen",
-        lambda command, **kwargs: launches.append((command, kwargs)),
-    )
-
-    update_window._launch_installer(
-        installer,
-        expected_sha256="a" * 64,
-        expected_size=9,
-        installer_signature=_installer_signature("a" * 64, 9),
-        signature_algorithm=INSTALLER_SIGNATURE_ALGORITHM,
-        signature_key_id=TEST_KEY_ID,
-        trusted_public_keys=TEST_PUBLIC_KEYS,
-    )
-
-    assert len(launches) == 1
-    command, _kwargs = launches[0]
-    assert command[0] == str(powershell)
-    assert Path(command[0]).is_absolute()
-    assert command[-2:] == ["-File", str(helper)]
-
-
-def test_launch_installer_revalidates_before_secure_windows_helper_launch(tmp_path, monkeypatch):
-    installer = tmp_path / "setup.exe"
-    installer.write_bytes(b"installer")
-    helper = tmp_path / "random-helper.ps1"
-    powershell = tmp_path / "Windows" / "System32" / "powershell.exe"
     events = []
 
-    monkeypatch.setattr(update_window, "os", SimpleNamespace(name="nt"))
+    class Process:
+        pid = 1236
+
     monkeypatch.setattr(
         update_window,
         "verify_installer",
         lambda path, **kwargs: events.append(("verify", path, kwargs)),
     )
-    monkeypatch.setattr(update_window, "_restart_executable", lambda: None)
-    monkeypatch.setattr(update_window, "windows_powershell_executable", lambda: powershell)
-
-    def write_helper(path, restart_exe, **kwargs):
-        events.append(("helper", path, restart_exe, kwargs))
-        return helper
-
-    monkeypatch.setattr(update_window, "_write_windows_update_helper", write_helper)
     monkeypatch.setattr(
         update_window.subprocess,
         "Popen",
-        lambda command, **kwargs: events.append(("launch", command, kwargs)),
+        lambda command, **kwargs: events.append(("launch", command, kwargs)) or Process(),
+    )
+
+    process = update_window._launch_installer(
+        installer,
+        expected_sha256="a" * 64,
+        expected_size=9,
+        installer_signature=_installer_signature("a" * 64, 9),
+        signature_algorithm=INSTALLER_SIGNATURE_ALGORITHM,
+        signature_key_id=TEST_KEY_ID,
+        trusted_public_keys=TEST_PUBLIC_KEYS,
+    )
+
+    assert process.pid == 1236
+    assert [event[0] for event in events] == ["verify", "launch"]
+    command, kwargs = events[1][1:]
+    assert command == [str(installer)]
+    assert kwargs == {"cwd": str(installer.parent)}
+
+
+def test_visible_installer_launch_has_no_silent_or_hidden_flags(tmp_path, monkeypatch):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"installer")
+    launches = []
+
+    monkeypatch.setattr(update_window, "verify_installer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        update_window.subprocess,
+        "Popen",
+        lambda command, **kwargs: launches.append((command, kwargs)) or SimpleNamespace(pid=1237),
     )
 
     update_window._launch_installer(
@@ -1244,7 +1359,49 @@ def test_launch_installer_revalidates_before_secure_windows_helper_launch(tmp_pa
         trusted_public_keys=TEST_PUBLIC_KEYS,
     )
 
-    assert [event[0] for event in events] == ["verify", "helper", "launch"]
-    assert events[1][2] is None
-    assert events[2][1][0] == str(powershell)
-    assert events[2][1][-2:] == ["-File", str(helper)]
+    command, kwargs = launches[0]
+    assert command == [str(installer)]
+    assert kwargs == {"cwd": str(installer.parent)}
+    forbidden = (
+        "powershell",
+        "-windowstyle",
+        "hidden",
+        "/verysilent",
+        "/silent",
+        "/suppressmsgboxes",
+        "/nocancel",
+        "/closeapplications",
+        "/restartapplications",
+    )
+    rendered = " ".join(command).casefold()
+    assert not any(flag in rendered for flag in forbidden)
+    assert "creationflags" not in kwargs
+
+
+def test_visible_installer_popen_failure_is_propagated(tmp_path, monkeypatch):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"installer")
+    events: list[str] = []
+    monkeypatch.setattr(
+        update_window,
+        "verify_installer",
+        lambda *_args, **_kwargs: events.append("verify"),
+    )
+    monkeypatch.setattr(
+        update_window.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("denied")),
+    )
+
+    with pytest.raises(OSError, match="denied"):
+        update_window._launch_installer(
+            installer,
+            expected_sha256="a" * 64,
+            expected_size=9,
+            installer_signature=_installer_signature("a" * 64, 9),
+            signature_algorithm=INSTALLER_SIGNATURE_ALGORITHM,
+            signature_key_id=TEST_KEY_ID,
+            trusted_public_keys=TEST_PUBLIC_KEYS,
+        )
+
+    assert events == ["verify"]

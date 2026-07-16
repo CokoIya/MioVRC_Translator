@@ -1,24 +1,24 @@
 {
-  "version": "v1.3.8.4",
-  "installer_name": "MioTranslator-Setup-v1.3.8.4.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.4/MioTranslator-Setup-v1.3.8.4.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.4/MioTranslator-Setup-v1.3.8.4.exe",
-  "size_bytes": 463847910,
-  "sha256": "982cdd9d32aa34600d24c82114f37f10d4f90f6e00a579fdf471af78fe550a11",
+  "version": "v1.3.8.5",
+  "installer_name": "MioTranslator-Setup-v1.3.8.5.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.5/MioTranslator-Setup-v1.3.8.5.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.5/MioTranslator-Setup-v1.3.8.5.exe",
+  "size_bytes": 463939062,
+  "sha256": "27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v1",
-  "installer_signature": "98dca6d2a212e6666e3109cbf5a9f101c2ada491a2798962b5731bea676758a47b34b5832950bb10436685c819b4f8394a413091568839a88818c28c5c762f09",
-  "notes": "v1.3.8.4 adds a secure Grok-compatible provider with relay headers, streaming fallback, and connection testing; bounds stale translation and reverse-processing queues, improves desktop/audio recovery and end-to-end latency diagnostics, and tightens translation context isolation.",
+  "installer_signature": "f588248fe2d04b661c3ac55c9824468d1830aeef0bbdb5e6034f7d324e5cb3c7cac8f821e99cedad893bef20f620dd2ca5d670c275380748f0b51167ffba010e",
+  "notes": "v1.3.8.5 safely quiesces realtime, manual translation, audio, OSC, TTS, provider, and rewrite resources before opening the verified installer; confirms visible installer startup before exiting and keeps Mio recoverable when preparation or launch fails.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.4 新增安全的 Grok 兼容服务商配置，支持中继请求头、流式回退和连接测试；限制过期翻译与逆向处理队列，改进桌面音频恢复和端到端延迟诊断，并加强翻译上下文隔离。",
-    "en": "v1.3.8.4 adds a secure Grok-compatible provider with relay headers, streaming fallback, and connection testing; bounds stale translation and reverse-processing queues, improves desktop/audio recovery and end-to-end latency diagnostics, and tightens translation context isolation.",
-    "ja": "v1.3.8.4 では、安全な Grok 互換プロバイダーを追加し、リレー用ヘッダー、ストリーミングのフォールバック、接続テストに対応しました。期限切れの翻訳および逆方向処理キューを制限し、デスクトップ音声の復旧とエンドツーエンド遅延診断を改善し、翻訳コンテキストの分離を強化しました。",
-    "ru": "v1.3.8.4 добавляет безопасного Grok-совместимого провайдера с заголовками для шлюзов, резервным нестриминговым режимом и проверкой подключения; ограничивает устаревшие очереди перевода и обратной обработки, улучшает восстановление аудио и сквозную диагностику задержек, а также усиливает изоляцию контекста перевода.",
-    "ko": "v1.3.8.4는 릴레이 헤더, 스트리밍 폴백 및 연결 테스트를 지원하는 안전한 Grok 호환 공급자를 추가합니다. 만료된 번역 및 역방향 처리 대기열을 제한하고 데스크톱 오디오 복구와 종단 간 지연 진단을 개선하며 번역 문맥 격리를 강화합니다."
+    "zh-CN": "v1.3.8.5 会在打开已验证的安装器前安全停止实时处理、手动翻译、音频、OSC、TTS、服务商请求和改写资源；确认可见安装器成功启动后再退出，并在准备或启动失败时保持 Mio 可恢复。",
+    "en": "v1.3.8.5 safely quiesces realtime, manual translation, audio, OSC, TTS, provider, and rewrite resources before opening the verified installer; confirms visible installer startup before exiting and keeps Mio recoverable when preparation or launch fails.",
+    "ja": "v1.3.8.5 では、検証済みインストーラーを開く前にリアルタイム処理、手動翻訳、音声、OSC、TTS、プロバイダー要求、書き換え処理を安全に停止します。表示されたインストーラーの起動確認後に終了し、準備または起動に失敗した場合も Mio を復旧可能な状態に保ちます。",
+    "ru": "v1.3.8.5 безопасно останавливает обработку в реальном времени, ручной перевод, аудио, OSC, TTS, запросы провайдеров и переписывание перед запуском проверенного установщика; подтверждает запуск видимого окна установщика перед выходом и сохраняет возможность восстановления Mio при ошибке подготовки или запуска.",
+    "ko": "v1.3.8.5는 검증된 설치 프로그램을 열기 전에 실시간 처리, 수동 번역, 오디오, OSC, TTS, 공급자 요청 및 다시 쓰기 리소스를 안전하게 중지합니다. 표시된 설치 프로그램의 시작을 확인한 후 종료하며 준비 또는 실행 실패 시 Mio를 복구 가능한 상태로 유지합니다."
   },
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-16T15:02:24+09:00",
+  "published_at": "2026-07-16T18:23:45+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v1",
-  "signature": "9010dfce73c2e88722cf5fb9a147a78bc28ed2c380ae902229c17dcd9c6213e054ca4a28abe597584d14dd685c6ec806dd6cbf4b212a5b6b653df96b947dbc0d"
+  "signature": "a7aead4859ad1c206832d10e076e2abdbad00a3a1c2a841dd47ab8a9dd37d1abaccbdad1da2d2b395882a0ada7591daa3550532bd216f426464f740d2ea6d60e"
 }

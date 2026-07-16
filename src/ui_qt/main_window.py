@@ -132,6 +132,10 @@ DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S = 6.0
 DEFAULT_REVERSE_TRANSLATION_TIMEOUT_S = 4.0
 DEFAULT_REVERSE_ASR_TIMEOUT_S = 5.0
 WORKER_STOP_TIMEOUT_S = 5.0
+# An update must not hand a visible installer a process that still owns models,
+# audio devices, or application files.  Unlike normal Stop, Install Now waits
+# for the bounded cleanup path and leaves Mio open if it cannot finish.
+UPDATE_INSTALL_QUIESCE_TIMEOUT_S = 15.0
 CONFIG_SAVE_DEBOUNCE_MS = 280
 MAIN_WINDOW_DEFAULT_SIZE = (940, 440)
 MAIN_WINDOW_MIN_SIZE = (900, 430)
@@ -922,12 +926,10 @@ class MainWindow(QMainWindow):
         self._mic_pipeline: MicPipeline | None = None
         self._listen_pipeline: ListenPipeline | None = None
         self._manual_translation_controller: ManualTranslationController | None = None
-        self._rewrite_coordinator = RewriteCallCoordinator(
-            max_active_calls=ASR_REWRITE_WORKER_CONCURRENCY,
-            max_pending_leaders=ASR_REWRITE_TASK_QUEUE_MAXSIZE + 2,
-            cache_size=256,
-            realtime_burst=MIC_PRIORITY_BURST,
-        )
+        self._rewrite_coordinator = self._create_rewrite_coordinator()
+        self._update_install_preparing = False
+        self._update_install_prepared = False
+        self._update_install_was_running = False
         self._sender: VRCOSCSender | None = None
         self._osc_service = None
         self._overlay_service: OverlayService | None = None
@@ -1313,6 +1315,136 @@ class MainWindow(QMainWindow):
         self._shutdown()
         super().closeEvent(event)
 
+    @staticmethod
+    def _create_rewrite_coordinator() -> RewriteCallCoordinator:
+        return RewriteCallCoordinator(
+            max_active_calls=ASR_REWRITE_WORKER_CONCURRENCY,
+            max_pending_leaders=ASR_REWRITE_TASK_QUEUE_MAXSIZE + 2,
+            cache_size=256,
+            realtime_burst=MIC_PRIORITY_BURST,
+        )
+
+    def _prepare_for_update_install(self) -> bool:
+        """Quiesce runtime-owned resources before launching a visible update.
+
+        This deliberately does not call ``_shutdown``: the update dialog must
+        stay alive if the installer cannot be spawned.  It performs the same
+        runtime teardown while preserving the window and can be rolled back by
+        ``_abort_update_install_preparation``.
+        """
+
+        if getattr(self, "_destroying", False):
+            return False
+        if getattr(self, "_update_install_prepared", False):
+            return True
+        if getattr(self, "_update_install_preparing", False):
+            return False
+
+        self._update_install_preparing = True
+        self._update_install_was_running = bool(getattr(self, "_running", False))
+        deadline = time.monotonic() + UPDATE_INSTALL_QUIESCE_TIMEOUT_S
+        try:
+            # _do_stop invalidates the session before capture can admit more
+            # work, cancels provider calls, drains TTS/OSC queues, and closes
+            # ASR providers only after scheduler workers have stopped.
+            shutdown_barrier = self._do_stop()
+            if shutdown_barrier is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not shutdown_barrier.wait(remaining):
+                    logger.error("Timed out waiting for realtime workers before update")
+                    return False
+            if not self._wait_for_update_runtime_quiescence(deadline):
+                logger.error("Timed out closing realtime providers before update")
+                return False
+
+            # Manual text/rewrite work does not belong to the realtime
+            # scheduler.  Close its clients and wait for any leased provider
+            # calls so no background request remains when the installer opens.
+            self._clear_cached_translator()
+            remaining = max(0.0, deadline - time.monotonic())
+            if not self._close_manual_translation_controller(
+                wait_timeout_s=remaining,
+            ):
+                logger.error("Timed out closing manual translation workers before update")
+                return False
+            self._reset_tts_manager()
+            self._close_update_osc_service()
+
+            coordinator = getattr(self, "_rewrite_coordinator", None)
+            if coordinator is not None:
+                coordinator.close()
+            self._discard_ui_callbacks()
+            self._flush_config_save()
+
+            if not self._wait_for_update_runtime_quiescence(deadline):
+                logger.error("Realtime cleanup did not finish before update launch")
+                return False
+            self._update_install_prepared = True
+            return True
+        except Exception:
+            logger.exception("Failed to prepare Mio for visible update installation")
+            return False
+        finally:
+            self._update_install_preparing = False
+
+    def _wait_for_update_runtime_quiescence(self, deadline: float) -> bool:
+        """Wait for deferred ASR cleanup without making normal Stop block."""
+
+        while self._pipeline_cleanup_in_progress():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.05, remaining))
+        return True
+
+    def _close_update_osc_service(self) -> None:
+        """Release both OSC sender and listener for the installer handoff."""
+
+        service = getattr(self, "_osc_service", None)
+        if service is not None:
+            try:
+                service.close()
+            except Exception:
+                logger.debug("Failed to close OSC service for update", exc_info=True)
+            self._osc_service = None
+            self._sender = None
+            return
+        sender = getattr(self, "_sender", None)
+        if sender is not None:
+            try:
+                sender.close()
+            except Exception:
+                logger.debug("Failed to close OSC sender for update", exc_info=True)
+            self._sender = None
+
+    def _abort_update_install_preparation(self) -> None:
+        """Make a failed installer launch recoverable without exiting Mio."""
+
+        was_running = bool(getattr(self, "_update_install_was_running", False))
+        self._update_install_preparing = False
+        self._update_install_prepared = False
+        self._update_install_was_running = False
+
+        coordinator = getattr(self, "_rewrite_coordinator", None)
+        snapshot = getattr(coordinator, "snapshot", None)
+        needs_replacement = coordinator is None
+        if callable(snapshot):
+            try:
+                needs_replacement = bool(snapshot().closed)
+            except Exception:
+                needs_replacement = True
+        if needs_replacement:
+            self._rewrite_coordinator = self._create_rewrite_coordinator()
+
+        self._flush_config_save()
+        if was_running and not getattr(self, "_destroying", False):
+            # _do_start already waits for deferred ASR cleanup, so a provider
+            # that needed longer than the update handoff can still recover.
+            QTimer.singleShot(0, self._do_start)
+            return
+        self._refresh_start_button()
+        self._set_status(self._t("status_ready"), "success", key="status_ready")
+
     def _shutdown(self) -> None:
         if self._destroying:
             return
@@ -1408,11 +1540,15 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.debug("Failed to dispose overlay service", exc_info=True)
 
-    def _close_manual_translation_controller(self) -> None:
+    def _close_manual_translation_controller(
+        self,
+        *,
+        wait_timeout_s: float | None = None,
+    ) -> bool:
         controller = getattr(self, "_manual_translation_controller", None)
         self._manual_translation_controller = None
         if controller is None:
-            return
+            return True
         try:
             controller.invalidate()
         except Exception:
@@ -1432,9 +1568,21 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
         try:
-            controller.close()
+            if wait_timeout_s is None:
+                controller.close()
+                return True
+            try:
+                stopped = controller.close(wait_timeout_s=wait_timeout_s)
+            except TypeError:
+                # Keep compatibility with an older controller supplied by a
+                # plugin while still allowing the normal app controller to
+                # synchronously drain its network workers during an update.
+                controller.close()
+                return True
+            return stopped is not False
         except Exception:
             logger.debug("Failed to close manual translation controller", exc_info=True)
+            return False
 
     def _discard_ui_callbacks(self) -> None:
         """Release queued closures and their payloads after UI delivery is disabled."""
@@ -2778,7 +2926,13 @@ class MainWindow(QMainWindow):
     # Pipeline start / stop
     # ----------------------------------------------------------------
     def _do_start(self) -> None:
-        if self._start_btn is None or self._destroying or self._running:
+        if (
+            self._start_btn is None
+            or self._destroying
+            or self._running
+            or getattr(self, "_update_install_preparing", False)
+            or getattr(self, "_update_install_prepared", False)
+        ):
             return
         if self._pipeline_cleanup_in_progress():
             self._start_btn.setEnabled(False)
@@ -3028,7 +3182,7 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(self._t("status_ready"), "success", key="status_ready")
 
-    def _do_stop(self) -> None:
+    def _do_stop(self) -> threading.Event | None:
         with self._asr_lifecycle_lock():
             startup_cancel_event = getattr(self, "_startup_cancel_event", None)
             if startup_cancel_event is not None:
@@ -3050,6 +3204,7 @@ class MainWindow(QMainWindow):
 
         self._refresh_start_button()
         self._set_status(self._t("status_ready"), "success", key="status_ready")
+        return shutdown_barrier
 
     def _asr_lifecycle_lock(self):
         lock = self.__dict__.get("_asr_close_lock")

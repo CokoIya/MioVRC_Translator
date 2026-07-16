@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -484,22 +485,61 @@ class ManualTranslationController(QObject):
             except Exception:
                 logger.debug("Failed to close manual translator client", exc_info=True)
 
-    def close(self) -> None:
-        close_now = None
+    def close(self, *, wait_timeout_s: float | None = None) -> bool:
+        """Cancel active client work and optionally wait for worker release.
+
+        Normal UI disposal only needs the default non-blocking behavior.  The
+        updater passes a bounded wait so a visible installer is never launched
+        while a typed-text rewrite or translation request still owns a provider
+        connection.
+        """
+
+        translators: list[Any] = []
+        workers: tuple[threading.Thread, ...] = ()
         with self._lock:
             if self._closed:
-                return
-            self._closed = True
-            self._generation += 1
-            previous = self._translator
-            self._translator = None
-            if previous is not None:
-                identity = id(previous)
-                if self._active_translator_uses.get(identity, 0) > 0:
-                    self._retired_translators[identity] = previous
-                else:
-                    close_now = previous
-        self._close_translator(close_now)
+                workers = tuple(self._threads)
+            else:
+                self._closed = True
+                self._generation += 1
+                for translator in (self._translator, *self._retired_translators.values()):
+                    if translator is not None and all(
+                        translator is not existing for existing in translators
+                    ):
+                        translators.append(translator)
+                self._translator = None
+                self._retired_translators.clear()
+                self._active_translator_uses.clear()
+                workers = tuple(self._threads)
+
+        for translator in translators:
+            cancel = getattr(translator, "cancel_pending_requests", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    logger.debug("Failed to cancel manual translator request", exc_info=True)
+            self._close_translator(translator)
+
+        if wait_timeout_s is not None:
+            deadline = time.monotonic() + max(0.0, float(wait_timeout_s))
+            current = threading.current_thread()
+            for worker in workers:
+                if worker is current:
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    worker.join(remaining)
+                except Exception:
+                    logger.debug("Failed to join manual translation worker", exc_info=True)
+
+        with self._lock:
+            return not any(
+                worker is not threading.current_thread() and worker.is_alive()
+                for worker in self._threads
+            )
 
     def _format_error(self, error: object) -> object:
         if self._error_formatter is not None:

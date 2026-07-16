@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import warnings
 from pathlib import Path
@@ -41,7 +40,6 @@ from src.updater.installer_signature import (
 from src.updater.installer_verifier import (
     InstallerVerificationError,
     verify_installer,
-    windows_powershell_executable,
 )
 from src.updater.update_checker import (
     UpdateInfo,
@@ -117,11 +115,14 @@ def _retained_update_dir() -> Path:
 def consume_update_install_result(
     argv: list[str] | None = None,
 ) -> UpdateInstallResult | None:
-    """Consume a private result marker supplied by the detached installer helper.
+    """Consume a result marker supplied by a pre-visible-installer build.
 
-    The command-line switch is removed before Qt processes application arguments.
-    Any malformed or missing marker is treated as a recoverable installation
-    failure so the relaunched application can explain what happened locally.
+    Current ``Install Now`` never creates this marker or starts a detached
+    helper; retaining the reader lets an older Mio release finish a one-time
+    upgrade into this version safely.  The command-line switch is removed
+    before Qt processes application arguments. Any malformed or missing marker
+    is treated as a recoverable installation failure so the relaunched
+    application can explain what happened locally.
     """
 
     arguments = sys.argv if argv is None else argv
@@ -580,207 +581,6 @@ def _localized_update_error(language: str, error: BaseException) -> str:
     return tr(language, "update_error_unexpected")
 
 
-def _ps_literal(value: Path | str) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _restart_executable() -> Path | None:
-    executable = Path(sys.executable or "")
-    if not executable:
-        return None
-    if bool(getattr(sys, "frozen", False)):
-        return executable
-    if executable.name.lower() == "miotranslator.exe":
-        return executable
-    return None
-
-
-def _write_windows_update_helper(
-    installer_path: Path,
-    restart_exe: Path | None,
-    *,
-    expected_sha256: str,
-    expected_size: int | None,
-) -> Path:
-    expected_digest = str(expected_sha256 or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
-        raise InstallerVerificationError("A valid installer SHA256 digest is required")
-    try:
-        normalized_size = int(expected_size)
-    except (TypeError, ValueError) as exc:
-        raise InstallerVerificationError("Installer size metadata is invalid") from exc
-    if normalized_size <= 0:
-        raise InstallerVerificationError("Installer size metadata is invalid")
-
-    temp_dir = app_temp_dir()
-    descriptor: int | None = None
-    helper_path: Path | None = None
-    try:
-        descriptor, helper_name = tempfile.mkstemp(
-            prefix="mio-update-install-",
-            suffix=".ps1",
-            dir=temp_dir,
-        )
-        helper_path = Path(helper_name)
-        log_path = helper_path.with_suffix(".log")
-        result_path = helper_path.with_suffix(".result.json")
-        install_dir = restart_exe.parent if restart_exe is not None else None
-        restart_literal = "$null" if restart_exe is None else _ps_literal(restart_exe)
-        install_dir_literal = "$null" if install_dir is None else _ps_literal(install_dir)
-        script = f"""$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$WarningPreference = 'SilentlyContinue'
-$PSModuleAutoLoadingPreference = 'None'
-$installer = {_ps_literal(installer_path)}
-$restartExe = {restart_literal}
-$installDir = {install_dir_literal}
-$installerLog = {_ps_literal(log_path)}
-$resultPath = {_ps_literal(result_path)}
-$expectedSha256 = {_ps_literal(expected_digest)}
-$expectedSize = [Int64]{normalized_size}
-$waitPid = {os.getpid()}
-$launchStream = $null
-$resultStream = $null
-$resultStatus = 'failed'
-$exitCode = -1
-
-try {{
-    try {{
-        $waitProcess = [System.Diagnostics.Process]::GetProcessById($waitPid)
-    }} catch {{
-        $waitProcess = $null
-    }}
-    if (($null -ne $waitProcess) -and (-not $waitProcess.WaitForExit(90000))) {{
-        throw 'Mio did not exit before the update timeout'
-    }}
-
-    $managementModule = [System.IO.Path]::Combine($PSHOME, 'Modules', 'Microsoft.PowerShell.Management', 'Microsoft.PowerShell.Management.psd1')
-    $utilityModule = [System.IO.Path]::Combine($PSHOME, 'Modules', 'Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Utility.psd1')
-    Import-Module -Name $managementModule -Force -ErrorAction Stop
-    Import-Module -Name $utilityModule -Force -ErrorAction Stop
-
-    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {{
-        throw 'Update installer is missing or is not a regular file'
-    }}
-    $item = Get-Item -LiteralPath $installer -Force
-    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{
-        throw 'Update installer must not be a reparse point'
-    }}
-    if ([Int64]$item.Length -ne $expectedSize) {{
-        throw ('Update installer size mismatch: ' + $item.Length)
-    }}
-
-    $arguments = @(
-        '/SP-',
-        '/VERYSILENT',
-        '/SUPPRESSMSGBOXES',
-        '/NOCANCEL',
-        '/NORESTART',
-        '/CLOSEAPPLICATIONS',
-        '/RESTARTAPPLICATIONS'
-    )
-    if ($null -ne $installDir) {{
-        $arguments += ('/DIR="' + $installDir + '"')
-    }}
-    $arguments += ('/LOG="' + $installerLog + '"')
-    $arguments = $arguments -join ' '
-
-    $launchStream = [System.IO.File]::Open(
-        $installer,
-        [System.IO.FileMode]::Open,
-        [System.IO.FileAccess]::Read,
-        [System.IO.FileShare]::Read
-    )
-    $launchItem = Get-Item -LiteralPath $installer -Force
-    if (($launchItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{
-        throw 'Update installer became a reparse point before launch'
-    }}
-    if ([Int64]$launchStream.Length -ne $expectedSize) {{
-        throw ('Update installer size changed before launch: ' + $launchStream.Length)
-    }}
-
-    $launchStream.Position = 0
-    $launchSha256 = (Get-FileHash -InputStream $launchStream -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($launchSha256 -ne $expectedSha256) {{
-        throw 'Update installer SHA256 verification failed immediately before launch'
-    }}
-    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-    $exitCode = 0
-    if ($null -ne $process) {{
-        $exitCode = [int]$process.ExitCode
-    }}
-
-    if (($exitCode -eq 0) -or ($exitCode -eq 3010)) {{
-        $resultStatus = 'success'
-    }}
-}} catch {{
-    $resultStatus = 'failed'
-}} finally {{
-    if ($null -ne $launchStream) {{
-        $launchStream.Dispose()
-    }}
-
-    try {{
-        $resultJson = '{{"status":"' + $resultStatus + '","exit_code":' + [System.Convert]::ToString($exitCode, [System.Globalization.CultureInfo]::InvariantCulture) + '}}'
-        $resultBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($resultJson)
-        $resultStream = [System.IO.File]::Open(
-            $resultPath,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::Write,
-            [System.IO.FileShare]::None
-        )
-        $resultStream.Write($resultBytes, 0, $resultBytes.Length)
-        $resultStream.Flush($true)
-    }} catch {{
-    }} finally {{
-        if ($null -ne $resultStream) {{
-            $resultStream.Dispose()
-        }}
-    }}
-
-    if (($null -ne $restartExe) -and [System.IO.File]::Exists($restartExe)) {{
-        $restartArguments = '--mio-update-result="' + $resultPath + '"'
-        try {{
-            $restartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-            $restartInfo.FileName = $restartExe
-            $restartInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($restartExe)
-            $restartInfo.Arguments = $restartArguments
-            $restartInfo.UseShellExecute = $true
-            [void][System.Diagnostics.Process]::Start($restartInfo)
-        }} catch {{
-            try {{
-                Start-Process -FilePath $restartExe -WorkingDirectory ([System.IO.Path]::GetDirectoryName($restartExe)) -ArgumentList $restartArguments
-            }} catch {{
-            }}
-        }}
-    }}
-
-    try {{
-        [System.IO.File]::Delete($PSCommandPath)
-    }} catch {{
-    }}
-}}
-"""
-        with os.fdopen(descriptor, "w", encoding="utf-8-sig", newline="\r\n") as handle:
-            descriptor = None
-            handle.write(script)
-            handle.flush()
-            os.fsync(handle.fileno())
-        return helper_path
-    except Exception:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        if helper_path is not None:
-            try:
-                helper_path.unlink(missing_ok=True)
-            except OSError:
-                logger.debug("Failed to remove incomplete update helper", exc_info=True)
-        raise
-
-
 def _launch_installer(
     path: Path,
     *,
@@ -790,7 +590,14 @@ def _launch_installer(
     signature_algorithm: str,
     signature_key_id: str,
     trusted_public_keys=None,
-) -> None:
+) -> subprocess.Popen:
+    """Start a freshly verified installer with its normal visible UI.
+
+    The application intentionally does not use an updater helper or installer
+    command-line switches here.  A helper cannot prove that the eventual
+    installer process started before Mio exits, and silent switches prevent
+    players from seeing the installer they explicitly requested.
+    """
     if trusted_public_keys is None:
         trusted_public_keys = TRUSTED_INSTALLER_PUBLIC_KEYS
     verify_installer(
@@ -803,60 +610,31 @@ def _launch_installer(
         trusted_public_keys=trusted_public_keys,
     )
 
-    if os.name == "nt":
-        restart_exe = _restart_executable()
-        if restart_exe is not None and not restart_exe.is_file():
-            restart_exe = None
-        powershell_path = windows_powershell_executable()
-        helper_path = _write_windows_update_helper(
-            path,
-            restart_exe,
-            expected_sha256=expected_sha256,
-            expected_size=expected_size,
-        )
-        try:
-            subprocess.Popen(
-                [
-                    str(powershell_path),
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-File",
-                    str(helper_path),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                creationflags=(
-                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                    | getattr(subprocess, "DETACHED_PROCESS", 0)
-                ),
-            )
-        except Exception:
-            try:
-                helper_path.unlink(missing_ok=True)
-            except OSError:
-                logger.debug("Failed to remove unlaunched update helper", exc_info=True)
-            raise
-        return
+    return subprocess.Popen([str(path)], cwd=str(path.parent))
 
-    subprocess.Popen(
-        [
-            str(path),
-            "/SP-",
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NOCANCEL",
-            "/NORESTART",
-            "/CLOSEAPPLICATIONS",
-            "/RESTARTAPPLICATIONS",
-        ]
-    )
+
+def _confirm_installer_process_started(process: object) -> None:
+    """Reject a failed process creation before Mio begins its final shutdown.
+
+    ``Popen`` returning a positive PID is the normal process-start guarantee.
+    A GUI bootstrapper is allowed to exit with status zero immediately after it
+    hands control to its visible child installer; a non-zero immediate exit is
+    treated as a failed launch so Mio can remain available to the player.
+    """
+
+    try:
+        pid = int(getattr(process, "pid"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise OSError("The installer process did not provide a valid PID") from exc
+    if pid <= 0:
+        raise OSError("The installer process did not provide a valid PID")
+
+    poll = getattr(process, "poll", None)
+    if not callable(poll):
+        return
+    exit_code = poll()
+    if exit_code is not None and int(exit_code) != 0:
+        raise OSError("The installer exited before startup completed")
 
 
 def _display_version(version: str) -> str:
@@ -903,6 +681,7 @@ class UpdateWindow(QDialog):
         self._download_done = False
         self._minimized = False
         self._destroying = False
+        self._installing = False
         self._view_state = "initial"
         self._last_progress: tuple[int, int] | None = None
         self._retained_download = False
@@ -1002,6 +781,7 @@ class UpdateWindow(QDialog):
             "update_error_unexpected",
             "update_installer_missing",
             "update_installer_launch_failed",
+            "update_shutdown_failed",
         ):
             if message == tr(previous_language, key):
                 return self._t(key)
@@ -1106,6 +886,7 @@ class UpdateWindow(QDialog):
         self._btn_primary.setEnabled(False)
 
     def _switch_to_ready(self, *, retained: bool = False) -> None:
+        self._installing = False
         self._view_state = "ready"
         self._retained_download = retained
         self._notes_label.hide()
@@ -1118,12 +899,20 @@ class UpdateWindow(QDialog):
         self._sub_label.setText(self._ready_note())
         self._btn_ignore.hide()
         self._btn_secondary.setText(self._t("update_install_later"))
+        self._btn_secondary.setEnabled(True)
         _set_button_action(self._btn_secondary, self._defer_installation)
         self._btn_primary.setText(self._t("update_install_now"))
         self._btn_primary.setEnabled(True)
         _set_button_action(self._btn_primary, self._run_installer)
 
-    def _switch_to_error(self, message: str) -> None:
+    def _switch_to_error(
+        self,
+        message: str,
+        *,
+        retry_action=None,
+        retain_installer: bool = False,
+    ) -> None:
+        self._installing = False
         self._view_state = "error"
         self._progress_label.setText(self._t("update_error"))
         self._progress_label.setObjectName("errorLabel")
@@ -1132,11 +921,16 @@ class UpdateWindow(QDialog):
         self._progress_bar.setRange(0, 100)
         self._sub_label.setText(message)
         self._btn_ignore.hide()
-        self._btn_secondary.setText(self._t("update_close"))
-        _set_button_action(self._btn_secondary, self.close)
+        self._btn_secondary.setEnabled(True)
+        if retain_installer:
+            self._btn_secondary.setText(self._t("update_install_later"))
+            _set_button_action(self._btn_secondary, self._defer_installation)
+        else:
+            self._btn_secondary.setText(self._t("update_close"))
+            _set_button_action(self._btn_secondary, self.close)
         self._btn_primary.setText(self._t("update_retry"))
         self._btn_primary.setEnabled(True)
-        _set_button_action(self._btn_primary, self._start_download)
+        _set_button_action(self._btn_primary, retry_action or self._start_download)
 
     def _on_ignore_version(self) -> None:
         if self._repair_mode:
@@ -1450,21 +1244,70 @@ class UpdateWindow(QDialog):
         self.close()
 
     def _run_installer(self) -> None:
+        if self._installing:
+            return
         if self._installer_path is None or not self._installer_path.exists():
             self._switch_to_error(self._t("update_installer_missing"))
             return
+        self._installing = True
         self._btn_primary.setEnabled(False)
+        self._btn_secondary.setEnabled(False)
         self._view_state = "launching"
         self._btn_primary.setText(self._t("update_launching_installer"))
         self._sub_label.setText(self._t("update_launching_note"))
+        master = self.parent()
+        prepare_master = None
+        prepared_master = None
         try:
-            _launch_installer(
+            # Validate before touching the active runtime.  _launch_installer
+            # validates a second time immediately before Popen to close the
+            # verify-to-launch race.
+            verify_installer(
                 self._installer_path,
                 **self._installer_verification_kwargs(),
             )
         except Exception:
+            logger.error("Update installer verification failed before shutdown", exc_info=True)
+            self._switch_to_error(self._t("update_error_verification"))
+            return
+
+        try:
+            prepare = getattr(master, "_prepare_for_update_install", None)
+            if callable(prepare):
+                prepare_master = master
+                if prepare() is False:
+                    raise RuntimeError("Mio runtime did not quiesce for update")
+                prepared_master = master
+            process = _launch_installer(
+                self._installer_path,
+                **self._installer_verification_kwargs(),
+            )
+            _confirm_installer_process_started(process)
+        except Exception:
             logger.error("Failed to launch verified update installer", exc_info=True)
-            self._switch_to_error(self._t("update_installer_launch_failed"))
+            abort_prepare = getattr(
+                prepare_master,
+                "_abort_update_install_preparation",
+                None,
+            )
+            if callable(abort_prepare):
+                try:
+                    abort_prepare()
+                except Exception:
+                    logger.warning(
+                        "Failed to restore Mio after installer launch failure",
+                        exc_info=True,
+                    )
+            message_key = (
+                "update_shutdown_failed"
+                if prepare_master is not None and prepared_master is None
+                else "update_installer_launch_failed"
+            )
+            self._switch_to_error(
+                self._t(message_key),
+                retry_action=self._run_installer,
+                retain_installer=True,
+            )
             return
         self._destroy_master_if_alive()
 

@@ -471,6 +471,46 @@ def test_rewrite_only_manual_worker_retention_is_bounded(monkeypatch):
         controller.close()
 
 
+def test_close_waits_for_active_manual_request_and_releases_client():
+    _app()
+    started = threading.Event()
+    release = threading.Event()
+
+    class Translator(_Translator):
+        def __init__(self):
+            super().__init__()
+            self.cancelled = 0
+            self.closed = 0
+
+        def translate(self, text, src, tgt, context_source=None):
+            started.set()
+            release.wait(timeout=2)
+            return super().translate(text, src, tgt, context_source)
+
+        def cancel_pending_requests(self):
+            self.cancelled += 1
+
+        def close(self):
+            self.closed += 1
+
+    translator = Translator()
+    controller = ManualTranslationController(
+        {"translation": {"output_format": "translated_only"}},
+        OutputDispatcher({"translation": {"output_format": "translated_only"}}),
+        translator_factory=lambda _config: translator,
+        language_detector=lambda _text: "en",
+    )
+    assert controller.start(ManualTranslationRequest("hello", "en", "ja")) == 1
+    assert started.wait(timeout=1)
+
+    assert controller.close(wait_timeout_s=0.01) is False
+    assert translator.cancelled == 1
+    assert translator.closed == 1
+
+    release.set()
+    assert controller.close(wait_timeout_s=1.0) is True
+
+
 def test_manual_translation_controller_translates_template_third_target(qtbot):
     _app()
     config = {

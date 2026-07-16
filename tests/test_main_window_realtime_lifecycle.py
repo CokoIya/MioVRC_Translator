@@ -814,6 +814,122 @@ def test_shutdown_sets_exact_startup_event_and_invalidates_session():
     assert close_waits == [shutdown_barrier]
 
 
+def test_prepare_for_update_install_quiesces_without_destroying_window():
+    class Coordinator:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    events: list[str] = []
+    window = MainWindow.__new__(MainWindow)
+    coordinator = Coordinator()
+    window._destroying = False
+    window._running = True
+    window._update_install_preparing = False
+    window._update_install_prepared = False
+    window._update_install_was_running = False
+    window._rewrite_coordinator = coordinator
+    def stop_runtime():
+        events.append("stop-runtime")
+        window._running = False
+        return None
+
+    window._do_stop = stop_runtime
+    window._wait_for_update_runtime_quiescence = lambda _deadline: events.append("wait-runtime") or True
+    window._clear_cached_translator = lambda: events.append("close-translator")
+    window._close_manual_translation_controller = (
+        lambda *, wait_timeout_s=None: events.append("close-manual") or True
+    )
+    window._reset_tts_manager = lambda: events.append("close-tts")
+    window._close_update_osc_service = lambda: events.append("close-osc")
+    window._discard_ui_callbacks = lambda: events.append("discard-ui")
+    window._flush_config_save = lambda: events.append("save")
+
+    assert window._prepare_for_update_install() is True
+
+    assert events == [
+        "stop-runtime",
+        "wait-runtime",
+        "close-translator",
+        "close-manual",
+        "close-tts",
+        "close-osc",
+        "discard-ui",
+        "save",
+        "wait-runtime",
+    ]
+    assert coordinator.closed is True
+    assert window._destroying is False
+    assert window._running is False
+    assert window._update_install_prepared is True
+
+
+def test_prepare_for_update_install_waits_for_worker_barrier():
+    class Barrier:
+        def __init__(self) -> None:
+            self.wait_calls: list[float] = []
+
+        def wait(self, timeout: float) -> bool:
+            self.wait_calls.append(timeout)
+            return True
+
+    barrier = Barrier()
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = False
+    window._update_install_preparing = False
+    window._update_install_prepared = False
+    window._update_install_was_running = False
+    window._rewrite_coordinator = SimpleNamespace(close=lambda: None)
+    window._do_stop = lambda: barrier
+    window._wait_for_update_runtime_quiescence = lambda _deadline: True
+    window._clear_cached_translator = lambda: None
+    window._close_manual_translation_controller = lambda **_kwargs: True
+    window._reset_tts_manager = lambda: None
+    window._close_update_osc_service = lambda: None
+    window._discard_ui_callbacks = lambda: None
+    window._flush_config_save = lambda: None
+
+    assert window._prepare_for_update_install() is True
+    assert len(barrier.wait_calls) == 1
+    assert 0 < barrier.wait_calls[0] <= main_window.UPDATE_INSTALL_QUIESCE_TIMEOUT_S
+
+
+def test_abort_update_install_preparation_recreates_coordinator_and_resumes_running(
+    monkeypatch,
+):
+    scheduled: list[tuple[int, object]] = []
+
+    class Coordinator:
+        def snapshot(self):
+            return SimpleNamespace(closed=True)
+
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._update_install_preparing = True
+    window._update_install_prepared = True
+    window._update_install_was_running = True
+    window._rewrite_coordinator = Coordinator()
+    window._create_rewrite_coordinator = lambda: "replacement"
+    window._flush_config_save = lambda: None
+    window._do_start = lambda: None
+    monkeypatch.setattr(
+        main_window.QTimer,
+        "singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+
+    window._abort_update_install_preparation()
+
+    assert window._rewrite_coordinator == "replacement"
+    assert window._update_install_prepared is False
+    assert window._update_install_preparing is False
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 0
+
+
 def test_pipeline_start_waits_for_previous_runtime_cleanup():
     class ThreadState:
         def __init__(self, alive: bool) -> None:

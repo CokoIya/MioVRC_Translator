@@ -2,6 +2,17 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.5] - 2026-07-16
+
+### Safe visible update installation
+
+- Reworked **Install Now** to verify the downloaded installer before touching the active runtime, then open the installer with its normal visible interface instead of using a detached helper or silent switches.
+- Added a bounded update-install quiescence barrier that stops active sessions, cancels provider calls, drains realtime and manual-translation workers, releases audio/TTS/OSC resources, and waits for pipeline cleanup before launching the installer.
+- Added explicit cancellation and bounded joining for manual translation workers so typed rewrites or translations cannot retain provider clients during installation.
+- Confirmed the child installer has a valid process and remains running before Mio performs its final shutdown.
+- Made preparation and launch failures recoverable: Mio remains open, the verified installer is retained for retry or deferred installation, and runtime services can be recreated when launch does not succeed.
+- Added localized installation handoff, startup, shutdown-timeout, retry, and recovery messages across all supported UI languages.
+
 ## [1.3.8.4] - 2026-07-16
 
 ### Grok-compatible translation
