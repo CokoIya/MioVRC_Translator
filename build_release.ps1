@@ -1,9 +1,14 @@
+param(
+    [string]$ReleaseSigningSeedFile = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSCommandPath
 if ($repoRoot) {
     Set-Location $repoRoot
 }
+. (Join-Path $repoRoot "tools\release\release_signing_helpers.ps1")
 
 $releasePython = Join-Path $repoRoot ".venv-release311\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $releasePython -PathType Leaf)) {
@@ -15,13 +20,30 @@ $releaseSeed = $env:MIO_RELEASE_SIGNING_SEED
 if (-not $releaseSeed) {
     $releaseSeed = $env:MIO_MANIFEST_SEED
 }
+$configuredSeedFile = $ReleaseSigningSeedFile
+if (-not $configuredSeedFile) {
+    $configuredSeedFile = $env:MIO_RELEASE_SIGNING_SEED_FILE
+}
+if ($releaseSeed -and $configuredSeedFile) {
+    throw "Configure either an in-memory release signing seed or a seed file, not both."
+}
+if (-not $releaseSeed -and $configuredSeedFile) {
+    $releaseSeed = Read-MioReleaseSigningSeedFile `
+        -Path $configuredSeedFile `
+        -RepositoryRoot $repoRoot
+}
 if (-not $releaseSeed) {
-    throw "Release builds require MIO_RELEASE_SIGNING_SEED for Ed25519 installer and manifest signatures."
+    throw "Release builds require MIO_RELEASE_SIGNING_SEED or MIO_RELEASE_SIGNING_SEED_FILE for Ed25519 installer and manifest signatures."
+}
+if ($releaseSeed -notmatch '^[0-9a-fA-F]{64}$') {
+    throw "Release signing seed must contain exactly 64 hexadecimal characters."
 }
 # Keep the signing seed out of PyInstaller, Inno Setup, and their child
 # processes. It is restored only for the final trusted manifest-signing tool.
 Remove-Item Env:MIO_RELEASE_SIGNING_SEED -ErrorAction SilentlyContinue
 Remove-Item Env:MIO_MANIFEST_SEED -ErrorAction SilentlyContinue
+Remove-Item Env:MIO_RELEASE_SIGNING_SEED_FILE -ErrorAction SilentlyContinue
+$configuredSeedFile = $null
 
 $signPfx = $env:MIO_TRANSLATOR_SIGN_PFX
 $signPass = $env:MIO_TRANSLATOR_SIGN_PASS
@@ -134,8 +156,60 @@ $compilerCandidates = @(
 )
 $iscc = $compilerCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if (-not $iscc) {
-    throw "Inno Setup 6 was not found. Please install Inno Setup 6."
+    throw "Inno Setup 6.5.0 or newer was not found. Please install a compatible Inno Setup release."
 }
+$isccVersion = $null
+$isccVersionText = [Diagnostics.FileVersionInfo]::GetVersionInfo($iscc).FileVersion
+$isccVersionMatch = [regex]::Match([string]$isccVersionText, '\d+\.\d+\.\d+(?:\.\d+)?')
+if ($isccVersionMatch.Success) {
+    $fileVersion = [Version]$isccVersionMatch.Value
+    if ($fileVersion -ge [Version]'6.0.0') {
+        $isccVersion = $fileVersion
+    }
+}
+if ($null -eq $isccVersion) {
+    $isccDirectory = [IO.Path]::GetFullPath((Split-Path -Parent $iscc)).TrimEnd('\')
+    $uninstallRoots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($uninstallRoot in $uninstallRoots) {
+        $entries = Get-ItemProperty $uninstallRoot -ErrorAction SilentlyContinue
+        foreach ($entry in $entries) {
+            if (-not $entry.InstallLocation -or -not $entry.DisplayVersion) {
+                continue
+            }
+            try {
+                $entryDirectory = [IO.Path]::GetFullPath(
+                    [string]$entry.InstallLocation
+                ).TrimEnd('\')
+                $entryVersion = [Version]([string]$entry.DisplayVersion)
+            } catch {
+                continue
+            }
+            if (
+                $entryDirectory.Equals(
+                    $isccDirectory,
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            ) {
+                $isccVersion = $entryVersion
+                break
+            }
+        }
+        if ($null -ne $isccVersion) {
+            break
+        }
+    }
+}
+if ($null -eq $isccVersion) {
+    throw "Unable to determine the Inno Setup compiler version: $iscc"
+}
+if ($isccVersion -lt [Version]'6.5.0') {
+    throw "Inno Setup 6.5.0 or newer is required; found $isccVersion at $iscc"
+}
+Write-Host "Using Inno Setup compiler: $iscc ($isccVersion)"
 
 $isccArgs = @()
 if ($useAuthenticode) {
@@ -178,15 +252,65 @@ if ($useAuthenticode) {
     }
 }
 
+$releaseMetadataTargets = @(
+    (Join-Path $repoRoot "mio_update.json"),
+    (Join-Path $repoRoot "docs\installer_manifest.json")
+)
+$releaseMetadataBackupRoot = Join-Path $repoRoot (
+    ".release-metadata-backup-" + [Guid]::NewGuid().ToString("N")
+)
+New-Item -ItemType Directory -Path $releaseMetadataBackupRoot | Out-Null
+foreach ($metadataTarget in $releaseMetadataTargets) {
+    $metadataItem = Get-Item -LiteralPath $metadataTarget -Force
+    if (
+        $metadataItem.PSIsContainer -or
+        ($metadataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    ) {
+        throw "Release metadata backup source is unsafe: $metadataTarget"
+    }
+    Copy-Item `
+        -LiteralPath $metadataTarget `
+        -Destination (Join-Path $releaseMetadataBackupRoot $metadataItem.Name)
+}
+$releaseMetadataFinalized = $false
 try {
     $env:MIO_RELEASE_SIGNING_SEED = $releaseSeed
     & $releasePython tools\update_release_manifests.py $installerPath
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+    & $releasePython tools\release\generate_release_checksums.py `
+        $installerPath `
+        (Join-Path $repoRoot "mio_update.json") `
+        (Join-Path $repoRoot "docs\installer_manifest.json") `
+        (Join-Path $repoRoot "docs\release_signing_keys.json")
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+    $releaseMetadataFinalized = $true
 } finally {
     Remove-Item Env:MIO_RELEASE_SIGNING_SEED -ErrorAction SilentlyContinue
     $releaseSeed = $null
+    if (-not $releaseMetadataFinalized) {
+        foreach ($metadataTarget in $releaseMetadataTargets) {
+            $metadataName = Split-Path -Leaf $metadataTarget
+            Copy-Item `
+                -LiteralPath (Join-Path $releaseMetadataBackupRoot $metadataName) `
+                -Destination $metadataTarget `
+                -Force
+        }
+    }
+    if (Test-Path -LiteralPath $releaseMetadataBackupRoot) {
+        $backupItem = Get-Item -LiteralPath $releaseMetadataBackupRoot -Force
+        $backupParent = [IO.Path]::GetFullPath((Split-Path -Parent $backupItem.FullName))
+        if (
+            $backupParent -ne [IO.Path]::GetFullPath($repoRoot) -or
+            ($backupItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        ) {
+            throw "Refusing unsafe release metadata backup cleanup: $releaseMetadataBackupRoot"
+        }
+        Remove-Item -LiteralPath $releaseMetadataBackupRoot -Recurse -Force
+    }
 }
 
-Write-Host "Release build and Ed25519 installer/manifest signing finished."
+Write-Host "Release build, Ed25519 signing, and detached checksum generation finished."

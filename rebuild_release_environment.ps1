@@ -1,5 +1,5 @@
 param(
-    [string]$BasePython = "C:\Python\python311\python.exe"
+    [string]$BasePython = "C:\Program Files\Python311\python.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +35,38 @@ function Assert-SafeReleaseEnvironmentPath {
         }
     }
     return $fullPath
+}
+
+function Remove-SafeReleaseEnvironmentDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$AllowedNamePattern
+    )
+
+    $fullPath = Assert-SafeReleaseEnvironmentPath `
+        -Path $Path `
+        -AllowedNamePattern $AllowedNamePattern
+    if (-not (Test-Path -LiteralPath $fullPath)) {
+        return
+    }
+    try {
+        Remove-Item -LiteralPath $fullPath -Recurse -Force -ErrorAction Stop
+    } catch {
+        # Windows PowerShell 5 can fail partway through deeply nested package
+        # trees even when long paths are enabled. Retry the verified directory
+        # through the Win32 extended-length namespace.
+        $extendedPath = if ($fullPath.StartsWith('\\')) {
+            '\\?\UNC\' + $fullPath.Substring(2)
+        } else {
+            '\\?\' + $fullPath
+        }
+        [IO.Directory]::Delete($extendedPath, $true)
+    }
+    if (Test-Path -LiteralPath $fullPath) {
+        throw "Failed to remove release-environment directory: $fullPath"
+    }
 }
 
 if (-not (Test-Path -LiteralPath $BasePython -PathType Leaf)) {
@@ -127,17 +159,15 @@ try {
 
     if ($rebuildSucceeded) {
         if ($movedExisting -and (Test-Path -LiteralPath $backupEnv)) {
-            $null = Assert-SafeReleaseEnvironmentPath `
+            Remove-SafeReleaseEnvironmentDirectory `
                 -Path $backupEnv `
                 -AllowedNamePattern '^\.venv-release311\.backup-[0-9a-f]{32}$'
-            Remove-Item -LiteralPath $backupEnv -Recurse -Force
         }
     } else {
         if (Test-Path -LiteralPath $releaseEnv) {
-            $null = Assert-SafeReleaseEnvironmentPath `
+            Remove-SafeReleaseEnvironmentDirectory `
                 -Path $releaseEnv `
                 -AllowedNamePattern '^\.venv-release311$'
-            Remove-Item -LiteralPath $releaseEnv -Recurse -Force
         }
         if ($movedExisting -and (Test-Path -LiteralPath $backupEnv)) {
             Move-Item -LiteralPath $backupEnv -Destination $releaseEnv

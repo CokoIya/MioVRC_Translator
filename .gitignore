@@ -1,5 +1,13 @@
 config.json
 .secrets/
+*.seed.hex
+*.pfx
+*.p12
+*.key
+id_ed25519
+id_ed25519.pub
+github-release-ed25519
+github-release-ed25519.pub
 __pycache__/
 *.pyc
 *.pyo
@@ -7,9 +15,12 @@ __pycache__/
 .venv311/
 venv311/
 .venv-release311/
+.venv-test311/
+.release-metadata-backup-*/
 venv/
 .pytest_cache/
 .pytest_tmp/
+.pytest_*/
 *.egg-info/
 dist/
 build/

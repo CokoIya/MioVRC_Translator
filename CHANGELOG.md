@@ -2,6 +2,39 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.6] - 2026-07-21
+
+### Provider compatibility and secure diagnostics
+
+- Audited and hardened official and compatible-relay paths for GPT/OpenAI, Claude/Anthropic, and Grok/xAI, including custom Base URLs, custom headers, proxy settings, API-key validation, provider-specific request formats, streaming and non-streaming responses, and stable error classification.
+- Preserved relay-specific custom model IDs exactly as entered instead of applying official-provider model migrations or rewrites.
+- Reused bounded HTTP connection pools and separated queue, pool, connect, read, response-header, and wall-clock deadlines so one stalled provider request cannot indefinitely retain a pipeline worker.
+- Removed raw relay paths, provider response prose, credentials, player text, and third-party transport tracebacks from runtime logs while retaining safe status, provider, category, and latency diagnostics.
+
+### Latency, queues, ordering, and cancellation
+
+- Added structured per-request latency reporting for local queue wait, connection-pool wait, measurable DNS/TCP/TLS and response-header stages, provider processing, first token or first audio, full response, parsing and post-processing, reorder wait, UI delivery, OSC/TTS wait, and total wall-clock time.
+- Strengthened realtime, manual, reverse-translation, ASR-rewrite, and typed-text-rewrite paths with bounded queue admission, strict ordering, stale-work retirement, cancellation propagation, poisoned-client replacement, and deterministic recovery after timeouts.
+- Made scheduler, output, OSC, and provider diagnostics safe under failure while keeping enough structured timing information to identify local backlog separately from upstream provider latency.
+
+### Qwen API TTS and lifecycle reliability
+
+- Audited the complete Qwen API TTS path from text admission, preprocessing, dictionary handling, and language detection through synthesis, audio download, decoding, conversion, buffering, playback, and virtual-audio-device delivery.
+- Prevented stalled synthesis or DNS resolution from permanently consuming later TTS capacity; resolver, synthesis, playback, request-close, and engine-close work now remains tracked until its worker and resource ownership are released.
+- Hardened rapid consecutive playback, repeated close calls, concurrent shutdown handoffs, queue saturation, partial-start failures, and deferred engine destruction so workers, queue slots, files, audio buffers, and device resources are reclaimed deterministically.
+- Extended application shutdown quiescence to cover realtime pipelines, manual translation, ASR, OSC, application and settings-test TTS managers, provider cleanup threads, and pending resolver work before terminal cleanup is reported.
+
+### Localization and regression coverage
+
+- Localized new provider names, settings, credential validation, timeout, cancellation, recovery, and lifecycle messages across Chinese, English, Japanese, Russian, and Korean without exposing untranslated provider errors as UI fallbacks.
+- Added focused compatibility, latency, security, queue, TTS, ordering, and shutdown regressions, plus static localization and release-surface validation for the production build.
+
+### Release signing identity
+
+- Established a project-specific Ed25519 v2 identity for updater manifests, installer metadata, and detached release checksums; only the public verification key and fingerprints are stored in the repository.
+- Added support for loading the private seed from an ACL-protected file outside the repository while keeping it out of PyInstaller, Inno Setup, command lines, logs, and release artifacts.
+- Retired the v1 signing identity instead of leaving an unavailable key authorized. Because the previous v1 private seed was unavailable for a signed overlap release, users on v1.3.8.5 or earlier must install v1.3.8.6 manually from GitHub, compare the v2 fingerprint through the project website, and then verify the published SHA-256 checksum and detached signature.
+
 ## [1.3.8.5] - 2026-07-16
 
 ### Safe visible update installation

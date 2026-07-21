@@ -1056,7 +1056,7 @@
       <div class="step-num">2</div>
       <div class="step-body">
         <h4 id="guide-step-2-title">配置翻译后端</h4>
-        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。</p>
+        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。官方服务会自动填入推荐 Base URL 与 Model；兼容中继的自定义 Base URL、请求头和 Model ID 可编辑并会原样保留。</p>
       </div>
     </div>
     <div class="guide-step">
@@ -1088,16 +1088,16 @@
 <section class="fp-section" id="download">
   <p class="eyebrow" id="download-eyebrow">下载</p>
   <h2 class="sec-title" id="download-title">新版下载</h2>
-  <p class="sec-sub" id="download-sub">v1.3.8.5 会在打开已验证的安装器前安全停止实时处理、手动翻译、音频、OSC、TTS、服务商请求和改写资源；确认可见安装器成功启动后再退出，并在准备或启动失败时保持 Mio 可恢复。</p>
+  <p class="sec-sub" id="download-sub">v1.3.8.6 强化了 GPT/OpenAI 兼容、Claude/Anthropic 兼容、Grok/xAI 兼容与 Qwen API TTS 链路：保留自定义 Base URL 和模型 ID，复用持久连接，限制队列、连接池、连接、读取与总墙钟超时，新增分阶段延迟诊断，并改进取消、顺序恢复、TTS/关机资源清理以及凭据、超时和恢复消息的完整本地化。本版本启用新的 Ed25519 更新签名身份；v1.3.8.5 及更早版本必须从 GitHub Release 手动安装，并核对已发布的 SHA-256 校验和。</p>
   <div class="dl-cards">
     <div class="dl-card">
       <div class="dl-icon-wrap">⬇️</div>
       <h3 id="download-card-title">Mio RealTime Translator</h3>
-      <p id="download-card-body">Windows x64 · v1.3.8.5 正式版 · 约 442 MB · Whisper Small 本地 ASR · 可选 GPU 支持</p>
+      <p id="download-card-body">Windows x64 · v1.3.8.6 正式版 · 约 437 MB · Whisper Small 本地 ASR · 可选 GPU 支持</p>
       <p class="dl-note" id="download-release-note">安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。</p>
       <div class="dl-btns">
-        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.5/MioTranslator-Setup-v1.3.8.5.exe"
-           download="MioTranslator-Setup-v1.3.8.5.exe"
+        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-Setup-v1.3.8.6.exe"
+           download="MioTranslator-Setup-v1.3.8.6.exe"
            id="download-direct-link" class="btn-dl prim">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span id="download-button-text">下载安装包</span>
@@ -1107,7 +1107,16 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
           <span id="download-model-text">Beta版下载</span>
         </a>
-        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.3.8.5 正式版安装包。SHA256：27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a</p>
+        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-v1.3.8.6-SHA256SUMS.txt"
+           id="download-checksum-link" class="btn-dl sec">
+          <span id="download-checksum-text">下载校验和</span>
+        </a>
+        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-v1.3.8.6-SHA256SUMS.txt.sig.json"
+           id="download-signature-link" class="btn-dl sec">
+          <span id="download-signature-text">下载签名</span>
+        </a>
+        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.3.8.6 正式版安装包。SHA256：85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca</p>
+        <p class="dl-note"><span id="download-signing-note">手动升级前，请通过官网 TLS 与 GitHub Release 双通道核对 v2 公钥 SHA-256 指纹：</span> <code>2a4ec078ce01b14b935a45cb04ac12eba7445a619075dbb0f50c25618e337b83</code> · <a href="./release_signing_keys.json"><span id="download-signing-catalog-text">查看公钥目录</span></a></p>
         <div class="download-community">
           <a href="https://qm.qq.com/q/BB1z8mldeM" target="_blank" rel="noopener" class="btn-dl sec">
             <span id="download-qq-1-text">QQ 1 群</span>
@@ -1467,7 +1476,7 @@
       'guide-step-1-title': '下载并安装',
       'guide-step-1-body': '点击下方“立即下载安装”按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。',
       'guide-step-2-title': '配置翻译后端',
-      'guide-step-2-body': '启动 MioTranslator.exe，点击右上角设置，填写你的 API Key。Base URL 与 Model 将按后端自动锁定。',
+      'guide-step-2-body': '启动 MioTranslator.exe，点击右上角设置，填写你的 API Key。官方服务会自动填入推荐 Base URL 与 Model；兼容中继的自定义 Base URL、请求头和 Model ID 可编辑并会原样保留。',
       'guide-step-3-title': '设置游戏输入',
       'guide-step-3-body': 'VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：',
       'guide-step-4-title': '下载并安装',
@@ -1476,20 +1485,24 @@
       'guide-step-5-body': '模型加载完成后，对着麦克风说话即可翻译；开启反向翻译和语音阅读后，译文会被 AI 语音读出并经 MixLine 进入游戏麦克风。',
       'download-eyebrow': '下载',
       'download-title': '新版下载',
-      'download-sub': 'v1.3.8.5 会在打开已验证的安装器前安全停止实时处理、手动翻译、音频、OSC、TTS、服务商请求和改写资源；确认可见安装器成功启动后再退出，并在准备或启动失败时保持 Mio 可恢复。',
+      'download-sub': 'v1.3.8.6 强化了 GPT/OpenAI 兼容、Claude/Anthropic 兼容、Grok/xAI 兼容与 Qwen API TTS 链路：保留自定义 Base URL 和模型 ID，复用持久连接，限制队列、连接池、连接、读取与总墙钟超时，新增分阶段延迟诊断，并改进取消、顺序恢复、TTS/关机资源清理以及凭据、超时和恢复消息的完整本地化。本版本启用新的 Ed25519 更新签名身份；v1.3.8.5 及更早版本必须从 GitHub Release 手动安装，并核对已发布的 SHA-256 校验和。',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.8.5 正式版 · 约 442 MB · Whisper Small 本地 ASR · 可选 GPU 支持',
+      'download-card-body': 'Windows x64 · v1.3.8.6 正式版 · 约 437 MB · Whisper Small 本地 ASR · 可选 GPU 支持',
       'download-release-note': '安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。',
       'download-button-text': '下载安装包',
       'download-button-loading': '正在准备安装包...',
       'download-model-text': 'Beta版下载',
-      'download-model-note': '暂无测试版提供，当前请使用 v1.3.8.5 正式版安装包。SHA256：27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a',
+      'download-checksum-text': '下载校验和',
+      'download-signature-text': '下载签名',
+      'download-model-note': '暂无测试版提供，当前请使用 v1.3.8.6 正式版安装包。SHA256：85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca',
+      'download-signing-note': '手动升级前，请通过官网 TLS 与 GitHub Release 双通道核对 v2 公钥 SHA-256 指纹：',
+      'download-signing-catalog-text': '查看公钥目录',
       'download-qq-1-text': 'QQ 1 群',
       'download-qq-2-text': 'QQ 2 群',
       'download-community-note': '下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。',
       'download-releases-text': '暂无测试版提供',
       'download-releases-loading': '暂无测试版提供',
-      'download-releases-note': 'v1.3.8.5 是当前正式版手动下载，当前暂无测试版提供。',
+      'download-releases-note': 'v1.3.8.6 是当前正式版手动下载，当前暂无测试版提供。',
       'download-dict-title': 'ASR 官方词典',
       'download-dict-body': '这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。',
       'download-dict-module-text': '打开词典页面',
@@ -1545,7 +1558,7 @@
       'guide-step-1-title': 'Download and install',
       'guide-step-1-body': 'Click the button below to download the installer. Run it, then launch <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
       'guide-step-2-title': 'Configure your translation backend',
-      'guide-step-2-body': 'Launch MioTranslator.exe, open Settings, and enter your API Key. Base URL and Model are automatically locked to the backend you choose.',
+      'guide-step-2-body': 'Launch MioTranslator.exe, open Settings, and enter your API Key. Official services fill recommended Base URLs and models automatically; compatible relays keep custom Base URLs, headers, and model IDs editable and preserve them exactly.',
       'guide-step-3-title': 'Set up game input',
       'guide-step-3-body': 'VRChat chatbox sending still needs OSC. To make a game hear AI speech, install MixLine separately and select the MixLine virtual microphone in the game. VRChat OSC path:',
       'guide-step-4-title': 'Download and install',
@@ -1554,20 +1567,24 @@
       'guide-step-5-body': 'After the model loads, speak into your mic to translate. Enable reverse translation and voice reading to have translated lines spoken by AI and routed through MixLine into the game microphone.',
       'download-eyebrow': 'Download',
       'download-title': 'Release Downloads',
-      'download-sub': 'v1.3.8.5 safely quiesces realtime, manual translation, audio, OSC, TTS, provider, and rewrite resources before opening the verified installer; confirms visible installer startup before exiting and keeps Mio recoverable when preparation or launch fails.',
+      'download-sub': 'v1.3.8.6 strengthens GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible, and Qwen API TTS paths with preserved custom Base URLs and model IDs, reusable connections, bounded queue, pool, connect, read, and wall-clock deadlines, structured latency diagnostics, safer cancellation and ordering recovery, deterministic TTS and shutdown cleanup, and fully localized credential, timeout, and recovery messages. This release establishes a new Ed25519 update-signing identity; v1.3.8.5 and earlier must install it manually from the GitHub Release and verify the published SHA-256 checksum.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.8.5 Release · About 442 MB · Local Whisper Small ASR · Optional GPU support',
+      'download-card-body': 'Windows x64 · v1.3.8.6 Release · About 437 MB · Local Whisper Small ASR · Optional GPU support',
       'download-release-note': 'The installer does not bundle SenseVoice, Whisper, or TTS voice models. Local models download on demand. GPU support checks the NVIDIA driver and can automatically install CUDA PyTorch.',
       'download-button-text': 'Download Installer',
       'download-button-loading': 'Preparing installer...',
       'download-model-text': 'Download Beta',
-      'download-model-note': 'No beta build is available right now. Please use the v1.3.8.5 release installer. SHA256: 27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a',
+      'download-checksum-text': 'Download Checksums',
+      'download-signature-text': 'Download Signature',
+      'download-model-note': 'No beta build is available right now. Please use the v1.3.8.6 release installer. SHA256: 85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca',
+      'download-signing-note': 'Before a manual upgrade, compare the v2 public-key SHA-256 fingerprint through both the official-site TLS channel and the GitHub Release:',
+      'download-signing-catalog-text': 'View public-key catalog',
       'download-qq-1-text': 'QQ Group 1',
       'download-qq-2-text': 'QQ Group 2',
       'download-community-note': 'Downloads are hosted on GitHub. If the download is slow, join a QQ group and use the group files, which include a picture-based guide.',
       'download-releases-text': 'No Beta Available',
       'download-releases-loading': 'No beta available',
-      'download-releases-note': 'v1.3.8.5 is the current release download. No beta build is available right now.',
+      'download-releases-note': 'v1.3.8.6 is the current release download. No beta build is available right now.',
       'download-dict-title': 'ASR Official Dictionary',
       'download-dict-body': 'Official recognition terms and update files are provided here. The app only connects when you open these links manually.',
       'download-dict-module-text': 'Open Dictionary Page',
@@ -1623,7 +1640,7 @@
       'guide-step-1-title': 'ダウンロードしてインストール',
       'guide-step-1-body': '下のボタンからインストーラーを取得し、実行してください。インストール後、<strong style="color:#f0f0fa;">MioTranslator.exe</strong> を起動します。',
       'guide-step-2-title': '翻訳バックエンドを設定',
-      'guide-step-2-body': 'MioTranslator.exe を起動し、設定から API Key を入力してください。Base URL と Model は選択したバックエンドに合わせて自動固定されます。',
+      'guide-step-2-body': 'MioTranslator.exe を起動し、設定から API Key を入力してください。公式サービスでは推奨 Base URL とモデルが自動入力されます。互換リレーではカスタム Base URL、ヘッダー、モデル ID を編集でき、入力値がそのまま保持されます。',
       'guide-step-3-title': 'ゲーム入力を設定',
       'guide-step-3-body': 'VRChat のチャットボックス送信には OSC が必要です。AI 音声をゲームに聞かせる場合は MixLine を別途インストールし、ゲーム側で MixLine 仮想マイクを選択してください。VRChat の OSC パス：',
       'guide-step-4-title': 'ダウンロードしてインストール',
@@ -1632,20 +1649,24 @@
       'guide-step-5-body': 'モデルの読み込み後、マイクに話すと翻訳できます。逆翻訳と音声読み上げを有効にすると、訳文が AI 音声で読み上げられ、MixLine 経由でゲームのマイク入力へ送られます。',
       'download-eyebrow': 'ダウンロード',
       'download-title': 'リリース版ダウンロード',
-      'download-sub': 'v1.3.8.5 では、検証済みインストーラーを開く前にリアルタイム処理、手動翻訳、音声、OSC、TTS、プロバイダー要求、書き換え処理を安全に停止します。表示されたインストーラーの起動確認後に終了し、準備または起動に失敗した場合も Mio を復旧可能な状態に保ちます。',
+      'download-sub': 'v1.3.8.6 では、GPT/OpenAI 互換、Claude/Anthropic 互換、Grok/xAI 互換、Qwen API TTS の各経路を強化しました。カスタム Base URL とモデル ID を保持し、接続を再利用し、キュー・接続プール・接続・読み取り・総経過時間の期限を制限し、段階別レイテンシ診断、キャンセルと順序回復、TTS/終了時の確実なリソース解放、認証情報・タイムアウト・復旧通知の完全なローカライズを追加しました。本リリースでは新しい Ed25519 更新署名 ID を有効化したため、v1.3.8.5 以前からは GitHub Release を使って手動インストールし、公開された SHA-256 チェックサムを確認してください。',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.8.5 正式版 · 約 442 MB · ローカル Whisper Small ASR · 任意の GPU サポート',
+      'download-card-body': 'Windows x64 · v1.3.8.6 正式版 · 約 437 MB · ローカル Whisper Small ASR · 任意の GPU サポート',
       'download-release-note': 'インストーラーには SenseVoice、Whisper、TTS 音声モデルは同梱していません。ローカルモデルは必要時にダウンロードします。GPU サポートは NVIDIA ドライバーを確認し、CUDA 版 PyTorch を自動インストールできます。',
       'download-button-text': 'インストーラーをダウンロード',
       'download-button-loading': '準備中...',
       'download-model-text': 'beta 版をダウンロード',
-      'download-model-note': '現在 beta 版は提供していません。v1.3.8.5 正式版インストーラーをご利用ください。SHA256: 27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a',
+      'download-checksum-text': 'チェックサムをダウンロード',
+      'download-signature-text': '署名をダウンロード',
+      'download-model-note': '現在 beta 版は提供していません。v1.3.8.6 正式版インストーラーをご利用ください。SHA256: 85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca',
+      'download-signing-note': '手動アップグレード前に、公式サイトの TLS 経路と GitHub Release の両方で v2 公開鍵の SHA-256 フィンガープリントを照合してください：',
+      'download-signing-catalog-text': '公開鍵カタログを表示',
       'download-qq-1-text': 'QQ 1 群',
       'download-qq-2-text': 'QQ 2 群',
       'download-community-note': 'ダウンロードは GitHub 経由です。遅い場合は QQ グループに参加し、グループファイルからダウンロードしてください。画像付きガイドも含まれています。',
       'download-releases-text': 'beta 版なし',
       'download-releases-loading': 'beta 版なし',
-      'download-releases-note': 'v1.3.8.5 が現在の正式版ダウンロードです。beta 版は提供していません。',
+      'download-releases-note': 'v1.3.8.6 が現在の正式版ダウンロードです。beta 版は提供していません。',
       'download-dict-title': 'ASR 公式辞書',
       'download-dict-body': '公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。',
       'download-dict-module-text': '辞書ページを開く',
@@ -1701,7 +1722,7 @@
       'guide-step-1-title': 'Скачайте и установите',
       'guide-step-1-body': 'Нажмите кнопку ниже, чтобы скачать установщик. Запустите его, затем откройте <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
       'guide-step-2-title': 'Настройте переводческий бэкенд',
-      'guide-step-2-body': 'Запустите MioTranslator.exe, откройте настройки и введите API Key. Base URL и Model будут автоматически зафиксированы выбранным бэкендом.',
+      'guide-step-2-body': 'Запустите MioTranslator.exe, откройте настройки и введите API Key. Для официальных сервисов рекомендуемые Base URL и модели заполняются автоматически; у совместимых реле пользовательские Base URL, заголовки и ID моделей остаются редактируемыми и сохраняются без изменений.',
       'guide-step-3-title': 'Настройте вход в игре',
       'guide-step-3-body': 'Для отправки в чатбокс VRChat нужен OSC. Чтобы игра слышала AI-голос, отдельно установите MixLine и выберите виртуальный микрофон MixLine в игре. Путь OSC в VRChat:',
       'guide-step-4-title': 'Скачайте и установите',
@@ -1710,20 +1731,24 @@
       'guide-step-5-body': 'После загрузки модели говорите в микрофон для перевода. Включите обратный перевод и озвучивание, чтобы переведённые строки произносились AI-голосом и шли через MixLine в микрофон игры.',
       'download-eyebrow': 'Скачать',
       'download-title': 'Загрузки релиза',
-      'download-sub': 'v1.3.8.5 безопасно останавливает обработку в реальном времени, ручной перевод, аудио, OSC, TTS, запросы провайдеров и переписывание перед запуском проверенного установщика; подтверждает запуск видимого окна установщика перед выходом и сохраняет возможность восстановления Mio при ошибке подготовки или запуска.',
+      'download-sub': 'v1.3.8.6 усиливает пути GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible и Qwen API TTS: сохраняет пользовательские Base URL и ID моделей, повторно использует соединения, ограничивает ожидание очереди и пула, подключение, чтение и общее время запроса, добавляет поэтапную диагностику задержек, безопасную отмену и восстановление порядка, гарантированное освобождение ресурсов TTS/при завершении и полную локализацию сообщений об учётных данных, тайм-аутах и восстановлении. В этом выпуске введён новый идентификатор подписи обновлений Ed25519; пользователям v1.3.8.5 и более ранних версий необходимо установить его вручную со страницы GitHub Release и сверить опубликованную контрольную сумму SHA-256.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.8.5 Release · около 442 МБ · Локальный Whisper Small ASR · Опциональный GPU',
+      'download-card-body': 'Windows x64 · v1.3.8.6 Release · около 437 МБ · Локальный Whisper Small ASR · Опциональный GPU',
       'download-release-note': 'Установщик не включает модели SenseVoice, Whisper или голоса TTS. Локальные модели загружаются по требованию. Поддержка GPU проверяет драйвер NVIDIA и может автоматически установить CUDA PyTorch.',
       'download-button-text': 'Скачать установщик',
       'download-button-loading': 'Подготовка установщика...',
       'download-model-text': 'Скачать beta',
-      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.3.8.5. SHA256: 27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a',
+      'download-checksum-text': 'Скачать контрольные суммы',
+      'download-signature-text': 'Скачать подпись',
+      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.3.8.6. SHA256: 85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca',
+      'download-signing-note': 'Перед ручным обновлением сравните SHA-256 отпечаток открытого ключа v2 по двум каналам: TLS официального сайта и GitHub Release:',
+      'download-signing-catalog-text': 'Открыть каталог ключей',
       'download-qq-1-text': 'QQ группа 1',
       'download-qq-2-text': 'QQ группа 2',
       'download-community-note': 'Загрузка идёт через GitHub. Если скорость низкая, вступите в QQ-группу и скачайте файл из группы; там также есть инструкция с изображениями.',
       'download-releases-text': 'Beta недоступна',
       'download-releases-loading': 'Beta недоступна',
-      'download-releases-note': 'v1.3.8.5 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
+      'download-releases-note': 'v1.3.8.6 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
       'download-dict-title': 'Официальный словарь ASR',
       'download-dict-body': 'Здесь размещены официальные термины распознавания и файлы обновлений. Приложение обращается к ним только при ручном открытии.',
       'download-dict-module-text': 'Открыть страницу словаря',
@@ -1779,7 +1804,7 @@
       'guide-step-1-title': '다운로드 후 설치',
       'guide-step-1-body': '아래 버튼으로 설치 파일을 받은 뒤 실행하세요. 설치 후 <strong style="color:#f0f0fa;">MioTranslator.exe</strong>를 실행하면 됩니다.',
       'guide-step-2-title': '번역 백엔드 설정',
-      'guide-step-2-body': 'MioTranslator.exe를 실행하고 설정에서 API Key를 입력하세요. Base URL과 Model은 선택한 백엔드에 맞게 자동으로 고정됩니다.',
+      'guide-step-2-body': 'MioTranslator.exe를 실행하고 설정에서 API Key를 입력하세요. 공식 서비스는 권장 Base URL과 모델을 자동으로 채웁니다. 호환 릴레이에서는 사용자 지정 Base URL, 헤더, 모델 ID를 편집할 수 있으며 입력값을 그대로 유지합니다.',
       'guide-step-3-title': '게임 입력 설정',
       'guide-step-3-body': 'VRChat 채팅박스 전송에는 OSC가 필요합니다. 게임에서 AI 음성을 듣게 하려면 MixLine을 별도로 설치하고 게임 안에서 MixLine 가상 마이크를 선택하세요. VRChat OSC 경로:',
       'guide-step-4-title': '다운로드 후 설치',
@@ -1788,20 +1813,24 @@
       'guide-step-5-body': '모델 로드가 끝나면 마이크에 말해 번역합니다. 역번역과 음성 읽기를 켜면 번역문이 AI 음성으로 읽히고 MixLine을 통해 게임 마이크 입력으로 들어갑니다.',
       'download-eyebrow': '다운로드',
       'download-title': '릴리스 다운로드',
-      'download-sub': 'v1.3.8.5는 검증된 설치 프로그램을 열기 전에 실시간 처리, 수동 번역, 오디오, OSC, TTS, 공급자 요청 및 다시 쓰기 리소스를 안전하게 중지합니다. 표시된 설치 프로그램의 시작을 확인한 후 종료하며 준비 또는 실행 실패 시 Mio를 복구 가능한 상태로 유지합니다.',
+      'download-sub': 'v1.3.8.6은 GPT/OpenAI 호환, Claude/Anthropic 호환, Grok/xAI 호환 및 Qwen API TTS 경로를 강화합니다. 사용자 지정 Base URL과 모델 ID를 그대로 유지하고 연결을 재사용하며, 큐·연결 풀·연결·읽기·전체 경과 시간 제한과 단계별 지연 진단을 추가했습니다. 또한 취소와 순서 복구, TTS/종료 리소스 해제, 자격 증명·시간 초과·복구 알림을 모든 지원 언어로 완전히 현지화했습니다. 이 릴리스는 새로운 Ed25519 업데이트 서명 ID를 사용하므로 v1.3.8.5 이하 버전에서는 GitHub Release에서 수동으로 설치하고 게시된 SHA-256 체크섬을 확인해야 합니다.',
       'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.3.8.5 Release · 약 442 MB · 로컬 Whisper Small ASR · 선택형 GPU 지원',
+      'download-card-body': 'Windows x64 · v1.3.8.6 Release · 약 437 MB · 로컬 Whisper Small ASR · 선택형 GPU 지원',
       'download-release-note': '설치 파일에는 SenseVoice, Whisper, TTS 음성 모델이 포함되지 않습니다. 로컬 모델은 필요할 때 다운로드됩니다. GPU 지원은 NVIDIA 드라이버를 확인하고 CUDA PyTorch를 자동 설치할 수 있습니다.',
       'download-button-text': '설치 파일 다운로드',
       'download-button-loading': '준비 중...',
       'download-model-text': 'Beta 다운로드',
-      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.3.8.5 정식 설치 파일을 사용해 주세요. SHA256: 27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a',
+      'download-checksum-text': '체크섬 다운로드',
+      'download-signature-text': '서명 다운로드',
+      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.3.8.6 정식 설치 파일을 사용해 주세요. SHA256: 85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca',
+      'download-signing-note': '수동 업그레이드 전에 공식 사이트 TLS 경로와 GitHub Release 양쪽에서 v2 공개 키 SHA-256 지문을 비교하십시오:',
+      'download-signing-catalog-text': '공개 키 목록 보기',
       'download-qq-1-text': 'QQ 1 그룹',
       'download-qq-2-text': 'QQ 2 그룹',
       'download-community-note': '다운로드는 GitHub를 통해 진행됩니다. 속도가 느리면 QQ 그룹에 참여해 그룹 파일에서 다운로드하세요. 이미지 가이드도 포함되어 있습니다.',
       'download-releases-text': 'Beta 없음',
       'download-releases-loading': 'Beta 없음',
-      'download-releases-note': 'v1.3.8.5가 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
+      'download-releases-note': 'v1.3.8.6이 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
       'download-dict-title': 'ASR 공식 사전',
       'download-dict-body': '공식 인식 사전과 업데이트 파일을 제공합니다. 사용자가 수동으로 열 때만 접근합니다.',
       'download-dict-module-text': '사전 페이지 열기',

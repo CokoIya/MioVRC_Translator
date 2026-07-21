@@ -27,8 +27,8 @@ Current main pipelines:
 
 - Official download site: <https://miovrc.com>
 - Stable builds, beta builds, and all future updates are distributed through the official website
-- GitHub Releases also provide the `full` installer and the `lite` update installer
-- New players should download `full`; existing users and online updates can use `lite`
+- GitHub Releases provide the same single production installer as the official website
+- New installations and upgrades use the same installer; local models download on demand and existing model files are reused
 - GitHub is now mainly used for source code, issue tracking, and development history
 
 ## Highlights
@@ -48,7 +48,7 @@ Current main pipelines:
 - Recommended OS: `Windows 10 / 11`
 - Reverse translation relies on `Windows WASAPI Loopback`
 - If the model is missing locally, `SenseVoice Small` will be downloaded automatically on first launch
-- The `full` installer includes the `SenseVoice Small` model. The `lite` installer is intended for existing installs that already have the model.
+- The installer does not bundle SenseVoice, Whisper, or TTS voice models. Each local model downloads when first needed, and existing model files are not downloaded again.
 
 ## Run From Source
 

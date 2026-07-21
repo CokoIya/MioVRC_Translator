@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.updater.manifest_signature import (
+from src.updater.manifest_signature import (  # noqa: E402
     SIGNATURE_ALGORITHM,
     SIGNATURE_ALGORITHM_FIELD,
     SIGNATURE_FIELD,
@@ -37,7 +37,7 @@ from src.updater.manifest_signature import (
     sign_manifest,
     verify_manifest_signature,
 )
-from src.updater.installer_signature import (
+from src.updater.installer_signature import (  # noqa: E402
     INSTALLER_SIGNATURE_ALGORITHM,
     INSTALLER_SIGNATURE_ALGORITHM_FIELD,
     INSTALLER_SIGNATURE_FIELD,
@@ -48,7 +48,7 @@ from src.updater.installer_signature import (
     sign_installer_metadata,
     verify_installer_metadata_signature,
 )
-from src.version import (
+from src.version import (  # noqa: E402
     APP_VERSION,
     INSTALLER_SIGNATURE_KEY_ID,
     TRUSTED_INSTALLER_PUBLIC_KEYS,

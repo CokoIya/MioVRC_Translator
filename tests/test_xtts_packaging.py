@@ -17,7 +17,7 @@ def test_release_requirements_include_functional_xtts_runtime() -> None:
     assert "unidic-lite==1.0.8" in requirements
     assert "mojimoji>=0.0.13,<0.1.0" in requirements
     assert "pyworld-prebuilt==0.3.5.post2" in requirements
-    assert "transformers>=5.3.0,<6.0.0" in requirements
+    assert "transformers>=5.5.0,<6.0.0" in requirements
     assert "nltk>=3.10.0,<4.0.0" in requirements
     assert "torch==2.8.0+cpu" in requirements
     assert "coqui-tts==0.27.5" in lock
@@ -26,7 +26,7 @@ def test_release_requirements_include_functional_xtts_runtime() -> None:
     assert "fugashi==1.5.2" in lock
     assert "unidic-lite==1.0.8" in lock
     assert "mojimoji==0.0.13" in lock
-    assert "transformers==5.3.0" in lock
+    assert "transformers==5.5.0" in lock
     assert "torch==2.8.0+cpu" in lock
     assert "av==17.0.1" in lock
     assert "num2words==0.5.14" in lock
@@ -139,7 +139,7 @@ def test_single_release_script_uses_full_feature_packaging_workflow() -> None:
 def test_release_environment_has_reproducible_rebuild_script() -> None:
     script = (ROOT / "rebuild_release_environment.ps1").read_text(encoding="utf-8")
 
-    assert "C:\\Python\\python311\\python.exe" in script
+    assert "C:\\Program Files\\Python311\\python.exe" in script
     assert "https://pypi.org/simple" in script
     assert "requirements.lock.txt" in script
     assert "--isolated" in script

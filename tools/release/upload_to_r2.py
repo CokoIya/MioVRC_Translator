@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 import boto3
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 ACCOUNT_ID = os.environ.get("CF_R2_ACCOUNT_ID", "")
 ACCESS_KEY_ID = os.environ.get("CF_R2_ACCESS_KEY_ID", "")

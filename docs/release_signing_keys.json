@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "active_release": "v1.3.8.6",
+  "active_manifest_key_id": "mio-update-ed25519-v2",
+  "active_installer_key_id": "mio-installer-ed25519-v2",
+  "keys": [
+    {
+      "generation": 1,
+      "status": "retired-untrusted",
+      "manifest_key_id": "mio-update-ed25519-v1",
+      "installer_key_id": "mio-installer-ed25519-v1",
+      "public_key_hex": "df75e9094c3d3d4d60dd3c7413fd256be8379c32e35c336b1972d3c3e5137f0f",
+      "public_key_sha256": "e6c4b1c1fbb81c4787e1a24f8a2553b17bbb56df999f21f510e920f0f7dcc4e6",
+      "retired_for_release": "v1.3.8.6",
+      "trusted_by_active_runtime": false
+    },
+    {
+      "generation": 2,
+      "status": "active",
+      "manifest_key_id": "mio-update-ed25519-v2",
+      "installer_key_id": "mio-installer-ed25519-v2",
+      "public_key_hex": "299d00127d293c1122b3e6f207b719d47df3546307c8757c67f8ca0d5f2d218e",
+      "public_key_sha256": "2a4ec078ce01b14b935a45cb04ac12eba7445a619075dbb0f50c25618e337b83",
+      "activated_for_release": "v1.3.8.6",
+      "created_at": "2026-07-20T21:39:28+09:00",
+      "trusted_by_active_runtime": true
+    }
+  ]
+}

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
-import sys
 import zipfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]

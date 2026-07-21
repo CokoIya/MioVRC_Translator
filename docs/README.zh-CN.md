@@ -27,8 +27,8 @@
 
 - 官方下载站：<https://miovrc.com>
 - 稳定版、beta 测试版，以及未来所有更新，统一在官网提供下载
-- GitHub Release 同步提供 `full` 完整包和 `lite` 更新包
-- 新玩家建议下载 `full` 完整包，老玩家和在线更新使用 `lite` 轻量包
+- GitHub Release 同步提供与官网相同的单一正式版安装包
+- 新玩家与老玩家升级使用同一个安装包；本地模型按需下载，已有模型会被检测并复用
 - GitHub 仓库主要用于源代码、问题反馈和开发记录
 
 ## 功能亮点
@@ -48,7 +48,7 @@
 - 推荐系统：`Windows 10 / 11`
 - 反向翻译依赖 `Windows WASAPI Loopback`
 - 若本地没有模型，首次启动时会自动下载 `SenseVoice Small`
-- `full` 安装包内置 `SenseVoice Small` 模型；`lite` 安装包用于已有模型的老玩家更新。
+- 安装包不内置 `SenseVoice Small`、Whisper 或 TTS 语音模型；首次使用相应本地功能时按需下载，已有模型不会重复下载。
 
 ## 从源码运行
 

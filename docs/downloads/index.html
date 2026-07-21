@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>Mio Translator v1.3.8.5 Downloads</title>
+  <title>Mio Translator v1.3.8.6 Downloads</title>
   <style>
     :root {
       color-scheme: light;
@@ -75,18 +75,21 @@
 </head>
 <body>
   <main class="card">
-    <h1>Mio Translator v1.3.8.5 Downloads</h1>
-    <p>这里是官网手动下载页。v1.3.8.5 会在打开已验证的安装器前安全停止实时处理、手动翻译、音频、OSC、TTS、服务商请求和改写资源；确认可见安装器成功启动后再退出，并在准备或启动失败时保持 Mio 可恢复。</p>
+    <h1>Mio Translator v1.3.8.6 Downloads</h1>
+    <p>这里是官网手动下载页。v1.3.8.6 强化了 GPT/OpenAI 兼容、Claude/Anthropic 兼容、Grok/xAI 兼容与 Qwen API TTS 链路：保留自定义 Base URL 和模型 ID，复用持久连接，限制队列、连接池、连接、读取与总墙钟超时，新增分阶段延迟诊断，并改进取消、顺序恢复、TTS/关机资源清理以及凭据、超时和恢复消息的完整本地化。本版本启用新的 Ed25519 更新签名身份；v1.3.8.5 及更早版本必须从本页手动安装，并核对下方 SHA-256 校验和。</p>
     <p>默认仍使用 CPU，适合低配设备。强显卡玩家可以在设置中开启 GPU 支持，程序会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。</p>
     <p>安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时会按需下载；已下载过的模型会被检测复用，不会重复下载。在线 ASR 包括 Web Speech、Qwen3-ASR 与 Gemini Live，不需要本地模型。</p>
     <p>译文和手打文字可以被 AI 声音读出来，再作为麦克风输入送进 VRChat 或其他支持自选麦克风的游戏。</p>
     <p>如果你想让游戏里的其他玩家听到 AI 语音，需要额外安装 MixLine，然后在游戏内选择 MixLine 虚拟麦克风。</p>
     <div class="actions">
-      <a class="primary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.5/MioTranslator-Setup-v1.3.8.5.exe" download="MioTranslator-Setup-v1.3.8.5.exe">下载正式版安装包</a>
+      <a class="primary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-Setup-v1.3.8.6.exe" download="MioTranslator-Setup-v1.3.8.6.exe">下载正式版安装包</a>
+      <a class="secondary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-v1.3.8.6-SHA256SUMS.txt">下载校验和</a>
+      <a class="secondary" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.6/MioTranslator-v1.3.8.6-SHA256SUMS.txt.sig.json">下载 Ed25519 签名</a>
       <a class="secondary" href="#" onclick="alert('暂无测试版提供'); return false;">Beta版下载</a>
     </div>
-    <p class="meta">如果你是第一次安装或从旧版本升级，都使用同一个 v1.3.8.5 安装包。文件大小：463,939,062 bytes，约 442 MB。</p>
-    <p class="meta">SHA256：27d58f255c622ef0630c3dbfb9fd9b22b1ff46145c8f15695cb487d6a708775a</p>
+    <p class="meta">如果你是第一次安装或从旧版本升级，都使用同一个 v1.3.8.6 安装包。文件大小：458,252,251 bytes，约 437 MB。</p>
+    <p class="meta">SHA256：85081430fa64068a9daeb990fc8b679d50c8cabf06caa1cb1ba4ab0a6e7faaca</p>
+    <p class="meta">v2 公钥 SHA-256 指纹：2a4ec078ce01b14b935a45cb04ac12eba7445a619075dbb0f50c25618e337b83。手动升级前请同时核对官网 TLS 页面与 GitHub Release，并查看 <a href="../release_signing_keys.json">公钥目录</a>。</p>
     <p class="meta">安装后按向导下载需要的模型；更新校验信息由官方 installer_manifest.json 提供。</p>
   </main>
 </body>

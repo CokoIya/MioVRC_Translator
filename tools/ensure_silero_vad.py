@@ -14,7 +14,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.utils.secure_http import open_trusted_https_url, read_bounded_response
+from src.utils.secure_http import (  # noqa: E402
+    open_trusted_https_url,
+    read_bounded_response,
+)
 
 
 SILERO_VAD_REVISION = "7e30209a3e901f9842f81b225f3e93d8199902b1"

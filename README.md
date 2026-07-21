@@ -113,6 +113,8 @@ $env:MODELSCOPE_CACHE = "./models"
 
 - [第三方许可证](./THIRD_PARTY_LICENSES.md) - 依赖库许可证信息
 - [品牌与非官方分发规则](./BRANDING.md) - Mio 名称、Logo、图标、官网素材和非官方构建说明
+- [生产发版流程](./docs/RELEASE_PROCESS.md) - 构建、验证、签名、标签与 GitHub Release 发布步骤
+- [发布签名说明](./docs/RELEASE_SIGNING.md) - Ed25519 信任模型、密钥保管、轮换与校验方法
 
 ## 许可证与品牌声明
 
