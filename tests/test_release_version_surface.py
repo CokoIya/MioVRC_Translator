@@ -135,14 +135,21 @@ def test_current_release_docs_describe_single_installer_and_custom_relays() -> N
     assert "Base URL 与 Model 将按后端自动锁定" not in website
     assert "compatible relays keep custom Base URLs" in website
     assert "兼容中继的自定义 Base URL" in website
-    for field in ("download-sub", "download-card-body"):
+    for field in (
+        "download-sub",
+        "download-card-body",
+        "download-release-note",
+        "download-model-text",
+        "download-model-note",
+        "download-qq-1-text",
+        "download-qq-2-text",
+        "download-community-note",
+    ):
         assert f'id="{field}"' in website
         assert website.count(f"'{field}':") == 5
     for removed_field in (
         "download-checksum",
         "download-signature",
         "download-signing",
-        "download-model-link",
-        "download-community",
     ):
         assert removed_field not in website
