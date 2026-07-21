@@ -100,6 +100,7 @@ ALLOWED_LITERAL_TEXT = {
     "🙈",
     "sk-...",
     "sk-ant-...",
+    "xai-...",
     "AI...",
     "{translation}\n{original}",
     "v",

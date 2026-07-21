@@ -114,6 +114,9 @@ TTS_API_DEFAULT_CONFIGS = {
         "instructions": "",
         "optimize_instructions": True,
         "timeout_seconds": 30,
+        "connect_timeout_seconds": 30,
+        "read_timeout_seconds": 30,
+        "wall_timeout_seconds": 45,
         "max_retries": 0,
     },
 }

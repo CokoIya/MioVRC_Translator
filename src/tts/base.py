@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Optional
 
 
@@ -35,6 +36,19 @@ class BaseTTS(ABC):
 
     def close(self) -> None:
         """Release process-level resources owned by this engine."""
+
+    def request_close(self) -> None:
+        """Ask an in-flight engine operation to stop as soon as practical.
+
+        The default implementation is intentionally a no-op. Network-backed
+        engines override it so manager shutdown can wake deadline-aware body
+        readers before their ordinary read timeout expires.
+        """
+
+    def consume_last_synthesis_diagnostics(self) -> Mapping[str, object]:
+        """Return and clear diagnostics for the current synthesis thread."""
+
+        return {}
 
     @abstractmethod
     def get_available_voices(self) -> list[TTSVoice]:

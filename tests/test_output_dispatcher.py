@@ -103,11 +103,12 @@ def test_output_dispatcher_dispatches_to_registered_sinks():
     assert message.chatbox_text == "こんにちは(hello)"
 
 
-def test_output_dispatcher_isolates_sink_failures():
+def test_output_dispatcher_isolates_sink_failures_without_logging_payload(caplog):
     seen: list[str] = []
+    secret = "raw sink failure with echoed player text"
 
     def bad_sink(_message):
-        raise RuntimeError("boom")
+        raise RuntimeError(secret)
 
     dispatcher = OutputDispatcher(
         {},
@@ -117,8 +118,12 @@ def test_output_dispatcher_isolates_sink_failures():
         },
     )
     message = OutputMessage(source="listen", display_text="ok")
+    caplog.set_level("WARNING", logger="src.core.output_dispatcher")
 
     result = dispatcher.dispatch(message)
 
     assert result == {"bad": False, "good": True}
     assert seen == ["ok"]
+    assert secret not in caplog.text
+    assert "type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

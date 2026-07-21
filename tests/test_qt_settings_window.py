@@ -1,5 +1,6 @@
 import os
 import subprocess
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -399,6 +400,84 @@ def test_temporary_local_tts_probe_closes_engine(monkeypatch):
 
     assert dialog._local_tts_engine_available("voicevox") is True
     assert engine.close_calls == 1
+
+
+def test_tts_test_manager_is_registered_before_async_close(monkeypatch):
+    events: list[object] = []
+
+    class Manager:
+        def stop_playback(self):
+            events.append("stop-playback")
+
+        def close(self):
+            events.append("close")
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            events.append("thread-start")
+            self._target()
+
+    manager = Manager()
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    dialog._tts_test_manager = manager
+    dialog._on_deferred_tts_manager = lambda value: events.append(
+        ("registered", value)
+    )
+    monkeypatch.setattr(threading, "Thread", ImmediateThread)
+
+    dialog._stop_tts_test_manager()
+
+    assert events == [
+        "stop-playback",
+        ("registered", manager),
+        "thread-start",
+        "close",
+    ]
+
+
+def test_tts_test_manager_thread_start_failure_closes_inline_without_raw_log(
+    monkeypatch,
+    caplog,
+):
+    events: list[object] = []
+    secret = "thread failure with relay/private-path"
+
+    class Manager:
+        def stop_playback(self):
+            events.append("stop-playback")
+
+        def close(self, timeout_seconds=None):
+            events.append(("close", timeout_seconds))
+
+    class FailingThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            raise RuntimeError(secret)
+
+    manager = Manager()
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    dialog._tts_test_manager = manager
+    dialog._on_deferred_tts_manager = lambda value: events.append(
+        ("registered", value)
+    )
+    monkeypatch.setattr(threading, "Thread", FailingThread)
+    caplog.set_level("ERROR", logger="src.ui_qt.settings_window")
+
+    dialog._stop_tts_test_manager()
+
+    assert events == [
+        "stop-playback",
+        ("registered", manager),
+        ("close", 0.0),
+    ]
+    assert secret not in caplog.text
+    assert "type=RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_temporary_voice_enumeration_engine_is_closed(monkeypatch):
@@ -1894,6 +1973,10 @@ def test_tts_test_button_disables_until_callback(qtbot, config, monkeypatch):
 
             return [Voice()]
 
+    class FakeVoice:
+        id = voice_id
+        name = "Nanami"
+
     class FakeTTSManager:
         def __init__(self, *args, **kwargs):
             pass
@@ -2489,7 +2572,6 @@ def test_xtts_settings_pass_device_language_and_voice_to_test_and_save(qtbot, co
             pass
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
     monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
     monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
     monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: object())
@@ -2570,7 +2652,6 @@ def test_xtts_auto_test_language_uses_translation_target(qtbot, config, monkeypa
             pass
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
     monkeypatch.setattr(
         "src.ui_qt.settings_window.xtts_runtime_status",
         lambda **_kwargs: type(
@@ -2625,7 +2706,6 @@ def test_xtts_test_reports_missing_runtime_before_creating_manager(qtbot, config
             raise AssertionError("XTTS runtime preflight should block before TTSManager creation")
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: False)
     monkeypatch.setattr(
         "src.ui_qt.settings_window.xtts_runtime_status",
         lambda **_kwargs: type(
@@ -2898,7 +2978,6 @@ def test_xtts_test_reports_missing_model_before_creating_manager(qtbot, config, 
             raise AssertionError("XTTS model preflight should block before TTSManager creation")
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
     monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: False)
     monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [FakeVoice()])
     monkeypatch.setattr("src.ui_qt.settings_window.TTSManager", FailingTTSManager)
@@ -2937,7 +3016,6 @@ def test_xtts_test_reports_missing_reference_before_creating_manager(qtbot, conf
             raise AssertionError("XTTS reference preflight should block before TTSManager creation")
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
     monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
     monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: None)
     monkeypatch.setattr("src.ui_qt.settings_window.list_xtts_reference_voices", lambda: [])
@@ -2972,7 +3050,6 @@ def test_xtts_test_reports_unusable_reference_before_creating_manager(qtbot, con
             raise AssertionError("XTTS reference quality preflight should block before TTSManager creation")
 
     _patch_dialog_deps(monkeypatch)
-    monkeypatch.setattr("src.ui_qt.settings_window.is_xtts_runtime_available", lambda **_kwargs: True)
     monkeypatch.setattr("src.tts.xtts_downloader.xtts_models_ready", lambda: True)
     monkeypatch.setattr("src.ui_qt.settings_window.first_xtts_reference_audio_path", lambda: object())
     monkeypatch.setattr("src.ui_qt.settings_window.first_usable_xtts_reference_audio_path", lambda: None)

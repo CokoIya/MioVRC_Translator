@@ -22,12 +22,13 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from src.utils.ui_config import UI_LANGUAGE_OPTIONS, normalize_backend
+from src.utils.ui_config import UI_LANGUAGE_OPTIONS
 from src.ui_qt.credential_prompt import show_missing_credential_prompt
 from src.utils.credential_validation import (
     MissingCredential,
     first_missing_required_credential,
 )
+from src.utils.provider_settings import PROVIDER_CHOICES, preserve_provider_id
 
 from .localized_tab import LocalizedSettingsTab, normalize_settings_language
 
@@ -60,14 +61,9 @@ class QuickSetupTab(LocalizedSettingsTab):
             config.get("translation", {}) if isinstance(config, dict) else {}
         )
         self._provider_api_keys = {}
-        for provider in (
-            "openai",
-            "anthropic",
-            "deepseek",
-            "gemini",
-            "qianwen",
-            "grok_compatible",
-        ):
+        provider_ids = {backend for _label_key, backend in PROVIDER_CHOICES}
+        provider_ids.add(preserve_provider_id(translation_cfg.get("backend")))
+        for provider in provider_ids:
             provider_cfg = translation_cfg.get(provider, {})
             if provider == "qianwen" and not isinstance(provider_cfg, dict):
                 provider_cfg = translation_cfg.get("qwen", {})
@@ -76,7 +72,9 @@ class QuickSetupTab(LocalizedSettingsTab):
             self._provider_api_keys[provider] = str(
                 provider_cfg.get("api_key", "") if isinstance(provider_cfg, dict) else ""
             )
-        self._current_provider = "openai"
+        self._current_provider = preserve_provider_id(
+            translation_cfg.get("backend", "openai")
+        )
 
         self._init_ui()
 
@@ -267,14 +265,7 @@ class QuickSetupTab(LocalizedSettingsTab):
         layout.addWidget(label)
 
         self._provider_combo = QComboBox()
-        for label_key, backend in (
-            ("provider_openai_recommended", "openai"),
-            ("provider_anthropic", "anthropic"),
-            ("provider_deepseek", "deepseek"),
-            ("provider_gemini", "gemini"),
-            ("provider_qwen", "qianwen"),
-            ("provider_grok", "grok_compatible"),
-        ):
+        for label_key, backend in PROVIDER_CHOICES:
             self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
         layout.addWidget(self._provider_combo, 1)
@@ -371,7 +362,7 @@ class QuickSetupTab(LocalizedSettingsTab):
 
     def _on_provider_change(self) -> None:
         """Handle provider selection change."""
-        provider = str(self._provider_combo.currentData() or "openai")
+        provider = preserve_provider_id(self._provider_combo.currentData())
         if not self._loading_config:
             self._provider_api_keys[self._current_provider] = self._api_key_input.text()
         self._current_provider = provider
@@ -380,22 +371,26 @@ class QuickSetupTab(LocalizedSettingsTab):
             self._api_key_input.setText(provider_key)
 
         # Update API key placeholder based on provider
-        provider_index = self._provider_combo.currentIndex()
         placeholders = {
-            0: "sk-...",  # OpenAI
-            1: "sk-ant-...",  # Anthropic
-            2: "sk-...",  # DeepSeek
-            3: "AI...",  # Gemini
-            4: "sk-...",  # Qwen
-            5: "xai-...",  # Grok-compatible relay
+            "openai": "sk-...",
+            "openai_compatible": "sk-...",
+            "anthropic": "sk-ant-...",
+            "anthropic_compatible": "sk-ant-...",
+            "deepseek": "sk-...",
+            "gemini": "AI...",
+            "qianwen": "sk-...",
+            "xai": "xai-...",
+            "grok_compatible": "xai-...",
         }
-        self._api_key_input.setPlaceholderText(placeholders.get(provider_index, ""))
+        self._api_key_input.setPlaceholderText(placeholders.get(provider, ""))
         self._on_config_change()
         if not self._loading_config:
             self._prompt_for_missing_credential()
 
     def _prompt_for_missing_credential(self) -> bool:
-        provider = str(self._provider_combo.currentData() or "openai")
+        provider = preserve_provider_id(self._provider_combo.currentData())
+        if provider not in {backend for _label_key, backend in PROVIDER_CHOICES}:
+            return False
         config = {
             "translation": {
                 "backend": provider,
@@ -467,7 +462,9 @@ class QuickSetupTab(LocalizedSettingsTab):
             "ui_language": str(self._language_combo.currentData() or self._ui_language),
             "source_language": source_map.get(self._source_combo.currentIndex(), "auto"),
             "target_language": target_map.get(self._target_combo.currentIndex(), "zh-CN"),
-            "translation_provider": str(self._provider_combo.currentData() or "openai"),
+            "translation_provider": preserve_provider_id(
+                self._provider_combo.currentData()
+            ),
             "api_key": self._api_key_input.text().strip(),
         }
 
@@ -493,25 +490,22 @@ class QuickSetupTab(LocalizedSettingsTab):
         # Reverse mapping from config to UI
         source_reverse = {"auto": 0, "en": 1, "zh-CN": 2, "ja": 3, "ko": 4, "es": 5, "fr": 6, "de": 7, "ru": 8}
         target_reverse = {"en": 0, "zh-CN": 1, "ja": 2, "ko": 3, "es": 4, "fr": 5, "de": 6, "ru": 7}
-        provider_reverse = {
-            "openai": 0,
-            "anthropic": 1,
-            "deepseek": 2,
-            "gemini": 3,
-            "qianwen": 4,
-            "qwen": 4,
-            "grok_compatible": 5,
-        }
-
         source = config.get("source_language", "auto")
         self._source_combo.setCurrentIndex(source_reverse.get(source, 0))
 
         target = config.get("target_language", "zh-CN")
         self._target_combo.setCurrentIndex(target_reverse.get(target, 1))
 
-        provider = normalize_backend(config.get("translation_provider", "openai"))
+        provider = preserve_provider_id(config.get("translation_provider", "openai"))
         api_key = str(config.get("api_key", "") or "")
         self._provider_api_keys[provider] = api_key
-        self._provider_combo.setCurrentIndex(provider_reverse.get(provider, 0))
+        provider_index = self._provider_combo.findData(provider)
+        if provider_index < 0:
+            self._provider_combo.addItem(
+                self._t("current_provider_unavailable", provider=provider),
+                provider,
+            )
+            provider_index = self._provider_combo.count() - 1
+        self._provider_combo.setCurrentIndex(provider_index)
 
         self._api_key_input.setText(api_key)

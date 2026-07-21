@@ -29,6 +29,7 @@ from src.tts.manager import (
     TTSManager,
     TTSRequest,
     _append_tail_silence,
+    _playback_timeout_seconds,
     _portaudio_error_code,
     _virtual_output_score,
     find_best_virtual_output_device,
@@ -172,6 +173,30 @@ def test_tts_manager_close_releases_engine_once_and_cannot_restart(monkeypatch):
     assert manager._running is False
 
 
+def test_tts_manager_initialization_log_hides_raw_exception_prose(
+    monkeypatch,
+    caplog,
+):
+    secret = "raw-initialization-secret and player text"
+
+    def fail_create(_engine_name, **_kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr("src.tts.manager.create_tts_engine", fail_create)
+    caplog.set_level(logging.ERROR, logger="src.tts.manager")
+
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert manager._engine is None
+    assert secret not in rendered
+    assert "type=RuntimeError" in rendered
+
+
 def test_tts_manager_repeated_start_stop_does_not_accumulate_workers(monkeypatch):
     engine = FakeTTS()
     monkeypatch.setattr(
@@ -191,6 +216,54 @@ def test_tts_manager_repeated_start_stop_does_not_accumulate_workers(monkeypatch
         assert manager._active_synthesis_workers == 0
         assert manager._synthesis_threads == []
         assert manager._playback_thread is None
+
+    manager.close()
+
+
+def test_speak_cannot_admit_after_stop_drain(monkeypatch):
+    validation_started = threading.Event()
+    release_validation = threading.Event()
+    callbacks: list[tuple[bool, str]] = []
+    result: list[bool] = []
+
+    def blocking_validation(text):
+        validation_started.set()
+        release_validation.wait(timeout=2)
+        return text
+
+    monkeypatch.setattr(manager_module, "validate_tts_text", blocking_validation)
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    manager.start()
+
+    speaker = threading.Thread(
+        target=lambda: result.append(
+            manager.speak(
+                "late",
+                "voice",
+                callback=lambda success, message: callbacks.append((success, message)),
+            )
+        )
+    )
+    speaker.start()
+    assert validation_started.wait(timeout=1)
+
+    state = manager.stop(timeout_seconds=1.0)
+    release_validation.set()
+    speaker.join(timeout=1)
+
+    assert state.quiescent is True
+    assert result == [False]
+    assert callbacks == [(False, "tts_error:stopped")]
+    assert manager._request_queue.empty()
+    assert manager._outstanding_requests == set()
 
     manager.close()
 
@@ -292,6 +365,8 @@ def test_tts_manager_defers_engine_close_until_blocked_synthesis_exits(monkeypat
             super().__init__()
             self.started = threading.Event()
             self.release = threading.Event()
+            self.close_started = threading.Event()
+            self.allow_close = threading.Event()
             self.closed = threading.Event()
             self.close_calls = 0
             self.request_close_calls = 0
@@ -307,6 +382,8 @@ def test_tts_manager_defers_engine_close_until_blocked_synthesis_exits(monkeypat
 
         def close(self):
             self.close_calls += 1
+            self.close_started.set()
+            self.allow_close.wait(timeout=2)
             self.closed.set()
 
     engine = BlockingTTS()
@@ -329,8 +406,11 @@ def test_tts_manager_defers_engine_close_until_blocked_synthesis_exits(monkeypat
     assert manager.speak("hello", "fake-voice") is True
     assert engine.started.wait(timeout=1)
 
-    manager.close()
+    close_state = manager.close()
 
+    assert close_state.quiescent is False
+    assert close_state.synthesis_workers_alive == 1
+    assert close_state.engine_close_deferred is True
     assert engine.request_close_calls == 1
     assert engine.close_calls == 0
     assert manager._engine is engine
@@ -340,10 +420,311 @@ def test_tts_manager_defers_engine_close_until_blocked_synthesis_exits(monkeypat
     assert manager._engine_config == {}
 
     engine.release.set()
+    assert engine.close_started.wait(timeout=2)
+    closing_state = manager.get_quiescence_state()
+    assert closing_state.quiescent is False
+    assert closing_state.synthesis_workers_alive == 0
+    assert closing_state.engine_close_deferred is True
+    assert manager._engine is None
+
+    engine.allow_close.set()
     assert engine.closed.wait(timeout=2)
     assert engine.close_calls == 1
     assert manager._engine is None
+    deadline = time.monotonic() + 2
+    final_state = manager.get_quiescence_state()
+    while not final_state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        final_state = manager.get_quiescence_state()
     assert manager._active_synthesis_workers == 0
+    assert final_state.quiescent is True
+    assert final_state.engine_close_deferred is False
+
+
+def test_tts_manager_defers_engine_close_for_background_resolver(monkeypatch):
+    class ResolverTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.background_tasks = 1
+            self.request_close_calls = 0
+            self.close_calls = 0
+
+        def background_work_count(self):
+            return self.background_tasks
+
+        def request_close(self):
+            self.request_close_calls += 1
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = ResolverTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    close_state = manager.close(timeout_seconds=0)
+
+    assert close_state.quiescent is False
+    assert close_state.engine_background_tasks == 1
+    assert close_state.engine_close_deferred is True
+    deadline = time.monotonic() + 1
+    while engine.request_close_calls == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert engine.request_close_calls == 1
+    assert engine.close_calls == 0
+    assert manager._engine is engine
+
+    engine.background_tasks = 0
+    final_state = manager.get_quiescence_state()
+    deadline = time.monotonic() + 1
+    while not final_state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        final_state = manager.get_quiescence_state()
+
+    assert final_state.quiescent is True
+    assert final_state.engine_background_tasks == 0
+    assert final_state.engine_close_deferred is False
+    assert engine.close_calls == 1
+    assert manager._engine is None
+
+
+def test_repeated_tts_close_finalizes_engine_without_holding_lifecycle_lock(
+    monkeypatch,
+):
+    class ResolverTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.background_tasks = 1
+
+        def background_work_count(self):
+            return self.background_tasks
+
+        def request_close(self):
+            return None
+
+    engine = ResolverTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    assert manager.close(timeout_seconds=0).quiescent is False
+    engine.background_tasks = 0
+    lifecycle_lock_available = threading.Event()
+
+    def close_resource(_engine):
+        def probe_lock():
+            with manager._lifecycle_lock:
+                lifecycle_lock_available.set()
+
+        probe = threading.Thread(target=probe_lock, daemon=True)
+        probe.start()
+        assert lifecycle_lock_available.wait(timeout=0.5)
+        probe.join(timeout=0.5)
+
+    monkeypatch.setattr(manager, "_close_engine_resource", close_resource)
+
+    state = manager.close(timeout_seconds=0)
+
+    assert state.quiescent is False
+    assert lifecycle_lock_available.wait(timeout=1)
+    deadline = time.monotonic() + 1
+    while not state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        state = manager.get_quiescence_state()
+    assert state.quiescent is True
+
+
+def test_tts_request_close_handoff_blocks_concurrent_engine_detach(monkeypatch):
+    class RequestingTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.background_tasks = 1
+            self.request_started = threading.Event()
+            self.allow_request_close = threading.Event()
+            self.close_calls = 0
+            self.request_close_calls = 0
+
+        def background_work_count(self):
+            return self.background_tasks
+
+        def request_close(self):
+            self.request_close_calls += 1
+            self.request_started.set()
+            self.allow_request_close.wait(timeout=2)
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = RequestingTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    close_started_at = time.monotonic()
+    close_state = manager.close(timeout_seconds=0)
+    close_elapsed = time.monotonic() - close_started_at
+
+    assert close_elapsed < 0.25
+    assert close_state.quiescent is False
+    assert engine.request_started.wait(timeout=1)
+
+    engine.background_tasks = 0
+    during_handoff = manager.get_quiescence_state()
+
+    assert during_handoff.quiescent is False
+    assert during_handoff.engine_close_deferred is True
+    assert manager._engine is engine
+    assert engine.close_calls == 0
+
+    repeated_state = manager.close(timeout_seconds=0)
+    assert repeated_state.quiescent is False
+    assert repeated_state.engine_close_deferred is True
+    assert engine.request_close_calls == 1
+    assert engine.close_calls == 0
+
+    engine.allow_request_close.set()
+    deadline = time.monotonic() + 2
+    final_state = manager.get_quiescence_state()
+    while not final_state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        final_state = manager.get_quiescence_state()
+
+    assert final_state.quiescent is True
+    assert engine.request_close_calls == 1
+    assert engine.close_calls == 1
+    assert manager._engine is None
+
+
+def test_tts_engine_close_handoff_honors_timeout_and_destroys_once(monkeypatch):
+    class BlockingCloseTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+            self.close_started = threading.Event()
+            self.allow_close = threading.Event()
+            self.closed = threading.Event()
+
+        def close(self):
+            self.close_calls += 1
+            self.close_started.set()
+            self.allow_close.wait(timeout=2)
+            self.closed.set()
+
+    engine = BlockingCloseTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    started_at = time.monotonic()
+    close_state = manager.close(timeout_seconds=0.05)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.25
+    assert engine.close_started.wait(timeout=1)
+    assert close_state.quiescent is False
+    assert close_state.engine_close_deferred is True
+    assert manager._engine is None
+    assert engine.close_calls == 1
+
+    repeated_state = manager.close(timeout_seconds=0)
+    assert repeated_state.quiescent is False
+    assert repeated_state.engine_close_deferred is True
+    assert engine.close_calls == 1
+
+    engine.allow_close.set()
+    assert engine.closed.wait(timeout=1)
+    deadline = time.monotonic() + 1
+    final_state = manager.get_quiescence_state()
+    while not final_state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        final_state = manager.get_quiescence_state()
+
+    assert final_state.quiescent is True
+    assert final_state.engine_close_deferred is False
+    assert engine.close_calls == 1
+
+
+def test_concurrent_repeated_close_cannot_report_quiescent_during_stop_handoff(
+    monkeypatch,
+):
+    class ClosingTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    engine = ClosingTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    stop_started = threading.Event()
+    allow_stop = threading.Event()
+
+    def blocked_stop(*, timeout_seconds=None):
+        del timeout_seconds
+        stop_started.set()
+        allow_stop.wait(timeout=2)
+
+    monkeypatch.setattr(manager, "stop", blocked_stop)
+    first_states: list[object] = []
+    first_close = threading.Thread(
+        target=lambda: first_states.append(manager.close(timeout_seconds=0)),
+        daemon=True,
+    )
+    first_close.start()
+    assert stop_started.wait(timeout=1)
+
+    concurrent_state = manager.close(timeout_seconds=0)
+
+    assert concurrent_state.quiescent is False
+    assert concurrent_state.engine_close_deferred is True
+    assert manager._engine is engine
+    assert engine.close_calls == 0
+
+    allow_stop.set()
+    first_close.join(timeout=2)
+
+    assert not first_close.is_alive()
+    assert first_states
+    deadline = time.monotonic() + 1
+    final_state = manager.get_quiescence_state()
+    while not final_state.quiescent and time.monotonic() < deadline:
+        time.sleep(0.01)
+        final_state = manager.get_quiescence_state()
+    assert final_state.quiescent is True
+    assert manager._engine is None
+    assert engine.close_calls == 1
 
 
 def test_pyttsx3_close_stops_native_driver_once():
@@ -397,6 +778,47 @@ def test_tts_manager_prewarm_runs_on_synthesis_worker(monkeypatch):
         assert engine.prewarm_calls == [("voice", "tts-synthesis-1")]
     finally:
         manager.stop()
+
+
+def test_tts_manager_prewarm_log_hides_raw_exception_prose(monkeypatch, caplog):
+    secret = "raw-prewarm-secret and player text"
+
+    class FailingPrewarmTTS(FakeTTS):
+        def __init__(self):
+            super().__init__()
+            self.attempted = threading.Event()
+
+        def prewarm(self, voice=""):
+            del voice
+            self.attempted.set()
+            raise RuntimeError(secret)
+
+    engine = FailingPrewarmTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    caplog.set_level(logging.WARNING, logger="src.tts.manager")
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+
+    manager.start()
+    try:
+        assert manager.prewarm("voice") is True
+        assert engine.attempted.wait(timeout=1)
+        deadline = time.monotonic() + 1
+        while manager._prewarm_queued and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        manager.stop()
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert manager._prewarm_queued is False
+    assert secret not in rendered
+    assert "type=RuntimeError" in rendered
 
 
 def test_tts_synthesizes_next_sentence_while_previous_audio_is_playing(monkeypatch):
@@ -570,6 +992,416 @@ def test_concurrent_tts_synthesis_still_plays_in_sentence_order(monkeypatch):
         manager.stop()
 
 
+def test_stalled_ordered_head_expires_once_and_later_qwen_audio_proceeds(monkeypatch):
+    first_started = threading.Event()
+    release_first = threading.Event()
+
+    class StalledTTS(FakeTTS):
+        max_concurrent_synthesis = 2
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "stalled":
+                first_started.set()
+                release_first.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    engine = StalledTTS()
+    played: list[bytes] = []
+    callbacks: list[tuple[str, bool, str]] = []
+    callback_event = threading.Event()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="qwen_tts",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=2,
+    )
+    manager._synthesis_wall_timeout_seconds = 0.05
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+
+    def callback(name):
+        def done(success, message):
+            callbacks.append((name, success, message))
+            if len(callbacks) >= 2:
+                callback_event.set()
+
+        return done
+
+    manager.start()
+    try:
+        assert manager.speak("stalled", "voice", callback=callback("stalled"))
+        assert first_started.wait(timeout=1)
+        assert manager.speak("later", "voice", callback=callback("later"))
+        assert callback_event.wait(timeout=1)
+        assert callbacks[0] == ("stalled", False, "tts_error:timeout")
+        assert callbacks[1] == ("later", True, "")
+        assert played == [b"RIFF-later"]
+
+        release_first.set()
+        time.sleep(0.05)
+        assert [name for name, _success, _message in callbacks].count("stalled") == 1
+    finally:
+        release_first.set()
+        manager.stop()
+
+
+def test_single_stalled_worker_is_quarantined_and_capacity_is_restored(monkeypatch):
+    stalled_started = threading.Event()
+    release_stalled = threading.Event()
+
+    class SingleWorkerStallTTS(FakeTTS):
+        max_concurrent_synthesis = 1
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "stalled":
+                stalled_started.set()
+                release_stalled.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    engine = SingleWorkerStallTTS()
+    callbacks: list[tuple[str, bool, str]] = []
+    played: list[bytes] = []
+    terminal = threading.Event()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="qwen_tts",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=1,
+    )
+    manager._synthesis_wall_timeout_seconds = 0.05
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+
+    def done(name):
+        def callback(success, message):
+            callbacks.append((name, success, message))
+            if len(callbacks) >= 2:
+                terminal.set()
+
+        return callback
+
+    manager.start()
+    try:
+        assert manager.speak("stalled", "voice", callback=done("stalled"))
+        assert stalled_started.wait(timeout=1)
+        assert manager.speak("later", "voice", callback=done("later"))
+
+        assert terminal.wait(timeout=1)
+        assert callbacks[:2] == [
+            ("stalled", False, "tts_error:timeout"),
+            ("later", True, ""),
+        ]
+        assert played == [b"RIFF-later"]
+        assert any(
+            thread.name.startswith("tts-synthesis-")
+            for thread in manager._synthesis_threads
+            if thread.is_alive()
+        )
+
+        release_stalled.set()
+        deadline = time.monotonic() + 1
+        while manager._active_synthesis_workers > 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert manager._active_synthesis_workers == 1
+        assert [name for name, _success, _message in callbacks].count("stalled") == 1
+    finally:
+        release_stalled.set()
+        manager.stop()
+
+
+def test_retired_worker_exit_restores_capacity_after_quarantine_cap_exhaustion(
+    monkeypatch,
+):
+    stalled_started = threading.Event()
+    release_stalled = threading.Event()
+    first_terminal = threading.Event()
+    all_terminal = threading.Event()
+
+    class CappedStallTTS(FakeTTS):
+        max_concurrent_synthesis = 1
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "stalled":
+                stalled_started.set()
+                release_stalled.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    engine = CappedStallTTS()
+    callbacks: list[tuple[str, bool, str]] = []
+    played: list[bytes] = []
+    monkeypatch.setattr(manager_module, "TTS_MAX_QUARANTINED_SYNTHESIS_WORKERS", 1)
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="qwen_tts",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=1,
+    )
+    manager._synthesis_wall_timeout_seconds = 0.05
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+
+    def done(name):
+        def callback(success, message):
+            callbacks.append((name, success, message))
+            if name == "stalled":
+                first_terminal.set()
+            if len(callbacks) >= 2:
+                all_terminal.set()
+
+        return callback
+
+    manager.start()
+    try:
+        assert manager.speak("stalled", "voice", callback=done("stalled"))
+        assert stalled_started.wait(timeout=1)
+        assert manager.speak("later", "voice", callback=done("later"))
+        assert first_terminal.wait(timeout=1)
+        assert callbacks == [("stalled", False, "tts_error:timeout")]
+        assert played == []
+        with manager._worker_state_lock:
+            retired = set(manager._retired_synthesis_workers)
+        assert len(retired) == 1
+        assert not any(
+            thread.is_alive() and thread not in retired
+            for thread in manager._synthesis_threads
+        )
+
+        release_stalled.set()
+        assert all_terminal.wait(timeout=1)
+        assert callbacks == [
+            ("stalled", False, "tts_error:timeout"),
+            ("later", True, ""),
+        ]
+        assert played == [b"RIFF-later"]
+        deadline = time.monotonic() + 1
+        while manager._active_synthesis_workers != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert manager._active_synthesis_workers == 1
+        assert any(thread.is_alive() for thread in manager._synthesis_threads)
+    finally:
+        release_stalled.set()
+        manager.stop()
+
+
+def test_replacement_thread_start_failure_rolls_back_and_playback_survives(
+    monkeypatch,
+    caplog,
+):
+    stalled_started = threading.Event()
+    release_stalled = threading.Event()
+    first_terminal = threading.Event()
+    all_terminal = threading.Event()
+    failed_threads: list[threading.Thread] = []
+    secret = "replacement-thread-start-secret"
+
+    class StartFailureStallTTS(FakeTTS):
+        max_concurrent_synthesis = 1
+
+        def synthesize(self, text, voice, rate=1.0, volume=1.0):
+            self.requests.append((text, voice, rate, volume))
+            if text == "stalled":
+                stalled_started.set()
+                release_stalled.wait(timeout=2)
+            return b"RIFF-" + text.encode("ascii")
+
+    original_start = threading.Thread.start
+
+    def controlled_start(thread, *args, **kwargs):
+        if thread.name == "tts-synthesis-2" and not failed_threads:
+            failed_threads.append(thread)
+            raise RuntimeError(secret)
+        return original_start(thread, *args, **kwargs)
+
+    engine = StartFailureStallTTS()
+    callbacks: list[tuple[str, bool, str]] = []
+    played: list[bytes] = []
+    monkeypatch.setattr(threading.Thread, "start", controlled_start)
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    caplog.set_level(logging.ERROR, logger="src.tts.manager")
+    manager = TTSManager(
+        engine_name="qwen_tts",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=1,
+    )
+    manager._synthesis_wall_timeout_seconds = 0.05
+    monkeypatch.setattr(manager, "_play_audio", played.append)
+
+    def done(name):
+        def callback(success, message):
+            callbacks.append((name, success, message))
+            if name == "stalled":
+                first_terminal.set()
+            if len(callbacks) >= 2:
+                all_terminal.set()
+
+        return callback
+
+    manager.start()
+    try:
+        assert manager.speak("stalled", "voice", callback=done("stalled"))
+        assert stalled_started.wait(timeout=1)
+        assert manager.speak("later", "voice", callback=done("later"))
+        assert first_terminal.wait(timeout=1)
+        assert len(failed_threads) == 1
+        failed_thread = failed_threads[0]
+        assert failed_thread not in manager._synthesis_threads
+        with manager._worker_state_lock:
+            assert failed_thread not in manager._retired_synthesis_workers
+        assert manager._active_synthesis_workers == 1
+        assert manager._playback_thread is not None
+        assert manager._playback_thread.is_alive()
+
+        rendered = "\n".join(record.getMessage() for record in caplog.records)
+        assert secret not in rendered
+        assert "type=RuntimeError" in rendered
+
+        release_stalled.set()
+        assert all_terminal.wait(timeout=1)
+        assert callbacks == [
+            ("stalled", False, "tts_error:timeout"),
+            ("later", True, ""),
+        ]
+        assert played == [b"RIFF-later"]
+        assert manager._playback_thread is not None
+        assert manager._playback_thread.is_alive()
+        deadline = time.monotonic() + 1
+        while manager._active_synthesis_workers != 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert manager._active_synthesis_workers == 1
+    finally:
+        release_stalled.set()
+        manager.stop()
+
+
+def test_tts_admission_saturation_returns_localizable_token(monkeypatch):
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+        max_outstanding=1,
+    )
+    manager._running = True
+    rejected: list[tuple[bool, str]] = []
+
+    assert manager.speak("first", "voice") is True
+    assert manager.speak(
+        "second",
+        "voice",
+        callback=lambda success, message: rejected.append((success, message)),
+    ) is False
+    assert rejected == [(False, "tts_error:pipeline_full")]
+
+
+def test_terminal_callback_observes_released_pipeline_slot(monkeypatch):
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+        max_outstanding=1,
+    )
+    monkeypatch.setattr(manager, "_play_audio", lambda _audio: None)
+    followup_acceptance = []
+    finished = threading.Event()
+
+    def first_done(success, _message):
+        assert success is True
+        followup_acceptance.append(
+            manager.speak(
+                "second",
+                "voice",
+                callback=lambda second_success, _second_message: (
+                    second_success and finished.set()
+                ),
+            )
+        )
+
+    manager.start()
+    try:
+        assert manager.speak("first", "voice", callback=first_done)
+        assert finished.wait(timeout=1)
+        assert followup_acceptance == [True]
+    finally:
+        manager.stop()
+
+
+def test_tts_latency_log_carries_upstream_request_context(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    monkeypatch.setattr(manager, "_play_audio", lambda _audio: None)
+    done = threading.Event()
+    caplog.set_level(logging.INFO, logger="src.tts.manager")
+    now = time.monotonic()
+
+    manager.start()
+    try:
+        assert manager.speak(
+            "hello",
+            "voice",
+            callback=lambda _success, _message: done.set(),
+            request_context={
+                "source": "mic",
+                "session_id": "session-7",
+                "sequence": 42,
+                "upstream_started_at": now - 0.1,
+                "ui_delivery_s": 0.004,
+                "osc_wait_s": 0.006,
+                "ignored_secret": "must-not-be-logged",
+            },
+        )
+        assert done.wait(timeout=1)
+    finally:
+        manager.stop()
+
+    latency = next(
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("TTS latency ")
+    )
+    assert "source=mic" in latency
+    assert "session_id=session-7" in latency
+    assert "upstream_sequence=42" in latency
+    assert "ui_delivery_ms=4.0" in latency
+    assert "osc_wait_ms=6.0" in latency
+    assert "must-not-be-logged" not in latency
+
+
+def test_playback_watchdog_scales_with_audio_duration():
+    assert _playback_timeout_seconds(4.5) == pytest.approx(14.5)
+    assert _playback_timeout_seconds(60.0) == pytest.approx(70.0)
+    assert _playback_timeout_seconds(60.0) > 30.0
+
+
 def test_synthesis_failure_never_reaches_playback_or_device_routing(monkeypatch, caplog):
     class FailingTTS(FakeTTS):
         def synthesize(self, *args, **kwargs):
@@ -606,12 +1438,15 @@ def test_synthesis_failure_never_reaches_playback_or_device_routing(monkeypatch,
         manager.stop()
 
     assert playback_attempts == []
-    assert callback_results == [
-        (False, "Qwen TTS API request failed: Invalid API-key provided.")
-    ]
+    assert callback_results == [(False, "tts_error:authentication")]
     assert manager._last_failure_stage == "synthesis"
     messages = [record.getMessage() for record in caplog.records]
     assert any("TTS ordered synthesis completed with error" in message for message in messages)
+    assert not any("Invalid API-key provided" in message for message in messages)
+    assert any(
+        "TTS synthesis failed (code=authentication type=RuntimeError)" in message
+        for message in messages
+    )
     assert not any("TTS ordered playback ready" in message for message in messages)
 
 
@@ -916,9 +1751,11 @@ def test_tts_manager_keeps_requested_cuda_for_engine_factory(monkeypatch):
 
 
 def test_tts_manager_pauses_after_repeated_failures(monkeypatch, caplog):
+    secret = "raw-repeated-failure-secret and player text"
+
     class FailingTTS(FakeTTS):
         def synthesize(self, *args, **kwargs):
-            raise RuntimeError("offline resource download failed")
+            raise RuntimeError(secret)
 
     fake_engine = FailingTTS()
     callback_results: list[tuple[bool, str]] = []
@@ -937,13 +1774,16 @@ def test_tts_manager_pauses_after_repeated_failures(monkeypatch, caplog):
         allow_fallback=False,
     )
 
-    request = lambda: TTSRequest(
-        text="hello",
-        voice="fake-voice",
-        rate=1.0,
-        volume=1.0,
-        callback=lambda success, message: callback_results.append((success, message)),
-    )
+    def request():
+        return TTSRequest(
+            text="hello",
+            voice="fake-voice",
+            rate=1.0,
+            volume=1.0,
+            callback=lambda success, message: callback_results.append(
+                (success, message)
+            ),
+        )
 
     manager._process_request(request())
     manager._process_request(request())
@@ -955,6 +1795,8 @@ def test_tts_manager_pauses_after_repeated_failures(monkeypatch, caplog):
     warning_messages = [record.getMessage() for record in caplog.records]
     assert any("TTS synthesis paused" in message for message in warning_messages)
     assert not any("TTS playback paused" in message for message in warning_messages)
+    assert not any(secret in message for message in warning_messages)
+    assert any("code=provider" in message for message in warning_messages)
 
     manager._running = True
     accepted = manager.speak(
@@ -964,8 +1806,7 @@ def test_tts_manager_pauses_after_repeated_failures(monkeypatch, caplog):
     )
 
     assert accepted is False
-    assert "temporarily paused" in callback_results[-1][1]
-    assert callback_results[-1][1].startswith("TTS synthesis is temporarily paused")
+    assert callback_results[-1][1] == "tts_error:suspended"
 
 
 def test_play_audio_can_mirror_to_monitor_output_when_not_routing_to_vrchat(monkeypatch):
@@ -1464,6 +2305,155 @@ def test_stop_playback_closes_stream_and_wakes_waiter():
     assert done.is_set()
     assert manager._current_playback is None
     assert manager._current_playback_done is None
+
+
+def test_stop_during_playback_preparation_prevents_new_stream_start(monkeypatch):
+    prepare_started = threading.Event()
+    release_prepare = threading.Event()
+    starts = []
+    stops = []
+    closes = []
+    errors = []
+
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    monkeypatch.setattr(manager, "_resolve_playback_device", lambda: (None, "default"))
+    monkeypatch.setattr(
+        manager,
+        "_resolve_monitor_playback_device",
+        lambda _device, _name: None,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_decode_audio_data",
+        lambda _audio: (np.ones(4, dtype=np.float32), 24000),
+    )
+
+    def blocked_prepare(audio, sample_rate, _device):
+        prepare_started.set()
+        release_prepare.wait(timeout=2)
+        return audio, sample_rate
+
+    monkeypatch.setattr(manager, "_prepare_audio_for_device", blocked_prepare)
+
+    class FakePlayback:
+        def start(self):
+            starts.append(True)
+
+        def stop(self):
+            stops.append(True)
+
+        def close(self):
+            closes.append(True)
+
+    monkeypatch.setattr(
+        manager,
+        "_create_output_stream",
+        lambda *_args, **_kwargs: (FakePlayback(), threading.Event()),
+    )
+
+    def run_playback():
+        try:
+            manager._play_audio(b"RIFF-fake")
+        except Exception as exc:
+            errors.append(exc)
+
+    playback_thread = threading.Thread(target=run_playback)
+    playback_thread.start()
+    assert prepare_started.wait(timeout=1)
+
+    manager.stop_playback()
+    release_prepare.set()
+    playback_thread.join(timeout=1)
+
+    assert starts == []
+    assert stops == [True]
+    assert closes == [True]
+    assert len(errors) == 1
+    assert isinstance(errors[0], manager_module._TTSPlaybackInterrupted)
+    assert manager._preparing_playbacks == []
+
+    manager.close()
+
+
+def test_stop_interrupts_stream_whose_native_start_is_still_blocked(monkeypatch):
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    stream_closed = threading.Event()
+    errors = []
+
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    monkeypatch.setattr(manager, "_resolve_playback_device", lambda: (None, "default"))
+    monkeypatch.setattr(
+        manager,
+        "_resolve_monitor_playback_device",
+        lambda _device, _name: None,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_decode_audio_data",
+        lambda _audio: (np.ones(4, dtype=np.float32), 24000),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_prepare_audio_for_device",
+        lambda audio, sample_rate, _device: (audio, sample_rate),
+    )
+
+    class BlockingStartPlayback:
+        def start(self):
+            start_entered.set()
+            release_start.wait(timeout=2)
+
+        def stop(self):
+            stream_closed.set()
+
+        def close(self):
+            stream_closed.set()
+
+    monkeypatch.setattr(
+        manager,
+        "_create_output_stream",
+        lambda *_args, **_kwargs: (BlockingStartPlayback(), threading.Event()),
+    )
+
+    def run_playback():
+        try:
+            manager._play_audio(b"RIFF-fake")
+        except Exception as exc:
+            errors.append(exc)
+
+    playback_thread = threading.Thread(target=run_playback)
+    playback_thread.start()
+    assert start_entered.wait(timeout=1)
+
+    stop_started = time.monotonic()
+    manager.stop_playback()
+    stop_elapsed = time.monotonic() - stop_started
+
+    assert stop_elapsed < 0.25
+    assert stream_closed.is_set()
+    release_start.set()
+    playback_thread.join(timeout=1)
+    assert len(errors) == 1
+    assert isinstance(errors[0], manager_module._TTSPlaybackInterrupted)
+
+    manager.close()
 
 
 def test_resolve_output_device_prefers_saved_name_over_stale_id(monkeypatch):

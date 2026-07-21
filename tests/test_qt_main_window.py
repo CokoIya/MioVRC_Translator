@@ -14,7 +14,6 @@ from src.ui_qt.main_window import (
     FOOTER_SPONSOR_BUTTON_WIDTH,
     MIC_SOURCE,
     MainWindow,
-    UI_CALLBACK_DRAIN_MS,
     _freeze_snapshot_value,
 )
 from src.utils.i18n import tr

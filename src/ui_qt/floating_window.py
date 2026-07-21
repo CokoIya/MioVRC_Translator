@@ -425,25 +425,25 @@ class FloatingWindow(QDialog):
         if selected:
             bg = str(tokens["ACCENT_SOFT"])
             border = str(tokens["ACCENT_BORDER"])
-            shadow = f"rgba(47, 111, 255, 0.28)" if is_dark else f"rgba(0, 152, 199, 0.24)"
+            shadow = "rgba(47, 111, 255, 0.28)" if is_dark else "rgba(0, 152, 199, 0.24)"
             return bg, border, text, shadow
 
         if source in {"manual", "mic"}:
             bg = "rgba(28, 34, 50, 0.82)" if is_dark else "rgba(232, 241, 249, 0.88)"
             border = "rgba(120, 154, 200, 0.38)" if is_dark else "rgba(93, 115, 145, 0.42)"
-            shadow = f"rgba(0, 0, 0, 0.12)" if is_dark else f"rgba(0, 0, 0, 0.08)"
+            shadow = "rgba(0, 0, 0, 0.12)" if is_dark else "rgba(0, 0, 0, 0.08)"
             return bg, border, text, shadow
 
         if source == "error":
             bg = str(tokens["DANGER_SOFT"])
             border = str(tokens["DANGER_BORDER"])
-            shadow = f"rgba(220, 38, 38, 0.18)"
+            shadow = "rgba(220, 38, 38, 0.18)"
             return bg, border, text, shadow
 
         # 默认 incoming 消息
         bg = "rgba(22, 27, 40, 0.78)" if is_dark else "rgba(248, 251, 255, 0.92)"
         border = "rgba(148, 163, 184, 0.32)" if is_dark else "rgba(141, 151, 168, 0.38)"
-        shadow = f"rgba(0, 0, 0, 0.10)" if is_dark else f"rgba(0, 0, 0, 0.06)"
+        shadow = "rgba(0, 0, 0, 0.10)" if is_dark else "rgba(0, 0, 0, 0.06)"
         return bg, border, text, shadow
 
     def _entry_can_resend(self, entry: dict[str, object]) -> bool:

@@ -517,7 +517,6 @@ def build_settings_window_styles(theme: object) -> str:
     shell_bg = "rgba(7, 9, 14, 0.18)" if is_dark else "rgba(247, 250, 255, 0.20)"
     glass_bg = "rgba(14, 18, 28, 0.68)" if is_dark else "rgba(247, 250, 255, 0.66)"
     glass_alt_bg = "rgba(22, 27, 40, 0.62)" if is_dark else "rgba(239, 246, 252, 0.58)"
-    glass_raised_bg = "rgba(28, 34, 50, 0.68)" if is_dark else "rgba(232, 241, 249, 0.62)"
     glass_border = "rgba(120, 154, 200, 0.32)" if is_dark else "rgba(93, 115, 145, 0.26)"
     return _base(theme) + f"""
     QDialog {{

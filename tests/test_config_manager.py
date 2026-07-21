@@ -1485,7 +1485,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
         assert (
             config["translation"]["anthropic_compatible"]["model"]
-            == "claude-sonnet-4-6"
+            == "claude-opus-4-1-20250805"
         )
 
     def test_corrupted_openai_claude_model_migrates_to_live_default(self):

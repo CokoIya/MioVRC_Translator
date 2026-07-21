@@ -1,5 +1,7 @@
 import threading
 
+import pytest
+
 from src.ui_qt.main_window import MIC_SOURCE, MainWindow
 
 
@@ -217,6 +219,25 @@ class _NetworkFailingQwenTtsManager(_FakeTtsManager):
         return True
 
 
+class _ContextTtsManager(_FakeTtsManager):
+    def __init__(self):
+        super().__init__()
+        self.contexts: list[dict[str, object]] = []
+
+    def speak(
+        self,
+        text,
+        voice,
+        rate,
+        volume,
+        callback=None,
+        *,
+        request_context=None,
+    ):
+        self.contexts.append(dict(request_context or {}))
+        return super().speak(text, voice, rate, volume, callback=callback)
+
+
 def _window_for_tts_strategy(strategy: str):
     window = MainWindow.__new__(MainWindow)
     manager = _FakeTtsManager()
@@ -248,6 +269,64 @@ def test_tts_latest_strategy_discards_pending_speech():
 
     assert manager.clear_count == 1
     assert manager.requests == ["hello"]
+
+
+def test_tts_request_context_is_forwarded_for_terminal_latency_correlation():
+    window, _manager = _window_for_tts_strategy("queue")
+    manager = _ContextTtsManager()
+    window._ensure_tts_manager = lambda: manager
+    context = {
+        "source": "mic",
+        "session_id": 4,
+        "sequence": 9,
+        "upstream_started_at": 10.0,
+        "ui_delivered_at": 10.5,
+        "ui_delivery_s": 0.02,
+    }
+
+    assert window._queue_tts_playback("hello", request_context=context) is True
+
+    assert manager.contexts == [context]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected_key"),
+    [
+        ("tts_error:timeout", "qwen_tts_timeout_error"),
+        ("tts_error:rate_limit", "qwen_tts_rate_limit_error"),
+        ("tts_error:unsupported_model", "qwen_tts_model_error"),
+        ("tts_error:invalid_endpoint", "qwen_tts_endpoint_error"),
+        ("tts_error:queue_full", "qwen_tts_busy_error"),
+        ("tts_error:playback", "qwen_tts_playback_error"),
+        ("tts_error:provider", "qwen_tts_provider_error"),
+        ("tts_error:invalid_input", "qwen_tts_input_error"),
+        ("tts_error:configuration", "qwen_tts_configuration_error"),
+        ("tts_error:safety", "qwen_tts_safety_error"),
+        ("tts_error:unavailable", "qwen_tts_unavailable_error"),
+    ],
+)
+def test_qwen_tts_structured_failures_use_localized_runtime_copy(
+    token,
+    expected_key,
+):
+    window = MainWindow.__new__(MainWindow)
+    reports = []
+    window._ui_lang = "en"
+    window._config = {"tts": {"engine": "qwen_tts"}}
+    window._call_in_ui = lambda callback, **_kwargs: callback() or True
+    window._set_bottom = lambda text, color="default", key=None: reports.append(
+        (text, color, key)
+    )
+
+    window._handle_tts_failure(token)
+
+    assert reports == [
+        (
+            window._copy(expected_key),
+            "warning",
+            expected_key,
+        )
+    ]
 
 
 def test_qwen_tts_auth_failure_is_reported_to_runtime_ui():

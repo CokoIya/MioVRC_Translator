@@ -83,7 +83,6 @@ def _provider_auto_fallback_enabled(
 def create_asr(config: dict, engine: str | None = None):
     asr_cfg = config.get("asr", {})
     engine = normalize_asr_engine(engine or asr_cfg.get("engine", DEFAULT_ASR_ENGINE))
-    spec = get_asr_runtime_spec(config, engine)
     corrector = LayeredASRCorrector(config)
 
     if engine == "qwen3-asr":

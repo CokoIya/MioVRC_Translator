@@ -568,7 +568,11 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "select",
+        "model_input": "editable",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": False,
+        "granular_timeout_input": True,
     },
     "openai_compatible": {
         "label": "GPT Compatible",
@@ -577,8 +581,12 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "select",
+        "model_input": "editable",
         "base_url_input": "entry",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": False,
+        "granular_timeout_input": True,
         "api_key_hint": (
             "Use this for OpenAI-compatible proxy or relay providers. Enter "
             "the Base URL and model id supplied by that provider."
@@ -600,6 +608,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "custom_headers_input": True,
         "streaming_input": True,
         "streaming": True,
+        "granular_timeout_input": True,
         "api_key_hint": (
             "Use an xAI key or the credential issued by any Grok-compatible "
             "OpenAI relay. The Base URL is not restricted to official xAI endpoints."
@@ -783,7 +792,11 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "select",
+        "model_input": "editable",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": False,
+        "granular_timeout_input": True,
     },
     "mistral": {
         "label": "Mistral",
@@ -831,7 +844,12 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "model": "claude-sonnet-4-6",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
-        "model_input": "select",
+        "max_retries": 0,
+        "model_input": "editable",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": False,
+        "granular_timeout_input": True,
     },
     "anthropic_compatible": {
         "label": "Claude Compatible",
@@ -840,8 +858,12 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "select",
+        "model_input": "editable",
         "base_url_input": "entry",
+        "custom_headers_input": True,
+        "streaming_input": True,
+        "streaming": False,
+        "granular_timeout_input": True,
         "api_key_hint": (
             "Use this for Claude-compatible proxy or relay providers. Enter "
             "the Base URL and model id supplied by that provider."

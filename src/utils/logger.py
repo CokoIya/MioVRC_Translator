@@ -27,6 +27,14 @@ _LOG_INITIALIZED = False
 _LOG_PATH: Path | None = None
 _FAULT_HANDLER_FILE = None
 
+_PROVIDER_TRANSPORT_LOGGER_PREFIXES = (
+    "httpx",
+    "httpcore",
+    "urllib3",
+    "openai",
+    "anthropic",
+)
+
 _REDACTED = "[REDACTED]"
 _URL_CREDENTIALS_RE = re.compile(
     r"(?i)(https?://)[^/@\s:]+:[^/@\s]+@"
@@ -71,6 +79,17 @@ def _redact_log_text(value: object) -> str:
 class _RedactingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         return _redact_log_text(super().format(record))
+
+
+class _ProviderTransportLogFilter(logging.Filter):
+    """Keep third-party request URLs and response prose out of Mio logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = str(record.name or "")
+        return not any(
+            name == prefix or name.startswith(f"{prefix}.")
+            for prefix in _PROVIDER_TRANSPORT_LOGGER_PREFIXES
+        )
 
 
 def logs_dir() -> Path:
@@ -183,8 +202,14 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
 
     target = log_path()
     formatter = _build_formatter()
+    provider_transport_filter = _ProviderTransportLogFilter()
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
+    for logger_name in _PROVIDER_TRANSPORT_LOGGER_PREFIXES:
+        # Mio emits its own path-free provider timings and error summaries.
+        # SDK transport logs can contain complete custom relay URLs, headers,
+        # request bodies, or provider prose, so they are never release logs.
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     # Determine file log level based on environment
     # MIO_DEBUG=1 -> DEBUG level (very verbose)
@@ -212,12 +237,14 @@ def setup_logging(console_level: int = logging.INFO) -> Path:
     )
     file_handler.setLevel(file_level)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(provider_transport_filter)
     root_logger.addHandler(file_handler)
 
     if _stdout_is_usable():
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(console_level)
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(provider_transport_filter)
         root_logger.addHandler(console_handler)
 
     logging.captureWarnings(True)

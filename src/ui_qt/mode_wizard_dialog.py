@@ -147,6 +147,12 @@ class ModeWizardDialog(QDialog):
         self.setWindowTitle(self._copy["title"])
         self.setMinimumSize(620, 520)
         self._build_ui()
+        self._fit_translated_content()
+
+    def _fit_translated_content(self) -> None:
+        hint = self.sizeHint()
+        self.setMinimumWidth(max(620, hint.width()))
+        self.resize(max(self.width(), hint.width()), max(self.height(), hint.height()))
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -242,7 +248,7 @@ class ModeWizardDialog(QDialog):
         for mode_id in _MODE_ORDER:
             self._mode_title_labels[mode_id].setText(self._copy[f"{mode_id}_title"])
             self._mode_body_labels[mode_id].setText(self._copy[f"{mode_id}_body"])
-        self.adjustSize()
+        self._fit_translated_content()
 
     def selected_mode(self) -> str:
         for mode_id in _MODE_ORDER:

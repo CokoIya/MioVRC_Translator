@@ -12,8 +12,9 @@ from PySide6.QtCore import QObject, Signal
 
 from src.translators.factory import create_translator
 from src.utils.lang_detect import detect_language
+from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.translation_error_formatter import format_translation_error
-from src.utils.ui_config import normalize_output_format, normalize_output_format_2
+from src.utils.ui_config import normalize_output_format
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,10 @@ class TranslationPipeline(QObject):
                     backend=trans_cfg.get("backend"),
                     ui_language=self._config.get("ui", {}).get("language", "zh-CN"),
                 )
-                logger.warning("Manual translation failed: %s", exc)
+                logger.warning(
+                    "Manual translation failed: %s",
+                    safe_exception_summary(exc),
+                )
                 self._emit_if_current(generation, self.error, friendly.inline_message)
             else:
                 self._emit_if_current(generation, self.translation_ready, result, text)
@@ -140,8 +144,11 @@ class TranslationPipeline(QObject):
         if callable(close):
             try:
                 close()
-            except Exception:
-                logger.debug("Failed to close translation pipeline client", exc_info=True)
+            except Exception as exc:
+                logger.debug(
+                    "Failed to close translation pipeline client: %s",
+                    safe_exception_summary(exc),
+                )
 
     def close(self) -> None:
         close_now = None

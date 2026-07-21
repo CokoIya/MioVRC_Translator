@@ -11,6 +11,30 @@ from pathlib import Path
 import pytest
 
 from src.utils import logger as logger_module
+from src.utils.provider_diagnostics import (
+    provider_endpoint_diagnostics,
+    safe_exception_summary,
+)
+
+
+def test_provider_diagnostics_hide_path_and_raw_exception_prose():
+    class ProviderError(RuntimeError):
+        status_code = 503
+        code = "provider_failure"
+
+    origin, endpoint_id = provider_endpoint_diagnostics(
+        "https://relay.example/tenant/opaque-secret/v1"
+    )
+    summary = safe_exception_summary(
+        ProviderError("raw-provider-secret and echoed player text")
+    )
+
+    assert origin == "https://relay.example"
+    assert len(endpoint_id) == 16
+    assert "opaque-secret" not in endpoint_id
+    assert summary == "type=ProviderError status=503 code=provider_failure"
+    assert "raw-provider-secret" not in summary
+    assert "echoed player text" not in summary
 
 
 def test_log_formatter_redacts_credentials_and_protected_secrets():
@@ -70,6 +94,10 @@ def isolated_logger_state():
     root = logging.getLogger()
     original_handlers = list(root.handlers)
     original_level = root.level
+    transport_logger_levels = {
+        name: logging.getLogger(name).level
+        for name in logger_module._PROVIDER_TRANSPORT_LOGGER_PREFIXES
+    }
     original_log_initialized = logger_module._LOG_INITIALIZED
     original_log_path = logger_module._LOG_PATH
     original_fault_file = logger_module._FAULT_HANDLER_FILE
@@ -93,6 +121,8 @@ def isolated_logger_state():
                 root.removeHandler(handler)
                 handler.close()
         root.setLevel(original_level)
+        for name, level in transport_logger_levels.items():
+            logging.getLogger(name).setLevel(level)
         sys.excepthook = original_excepthook
         threading.excepthook = original_threading_excepthook
         logger_module._LOG_INITIALIZED = original_log_initialized
@@ -278,6 +308,40 @@ def test_keyboard_interrupt_is_a_clean_shutdown_request(
     assert shutdown_requests == [True]
     assert "[INFO] [mio.unhandled] Application interruption requested" in content
     assert "[ERROR] [mio.unhandled] Unhandled exception" not in content
+
+
+def test_provider_sdk_transport_logs_cannot_emit_custom_relay_paths(
+    monkeypatch,
+    tmp_path,
+    isolated_logger_state,
+):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    secret_url = "https://relay.example/tenant/opaque-secret/v1/chat/completions"
+    monkeypatch.setattr(logger_module, "writable_app_dir", lambda: app_root)
+    monkeypatch.setattr(logger_module, "_stdout_is_usable", lambda: False)
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **_kwargs: None)
+
+    path = logger_module.setup_logging()
+    logging.getLogger("httpx").info("HTTP Request: POST %s", secret_url)
+    logging.getLogger("httpcore.connection").warning(
+        "connect failed for %s",
+        secret_url,
+    )
+    logging.getLogger("openai._base_client").error(
+        "provider error from %s",
+        secret_url,
+    )
+    logging.getLogger("mio.test").info("structured provider diagnostic emitted")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    content = path.read_text(encoding="utf-8")
+    assert "opaque-secret" not in content
+    assert "HTTP Request: POST" not in content
+    assert "connect failed" not in content
+    assert "provider error from" not in content
+    assert "structured provider diagnostic emitted" in content
 
 
 def test_unhandled_exception_traceback_is_redacted(

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import contextlib
 import logging
+import math
 import time
+import urllib.parse
 
 import httpx
 
@@ -14,6 +17,11 @@ from .base import (
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
 from src.utils.openai_compat import normalize_openai_custom_headers
+from src.utils.provider_diagnostics import (
+    provider_endpoint_diagnostics,
+    safe_exception_summary,
+)
+from src.utils.provider_http_timing import ProviderHttpTimingHooks
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
@@ -58,38 +66,83 @@ class OpenAITranslator(BaseTranslator):
         allow_private_http: bool = False,
         custom_headers: object = None,
         streaming: bool = False,
+        connect_timeout_s: float | None = None,
+        pool_timeout_s: float | None = None,
+        read_timeout_s: float | None = None,
+        write_timeout_s: float | None = None,
+        wall_timeout_s: float | None = None,
     ):
         super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
             from openai import OpenAI
         except ImportError:
-            raise RuntimeError("openai 未安装，请先执行: pip install openai")
+            raise RuntimeError("Translation dependency is not installed: openai")
 
         validated_base_url = validate_api_base_url(
             base_url,
             label="Translation API",
             allow_private_http=allow_private_http,
         )
-        self._timeout_s = max(float(timeout_s), 1.0)
+        self._timeout_s = self._positive_timeout(timeout_s, 15.0, minimum=1.0)
+        self._connect_timeout_s = self._positive_timeout(
+            connect_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._pool_timeout_s = self._positive_timeout(
+            pool_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._read_timeout_s = self._positive_timeout(
+            read_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._write_timeout_s = self._positive_timeout(
+            write_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._wall_timeout_s = self._positive_timeout(
+            wall_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._request_timeout = httpx.Timeout(
+            connect=self._connect_timeout_s,
+            pool=self._pool_timeout_s,
+            read=self._read_timeout_s,
+            write=self._write_timeout_s,
+        )
         self._max_retries = max(int(max_retries), 0)
         self._custom_headers = normalize_openai_custom_headers(custom_headers)
+        self._http_timing = ProviderHttpTimingHooks()
         # The realtime scheduler owns several long-lived translation workers.
         # httpx otherwise expires idle connections after five seconds, so a
         # worker rotation can turn nearly every conversational request into a
         # fresh proxy/TCP/TLS handshake. Keep each worker's pool warm long
         # enough to be reused across normal pauses between spoken sentences.
         self._http_client = httpx.Client(
-            timeout=httpx.Timeout(self._timeout_s),
+            timeout=self._request_timeout,
             limits=httpx.Limits(
                 max_connections=4,
                 max_keepalive_connections=2,
                 keepalive_expiry=OPENAI_HTTP_KEEPALIVE_EXPIRY_S,
             ),
+            event_hooks={
+                "request": [self._http_timing.on_request],
+                "response": [self._http_timing.on_response],
+            },
+            trust_env=True,
         )
         try:
             client_kwargs = dict(
                 api_key=api_key,
                 base_url=validated_base_url,
+                # Keep the public SDK default backward-compatible while the
+                # provided httpx client and per-call options carry granular
+                # phase timeouts.
                 timeout=self._timeout_s,
                 max_retries=self._max_retries,
                 http_client=self._http_client,
@@ -102,9 +155,16 @@ class OpenAITranslator(BaseTranslator):
             raise
         self.model = model
         self._provider_id = str(provider_id or "").strip().lower()
-        self._base_url = validated_base_url.lower()
-        model_name = str(model).lower()
-        self._is_openai_api = "api.openai.com" in self._base_url
+        self._base_url = validated_base_url
+        self._log_endpoint, self._log_endpoint_id = provider_endpoint_diagnostics(
+            validated_base_url
+        )
+        self._base_url_lower = validated_base_url.casefold()
+        self._base_hostname = (
+            urllib.parse.urlsplit(validated_base_url).hostname or ""
+        ).rstrip(".").casefold()
+        model_name = str(model).strip().casefold()
+        self._is_openai_api = self._base_hostname == "api.openai.com"
         self._is_reasoning_model = (
             "reasoner" in model_name
             or "reasoning" in model_name
@@ -119,20 +179,24 @@ class OpenAITranslator(BaseTranslator):
             or model_name.startswith("mimo-")
         )
         self._uses_qwen_mt_translation_options = (
-            "dashscope" in self._base_url and model_name.startswith("qwen-mt-")
+            "dashscope" in self._base_hostname and model_name.startswith("qwen-mt-")
         )
         self._is_qwen_backend = (
-            "dashscope" in self._base_url
+            "dashscope" in self._base_hostname
             or model_name.startswith("qwen")
         )
         # Responses API is opt-in via env var so model routing stays driven by
         # the provider/model table instead of a hardcoded release name.
         self._use_responses_api = (
             self._is_openai_api
+            and not bool(streaming)
             and os.environ.get("MIO_TRANSLATOR_USE_RESPONSES_API", "").strip() == "1"
         )
         self._omits_temperature = (
-            ("api.deepseek.com" in self._base_url and model_name == "deepseek-reasoner")
+            (
+                self._base_hostname == "api.deepseek.com"
+                and model_name == "deepseek-reasoner"
+            )
             or (self._is_openai_api and model_name.startswith("gpt-5"))
             or self._use_responses_api
         )
@@ -144,20 +208,74 @@ class OpenAITranslator(BaseTranslator):
         self._streaming_supported = True
         self._last_response_summary = ""
 
+    @staticmethod
+    def _positive_timeout(
+        value: object,
+        fallback: float,
+        *,
+        minimum: float,
+    ) -> float:
+        try:
+            parsed = float(value) if value is not None else float(fallback)
+        except (TypeError, ValueError):
+            parsed = float(fallback)
+        if not math.isfinite(parsed):
+            parsed = float(fallback)
+        return max(parsed, minimum)
+
+    def _sdk_timeout(self) -> object:
+        return getattr(self, "_request_timeout", getattr(self, "_timeout_s", None))
+
+    def _raise_if_wall_timeout(self, started_at: float) -> None:
+        wall_timeout = getattr(
+            self,
+            "_wall_timeout_s",
+            getattr(self, "_timeout_s", None),
+        )
+        if wall_timeout is None:
+            return
+        elapsed = max(0.0, time.perf_counter() - started_at)
+        if elapsed > float(wall_timeout):
+            raise httpx.TimeoutException(
+                "Translation request exceeded the wall-clock timeout "
+                f"({float(wall_timeout):.2f}s)"
+            )
+
+    @staticmethod
+    def _capture_metrics(capture: object) -> dict[str, object]:
+        metrics = getattr(capture, "metrics", None)
+        if not callable(metrics):
+            return {}
+        try:
+            result = metrics()
+        except Exception:
+            return {}
+        return dict(result) if isinstance(result, dict) else {}
+
+    def _http_timing_capture(self):
+        timing = getattr(self, "_http_timing", None)
+        capture = getattr(timing, "capture", None)
+        if callable(capture):
+            return capture()
+        return contextlib.nullcontext(None)
+
     def _translation_extra_body(self, extra_body: dict, model_name: str) -> dict:
         body = dict(extra_body)
+        hostname = str(getattr(self, "_base_hostname", "") or "").casefold()
+        if not hostname:
+            hostname = str(getattr(self, "_base_url", "") or "").casefold()
         if (
             self._provider_id in {"qianwen", "hunyuan"}
-            or "dashscope" in self._base_url
+            or "dashscope" in hostname
         ) and not model_name.startswith("qwen-mt-"):
             body["enable_thinking"] = False
             self._managed_no_thinking_extra_keys.add("enable_thinking")
         if (
             self._provider_id
             in {"deepseek", "xiaomi", "zhipu", "kimi", "doubao"}
-            or "api.deepseek.com" in self._base_url
-            or "api.moonshot.cn" in self._base_url
-            or "open.bigmodel.cn" in self._base_url
+            or hostname == "api.deepseek.com"
+            or hostname == "api.moonshot.cn"
+            or hostname == "open.bigmodel.cn"
         ):
             body["thinking"] = {"type": "disabled"}
             self._managed_no_thinking_extra_keys.add("thinking")
@@ -252,10 +370,15 @@ class OpenAITranslator(BaseTranslator):
         current = dict(kwargs)
         removed_no_thinking = False
         swapped_token_parameter = False
+        wall_started = time.perf_counter()
         for _attempt in range(3):
+            self._raise_if_wall_timeout(wall_started)
             try:
-                return create(**current)
+                response = create(**current)
+                self._raise_if_wall_timeout(wall_started)
+                return response
             except Exception as exc:
+                self._raise_if_wall_timeout(wall_started)
                 extra_body = current.get("extra_body")
                 extra_keys = (
                     extra_body.keys() if isinstance(extra_body, dict) else ()
@@ -279,9 +402,11 @@ class OpenAITranslator(BaseTranslator):
                     current = self._without_no_thinking_controls(current)
                     logger.warning(
                         "Translation provider rejected no-thinking controls; retrying "
-                        "without unsupported fields (model=%s base_url=%s)",
+                        "without unsupported fields "
+                        "(model=%s endpoint=%s endpoint_id=%s)",
                         self.model,
-                        self._base_url,
+                        self._log_endpoint,
+                        self._log_endpoint_id,
                     )
                     continue
 
@@ -314,21 +439,24 @@ class OpenAITranslator(BaseTranslator):
                     )
                     logger.warning(
                         "Translation provider rejected %s; retrying with %s "
-                        "(model=%s base_url=%s)",
+                        "(model=%s endpoint=%s endpoint_id=%s)",
                         token_parameter,
                         replacement,
                         self.model,
-                        self._base_url,
+                        self._log_endpoint,
+                        self._log_endpoint_id,
                     )
                     continue
                 raise
         raise RuntimeError("Translation request compatibility retry limit exceeded")
 
     @staticmethod
-    def _stream_delta_text(delta: object) -> str:
-        content = getattr(delta, "content", None)
+    def _content_text(content: object) -> str:
         if isinstance(content, str):
             return content
+        if isinstance(content, dict):
+            text = content.get("text") or content.get("content")
+            return OpenAITranslator._content_text(text)
         if not isinstance(content, (list, tuple)):
             return ""
         fragments: list[str] = []
@@ -341,10 +469,33 @@ class OpenAITranslator(BaseTranslator):
             else:
                 text = getattr(part, "text", None) or getattr(part, "content", None)
             if text:
-                fragments.append(str(text))
+                fragments.append(OpenAITranslator._content_text(text) or str(text))
         return "".join(fragments)
 
+    @staticmethod
+    def _stream_delta_text(delta: object) -> str:
+        if isinstance(delta, dict):
+            content = delta.get("content")
+            if content is None:
+                content = delta.get("text")
+        else:
+            content = getattr(delta, "content", None)
+            if content is None:
+                content = getattr(delta, "text", None)
+        return OpenAITranslator._content_text(content)
+
     def _chat_completion_request(self, kwargs: dict) -> tuple[str, object]:
+        return self._run_with_wall_timeout(
+            lambda: self._chat_completion_request_unbounded(kwargs),
+            timeout_s=getattr(self, "_wall_timeout_s", None),
+            operation_name="OpenAI-compatible request",
+        )
+
+    def _chat_completion_request_unbounded(
+        self,
+        kwargs: dict,
+    ) -> tuple[str, object]:
+        request_started = time.perf_counter()
         if not getattr(self, "_streaming_enabled", False) or not getattr(
             self,
             "_streaming_supported",
@@ -354,7 +505,13 @@ class OpenAITranslator(BaseTranslator):
                 self._client.chat.completions.create,
                 kwargs,
             )
-            return self._chat_completion_output_text(response), response
+            parse_started = time.perf_counter()
+            output = self._chat_completion_output_text(response)
+            self._record_translation_metrics(
+                first_token_s=None,
+                parse_s=max(0.0, time.perf_counter() - parse_started),
+            )
+            return output, response
 
         stream_kwargs = dict(kwargs)
         stream_kwargs["stream"] = True
@@ -369,39 +526,76 @@ class OpenAITranslator(BaseTranslator):
             self._streaming_supported = False
             logger.warning(
                 "Translation provider rejected streaming; retrying without it "
-                "(model=%s base_url=%s)",
+                "(model=%s endpoint=%s endpoint_id=%s)",
                 self.model,
-                self._base_url,
+                self._log_endpoint,
+                self._log_endpoint_id,
             )
+            self._raise_if_wall_timeout(request_started)
             response = self._create_with_control_fallback(
                 self._client.chat.completions.create,
                 kwargs,
             )
-            return self._chat_completion_output_text(response), response
+            parse_started = time.perf_counter()
+            output = self._chat_completion_output_text(response)
+            self._record_translation_metrics(
+                first_token_s=None,
+                parse_s=max(0.0, time.perf_counter() - parse_started),
+            )
+            return output, response
 
         fragments: list[str] = []
         chunk_count = 0
+        first_token_s: float | None = None
+        parse_s = 0.0
         try:
             for chunk in stream:
+                self._raise_if_wall_timeout(request_started)
                 chunk_count += 1
                 try:
-                    choices = list(getattr(chunk, "choices", []) or [])
+                    if isinstance(chunk, dict):
+                        raw_choices = chunk.get("choices", [])
+                    else:
+                        raw_choices = getattr(chunk, "choices", [])
+                    choices = list(raw_choices or [])
                 except TypeError:
                     choices = []
                 if not choices:
                     continue
-                delta = getattr(choices[0], "delta", None)
+                choice = choices[0]
+                if isinstance(choice, dict):
+                    delta = choice.get("delta") or choice.get("message")
+                else:
+                    delta = getattr(choice, "delta", None) or getattr(
+                        choice,
+                        "message",
+                        None,
+                    )
+                parse_started = time.perf_counter()
                 text = self._stream_delta_text(delta)
+                parse_s += max(0.0, time.perf_counter() - parse_started)
                 if text:
+                    if first_token_s is None:
+                        first_token_s = max(
+                            0.0,
+                            time.perf_counter() - request_started,
+                        )
                     fragments.append(text)
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
                 close()
+        parse_started = time.perf_counter()
         output = "".join(fragments)
+        parse_s += max(0.0, time.perf_counter() - parse_started)
+        self._record_translation_metrics(
+            first_token_s=first_token_s,
+            parse_s=parse_s,
+        )
         if not output:
             self._last_response_summary = (
-                f"model={self.model}, base_url={self._base_url}, "
+                f"model={self.model}, endpoint={self._log_endpoint}, "
+                f"endpoint_id={self._log_endpoint_id}, "
                 f"stream_chunks={chunk_count}"
             )
         return output, stream
@@ -419,8 +613,16 @@ class OpenAITranslator(BaseTranslator):
         try:
             text = validate_translation_text(text)
         except ValidationError as e:
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise ValueError(f"Invalid translation input: {e}")
         if self._source_matches_target(src_lang, tgt_lang):
+            self._record_translation_metrics(
+                cache_hit=False,
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return text
 
         context_started = time.perf_counter()
@@ -460,27 +662,37 @@ class OpenAITranslator(BaseTranslator):
             return cached
 
         self._last_response_summary = ""
-        if self._use_responses_api:
-            translated = self._translate_with_responses(
-                text,
-                src_lang,
-                tgt_lang,
-                context_snapshot=context_snapshot,
-                context_source=context_source,
+        try:
+            if self._use_responses_api:
+                translated = self._translate_with_responses(
+                    text,
+                    src_lang,
+                    tgt_lang,
+                    context_snapshot=context_snapshot,
+                    context_source=context_source,
+                )
+            else:
+                translated = self._translate_with_chat_completions(
+                    text,
+                    src_lang,
+                    tgt_lang,
+                    context_snapshot=context_snapshot,
+                    context_source=context_source,
+                )
+            if not translated:
+                summary = str(
+                    getattr(self, "_last_response_summary", "") or ""
+                ).strip()
+                if summary:
+                    raise RuntimeError(
+                        f"Translation API returned an empty response ({summary})"
+                    )
+                raise RuntimeError("Translation API returned an empty response")
+        except Exception:
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
             )
-        else:
-            translated = self._translate_with_chat_completions(
-                text,
-                src_lang,
-                tgt_lang,
-                context_snapshot=context_snapshot,
-                context_source=context_source,
-            )
-        if not translated:
-            summary = str(getattr(self, "_last_response_summary", "") or "").strip()
-            if summary:
-                raise RuntimeError(f"Translation API returned an empty response ({summary})")
-            raise RuntimeError("Translation API returned an empty response")
+            raise
         translated = self._store_cached_translation(
             text,
             src_lang,
@@ -511,13 +723,22 @@ class OpenAITranslator(BaseTranslator):
         language_hint: str = "auto",
         context_source: str = "mic",
     ) -> str:
+        call_started = time.perf_counter()
+        self._reset_translation_metrics()
         try:
             text = validate_translation_text(text)
         except ValidationError as exc:
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise ValueError(f"Invalid ASR rewrite input: {exc}") from exc
 
         normalized_style = normalize_asr_rewrite_style(style)
         if normalized_style == "off":
+            self._record_translation_metrics(
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return text
         cache_source = f"rewrite:{normalized_style}"
         cached = self._get_cached_translation(
@@ -528,8 +749,14 @@ class OpenAITranslator(BaseTranslator):
             context_source=f"asr_rewrite:{context_source}",
         )
         if cached is not None:
+            self._record_translation_metrics(
+                cache_hit=True,
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return cached
 
+        prompt_started = time.perf_counter()
         messages = build_asr_rewrite_messages(
             text,
             normalized_style,
@@ -540,61 +767,112 @@ class OpenAITranslator(BaseTranslator):
             self._max_output_tokens,
             max(32, self._estimate_max_tokens(text) + 12),
         )
+        self._record_translation_metrics(
+            prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
+            prompt_chars=sum(
+                len(str(message.get("content", ""))) for message in messages
+            ),
+        )
         self._last_response_summary = ""
-        if self._use_responses_api:
-            prompt = "\n\n".join(
-                str(message.get("content", "")) for message in messages
+        provider_started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                if self._use_responses_api:
+                    prompt = "\n\n".join(
+                        str(message.get("content", "")) for message in messages
+                    )
+                    kwargs = {
+                        "model": self.model,
+                        "input": prompt,
+                        "max_output_tokens": output_tokens,
+                    }
+                    request_timeout = self._sdk_timeout()
+                    if request_timeout:
+                        kwargs["timeout"] = request_timeout
+                    if not self._omits_temperature:
+                        kwargs["temperature"] = 0.2
+                    if (
+                        getattr(self, "_no_thinking_request_supported", True)
+                        and self._uses_reasoning_effort_control()
+                    ):
+                        kwargs["reasoning"] = {"effort": "none"}
+                    extra_body = self._request_extra_body()
+                    if extra_body:
+                        kwargs["extra_body"] = extra_body
+                    response = self._run_with_wall_timeout(
+                        lambda: self._create_with_control_fallback(
+                            self._client.responses.create,
+                            kwargs,
+                        ),
+                        timeout_s=getattr(self, "_wall_timeout_s", None),
+                        operation_name="OpenAI Responses ASR rewrite request",
+                    )
+                    parse_started = time.perf_counter()
+                    output = str(getattr(response, "output_text", "") or "")
+                    self._record_translation_metrics(
+                        first_token_s=None,
+                        parse_s=max(0.0, time.perf_counter() - parse_started),
+                    )
+                else:
+                    kwargs = {
+                        "model": self.model,
+                        "messages": messages,
+                    }
+                    request_timeout = self._sdk_timeout()
+                    if request_timeout:
+                        kwargs["timeout"] = request_timeout
+                    if not self._omits_temperature:
+                        kwargs["temperature"] = 0.2
+                    if self._uses_max_completion_tokens:
+                        kwargs["max_completion_tokens"] = output_tokens
+                    else:
+                        kwargs["max_tokens"] = output_tokens
+                    if (
+                        getattr(self, "_no_thinking_request_supported", True)
+                        and self._uses_reasoning_effort_control()
+                    ):
+                        kwargs["reasoning_effort"] = "none"
+                    extra_body = self._request_extra_body()
+                    if extra_body:
+                        kwargs["extra_body"] = extra_body
+                    output, response = self._chat_completion_request(kwargs)
+        except Exception as exc:
+            elapsed = max(0.0, time.perf_counter() - provider_started)
+            transport_metrics = self._capture_metrics(http_capture)
+            self._record_translation_metrics(
+                provider_s=elapsed,
+                full_response_s=elapsed,
+                total_s=max(0.0, time.perf_counter() - call_started),
+                **transport_metrics,
             )
-            kwargs = {
-                "model": self.model,
-                "input": prompt,
-                "max_output_tokens": output_tokens,
-            }
-            request_timeout = getattr(self, "_timeout_s", None)
-            if request_timeout:
-                kwargs["timeout"] = request_timeout
-            if not self._omits_temperature:
-                kwargs["temperature"] = 0.2
-            if (
-                getattr(self, "_no_thinking_request_supported", True)
-                and self._uses_reasoning_effort_control()
-            ):
-                kwargs["reasoning"] = {"effort": "none"}
-            extra_body = self._request_extra_body()
-            if extra_body:
-                kwargs["extra_body"] = extra_body
-            response = self._create_with_control_fallback(
-                self._client.responses.create,
-                kwargs,
+            logger.warning(
+                "ASR rewrite API request failed "
+                "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+                "source=%s error=%s)",
+                self.model,
+                self._log_endpoint,
+                self._log_endpoint_id,
+                elapsed,
+                context_source,
+                safe_exception_summary(exc),
             )
-            output = str(getattr(response, "output_text", "") or "")
-        else:
-            kwargs = {
-                "model": self.model,
-                "messages": messages,
-            }
-            request_timeout = getattr(self, "_timeout_s", None)
-            if request_timeout:
-                kwargs["timeout"] = request_timeout
-            if not self._omits_temperature:
-                kwargs["temperature"] = 0.2
-            if self._uses_max_completion_tokens:
-                kwargs["max_completion_tokens"] = output_tokens
-            else:
-                kwargs["max_tokens"] = output_tokens
-            if (
-                getattr(self, "_no_thinking_request_supported", True)
-                and self._uses_reasoning_effort_control()
-            ):
-                kwargs["reasoning_effort"] = "none"
-            extra_body = self._request_extra_body()
-            if extra_body:
-                kwargs["extra_body"] = extra_body
-            output, response = self._chat_completion_request(kwargs)
+            raise
 
+        elapsed = max(0.0, time.perf_counter() - provider_started)
+        self._record_translation_metrics(
+            provider_s=elapsed,
+            full_response_s=elapsed,
+            **self._capture_metrics(http_capture),
+        )
+
+        postprocess_started = time.perf_counter()
         rewritten = self._finalize_asr_rewrite_output(
             output,
             source_text=text,
+        )
+        self._record_translation_metrics(
+            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
         )
         if not rewritten:
             self._last_response_summary = (
@@ -609,7 +887,7 @@ class OpenAITranslator(BaseTranslator):
                     else ""
                 )
             )
-        return self._store_cached_translation(
+        rewritten = self._store_cached_translation(
             text,
             cache_source,
             str(language_hint or "auto"),
@@ -617,6 +895,11 @@ class OpenAITranslator(BaseTranslator):
             rewritten,
             context_source=f"asr_rewrite:{context_source}",
         )
+        self._record_translation_metrics(
+            cache_hit=False,
+            total_s=max(0.0, time.perf_counter() - call_started),
+        )
+        return rewritten
 
     def _translate_with_chat_completions(
         self,
@@ -663,7 +946,7 @@ class OpenAITranslator(BaseTranslator):
             model=self.model,
             messages=messages,
         )
-        request_timeout = getattr(self, "_timeout_s", None)
+        request_timeout = self._sdk_timeout()
         if request_timeout:
             kwargs["timeout"] = request_timeout
         if not uses_translation_options and not self._omits_temperature:
@@ -692,42 +975,74 @@ class OpenAITranslator(BaseTranslator):
         )
 
         started = time.perf_counter()
+        http_capture = None
         try:
-            output, response = self._chat_completion_request(kwargs)
+            with self._http_timing_capture() as http_capture:
+                output, response = self._chat_completion_request(kwargs)
         except Exception as exc:
             elapsed = time.perf_counter() - started
-            self._record_translation_metrics(provider_s=elapsed)
+            transport_metrics = self._capture_metrics(http_capture)
+            self._record_translation_metrics(
+                provider_s=elapsed,
+                full_response_s=elapsed,
+                **transport_metrics,
+            )
             active_context = self._active_context()
             logger.warning(
                 "Translation API request failed "
-                "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s error=%s)",
+                "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+                "source=%s sequence=%s "
+                "pool_wait_s=%s tcp_s=%s tls_s=%s response_headers_s=%s "
+                "error=%s)",
                 self.model,
-                self._base_url,
+                self._log_endpoint,
+                self._log_endpoint_id,
                 elapsed,
                 context_source,
                 active_context.sequence,
-                exc,
-                exc_info=True,
+                transport_metrics.get("pool_wait_s"),
+                transport_metrics.get("tcp_s"),
+                transport_metrics.get("tls_s"),
+                transport_metrics.get("response_headers_s"),
+                safe_exception_summary(exc),
             )
             raise
         elapsed = time.perf_counter() - started
-        self._record_translation_metrics(provider_s=elapsed)
+        transport_metrics = self._capture_metrics(http_capture)
+        self._record_translation_metrics(
+            provider_s=elapsed,
+            full_response_s=elapsed,
+            **transport_metrics,
+        )
         active_context = self._active_context()
         logger.info(
             "Translation API request finished "
-            "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s "
-            "prompt_chars=%d context_turns=%d)",
+            "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+            "source=%s sequence=%s "
+            "prompt_chars=%d context_turns=%d pool_wait_s=%s tcp_s=%s "
+            "tls_s=%s response_headers_s=%s first_token_s=%s reused=%s)",
             self.model,
-            self._base_url,
+            self._log_endpoint,
+            self._log_endpoint_id,
             elapsed,
             context_source,
             active_context.sequence,
             sum(len(str(message.get("content", ""))) for message in messages),
             len(context_snapshot or ()),
+            transport_metrics.get("pool_wait_s"),
+            transport_metrics.get("tcp_s"),
+            transport_metrics.get("tls_s"),
+            transport_metrics.get("response_headers_s"),
+            self.translation_metrics().get("first_token_s"),
+            transport_metrics.get("connection_reused"),
         )
+        postprocess_started = time.perf_counter()
         translated = self._finalize_translation_output(
             output,
             source_text=text,
+        )
+        self._record_translation_metrics(
+            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
         )
         if not translated:
             self._last_response_summary = (
@@ -768,7 +1083,10 @@ class OpenAITranslator(BaseTranslator):
         return messages
 
     def _chat_messages_for_backend(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
-        if "dashscope" not in str(getattr(self, "_base_url", "") or ""):
+        hostname = str(getattr(self, "_base_hostname", "") or "").casefold()
+        if not hostname:
+            hostname = str(getattr(self, "_base_url", "") or "").casefold()
+        if "dashscope" not in hostname:
             return messages
 
         system_parts: list[str] = []
@@ -821,7 +1139,7 @@ class OpenAITranslator(BaseTranslator):
             input=prompt,
             max_output_tokens=self._estimate_max_tokens(text),
         )
-        request_timeout = getattr(self, "_timeout_s", None)
+        request_timeout = self._sdk_timeout()
         if request_timeout:
             kwargs["timeout"] = request_timeout
         if not self._omits_temperature:
@@ -841,45 +1159,86 @@ class OpenAITranslator(BaseTranslator):
         )
 
         started = time.perf_counter()
+        http_capture = None
         try:
-            response = self._create_with_control_fallback(
-                self._client.responses.create,
-                kwargs,
-            )
+            with self._http_timing_capture() as http_capture:
+                response = self._run_with_wall_timeout(
+                    lambda: self._create_with_control_fallback(
+                        self._client.responses.create,
+                        kwargs,
+                    ),
+                    timeout_s=getattr(self, "_wall_timeout_s", None),
+                    operation_name="OpenAI Responses translation request",
+                )
         except Exception as exc:
             elapsed = time.perf_counter() - started
-            self._record_translation_metrics(provider_s=elapsed)
+            transport_metrics = self._capture_metrics(http_capture)
+            self._record_translation_metrics(
+                provider_s=elapsed,
+                full_response_s=elapsed,
+                first_token_s=None,
+                **transport_metrics,
+            )
             active_context = self._active_context()
             logger.warning(
                 "Translation Responses API request failed "
-                "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s error=%s)",
+                "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+                "source=%s sequence=%s "
+                "pool_wait_s=%s tcp_s=%s tls_s=%s response_headers_s=%s "
+                "error=%s)",
                 self.model,
-                self._base_url,
+                self._log_endpoint,
+                self._log_endpoint_id,
                 elapsed,
                 context_source,
                 active_context.sequence,
-                exc,
-                exc_info=True,
+                transport_metrics.get("pool_wait_s"),
+                transport_metrics.get("tcp_s"),
+                transport_metrics.get("tls_s"),
+                transport_metrics.get("response_headers_s"),
+                safe_exception_summary(exc),
             )
             raise
         elapsed = time.perf_counter() - started
-        self._record_translation_metrics(provider_s=elapsed)
+        transport_metrics = self._capture_metrics(http_capture)
+        parse_started = time.perf_counter()
+        output_text = str(getattr(response, "output_text", "") or "")
+        parse_s = max(0.0, time.perf_counter() - parse_started)
+        self._record_translation_metrics(
+            provider_s=elapsed,
+            full_response_s=elapsed,
+            first_token_s=None,
+            parse_s=parse_s,
+            **transport_metrics,
+        )
         active_context = self._active_context()
         logger.info(
             "Translation Responses API request finished "
-            "(model=%s base_url=%s elapsed=%.2fs source=%s sequence=%s "
-            "prompt_chars=%d context_turns=%d)",
+            "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+            "source=%s sequence=%s "
+            "prompt_chars=%d context_turns=%d pool_wait_s=%s tcp_s=%s "
+            "tls_s=%s response_headers_s=%s reused=%s)",
             self.model,
-            self._base_url,
+            self._log_endpoint,
+            self._log_endpoint_id,
             elapsed,
             context_source,
             active_context.sequence,
             len(prompt),
             len(context_snapshot or ()),
+            transport_metrics.get("pool_wait_s"),
+            transport_metrics.get("tcp_s"),
+            transport_metrics.get("tls_s"),
+            transport_metrics.get("response_headers_s"),
+            transport_metrics.get("connection_reused"),
         )
+        postprocess_started = time.perf_counter()
         translated = self._finalize_translation_output(
-            str(response.output_text or ""),
+            output_text,
             source_text=text,
+        )
+        self._record_translation_metrics(
+            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
         )
         if not translated:
             self._last_response_summary = (
@@ -896,19 +1255,41 @@ class OpenAITranslator(BaseTranslator):
 
     def _chat_completion_output_text(self, response) -> str:
         try:
-            choices = list(getattr(response, "choices", []) or [])
+            if isinstance(response, dict):
+                raw_choices = response.get("choices", [])
+            else:
+                raw_choices = getattr(response, "choices", [])
+            choices = list(raw_choices or [])
         except TypeError:
             choices = []
         if not choices:
             return ""
-        message = getattr(choices[0], "message", None)
-        return str(getattr(message, "content", "") or "")
+        choice = choices[0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            fallback_text = choice.get("text")
+        else:
+            message = getattr(choice, "message", None)
+            fallback_text = getattr(choice, "text", None)
+        if isinstance(message, dict):
+            content = message.get("content")
+        else:
+            content = getattr(message, "content", None)
+        return self._content_text(content) or self._content_text(fallback_text)
 
     def _response_debug_summary(self, response) -> str:
-        parts = [f"model={self.model}", f"base_url={self._base_url}"]
+        parts = [
+            f"model={self.model}",
+            f"endpoint={self._log_endpoint}",
+            f"endpoint_id={self._log_endpoint_id}",
+        ]
         response_status = getattr(response, "status", None)
-        if response_status:
-            parts.append(f"status={response_status}")
+        try:
+            parsed_status = int(response_status)
+        except (TypeError, ValueError):
+            parsed_status = 0
+        if 100 <= parsed_status <= 599:
+            parts.append(f"status={parsed_status}")
         try:
             choices = list(getattr(response, "choices", []) or [])
         except TypeError:
@@ -918,7 +1299,17 @@ class OpenAITranslator(BaseTranslator):
             choice = choices[0]
             finish_reason = getattr(choice, "finish_reason", None)
             if finish_reason:
-                parts.append(f"finish_reason={finish_reason}")
+                normalized_finish_reason = str(finish_reason).strip().casefold()
+                if normalized_finish_reason in {
+                    "content_filter",
+                    "function_call",
+                    "length",
+                    "stop",
+                    "tool_calls",
+                }:
+                    parts.append(f"finish_reason={normalized_finish_reason}")
+                else:
+                    parts.append("finish_reason=present")
             message = getattr(choice, "message", None)
             if message is not None:
                 reasoning = getattr(message, "reasoning_content", None)
@@ -931,8 +1322,12 @@ class OpenAITranslator(BaseTranslator):
         if usage is not None:
             for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
                 value = getattr(usage, name, None)
-                if value is not None:
-                    parts.append(f"{name}={value}")
+                try:
+                    parsed_value = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_value >= 0:
+                    parts.append(f"{name}={parsed_value}")
         return ", ".join(parts)
 
     def _translation_option_language(self, code: str) -> str:

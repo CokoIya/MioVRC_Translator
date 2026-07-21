@@ -26,6 +26,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from src.utils.provider_diagnostics import safe_exception_summary
+
 logger = logging.getLogger(__name__)
 
 
@@ -1243,10 +1245,10 @@ class RealtimeScheduler:
             except Exception as exc:
                 error = exc
                 logger.debug(
-                    "Realtime ASR failed source=%s sequence=%d",
+                    "Realtime ASR failed source=%s sequence=%d error=%s",
                     task.source,
                     task.sequence,
-                    exc_info=True,
+                    safe_exception_summary(exc),
                 )
             finally:
                 finished_at = self._clock()
@@ -1375,12 +1377,13 @@ class RealtimeScheduler:
                         rewrite_required = bool(
                             predicate(downstream.task, downstream.text)
                         )
-                    except Exception:
-                        logger.exception(
+                    except Exception as exc:
+                        logger.error(
                             "Realtime rewrite predicate failed; preserving rewrite "
-                            "source=%s sequence=%d",
+                            "source=%s sequence=%d error=%s",
                             work.task.source,
                             work.task.sequence,
+                            safe_exception_summary(exc),
                         )
                 if rewrite_required:
                     queued = self._put_stage_work(
@@ -1518,7 +1521,12 @@ class RealtimeScheduler:
         except Exception as exc:
             worker_state = None
             state_error = exc
-            logger.exception("Realtime rewrite worker state initialization failed")
+            logger.error(
+                "Realtime rewrite worker state initialization failed "
+                "worker=%d error=%s",
+                worker_index,
+                safe_exception_summary(exc),
+            )
 
         try:
             while True:
@@ -1563,14 +1571,11 @@ class RealtimeScheduler:
                         rewrite_error = exc
                         rewritten_text = work.text
                         logger.warning(
-                            "Realtime ASR rewrite failed open source=%s sequence=%d: %s",
+                            "Realtime ASR rewrite failed open "
+                            "source=%s sequence=%d error=%s",
                             work.task.source,
                             work.task.sequence,
-                            exc,
-                        )
-                        logger.debug(
-                            "Realtime ASR rewrite traceback",
-                            exc_info=True,
+                            safe_exception_summary(exc),
                         )
                     finished_at = self._clock()
                     rewritten = _RecognizedWork(
@@ -1612,8 +1617,13 @@ class RealtimeScheduler:
             if state_initialized and callable(finalizer):
                 try:
                     finalizer(worker_state)
-                except Exception:
-                    logger.exception("Realtime rewrite worker state cleanup failed")
+                except Exception as exc:
+                    logger.error(
+                        "Realtime rewrite worker state cleanup failed "
+                        "worker=%d error=%s",
+                        worker_index,
+                        safe_exception_summary(exc),
+                    )
 
     def _store_rewritten_work(self, work: _RecognizedWork) -> None:
         with self._recognized_available:
@@ -1883,7 +1893,12 @@ class RealtimeScheduler:
         except Exception as exc:
             worker_state = None
             state_error = exc
-            logger.exception("Realtime translation worker state initialization failed")
+            logger.error(
+                "Realtime translation worker state initialization failed "
+                "worker=%d error=%s",
+                worker_index,
+                safe_exception_summary(exc),
+            )
 
         try:
             while True:
@@ -1919,10 +1934,11 @@ class RealtimeScheduler:
                     except Exception as exc:
                         translation_error = exc
                         logger.debug(
-                            "Realtime translation failed source=%s sequence=%d",
+                            "Realtime translation failed "
+                            "source=%s sequence=%d error=%s",
                             work.task.source,
                             work.task.sequence,
-                            exc_info=True,
+                            safe_exception_summary(exc),
                         )
                     finished_at = self._clock()
                     completion = RealtimeCompletion(
@@ -1962,8 +1978,13 @@ class RealtimeScheduler:
             if state_initialized and callable(finalizer):
                 try:
                     finalizer(worker_state)
-                except Exception:
-                    logger.exception("Realtime translation worker state cleanup failed")
+                except Exception as exc:
+                    logger.error(
+                        "Realtime translation worker state cleanup failed "
+                        "worker=%d error=%s",
+                        worker_index,
+                        safe_exception_summary(exc),
+                    )
 
     def _store_completion(self, completion: RealtimeCompletion) -> None:
         with self._delivery_available:
@@ -2030,11 +2051,13 @@ class RealtimeScheduler:
                     completion.cancelled,
                     max(0.0, self._clock() - completion.task.submitted_at) * 1000.0,
                 )
-            except Exception:
-                logger.exception(
-                    "Realtime delivery callback failed source=%s sequence=%d",
+            except Exception as exc:
+                logger.error(
+                    "Realtime delivery callback failed "
+                    "source=%s sequence=%d error=%s",
                     completion.task.source,
                     completion.task.sequence,
+                    safe_exception_summary(exc),
                 )
             finally:
                 delivery_finished_at = self._clock()

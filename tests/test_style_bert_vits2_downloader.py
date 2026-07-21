@@ -4,7 +4,6 @@ from __future__ import annotations
 import gc
 import json
 import weakref
-from pathlib import Path
 
 import numpy as np
 

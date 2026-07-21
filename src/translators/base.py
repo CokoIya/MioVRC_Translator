@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import _thread
 import json
+import math
 import re
+import threading
+import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict, deque
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
-from collections.abc import Hashable, Iterator
+from collections.abc import Callable, Hashable, Iterator
 from threading import Lock
 from time import monotonic
 
@@ -86,6 +90,39 @@ _ACTIVE_TRANSLATION_CONTEXT: ContextVar[TranslationContext] = ContextVar(
     "mio_translation_context",
     default=TranslationContext(),
 )
+_PROVIDER_BACKGROUND_LOCK = Lock()
+_PROVIDER_BACKGROUND_THREADS: set[threading.Thread] = set()
+_PROVIDER_BACKGROUND_RETRIES: dict[threading.Thread, Callable[[], bool]] = {}
+
+
+def provider_background_work_in_progress() -> bool:
+    """Return whether a supervised provider call or cleanup still owns work."""
+
+    with _PROVIDER_BACKGROUND_LOCK:
+        retries = tuple(_PROVIDER_BACKGROUND_RETRIES.values())
+    for retry in retries:
+        try:
+            retry()
+        except BaseException:
+            pass
+
+    with _PROVIDER_BACKGROUND_LOCK:
+        alive = {
+            thread
+            for thread in _PROVIDER_BACKGROUND_THREADS
+            # Threads are registered before ``start()`` so shutdown cannot
+            # miss work created concurrently with its quiescence poll.  A
+            # registered thread with no identifier is still pending start;
+            # the explicit start-failure paths remove it from this registry.
+            if thread.ident is None or thread.is_alive()
+        }
+        _PROVIDER_BACKGROUND_THREADS.clear()
+        _PROVIDER_BACKGROUND_THREADS.update(alive)
+        return bool(alive or _PROVIDER_BACKGROUND_RETRIES)
+
+
+class ProviderWallTimeoutError(TimeoutError):
+    """A provider call exceeded its total wall-clock budget."""
 
 
 @contextmanager
@@ -448,9 +485,14 @@ class BaseTranslator(ABC):
         self._prompt_profile: dict[str, object] = {}
         self._resource_close_lock = Lock()
         self._resources_closed = False
+        self._requests_cancelled = False
         self._prompt_signature = ""
         self._translation_metrics_lock = Lock()
         self._last_translation_metrics: dict[str, object] = {}
+        self._wall_call_lock = Lock()
+        self._wall_call_threads: set[threading.Thread] = set()
+        self._wall_cleanup_threads: set[threading.Thread] = set()
+        self._wall_call_sequence = 0
 
     @abstractmethod
     def translate(
@@ -487,6 +529,7 @@ class BaseTranslator(ABC):
         """Close reusable HTTP/API clients owned by this translator."""
 
         with self._resource_close_lock:
+            self._requests_cancelled = True
             if self._resources_closed:
                 return
             self._resources_closed = True
@@ -515,6 +558,202 @@ class BaseTranslator(ABC):
                 except Exception:
                     # Cleanup is best-effort and must not mask pipeline shutdown.
                     pass
+
+    def cancel_pending_requests(self) -> None:
+        """Cancel in-flight provider work by permanently closing this instance.
+
+        Provider SDKs do not expose a portable per-request cancellation token.
+        Controllers therefore use destructive rotation: detach a timed-out
+        translator, call this idempotent method, and create a fresh translator
+        for later work.  Reusing an instance after cancellation is unsupported.
+        """
+
+        self._retire_pending_requests()
+        self.close()
+
+    def _retire_pending_requests(self) -> None:
+        """Prevent new work from reusing this instance before cleanup finishes."""
+
+        with self._resource_close_lock:
+            self._requests_cancelled = True
+
+    def _pending_requests_retired(self) -> bool:
+        with self._resource_close_lock:
+            return bool(self._requests_cancelled or self._resources_closed)
+
+    def _cancel_pending_requests_async(self, *, sequence: int) -> None:
+        """Run potentially blocking SDK cleanup outside the caller deadline."""
+
+        cleanup: threading.Thread
+
+        def run_cleanup() -> None:
+            try:
+                self.cancel_pending_requests()
+            finally:
+                current = threading.current_thread()
+                with self._wall_call_lock:
+                    self._wall_cleanup_threads.discard(current)
+                with _PROVIDER_BACKGROUND_LOCK:
+                    _PROVIDER_BACKGROUND_THREADS.discard(current)
+                    _PROVIDER_BACKGROUND_RETRIES.pop(cleanup, None)
+
+        cleanup = threading.Thread(
+            target=run_cleanup,
+            daemon=True,
+            name=f"mio-provider-cancel-{sequence}",
+        )
+        with self._wall_call_lock:
+            self._wall_cleanup_threads.add(cleanup)
+        with _PROVIDER_BACKGROUND_LOCK:
+            _PROVIDER_BACKGROUND_THREADS.add(cleanup)
+        try:
+            cleanup.start()
+        except BaseException:
+            # Keep the pending-start sentinel registered until a low-level
+            # emergency worker takes ownership. This preserves the hard caller
+            # deadline while ensuring a failed ``Thread.start()`` cannot leak
+            # the already-retired HTTP client or fool shutdown quiescence.
+            emergency_start_lock = Lock()
+            emergency_scheduled = False
+
+            def run_emergency_cleanup() -> None:
+                current = threading.current_thread()
+                with self._wall_call_lock:
+                    self._wall_cleanup_threads.discard(cleanup)
+                    self._wall_cleanup_threads.add(current)
+                with _PROVIDER_BACKGROUND_LOCK:
+                    _PROVIDER_BACKGROUND_THREADS.discard(cleanup)
+                    _PROVIDER_BACKGROUND_THREADS.add(current)
+                run_cleanup()
+
+            def retry_emergency_cleanup() -> bool:
+                nonlocal emergency_scheduled
+                with emergency_start_lock:
+                    if emergency_scheduled:
+                        return True
+                    try:
+                        _thread.start_new_thread(run_emergency_cleanup, ())
+                    except BaseException:
+                        return False
+                    emergency_scheduled = True
+                with _PROVIDER_BACKGROUND_LOCK:
+                    _PROVIDER_BACKGROUND_RETRIES.pop(cleanup, None)
+                return True
+
+            with _PROVIDER_BACKGROUND_LOCK:
+                _PROVIDER_BACKGROUND_RETRIES[cleanup] = retry_emergency_cleanup
+            # A transient resource failure gets one immediate low-level retry.
+            # If that also fails, shutdown polling retries later while the
+            # pending-start sentinel truthfully keeps quiescence false.
+            retry_emergency_cleanup()
+
+    def _run_with_wall_timeout(
+        self,
+        operation,
+        *,
+        timeout_s: object = None,
+        operation_name: str = "provider request",
+    ):
+        """Run one synchronous SDK call under a hard caller-visible deadline.
+
+        Python cannot safely terminate an arbitrary thread. On expiry the
+        translator is therefore destructively closed, which interrupts normal
+        HTTP SDK I/O and makes the instance ineligible for reuse. Controllers
+        must rotate to a fresh translator, as documented by
+        ``cancel_pending_requests``.
+        """
+
+        if not callable(operation):
+            raise TypeError("Provider operation must be callable")
+        fallback_timeout = getattr(self, "_wall_timeout_s", None)
+        try:
+            timeout = float(
+                fallback_timeout if timeout_s is None else timeout_s
+            )
+        except (TypeError, ValueError):
+            timeout = 0.0
+        with self._resource_close_lock:
+            if self._resources_closed or self._requests_cancelled:
+                raise RuntimeError("Translation provider client is closed")
+        if not math.isfinite(timeout) or timeout <= 0.0:
+            return operation()
+
+        started_at = time.perf_counter()
+        deadline = started_at + timeout
+        completed = threading.Event()
+        state_lock = Lock()
+        state: dict[str, object] = {}
+        call_context = copy_context()
+
+        with self._wall_call_lock:
+            self._wall_call_sequence += 1
+            sequence = self._wall_call_sequence
+
+        def run() -> None:
+            try:
+                value = call_context.run(operation)
+            except BaseException as exc:
+                with state_lock:
+                    state["exception"] = exc
+                    state["traceback"] = exc.__traceback__
+            else:
+                with state_lock:
+                    state["value"] = value
+            finally:
+                completed.set()
+                current = threading.current_thread()
+                with self._wall_call_lock:
+                    self._wall_call_threads.discard(current)
+                with _PROVIDER_BACKGROUND_LOCK:
+                    _PROVIDER_BACKGROUND_THREADS.discard(current)
+
+        worker = threading.Thread(
+            target=run,
+            daemon=True,
+            name=f"mio-provider-call-{sequence}",
+        )
+        with self._wall_call_lock:
+            self._wall_call_threads.add(worker)
+        with _PROVIDER_BACKGROUND_LOCK:
+            _PROVIDER_BACKGROUND_THREADS.add(worker)
+        try:
+            worker.start()
+        except BaseException:
+            with self._wall_call_lock:
+                self._wall_call_threads.discard(worker)
+            with _PROVIDER_BACKGROUND_LOCK:
+                _PROVIDER_BACKGROUND_THREADS.discard(worker)
+            raise
+
+        if not completed.wait(max(0.0, deadline - time.perf_counter())):
+            self._record_translation_metrics(
+                wall_timeout_s=timeout,
+                wall_timeout_triggered=True,
+            )
+            # Retire synchronously so an immediate follow-up cannot reuse the
+            # timed-out client. Third-party SDK ``close()`` methods may block,
+            # so destructive cleanup cannot run on the deadline thread.
+            self._retire_pending_requests()
+            self._cancel_pending_requests_async(sequence=sequence)
+            elapsed = max(0.0, time.perf_counter() - started_at)
+            raise ProviderWallTimeoutError(
+                f"{operation_name} exceeded the wall-clock timeout "
+                f"({timeout:.2f}s; elapsed={elapsed:.2f}s)"
+            )
+
+        with state_lock:
+            exception = state.get("exception")
+            traceback = state.get("traceback")
+            value = state.get("value")
+        if isinstance(exception, BaseException):
+            raise exception.with_traceback(traceback)  # type: ignore[arg-type]
+        return value
+
+    def _active_wall_call_count(self) -> int:
+        """Return active supervised SDK calls and destructive cleanup work."""
+
+        with self._wall_call_lock:
+            return len(self._wall_call_threads | self._wall_cleanup_threads)
 
     @staticmethod
     def _active_context() -> TranslationContext:

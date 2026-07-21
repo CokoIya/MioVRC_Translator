@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
 import logging
 import os
@@ -17,19 +16,16 @@ import weakref
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QTimer, QUrl, Qt, Signal, QVariantAnimation
-from PySide6.QtGui import QCloseEvent, QColor, QDesktopServices, QLinearGradient, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QThread, QTimer, QUrl, Qt, Signal, QVariantAnimation
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -40,7 +36,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -76,14 +71,13 @@ from src.tts.api_tts_config import (
     resolve_tts_api_config,
 )
 from src.tts.factory import create_tts_engine
-from src.tts.error_utils import is_tts_authentication_error, is_tts_network_error
+from src.tts.error_utils import tts_error_code, tts_error_token
 from src.tts.manager import TTSManager, find_best_virtual_output_device, resolve_output_device
 from src.tts.base import TTSVoice
 from src.tts.xtts_engine import (
     XTTS_SUPPORTED_LANGUAGES,
     first_usable_xtts_reference_audio_path,
     first_xtts_reference_audio_path,
-    is_xtts_runtime_available,
     list_xtts_reference_voices,
     normalize_xtts_language_code,
     normalize_xtts_reference_audio_file,
@@ -95,7 +89,6 @@ from src.tts.xtts_engine import (
     xtts_runtime_status,
 )
 from src.tts.style_bert_vits2_models import (
-    StyleBertVits2ModelError,
     import_style_bert_model_path,
     list_imported_style_bert_models,
     style_bert_preset_title,
@@ -127,6 +120,7 @@ from src.utils.global_hotkey import normalize_hotkey, HotkeyError
 from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
 from src.utils.i18n import tr
 from src.utils.openai_compat import normalize_openai_custom_headers
+from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.secure_http import validate_api_base_url
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
@@ -289,7 +283,16 @@ TTS_TEST_TIMEOUT_MS = 60_000
 STYLE_BERT_TTS_TEST_TIMEOUT_MS = 240_000
 _NUMERIC_INPUT_VAR_NAMES = (
     "_backend_timeout_var",
+    "_backend_connect_timeout_var",
+    "_backend_pool_timeout_var",
+    "_backend_read_timeout_var",
+    "_backend_write_timeout_var",
+    "_backend_wall_timeout_var",
     "_backend_retries_var",
+    "_tts_api_timeout_var",
+    "_tts_api_connect_timeout_var",
+    "_tts_api_read_timeout_var",
+    "_tts_api_wall_timeout_var",
     "_vad_var",
     "_chunk_interval_var",
     "_chunk_window_var",
@@ -2243,6 +2246,13 @@ QT_SETTINGS_COPY.update({
         "ru": "Запрос теста TTS не принят",
         "ko": "TTS 테스트 요청이 수락되지 않았습니다",
     },
+    "tts_test_failed": {
+        "zh-CN": "TTS 测试失败。请检查语音设置后重试。",
+        "en": "TTS test failed. Check the speech settings and try again.",
+        "ja": "TTS テストに失敗しました。音声設定を確認して、もう一度お試しください。",
+        "ru": "Тест TTS завершился с ошибкой. Проверьте настройки синтеза речи и повторите попытку.",
+        "ko": "TTS 테스트에 실패했습니다. 음성 설정을 확인한 후 다시 시도하세요.",
+    },
     "tts_test_stopped": {
         "zh-CN": "TTS 测试已停止",
         "en": "TTS test stopped",
@@ -2270,6 +2280,62 @@ QT_SETTINGS_COPY.update({
         "ja": "Qwen TTS はサービスに接続できませんでした。ネットワークとプロキシまたは VPN の設定を確認してから、再度テストしてください。プロキシを使用する場合は、安定した HTTPS/TLS 接続に対応していることを確認してください。",
         "ru": "Qwen TTS не удалось подключиться к сервису. Проверьте сеть и настройки прокси или VPN, затем повторите тест. Если используется прокси, убедитесь, что он поддерживает стабильные соединения HTTPS/TLS.",
         "ko": "Qwen TTS가 서비스에 연결하지 못했습니다. 네트워크와 프록시 또는 VPN 설정을 확인한 뒤 다시 테스트하세요. 프록시를 사용한다면 안정적인 HTTPS/TLS 연결을 지원하는지 확인하세요.",
+    },
+    "qwen_tts_timeout_failed": {
+        "zh-CN": "Qwen TTS 测试超时，任务已释放。请检查超时设置后重试。",
+        "en": "The Qwen TTS test timed out and released the task. Check the timeout settings and try again.",
+        "ja": "Qwen TTS テストがタイムアウトし、タスクを解放しました。タイムアウト設定を確認して再試行してください。",
+        "ru": "Истекло время ожидания теста Qwen TTS, задача освобождена. Проверьте настройки тайм-аутов и повторите попытку.",
+        "ko": "Qwen TTS 테스트 시간이 초과되어 작업을 해제했습니다. 제한 시간 설정을 확인한 뒤 다시 시도하세요.",
+    },
+    "qwen_tts_rate_limit_failed": {
+        "zh-CN": "Qwen TTS 请求过于频繁，请稍候再测试。",
+        "en": "Qwen TTS is rate-limited. Wait briefly, then test again.",
+        "ja": "Qwen TTS の利用制限に達しました。しばらく待ってから再テストしてください。",
+        "ru": "Достигнут лимит запросов Qwen TTS. Немного подождите и повторите тест.",
+        "ko": "Qwen TTS 요청 한도에 도달했습니다. 잠시 후 다시 테스트하세요.",
+    },
+    "qwen_tts_configuration_failed": {
+        "zh-CN": "Qwen TTS 配置不可用，请检查 API Key、模型、服务区域和 API 地址。",
+        "en": "The Qwen TTS configuration is unusable. Check the API key, model, service region, and API URL.",
+        "ja": "Qwen TTS の設定を使用できません。API Key、モデル、サービス地域、API URL を確認してください。",
+        "ru": "Настройки Qwen TTS непригодны. Проверьте API-ключ, модель, регион сервиса и URL API.",
+        "ko": "Qwen TTS 설정을 사용할 수 없습니다. API Key, 모델, 서비스 지역, API URL을 확인하세요.",
+    },
+    "qwen_tts_busy_failed": {
+        "zh-CN": "Qwen TTS 队列繁忙或正在恢复，请稍候再测试。",
+        "en": "Qwen TTS is busy or recovering. Wait briefly, then test again.",
+        "ja": "Qwen TTS が混雑中または復旧中です。しばらく待ってから再テストしてください。",
+        "ru": "Qwen TTS занят или восстанавливается. Немного подождите и повторите тест.",
+        "ko": "Qwen TTS가 혼잡하거나 복구 중입니다. 잠시 후 다시 테스트하세요.",
+    },
+    "qwen_tts_playback_failed": {
+        "zh-CN": "Qwen TTS 已生成音频，但播放失败。请检查输出设备后重试。",
+        "en": "Qwen TTS produced audio, but playback failed. Check the output device and try again.",
+        "ja": "Qwen TTS は音声を生成しましたが、再生に失敗しました。出力デバイスを確認して再試行してください。",
+        "ru": "Qwen TTS создал звук, но воспроизведение не удалось. Проверьте устройство вывода и повторите попытку.",
+        "ko": "Qwen TTS가 오디오를 생성했지만 재생에 실패했습니다. 출력 장치를 확인한 뒤 다시 시도하세요.",
+    },
+    "qwen_tts_safety_failed": {
+        "zh-CN": "Qwen TTS 因内容安全检查未合成此文本，请修改测试文本后重试。",
+        "en": "Qwen TTS did not synthesize the test text because of a content-safety check. Edit the text and try again.",
+        "ja": "Qwen TTS はコンテンツ安全性チェックによりテスト文を合成しませんでした。文を修正して再試行してください。",
+        "ru": "Qwen TTS не синтезировал тестовый текст из-за проверки безопасности содержимого. Измените текст и повторите попытку.",
+        "ko": "Qwen TTS가 콘텐츠 안전성 검사로 테스트 문장을 합성하지 않았습니다. 문장을 수정한 뒤 다시 시도하세요.",
+    },
+    "qwen_tts_input_failed": {
+        "zh-CN": "Qwen TTS 无法处理当前测试文本，请修改内容后重试。",
+        "en": "Qwen TTS could not accept the current test text. Edit it and try again.",
+        "ja": "Qwen TTS が現在のテスト文を受け付けませんでした。内容を修正して再試行してください。",
+        "ru": "Qwen TTS не принял текущий тестовый текст. Измените его и повторите попытку.",
+        "ko": "Qwen TTS가 현재 테스트 문장을 처리할 수 없습니다. 내용을 수정한 뒤 다시 시도하세요.",
+    },
+    "qwen_tts_provider_failed": {
+        "zh-CN": "Qwen TTS 服务暂时失败，任务已释放，请稍后重新测试。",
+        "en": "Qwen TTS temporarily failed and released the task. Test again shortly.",
+        "ja": "Qwen TTS サービスで一時的な障害が発生し、タスクを解放しました。しばらくしてから再テストしてください。",
+        "ru": "Временный сбой Qwen TTS, задача освобождена. Повторите тест позже.",
+        "ko": "Qwen TTS 서비스에 일시적인 오류가 발생해 작업을 해제했습니다. 잠시 후 다시 테스트하세요.",
     },
     "xtts_runtime_missing": {
         "zh-CN": "声音克隆需要可选的 Coqui TTS 运行环境。当前尚未安装，因此可以管理参考音频，但暂时不能合成和测试。",
@@ -2949,6 +3015,7 @@ class SettingsWindow(QDialog):
         on_vad_calibration_requested: Callable[[str], None] | None = None,
         on_mode_wizard_requested: Callable[[], None] | None = None,
         defer_initial_page: bool = False,
+        on_deferred_tts_manager: Callable[[object], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._config = config
@@ -2959,6 +3026,7 @@ class SettingsWindow(QDialog):
         self._on_audio_diagnostics_requested = on_audio_diagnostics_requested
         self._on_vad_calibration_requested = on_vad_calibration_requested
         self._on_mode_wizard_requested = on_mode_wizard_requested
+        self._on_deferred_tts_manager = on_deferred_tts_manager
         self._preloaded = preload
         self._defer_initial_page = bool(defer_initial_page)
 
@@ -2999,9 +3067,16 @@ class SettingsWindow(QDialog):
         self._backend_base_url_var = _StrVar()
         self._backend_model_var = _StrVar()
         self._backend_timeout_var = _StrVar()
+        self._backend_connect_timeout_var = _StrVar()
+        self._backend_pool_timeout_var = _StrVar()
+        self._backend_read_timeout_var = _StrVar()
+        self._backend_write_timeout_var = _StrVar()
+        self._backend_wall_timeout_var = _StrVar()
         self._backend_retries_var = _StrVar()
         self._backend_custom_headers_var = _StrVar()
         self._backend_streaming_var = _BoolVar(False)
+        self._backend_draft_configs: dict[str, dict[str, object]] = {}
+        self._active_backend_form = ""
         self._fallback_backends_var = _StrVar()
         self._qwen_translation_region_var = _StrVar()
         self._src_lang_var = _StrVar()
@@ -3044,6 +3119,12 @@ class SettingsWindow(QDialog):
         self._tts_api_region_var = _StrVar()
         self._tts_api_base_url_var = _StrVar()
         self._tts_api_model_var = _StrVar()
+        self._tts_api_timeout_var = _StrVar()
+        self._tts_api_connect_timeout_var = _StrVar()
+        self._tts_api_read_timeout_var = _StrVar()
+        self._tts_api_wall_timeout_var = _StrVar()
+        self._tts_api_draft_configs: dict[str, dict[str, object]] = {}
+        self._active_tts_api_engine = ""
         self._tts_output_to_vrchat_var = _BoolVar(False)
         self._tts_auto_read_var = _BoolVar(True)
         self._tts_monitor_var = _BoolVar(False)
@@ -3139,6 +3220,10 @@ class SettingsWindow(QDialog):
         self._tts_api_region_combo: QComboBox | None = None
         self._tts_api_base_url_entry: QLineEdit | None = None
         self._tts_api_model_entry: QComboBox | None = None
+        self._tts_api_timeout_entry: QLineEdit | None = None
+        self._tts_api_connect_timeout_entry: QLineEdit | None = None
+        self._tts_api_read_timeout_entry: QLineEdit | None = None
+        self._tts_api_wall_timeout_entry: QLineEdit | None = None
         self._tts_device_combo: QComboBox | None = None
         self._xtts_device_combo: QComboBox | None = None
         self._asr_device_combo: QComboBox | None = None
@@ -3186,7 +3271,10 @@ class SettingsWindow(QDialog):
         self._applied_background_path = self._background_image_path
 
         self._init_from_config()
-        self._fmt_codes = {l: c for l, c in get_output_format_options(self._ui_lang)}
+        self._fmt_codes = {
+            label: code
+            for label, code in get_output_format_options(self._ui_lang)
+        }
         self._build_ui()
         self._audio_device_refresh_timer = QTimer(self)
         self._audio_device_refresh_timer.setInterval(3000)
@@ -3282,19 +3370,39 @@ class SettingsWindow(QDialog):
         target_opts = get_target_language_options(ui_language=self._ui_lang)
         self._lang_codes = {label: code for label, code in target_opts}
         tgt_code = str(trans_cfg.get("target_language", "ja"))
-        self._target_lang_var.set(next((l for l, c in target_opts if c == tgt_code), target_opts[0][0]))
+        self._target_lang_var.set(
+            next(
+                (label for label, code in target_opts if code == tgt_code),
+                target_opts[0][0],
+            )
+        )
         tgt2_code = str(trans_cfg.get("target_language_2", "en"))
-        self._target_lang2_var.set(next((l for l, c in target_opts if c == tgt2_code), target_opts[0][0]))
+        self._target_lang2_var.set(
+            next(
+                (label for label, code in target_opts if code == tgt2_code),
+                target_opts[0][0],
+            )
+        )
         target3_label = self._copy("target_language_disabled")
         target3_opts = [(target3_label, ""), *target_opts]
         self._lang3_codes = {label: code for label, code in target3_opts}
         tgt3_code = str(trans_cfg.get("target_language_3", "") or "")
-        self._target_lang3_var.set(next((l for l, c in target3_opts if c == tgt3_code), target3_opts[0][0]))
+        self._target_lang3_var.set(
+            next(
+                (label for label, code in target3_opts if code == tgt3_code),
+                target3_opts[0][0],
+            )
+        )
 
         src_opts = get_manual_source_language_options(ui_language=self._ui_lang)
         self._src_codes = {label: code for label, code in src_opts}
         src_code = str(trans_cfg.get("source_language", "auto"))
-        self._src_lang_var.set(next((l for l, c in src_opts if c == src_code), src_opts[0][0]))
+        self._src_lang_var.set(
+            next(
+                (label for label, code in src_opts if code == src_code),
+                src_opts[0][0],
+            )
+        )
 
         self._output_format_var.set(self._format_label_from_code(normalize_output_format(trans_cfg.get("output_format"))))
         self._mic_send_to_chatbox_var.set(bool(trans_cfg.get("send_to_chatbox", True)))
@@ -3318,7 +3426,10 @@ class SettingsWindow(QDialog):
         asr_opts = self._asr_engine_options()
         self._asr_codes = {label: code for label, code in asr_opts}
         asr_code = str(asr_cfg.get("engine", DEFAULT_ASR_ENGINE))
-        asr_label = next((l for l, c in asr_opts if c == asr_code), asr_opts[0][0])
+        asr_label = next(
+            (label for label, code in asr_opts if code == asr_code),
+            asr_opts[0][0],
+        )
         self._asr_engine_var.set(asr_label)
         self._init_asr_device_vars(asr_cfg)
         self._init_asr_provider_vars(asr_cfg)
@@ -3386,13 +3497,32 @@ class SettingsWindow(QDialog):
         listen_tgt = str(vrc_cfg.get("target_language", "zh"))
         self._listen_src_codes = {label: code for label, code in src_opts}
         self._listen_lang_codes = {label: code for label, code in target_opts}
-        self._vrc_listen_src_var.set(next((l for l, c in src_opts if c == listen_src), src_opts[0][0]))
-        self._vrc_listen_tgt_var.set(next((l for l, c in target_opts if c == listen_tgt), target_opts[0][0]))
+        self._vrc_listen_src_var.set(
+            next(
+                (label for label, code in src_opts if code == listen_src),
+                src_opts[0][0],
+            )
+        )
+        self._vrc_listen_tgt_var.set(
+            next(
+                (label for label, code in target_opts if code == listen_tgt),
+                target_opts[0][0],
+            )
+        )
         self._loopback_device_var.set(str(vrc_cfg.get("loopback_device") or ""))
         listen_asr_opts = self._listen_asr_engine_options()
         self._listen_asr_engine_codes = {label: code for label, code in listen_asr_opts}
         listen_asr_code = str(vrc_cfg.get("asr_engine", ASR_ENGINE_FOLLOW_MAIN) or ASR_ENGINE_FOLLOW_MAIN)
-        self._listen_asr_engine_var.set(next((l for l, c in listen_asr_opts if c == listen_asr_code), listen_asr_opts[0][0]))
+        self._listen_asr_engine_var.set(
+            next(
+                (
+                    label
+                    for label, code in listen_asr_opts
+                    if code == listen_asr_code
+                ),
+                listen_asr_opts[0][0],
+            )
+        )
 
         from src.utils.global_hotkey import DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
         self._text_input_hotkey_var.set(str(text_input_cfg.get("hotkey", DEFAULT_TEXT_INPUT_HOTKEY) or ""))
@@ -3446,7 +3576,10 @@ class SettingsWindow(QDialog):
 
     def _format_label_from_code(self, fmt_code: str) -> str:
         options = get_output_format_options(self._ui_lang)
-        label = next((l for l, c in options if c == fmt_code), options[0][0])
+        label = next(
+            (label for label, code in options if code == fmt_code),
+            options[0][0],
+        )
         return label
 
     def _copy(self, key: str, **kwargs) -> str:
@@ -3807,6 +3940,51 @@ class SettingsWindow(QDialog):
         if self._preloaded:
             QTimer.singleShot(80, self._prebuild_next_page)
 
+    def _capture_backend_draft(self) -> None:
+        backend = self._active_backend_form
+        if not backend:
+            return
+        draft: dict[str, object] = {
+            "api_key": self._backend_api_key_var.value(),
+            "base_url": self._backend_base_url_var.value(),
+            "model": self._backend_model_var.value(),
+            "timeout_s": self._backend_timeout_var.value(),
+            "connect_timeout_s": self._backend_connect_timeout_var.value(),
+            "pool_timeout_s": self._backend_pool_timeout_var.value(),
+            "read_timeout_s": self._backend_read_timeout_var.value(),
+            "write_timeout_s": self._backend_write_timeout_var.value(),
+            "wall_timeout_s": self._backend_wall_timeout_var.value(),
+            "max_retries": self._backend_retries_var.value(),
+            "custom_headers_text": self._backend_custom_headers_var.value(),
+            "streaming": self._backend_streaming_var.value(),
+        }
+        if backend_has_service_regions(backend):
+            region = self._qwen_translation_region_codes.get(
+                self._qwen_translation_region_var.value(),
+                "",
+            )
+            if not region:
+                existing = self._backend_draft_configs.get(backend, {})
+                region = str(existing.get("region", "") or "")
+            if not region:
+                trans_cfg = self._config.get("translation", {})
+                backend_cfg = (
+                    trans_cfg.get(backend, {})
+                    if isinstance(trans_cfg, dict)
+                    and isinstance(trans_cfg.get(backend, {}), dict)
+                    else {}
+                )
+                region = str(backend_cfg.get("region", "") or "")
+            draft["region"] = normalize_backend_region(
+                backend,
+                region,
+                default_region=backend_region_for_ui_language(
+                    backend,
+                    self._ui_lang,
+                ),
+            )
+        self._backend_draft_configs[backend] = draft
+
     def _set_backend_field_vars(self, backend: str) -> None:
         trans_cfg = self._config.get("translation", {})
         if not isinstance(trans_cfg, dict):
@@ -3817,31 +3995,73 @@ class SettingsWindow(QDialog):
             else {}
         )
         spec = get_backend_spec(backend)
-        self._backend_api_key_var.set(get_backend_config_value(trans_cfg, backend, "api_key"))
-        self._backend_base_url_var.set(get_backend_config_value(trans_cfg, backend, "base_url"))
-        self._backend_model_var.set(get_backend_config_value(trans_cfg, backend, "model"))
-        self._backend_timeout_var.set(
-            self._format_numeric_input(
-                get_backend_config_value(trans_cfg, backend, "timeout_s")
+        draft = self._backend_draft_configs.get(backend)
+        if draft is None:
+            self._backend_api_key_var.set(
+                get_backend_config_value(trans_cfg, backend, "api_key")
             )
-        )
-        self._backend_retries_var.set(
-            self._format_numeric_input(
-                get_backend_config_value(trans_cfg, backend, "max_retries")
+            self._backend_base_url_var.set(
+                get_backend_config_value(trans_cfg, backend, "base_url")
             )
-        )
-        custom_headers = backend_cfg.get("custom_headers", {})
-        if isinstance(custom_headers, dict) and custom_headers:
-            self._backend_custom_headers_var.set(
-                json.dumps(
-                    custom_headers,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
+            self._backend_model_var.set(
+                get_backend_config_value(trans_cfg, backend, "model")
+            )
+            self._backend_timeout_var.set(
+                self._format_numeric_input(
+                    get_backend_config_value(trans_cfg, backend, "timeout_s")
                 )
             )
+            for config_key, variable in (
+                ("connect_timeout_s", self._backend_connect_timeout_var),
+                ("pool_timeout_s", self._backend_pool_timeout_var),
+                ("read_timeout_s", self._backend_read_timeout_var),
+                ("write_timeout_s", self._backend_write_timeout_var),
+                ("wall_timeout_s", self._backend_wall_timeout_var),
+            ):
+                variable.set(
+                    self._format_numeric_input(backend_cfg.get(config_key, ""))
+                )
+            self._backend_retries_var.set(
+                self._format_numeric_input(
+                    get_backend_config_value(trans_cfg, backend, "max_retries")
+                )
+            )
+            custom_headers = backend_cfg.get("custom_headers", {})
+            if isinstance(custom_headers, dict) and custom_headers:
+                self._backend_custom_headers_var.set(
+                    json.dumps(
+                        custom_headers,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
+            else:
+                self._backend_custom_headers_var.set("")
+            raw_streaming = backend_cfg.get(
+                "streaming",
+                spec.get("streaming", False),
+            )
         else:
-            self._backend_custom_headers_var.set("")
-        raw_streaming = backend_cfg.get("streaming", spec.get("streaming", False))
+            self._backend_api_key_var.set(draft.get("api_key", ""))
+            self._backend_base_url_var.set(draft.get("base_url", ""))
+            self._backend_model_var.set(draft.get("model", ""))
+            self._backend_timeout_var.set(draft.get("timeout_s", ""))
+            for config_key, variable in (
+                ("connect_timeout_s", self._backend_connect_timeout_var),
+                ("pool_timeout_s", self._backend_pool_timeout_var),
+                ("read_timeout_s", self._backend_read_timeout_var),
+                ("write_timeout_s", self._backend_write_timeout_var),
+                ("wall_timeout_s", self._backend_wall_timeout_var),
+            ):
+                variable.set(draft.get(config_key, ""))
+            self._backend_retries_var.set(draft.get("max_retries", ""))
+            self._backend_custom_headers_var.set(
+                draft.get("custom_headers_text", "")
+            )
+            raw_streaming = draft.get(
+                "streaming",
+                spec.get("streaming", False),
+            )
         if isinstance(raw_streaming, str):
             streaming = raw_streaming.strip().casefold() in {
                 "1",
@@ -3854,10 +4074,32 @@ class SettingsWindow(QDialog):
             streaming = bool(raw_streaming)
         self._backend_streaming_var.set(streaming)
         if backend_has_service_regions(backend):
-            self._set_backend_region_vars(backend, trans_cfg)
+            if draft is None:
+                self._set_backend_region_vars(backend, trans_cfg)
+            else:
+                region = normalize_backend_region(
+                    backend,
+                    draft.get("region", ""),
+                    default_region=backend_region_for_ui_language(
+                        backend,
+                        self._ui_lang,
+                    ),
+                )
+                options = self._backend_region_options(backend)
+                self._qwen_translation_region_codes = {
+                    label: code for label, code in options
+                }
+                self._qwen_translation_region_var.set(
+                    self._label_for_code(options, region)
+                )
+                if region != "custom":
+                    self._backend_base_url_var.set(
+                        get_backend_region_base_url(backend, region)
+                    )
         else:
             self._qwen_translation_region_codes = {}
             self._qwen_translation_region_var.set("")
+        self._active_backend_form = backend
 
     def _qwen_translation_region_options(self) -> list[tuple[str, str]]:
         return self._backend_region_options("qianwen")
@@ -3976,6 +4218,37 @@ class SettingsWindow(QDialog):
             next((label for label, code in device_options if code == current_device), device_options[0][0])
         )
 
+    def _capture_tts_api_draft(self) -> None:
+        engine = self._active_tts_api_engine
+        if engine not in TTS_API_ENGINE_IDS:
+            return
+        region = self._tts_api_region_codes.get(
+            self._tts_api_region_var.value(),
+            "",
+        )
+        if not region:
+            existing = self._tts_api_draft_configs.get(engine, {})
+            region = str(existing.get("region", "") or "")
+        if not region:
+            tts_cfg = self._config.get("tts", {})
+            engine_cfg = (
+                tts_cfg.get(engine, {})
+                if isinstance(tts_cfg, dict)
+                and isinstance(tts_cfg.get(engine, {}), dict)
+                else {}
+            )
+            region = str(engine_cfg.get("region", "") or "")
+        self._tts_api_draft_configs[engine] = {
+            "api_key": self._tts_api_key_var.value(),
+            "region": normalize_tts_api_region(engine, region),
+            "base_url": self._tts_api_base_url_var.value(),
+            "model": self._tts_api_model_var.value(),
+            "timeout_seconds": self._tts_api_timeout_var.value(),
+            "connect_timeout_seconds": self._tts_api_connect_timeout_var.value(),
+            "read_timeout_seconds": self._tts_api_read_timeout_var.value(),
+            "wall_timeout_seconds": self._tts_api_wall_timeout_var.value(),
+        }
+
     def _init_tts_api_vars(self, tts_cfg: dict, engine: str) -> None:
         self._tts_api_region_codes = {}
         if engine not in TTS_API_ENGINE_IDS:
@@ -3983,17 +4256,81 @@ class SettingsWindow(QDialog):
             self._tts_api_region_var.set("")
             self._tts_api_base_url_var.set("")
             self._tts_api_model_var.set("")
+            self._tts_api_timeout_var.set("")
+            self._tts_api_connect_timeout_var.set("")
+            self._tts_api_read_timeout_var.set("")
+            self._tts_api_wall_timeout_var.set("")
+            self._active_tts_api_engine = ""
             return
 
-        engine_cfg = tts_cfg.get(engine, {}) if isinstance(tts_cfg.get(engine, {}), dict) else {}
-        resolved = resolve_tts_api_config(engine, engine_cfg)
-        self._tts_api_key_var.set(str(resolved.get("api_key", "") or ""))
         region_options = self._tts_api_region_options(engine)
         self._tts_api_region_codes = {label: code for label, code in region_options}
+        draft = self._tts_api_draft_configs.get(engine)
+        if draft is not None:
+            current_region = normalize_tts_api_region(
+                engine,
+                draft.get("region", ""),
+            )
+            self._tts_api_key_var.set(draft.get("api_key", ""))
+            self._tts_api_region_var.set(
+                self._label_for_code(region_options, current_region)
+            )
+            self._tts_api_base_url_var.set(
+                get_tts_api_base_url(engine, current_region)
+                if current_region != "custom"
+                else draft.get("base_url", "")
+            )
+            self._tts_api_model_var.set(draft.get("model", ""))
+            self._tts_api_timeout_var.set(draft.get("timeout_seconds", ""))
+            self._tts_api_connect_timeout_var.set(
+                draft.get("connect_timeout_seconds", "")
+            )
+            self._tts_api_read_timeout_var.set(
+                draft.get("read_timeout_seconds", "")
+            )
+            self._tts_api_wall_timeout_var.set(
+                draft.get("wall_timeout_seconds", "")
+            )
+            self._active_tts_api_engine = engine
+            return
+
+        engine_cfg = (
+            tts_cfg.get(engine, {})
+            if isinstance(tts_cfg.get(engine, {}), dict)
+            else {}
+        )
+        resolved = resolve_tts_api_config(engine, engine_cfg)
+        self._tts_api_key_var.set(str(resolved.get("api_key", "") or ""))
         current_region = str(resolved.get("region", "") or "")
         self._tts_api_region_var.set(self._label_for_code(region_options, current_region))
         self._tts_api_base_url_var.set(str(resolved.get("base_url", "") or ""))
         self._tts_api_model_var.set(str(resolved.get("model", "") or ""))
+        request_timeout = resolved.get("timeout_seconds", 30)
+        try:
+            request_timeout_number = float(request_timeout)
+        except (TypeError, ValueError):
+            request_timeout_number = 30.0
+        timeout_values = (
+            (self._tts_api_timeout_var, request_timeout),
+            (
+                self._tts_api_connect_timeout_var,
+                resolved.get("connect_timeout_seconds", request_timeout),
+            ),
+            (
+                self._tts_api_read_timeout_var,
+                resolved.get("read_timeout_seconds", request_timeout),
+            ),
+            (
+                self._tts_api_wall_timeout_var,
+                resolved.get(
+                    "wall_timeout_seconds",
+                    max(45.0, request_timeout_number),
+                ),
+            ),
+        )
+        for variable, value in timeout_values:
+            variable.set(self._format_numeric_input(value))
+        self._active_tts_api_engine = engine
 
     def _tts_api_region_options(self, engine: str) -> list[tuple[str, str]]:
         return [
@@ -4071,6 +4408,23 @@ class SettingsWindow(QDialog):
                 api_entry = None
             if api_entry is not None:
                 api_entry.setText(self._tts_api_key_var.value())
+            for entry_attribute, variable in (
+                ("_tts_api_timeout_entry", self._tts_api_timeout_var),
+                (
+                    "_tts_api_connect_timeout_entry",
+                    self._tts_api_connect_timeout_var,
+                ),
+                ("_tts_api_read_timeout_entry", self._tts_api_read_timeout_var),
+                ("_tts_api_wall_timeout_entry", self._tts_api_wall_timeout_var),
+            ):
+                timeout_entry = getattr(self, entry_attribute, None)
+                if timeout_entry is not None and not self._qt_widget_is_alive(
+                    timeout_entry
+                ):
+                    setattr(self, entry_attribute, None)
+                    timeout_entry = None
+                if timeout_entry is not None:
+                    timeout_entry.setText(variable.value())
             model_entry = getattr(self, "_tts_api_model_entry", None)
             if model_entry is not None and not self._qt_widget_is_alive(model_entry):
                 self._tts_api_model_entry = None
@@ -4738,6 +5092,44 @@ class SettingsWindow(QDialog):
         base_tts.setReadOnly(self._selected_tts_api_region() != "custom")
         self._tts_api_base_url_entry = base_tts
         self._row_layout(layout, self._copy("base_url"), base_tts)
+
+        for field_name, label_key, variable, entry_attribute in (
+            (
+                "tts_api_timeout",
+                "request_timeout",
+                self._tts_api_timeout_var,
+                "_tts_api_timeout_entry",
+            ),
+            (
+                "tts_api_connect_timeout",
+                "connect_timeout",
+                self._tts_api_connect_timeout_var,
+                "_tts_api_connect_timeout_entry",
+            ),
+            (
+                "tts_api_read_timeout",
+                "read_timeout",
+                self._tts_api_read_timeout_var,
+                "_tts_api_read_timeout_entry",
+            ),
+            (
+                "tts_api_wall_timeout",
+                "wall_timeout",
+                self._tts_api_wall_timeout_var,
+                "_tts_api_wall_timeout_entry",
+            ),
+        ):
+            entry = self._line_edit(field_name, variable, 180)
+            setattr(self, entry_attribute, entry)
+            self._row_layout(
+                layout,
+                tr(self._ui_lang, label_key),
+                entry,
+            )
+        timeout_hint = QLabel(tr(self._ui_lang, "tts_api_timeout_hint"))
+        timeout_hint.setObjectName("hintLabel")
+        timeout_hint.setWordWrap(True)
+        layout.addWidget(timeout_hint)
 
     def _build_voice_page(self, layout: QVBoxLayout) -> None:
         # ASR Engine Section
@@ -5520,6 +5912,7 @@ class SettingsWindow(QDialog):
 
     def _render_backend_fields(self) -> None:
         backend = self._backend_code()
+        self._capture_backend_draft()
         self._set_backend_field_vars(backend)
         self._clear_layout(self._backend_fields_layout)
         self._backend_api_key_entry = None
@@ -5595,6 +5988,25 @@ class SettingsWindow(QDialog):
             model_hint_label.setWordWrap(True)
             self._backend_fields_layout.addWidget(model_hint_label)
         self._row_layout(self._backend_fields_layout, self._copy("request_timeout"), self._line_edit("backend_timeout", self._backend_timeout_var, 120))
+        if spec.get("granular_timeout_input"):
+            for field_name, label_key, variable in (
+                ("backend_connect_timeout", "connect_timeout", self._backend_connect_timeout_var),
+                ("backend_pool_timeout", "pool_timeout", self._backend_pool_timeout_var),
+                ("backend_read_timeout", "read_timeout", self._backend_read_timeout_var),
+                ("backend_write_timeout", "write_timeout", self._backend_write_timeout_var),
+                ("backend_wall_timeout", "wall_timeout", self._backend_wall_timeout_var),
+            ):
+                entry = self._line_edit(field_name, variable, 180)
+                entry.setPlaceholderText(tr(self._ui_lang, "optional_timeout_placeholder"))
+                self._row_layout(
+                    self._backend_fields_layout,
+                    tr(self._ui_lang, label_key),
+                    entry,
+                )
+            timeout_hint = QLabel(tr(self._ui_lang, "timeout_settings_hint"))
+            timeout_hint.setObjectName("hintLabel")
+            timeout_hint.setWordWrap(True)
+            self._backend_fields_layout.addWidget(timeout_hint)
         self._row_layout(self._backend_fields_layout, self._copy("request_retries"), self._line_edit("backend_retries", self._backend_retries_var, 120))
         if spec.get("custom_headers_input"):
             headers_entry = self._line_edit(
@@ -5730,6 +6142,154 @@ class SettingsWindow(QDialog):
         self._show_missing_credential(missing)
         return True
 
+    def _optional_backend_timeout(
+        self,
+        variable: _StrVar,
+        label_key: str,
+        minimum: float,
+        maximum: float,
+    ) -> float | None:
+        value = variable.value().strip()
+        if not value:
+            return None
+        return self._parse_float_range(
+            value,
+            tr(self._ui_lang, label_key),
+            minimum,
+            maximum,
+        )
+
+    def _backend_timeout_overrides(self) -> dict[str, float | None]:
+        return {
+            "connect_timeout_s": self._optional_backend_timeout(
+                self._backend_connect_timeout_var,
+                "connect_timeout",
+                0.1,
+                120.0,
+            ),
+            "pool_timeout_s": self._optional_backend_timeout(
+                self._backend_pool_timeout_var,
+                "pool_timeout",
+                0.1,
+                120.0,
+            ),
+            "read_timeout_s": self._optional_backend_timeout(
+                self._backend_read_timeout_var,
+                "read_timeout",
+                0.1,
+                300.0,
+            ),
+            "write_timeout_s": self._optional_backend_timeout(
+                self._backend_write_timeout_var,
+                "write_timeout",
+                0.1,
+                300.0,
+            ),
+            "wall_timeout_s": self._optional_backend_timeout(
+                self._backend_wall_timeout_var,
+                "wall_timeout",
+                0.1,
+                300.0,
+            ),
+        }
+
+    @staticmethod
+    def _apply_backend_timeout_overrides(
+        backend_cfg: dict,
+        overrides: dict[str, float | None],
+    ) -> None:
+        for config_key, value in overrides.items():
+            if value is None:
+                backend_cfg.pop(config_key, None)
+            else:
+                backend_cfg[config_key] = value
+
+    def _apply_backend_draft_configs(self, trans_cfg: dict) -> None:
+        for backend, draft in self._backend_draft_configs.items():
+            backend_cfg = trans_cfg.get(backend)
+            if not isinstance(backend_cfg, dict):
+                backend_cfg = {}
+                trans_cfg[backend] = backend_cfg
+            backend_cfg["api_key"] = str(draft.get("api_key", "") or "").strip()
+            if backend_has_service_regions(backend):
+                region = normalize_backend_region(
+                    backend,
+                    draft.get("region", ""),
+                    default_region=backend_region_for_ui_language(
+                        backend,
+                        self._ui_lang,
+                    ),
+                )
+                backend_cfg["region"] = region
+                backend_cfg["base_url"] = (
+                    get_backend_region_base_url(backend, region)
+                    if region != "custom"
+                    else str(draft.get("base_url", "") or "").strip().rstrip("/")
+                )
+            else:
+                backend_cfg["base_url"] = (
+                    str(draft.get("base_url", "") or "").strip()
+                    or get_backend_value(backend, "base_url")
+                )
+            backend_cfg["model"] = (
+                str(draft.get("model", "") or "").strip()
+                or get_backend_value(backend, "model")
+            )
+            backend_cfg["timeout_s"] = self._parse_float_range(
+                str(draft.get("timeout_s", "") or ""),
+                self._copy("request_timeout"),
+                3.0,
+                120.0,
+            )
+            backend_cfg["max_retries"] = int(
+                self._parse_float_range(
+                    str(draft.get("max_retries", "") or ""),
+                    self._copy("request_retries"),
+                    0.0,
+                    3.0,
+                )
+            )
+            spec = get_backend_spec(backend)
+            if spec.get("granular_timeout_input"):
+                timeout_overrides: dict[str, float | None] = {}
+                for config_key, label_key, minimum, maximum in (
+                    ("connect_timeout_s", "connect_timeout", 0.1, 120.0),
+                    ("pool_timeout_s", "pool_timeout", 0.1, 120.0),
+                    ("read_timeout_s", "read_timeout", 0.1, 300.0),
+                    ("write_timeout_s", "write_timeout", 0.1, 300.0),
+                    ("wall_timeout_s", "wall_timeout", 0.1, 300.0),
+                ):
+                    raw_value = str(draft.get(config_key, "") or "").strip()
+                    timeout_overrides[config_key] = (
+                        None
+                        if not raw_value
+                        else self._parse_float_range(
+                            raw_value,
+                            tr(self._ui_lang, label_key),
+                            minimum,
+                            maximum,
+                        )
+                    )
+                self._apply_backend_timeout_overrides(
+                    backend_cfg,
+                    timeout_overrides,
+                )
+            self._validate_backend_base_url(
+                backend,
+                backend_cfg.get("base_url", ""),
+            )
+            if spec.get("custom_headers_input"):
+                try:
+                    backend_cfg["custom_headers"] = normalize_openai_custom_headers(
+                        draft.get("custom_headers_text", "")
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        tr(self._ui_lang, "invalid_custom_headers")
+                    ) from exc
+            if spec.get("streaming_input"):
+                backend_cfg["streaming"] = bool(draft.get("streaming", False))
+
     def _translation_connection_config(self) -> dict:
         cfg = copy.deepcopy(self._config)
         trans_cfg = cfg.setdefault("translation", {})
@@ -5742,9 +6302,10 @@ class SettingsWindow(QDialog):
             trans_cfg[backend] = backend_cfg
         backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
         backend_cfg["base_url"] = (
-            self._backend_base_url_var.value().strip().rstrip("/")
+            self._backend_base_url_var.value().strip()
             or get_backend_value(backend, "base_url")
         )
+        self._validate_backend_base_url(backend, backend_cfg["base_url"])
         backend_cfg["model"] = (
             self._backend_model_var.value().strip()
             or get_backend_value(backend, "model")
@@ -5755,6 +6316,11 @@ class SettingsWindow(QDialog):
             3.0,
             120.0,
         )
+        if get_backend_spec(backend).get("granular_timeout_input"):
+            self._apply_backend_timeout_overrides(
+                backend_cfg,
+                self._backend_timeout_overrides(),
+            )
         backend_cfg["max_retries"] = int(
             self._parse_float_range(
                 self._backend_retries_var.value(),
@@ -5774,6 +6340,23 @@ class SettingsWindow(QDialog):
         if spec.get("streaming_input"):
             backend_cfg["streaming"] = self._backend_streaming_var.value()
         return cfg
+
+    def _validate_backend_base_url(self, backend: str, value: object) -> None:
+        if not backend_base_url_is_editable(backend):
+            return
+        try:
+            validate_api_base_url(
+                str(value or "").strip(),
+                label=f"{get_backend_label(backend, self._ui_lang)} API",
+            )
+        except ValueError as exc:
+            raise ValueError(
+                format_translation_error(
+                    exc,
+                    backend=backend,
+                    ui_language=self._ui_lang,
+                ).detailed_message
+            ) from exc
 
     def _test_translation_connection(self) -> None:
         if self._translation_connection_testing:
@@ -6435,6 +7018,69 @@ class SettingsWindow(QDialog):
         xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
         return str(xtts_cfg.get("device") or self._config.get("xtts_device") or "cpu").lower()
 
+    def _tts_api_timeout_values(self) -> dict[str, float]:
+        return self._tts_api_timeout_values_from_draft(
+            {
+                "timeout_seconds": self._tts_api_timeout_var.value(),
+                "connect_timeout_seconds": self._tts_api_connect_timeout_var.value(),
+                "read_timeout_seconds": self._tts_api_read_timeout_var.value(),
+                "wall_timeout_seconds": self._tts_api_wall_timeout_var.value(),
+            }
+        )
+
+    def _tts_api_timeout_values_from_draft(
+        self,
+        draft: dict[str, object],
+    ) -> dict[str, float]:
+        return {
+            "timeout_seconds": self._parse_float_range(
+                str(draft.get("timeout_seconds", "") or ""),
+                tr(self._ui_lang, "request_timeout"),
+                3.0,
+                120.0,
+            ),
+            "connect_timeout_seconds": self._parse_float_range(
+                str(draft.get("connect_timeout_seconds", "") or ""),
+                tr(self._ui_lang, "connect_timeout"),
+                0.25,
+                120.0,
+            ),
+            "read_timeout_seconds": self._parse_float_range(
+                str(draft.get("read_timeout_seconds", "") or ""),
+                tr(self._ui_lang, "read_timeout"),
+                0.25,
+                120.0,
+            ),
+            "wall_timeout_seconds": self._parse_float_range(
+                str(draft.get("wall_timeout_seconds", "") or ""),
+                tr(self._ui_lang, "wall_timeout"),
+                3.0,
+                300.0,
+            ),
+        }
+
+    def _apply_tts_api_draft_configs(self, tts_cfg: dict) -> None:
+        for engine, draft in self._tts_api_draft_configs.items():
+            if engine not in TTS_API_ENGINE_IDS:
+                continue
+            engine_cfg = tts_cfg.get(engine)
+            if not isinstance(engine_cfg, dict):
+                engine_cfg = {}
+                tts_cfg[engine] = engine_cfg
+            region = normalize_tts_api_region(engine, draft.get("region", ""))
+            engine_cfg["api_key"] = str(draft.get("api_key", "") or "").strip()
+            engine_cfg["region"] = region
+            engine_cfg["base_url"] = (
+                get_tts_api_base_url(engine, region)
+                if region != "custom"
+                else str(draft.get("base_url", "") or "").strip().rstrip("/")
+            )
+            engine_cfg["model"] = (
+                str(draft.get("model", "") or "").strip()
+                or str(get_tts_api_default_value(engine, "model") or "")
+            )
+            engine_cfg.update(self._tts_api_timeout_values_from_draft(draft))
+
     def _current_tts_engine_config(self, engine: str) -> dict[str, object]:
         tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
         source = tts_cfg.get(engine, {}) if isinstance(tts_cfg.get(engine, {}), dict) else {}
@@ -6465,6 +7111,7 @@ class SettingsWindow(QDialog):
             engine_cfg["model"] = self._tts_api_model_var.value().strip() or str(
                 get_tts_api_default_value(engine, "model") or ""
             )
+            engine_cfg.update(self._tts_api_timeout_values())
             if engine == "qwen_tts":
                 engine_cfg["language_type"] = self._qwen_tts_language_type_from_code(
                     self._selected_tts_test_language()
@@ -7095,7 +7742,21 @@ class SettingsWindow(QDialog):
         current_codes = self._capture_language_option_codes()
         self._apply_language_option_codes(current_codes, code)
         self._relocalize_numeric_inputs(previous_language)
-        self._fmt_codes = {l: c for l, c in get_output_format_options(self._ui_lang)}
+        self._capture_backend_draft()
+        self._capture_tts_api_draft()
+        tts_cfg = (
+            self._config.get("tts", {})
+            if isinstance(self._config.get("tts", {}), dict)
+            else {}
+        )
+        self._init_tts_api_vars(
+            tts_cfg,
+            str(current_codes.get("tts_engine", DEFAULT_TTS_ENGINE)),
+        )
+        self._fmt_codes = {
+            label: code
+            for label, code in get_output_format_options(self._ui_lang)
+        }
         self._refresh_language_widgets()
         if emit_signal:
             self.language_changed.emit(code)
@@ -7189,6 +7850,7 @@ class SettingsWindow(QDialog):
             self._applied_background_path = ""
 
     def _on_tts_engine_changed(self, text: str) -> None:
+        self._capture_tts_api_draft()
         engine = self._tts_engine_codes.get(text, text)
         self._tts_engine_var.set(engine)
         tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
@@ -7406,8 +8068,11 @@ class SettingsWindow(QDialog):
             return
         try:
             close()
-        except Exception:
-            logger.debug("Failed to close temporary TTS engine", exc_info=True)
+        except Exception as exc:
+            logger.debug(
+                "Failed to close temporary TTS engine: %s",
+                safe_exception_summary(exc),
+            )
 
     def _open_external_url(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
@@ -8005,13 +8670,20 @@ class SettingsWindow(QDialog):
             if not accepted:
                 self.tts_test_finished.emit(generation, False, self._copy("tts_test_not_accepted"))
         except Exception as e:
-            message = str(e)
-            logger.warning("TTS test failed: %s", e)
+            raw_message = str(e)
+            logger.warning(
+                "TTS test failed: %s",
+                safe_exception_summary(e),
+            )
             is_xtts_runtime_error = (
-                engine == "xtts" and self._is_xtts_runtime_error_message(message)
+                engine == "xtts" and self._is_xtts_runtime_error_message(raw_message)
             )
             if is_xtts_runtime_error:
                 message = self._xtts_runtime_error_message(e)
+            elif engine == "qwen_tts":
+                message = tts_error_token(tts_error_code(e))
+            else:
+                message = self._copy("tts_test_failed")
             self.tts_test_finished.emit(generation, False, message)
             if is_xtts_runtime_error:
                 self._open_xtts_runtime_repair(message)
@@ -8043,8 +8715,11 @@ class SettingsWindow(QDialog):
         if self._tts_test_manager:
             try:
                 self._tts_test_manager.stop_playback()
-            except Exception:
-                logger.debug("Failed to stop timed-out TTS playback", exc_info=True)
+            except Exception as exc:
+                logger.debug(
+                    "Failed to stop timed-out TTS playback: %s",
+                    safe_exception_summary(exc),
+                )
         self._finish_tts_test(generation, False, self._copy("tts_test_timed_out"))
 
     def _finish_tts_test(self, generation: int, success: bool, message: str) -> None:
@@ -8057,9 +8732,13 @@ class SettingsWindow(QDialog):
         if success:
             logger.info("TTS test finished successfully")
         else:
-            logger.warning("TTS test finished without playback success: %s", message or "unknown error")
+            logger.warning(
+                "TTS test finished without playback success error_code=%s",
+                tts_error_code(message),
+            )
             if manager_was_active and self._selected_tts_engine() == "qwen_tts":
-                if is_tts_authentication_error(message):
+                error_code = tts_error_code(message)
+                if error_code == "authentication":
                     region = (
                         self._tts_api_region_var.value().strip()
                         or self._selected_tts_api_region()
@@ -8069,11 +8748,27 @@ class SettingsWindow(QDialog):
                         tr(self._ui_lang, "tts_test"),
                         self._copy("qwen_tts_auth_failed", region=region),
                     )
-                elif is_tts_network_error(message):
+                elif error_code not in {"cancelled", "stopped"}:
+                    message_key = {
+                        "network": "qwen_tts_network_failed",
+                        "timeout": "qwen_tts_timeout_failed",
+                        "rate_limit": "qwen_tts_rate_limit_failed",
+                        "configuration": "qwen_tts_configuration_failed",
+                        "unsupported_model": "qwen_tts_configuration_failed",
+                        "invalid_endpoint": "qwen_tts_configuration_failed",
+                        "unavailable": "qwen_tts_configuration_failed",
+                        "queue_full": "qwen_tts_busy_failed",
+                        "pipeline_full": "qwen_tts_busy_failed",
+                        "suspended": "qwen_tts_busy_failed",
+                        "playback": "qwen_tts_playback_failed",
+                        "safety": "qwen_tts_safety_failed",
+                        "invalid_input": "qwen_tts_input_failed",
+                        "provider": "qwen_tts_provider_failed",
+                    }.get(error_code, "qwen_tts_provider_failed")
                     QMessageBox.warning(
                         self,
                         tr(self._ui_lang, "tts_test"),
-                        self._copy("qwen_tts_network_failed"),
+                        self._copy(message_key),
                     )
             if (
                 manager_was_active
@@ -8093,8 +8788,11 @@ class SettingsWindow(QDialog):
             stop_playback = getattr(manager, "stop_playback", None)
             if callable(stop_playback):
                 stop_playback()
-        except Exception:
-            logger.debug("Failed to stop TTS test manager", exc_info=True)
+        except Exception as exc:
+            logger.debug(
+                "Failed to stop TTS test manager: %s",
+                safe_exception_summary(exc),
+            )
 
         close = getattr(manager, "close", None)
         if not callable(close):
@@ -8102,20 +8800,51 @@ class SettingsWindow(QDialog):
         if not callable(close):
             return
 
-        def close_manager() -> None:
+        remember_deferred = getattr(self, "_on_deferred_tts_manager", None)
+        if callable(remember_deferred):
             try:
-                close()
-            except Exception:
-                logger.debug("Failed to close TTS test manager", exc_info=True)
+                remember_deferred(manager)
+            except Exception as exc:
+                logger.debug(
+                    "Failed to register deferred TTS test manager: %s",
+                    safe_exception_summary(exc),
+                )
+
+        def close_manager(timeout_seconds: float | None = None) -> None:
+            try:
+                if timeout_seconds is None:
+                    close()
+                else:
+                    try:
+                        close(timeout_seconds=timeout_seconds)
+                    except TypeError:
+                        request_close = getattr(manager, "request_close", None)
+                        if callable(request_close):
+                            request_close()
+                        else:
+                            close()
+            except Exception as exc:
+                logger.debug(
+                    "Failed to close TTS test manager: %s",
+                    safe_exception_summary(exc),
+                )
 
         # XTTS inference cannot be interrupted. Closing on a cleanup thread
         # avoids freezing the Qt event loop for the manager's join timeout and
         # does not retain this window.
-        threading.Thread(
+        cleanup_thread = threading.Thread(
             target=close_manager,
             daemon=True,
             name="settings-tts-close",
-        ).start()
+        )
+        try:
+            cleanup_thread.start()
+        except Exception as exc:
+            logger.error(
+                "Failed to start TTS test cleanup thread; closing inline: %s",
+                safe_exception_summary(exc),
+            )
+            close_manager(timeout_seconds=0.0)
 
     def _set_update_checking(self, checking: bool) -> None:
         self._update_checking = bool(checking)
@@ -8396,6 +9125,8 @@ class SettingsWindow(QDialog):
     # Save
     # ----------------------------------------------------------------
     def _save(self) -> None:
+        self._capture_backend_draft()
+        self._capture_tts_api_draft()
         cfg = copy.deepcopy(self._config)
         ui_cfg = cfg.setdefault("ui", {})
         trans_cfg = cfg.setdefault("translation", {})
@@ -8436,20 +9167,6 @@ class SettingsWindow(QDialog):
 
         backend = self._backend_code()
         trans_cfg["backend"] = backend
-        backend_cfg = trans_cfg.setdefault(backend, {})
-        if isinstance(backend_cfg, dict):
-            backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
-            if backend_has_service_regions(backend):
-                backend_region = self._selected_qwen_translation_region()
-                backend_cfg["region"] = backend_region
-                backend_cfg["base_url"] = (
-                    get_backend_region_base_url(backend, backend_region)
-                    if backend_region != "custom"
-                    else self._backend_base_url_var.value().strip().rstrip("/")
-                )
-            else:
-                backend_cfg["base_url"] = self._backend_base_url_var.value().strip() or get_backend_value(backend, "base_url")
-            backend_cfg["model"] = self._backend_model_var.value().strip() or get_backend_value(backend, "model")
         fmt_code = self._fmt_codes.get(self._output_format_var.value(), "translated_with_original")
         trans_cfg["output_format"] = normalize_output_format(fmt_code)
         trans_cfg["chatbox_template"] = self._chatbox_template_var.value().strip()
@@ -8498,33 +9215,9 @@ class SettingsWindow(QDialog):
             gemini_cfg.setdefault("use_live_api", True)
 
         try:
-            backend_timeout_s = self._parse_float_range(self._backend_timeout_var.value(), self._copy("request_timeout"), 3.0, 120.0)
-            backend_retries = int(self._parse_float_range(self._backend_retries_var.value(), self._copy("request_retries"), 0.0, 3.0))
-            backend_spec = get_backend_spec(backend)
-            backend_custom_headers: dict[str, str] | None = None
-            if backend == "grok_compatible":
-                try:
-                    backend_cfg["base_url"] = validate_api_base_url(
-                        backend_cfg.get("base_url", ""),
-                        label="Grok-compatible API",
-                    )
-                except ValueError as exc:
-                    raise ValueError(
-                        format_translation_error(
-                            exc,
-                            backend=backend,
-                            ui_language=self._ui_lang,
-                        ).detailed_message
-                    ) from exc
-            if backend_spec.get("custom_headers_input"):
-                try:
-                    backend_custom_headers = normalize_openai_custom_headers(
-                        self._backend_custom_headers_var.value()
-                    )
-                except ValueError as exc:
-                    raise ValueError(
-                        tr(self._ui_lang, "invalid_custom_headers")
-                    ) from exc
+            self._apply_backend_draft_configs(trans_cfg)
+            selected_tts_engine = self._selected_tts_engine()
+            self._apply_tts_api_draft_configs(tts_cfg)
             vad_threshold = self._parse_positive_float(self._vad_var.value(), self._copy("vad_seconds"))
             chunk_interval_ms = int(
                 self._parse_float_range(
@@ -8578,14 +9271,6 @@ class SettingsWindow(QDialog):
             )
             return
 
-        if isinstance(backend_cfg, dict):
-            backend_cfg["timeout_s"] = backend_timeout_s
-            backend_cfg["max_retries"] = backend_retries
-            if backend_custom_headers is not None:
-                backend_cfg["custom_headers"] = backend_custom_headers
-            if backend_spec.get("streaming_input"):
-                backend_cfg["streaming"] = self._backend_streaming_var.value()
-
         if chunk_window_s * 1000 < chunk_interval_ms:
             QMessageBox.warning(self, self._copy("save_failed"), self._copy("recognition_window_too_short"))
             return
@@ -8613,7 +9298,7 @@ class SettingsWindow(QDialog):
             streaming_cfg["ring_buffer_s"] = max(float(streaming_cfg.get("ring_buffer_s", 4.0)), chunk_window_s)
             streaming_cfg.setdefault("recent_speech_hold_s", 0.8)
 
-        tts_engine = self._selected_tts_engine()
+        tts_engine = selected_tts_engine
         tts_cfg["enabled"] = self._tts_enabled_var.value()
         tts_cfg["engine"] = tts_engine
         tts_cfg["auto_read"] = self._tts_auto_read_var.value()
@@ -8630,16 +9315,6 @@ class SettingsWindow(QDialog):
             tts_engine_cfg["voice"] = tts_voice or None
             tts_engine_cfg["rate"] = self._safe_tts_rate(self._tts_rate_var.value(), engine=tts_engine)
             tts_engine_cfg["volume"] = self._safe_tts_volume(self._tts_volume_var.value())
-            if tts_engine in TTS_API_ENGINE_IDS:
-                tts_api_region = self._selected_tts_api_region()
-                tts_engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
-                tts_engine_cfg["region"] = tts_api_region
-                tts_engine_cfg["base_url"] = (
-                    get_tts_api_base_url(tts_engine, tts_api_region)
-                    if tts_api_region != "custom"
-                    else self._tts_api_base_url_var.value().strip().rstrip("/")
-                )
-                tts_engine_cfg["model"] = self._tts_api_model_var.value().strip() or str(get_tts_api_default_value(tts_engine, "model") or "")
         style_cfg = tts_cfg.setdefault("style_bert_vits2", {})
         if isinstance(style_cfg, dict):
             style_cfg["device"] = self._tts_device_codes.get(self._tts_device_var.value(), "cpu")

@@ -7,6 +7,7 @@ import base64
 import copy
 import ctypes
 import json
+import math
 import os
 import shutil
 import sys
@@ -74,6 +75,11 @@ from src.asr.model_registry import (
     get_qwen3_asr_base_url,
     normalize_qwen3_asr_region,
 )
+from src.translators.asr_rewriter import (
+    ASR_REWRITE_DISABLED,
+    legacy_social_rewrite_style,
+    normalize_asr_rewrite_style,
+)
 
 _SAVE_LOCK = threading.Lock()
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
@@ -82,11 +88,6 @@ _PROTECTED_SECRET_PREFIX = "dpapi:v1:"
 _LAST_GOOD_CONFIG_SUFFIX = ".last-good"
 _REQUIRED_CONFIG_SECTIONS = frozenset(
     {"asr", "audio", "osc", "translation", "tts", "ui"}
-)
-from src.translators.asr_rewriter import (
-    ASR_REWRITE_DISABLED,
-    legacy_social_rewrite_style,
-    normalize_asr_rewrite_style,
 )
 
 
@@ -703,7 +704,11 @@ def _coerce_float_range_config(
 ) -> bool:
     try:
         parsed = float(mapping.get(key, default))
-        if parsed < minimum or (maximum is not None and parsed > maximum):
+        if (
+            not math.isfinite(parsed)
+            or parsed < minimum
+            or (maximum is not None and parsed > maximum)
+        ):
             raise ValueError
     except (TypeError, ValueError):
         parsed = float(default)
@@ -1575,6 +1580,31 @@ def _ensure_translation_config(
                 backend_cfg[key] = default_value
                 changed = True
         backend_spec = _catalog_backends().get(backend_code, {})
+        if backend_spec.get("granular_timeout_input"):
+            if _coerce_float_range_config(
+                backend_cfg,
+                "timeout_s",
+                float(backend_spec.get("timeout_s", 15.0)),
+                3.0,
+                120.0,
+            ):
+                changed = True
+            phase_default = float(backend_cfg.get("timeout_s", 15.0))
+            for timeout_key, timeout_maximum in (
+                ("connect_timeout_s", 120.0),
+                ("pool_timeout_s", 120.0),
+                ("read_timeout_s", 300.0),
+                ("write_timeout_s", 300.0),
+                ("wall_timeout_s", 300.0),
+            ):
+                if _coerce_float_range_config(
+                    backend_cfg,
+                    timeout_key,
+                    phase_default,
+                    0.1,
+                    timeout_maximum,
+                ):
+                    changed = True
         if backend_spec.get("custom_headers_input"):
             custom_headers = backend_cfg.get("custom_headers", {})
             if isinstance(custom_headers, str):
@@ -1613,7 +1643,9 @@ def _ensure_translation_config(
             openai_cfg["model"] = _DEFAULT_OPENAI_MODEL
             changed = True
 
-    for anthropic_backend in ("anthropic", "anthropic_compatible"):
+    # Relay-owned model identifiers must remain byte-for-byte stable. Apply
+    # Anthropic retirement migrations only to the official provider catalog.
+    for anthropic_backend in ("anthropic",):
         anthropic_cfg = trans_cfg.get(anthropic_backend, {})
         if not isinstance(anthropic_cfg, dict):
             continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import sys
 import threading
 import time
 import weakref
@@ -9,13 +10,14 @@ from types import SimpleNamespace
 import pytest
 
 from src.asr.errors import ASRTemporaryUnavailableError
+from src.core.output_dispatcher import OutputMessage
 from src.core.realtime_pipelines import RealtimeTranslationResult
 from src.core.realtime_scheduler import (
     AdmissionStatus,
     RealtimeCompletion,
     RealtimeTask,
 )
-from src.translators.base import TranslationContextStore
+from src.translators.base import ProviderWallTimeoutError, TranslationContextStore
 from src.ui_qt import main_window
 from src.ui_qt.main_window import (
     DESKTOP_SOURCE,
@@ -494,6 +496,100 @@ def test_scheduler_completion_is_applied_as_one_ordered_ui_transaction():
     ]
 
 
+def test_scheduler_completion_correlates_osc_and_tts_request_context():
+    now = time.monotonic()
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 21
+    captured: dict[str, object] = {}
+
+    def dispatch(message, *, sinks):
+        if sinks == ("tts",):
+            captured["tts_context"] = dict(message.metadata["request_context"])
+            return {"tts": True}
+        return {name: True for name in sinks}
+
+    def send_chatbox(_text, **kwargs):
+        captured["osc_context"] = dict(kwargs["request_context"])
+        captured["osc_callback"] = kwargs["completion_callback"]
+        return True
+
+    window._dispatch_output_message = dispatch
+    window._send_chatbox_payload = send_chatbox
+    window._restore_runtime_status = lambda *_keys: None
+
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=True,
+        config_snapshot={},
+        diagnostics={
+            "speech_ended_at": now - 0.5,
+            "ui_started_at": now - 0.02,
+        },
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=21,
+        sequence=7,
+        provider_key="provider",
+        payload=payload,
+        submitted_at=now - 0.4,
+        diagnostics=payload.diagnostics,
+    )
+    message = OutputMessage(
+        source="mic",
+        original_text="hello",
+        translated_text="translated",
+    )
+    completion = RealtimeCompletion(
+        task=task,
+        recognized_text="hello",
+        result=RealtimeTranslationResult(
+            original_text="hello",
+            translated_text="translated",
+            output_message=message,
+        ),
+    )
+
+    output = window._deliver_scheduler_completion_ui(completion)
+
+    assert output == {
+        "osc_attempted": True,
+        "osc_queued": True,
+        "tts_attempted": True,
+        "tts_queued": True,
+    }
+    assert captured["osc_context"] == captured["tts_context"]
+    assert captured["osc_context"]["source"] == MIC_SOURCE
+    assert captured["osc_context"]["session_id"] == 21
+    assert captured["osc_context"]["sequence"] == 7
+
+    callback = captured["osc_callback"]
+    retained = [cell.cell_contents for cell in (callback.__closure__ or ())]
+    assert all(item is not completion for item in retained)
+    assert all(item is not task for item in retained)
+    assert all(item is not payload for item in retained)
+    assert all(item is not message for item in retained)
+
+    callback(
+        {
+            "outcome": "sent",
+            "queue_wait_s": 0.01,
+            "pipeline_total_s": 0.02,
+        }
+    )
+    assert payload.diagnostics["osc_outcome"] == "sent"
+
+
 def test_qwen_asr_timeout_uses_localized_asr_failure_instead_of_translation_error():
     window = MainWindow.__new__(MainWindow)
     window._running = True
@@ -709,9 +805,23 @@ def test_reverse_latency_log_separates_provider_queue_reorder_ui_and_tts(caplog)
         "asr_provider_queue_s": 0.02,
         "asr_provider_s": 0.20,
         "asr_connection_reused": True,
+        "rewrite_pool_wait_s": 0.002,
+        "rewrite_first_token_s": 0.01,
+        "rewrite_full_response_s": 0.03,
+        "rewrite_parse_s": 0.001,
         "translation_context_lookup_s": 0.003,
         "translation_prompt_build_s": 0.004,
+        "translation_pool_wait_s": 0.005,
+        "translation_tcp_s": 0.01,
+        "translation_tls_s": 0.02,
+        "translation_response_headers_s": 0.12,
+        "translation_provider_processing_s": 0.09,
         "translation_provider_s": 0.15,
+        "translation_first_token_s": 0.11,
+        "translation_full_response_s": 0.15,
+        "translation_parse_s": 0.002,
+        "translation_postprocess_s": 0.003,
+        "translation_connection_reused": False,
     }
     task = RealtimeTask(
         source=DESKTOP_SOURCE,
@@ -745,11 +855,18 @@ def test_reverse_latency_log_separates_provider_queue_reorder_ui_and_tts(caplog)
 
     message = caplog.records[-1].getMessage()
     assert "asr_provider_queue_ms=" in message
+    assert "rewrite_connection_pool_wait_ms=2.0" in message
+    assert "rewrite_first_token_ms=10.0" in message
     assert "translation_context_ms=" in message
+    assert "connection_pool_wait_ms=5.0" in message
+    assert "provider_processing_ms=90.0" in message
+    assert "streaming_first_token_ms=110.0" in message
+    assert "parsing_postprocessing_ms=5.0" in message
     assert "translation_provider_ms=" in message
     assert "reorder_ms=" in message
     assert "ui_queue_ms=" in message
-    assert "tts_wait_ms=0.0 tts_queued=false" in message
+    assert "osc_wait_ms=na osc_queued=false" in message
+    assert "tts_wait_ms=na tts_queued=false" in message
     assert "asr_connection_reused=True" in message
 
 
@@ -783,7 +900,7 @@ def test_stale_startup_cleanup_cannot_touch_newer_session():
     assert window._startup_cancel_event is current_event
 
 
-def test_shutdown_sets_exact_startup_event_and_invalidates_session():
+def test_shutdown_sets_exact_startup_event_and_invalidates_session(caplog):
     window = MainWindow.__new__(MainWindow)
     startup_event = threading.Event()
     shutdown_barrier = threading.Event()
@@ -805,13 +922,17 @@ def test_shutdown_sets_exact_startup_event_and_invalidates_session():
     window._close_osc_sender = lambda: None
     window._reset_tts_manager = lambda: None
 
-    window._shutdown()
+    with caplog.at_level("INFO", logger="src.ui_qt.main_window"):
+        window._shutdown()
 
     assert startup_event.is_set()
     assert window._destroying is True
     assert window._running is False
     assert window._listen_session == 5
     assert close_waits == [shutdown_barrier]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("foreground shutdown complete" in message for message in messages)
+    assert any("shutdown cleanup complete" in message for message in messages)
 
 
 def test_prepare_for_update_install_quiesces_without_destroying_window():
@@ -842,7 +963,7 @@ def test_prepare_for_update_install_quiesces_without_destroying_window():
     window._close_manual_translation_controller = (
         lambda *, wait_timeout_s=None: events.append("close-manual") or True
     )
-    window._reset_tts_manager = lambda: events.append("close-tts")
+    window._reset_tts_manager = lambda **_kwargs: events.append("close-tts")
     window._close_update_osc_service = lambda: events.append("close-osc")
     window._discard_ui_callbacks = lambda: events.append("discard-ui")
     window._flush_config_save = lambda: events.append("save")
@@ -887,7 +1008,7 @@ def test_prepare_for_update_install_waits_for_worker_barrier():
     window._wait_for_update_runtime_quiescence = lambda _deadline: True
     window._clear_cached_translator = lambda: None
     window._close_manual_translation_controller = lambda **_kwargs: True
-    window._reset_tts_manager = lambda: None
+    window._reset_tts_manager = lambda **_kwargs: None
     window._close_update_osc_service = lambda: None
     window._discard_ui_callbacks = lambda: None
     window._flush_config_save = lambda: None
@@ -953,6 +1074,166 @@ def test_pipeline_start_waits_for_previous_runtime_cleanup():
     active_cleanup.alive = False
     assert window._pipeline_cleanup_in_progress() is False
     assert window._asr_cleanup_threads == []
+
+
+def test_runtime_cleanup_tracks_deferred_tts_and_manual_workers():
+    class TtsManager:
+        ready = False
+
+        def get_quiescence_state(self):
+            return SimpleNamespace(
+                quiescent=self.ready,
+                engine_close_deferred=not self.ready,
+            )
+
+    class ManualController:
+        ready = False
+
+        def close(self, *, wait_timeout_s=None):
+            return self.ready
+
+    manager = TtsManager()
+    controller = ManualController()
+    window = MainWindow.__new__(MainWindow)
+    window._asr_close_lock = threading.RLock()
+    window._startup_thread = None
+    window._asr_cleanup_threads = []
+    window._closing_asr_providers = []
+    window._deferred_tts_managers = [manager]
+    window._deferred_manual_translation_controllers = [controller]
+
+    assert window._pipeline_cleanup_in_progress() is False
+    assert window._runtime_cleanup_in_progress() is True
+    assert window._deferred_tts_managers == [manager]
+    assert window._deferred_manual_translation_controllers == [controller]
+
+    manager.ready = True
+    controller.ready = True
+    assert window._runtime_cleanup_in_progress() is False
+    assert window._deferred_tts_managers == []
+    assert window._deferred_manual_translation_controllers == []
+
+
+def test_settings_window_registers_tts_test_manager_with_main_lifecycle(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    class Signal:
+        def connect(self, callback):
+            captured["language_callback"] = callback
+
+    class FakeSettingsWindow:
+        def __init__(self, _parent, _config, **kwargs):
+            captured.update(kwargs)
+            self.language_changed = Signal()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.ui_qt.settings_window",
+        SimpleNamespace(SettingsWindow=FakeSettingsWindow),
+    )
+    window = MainWindow.__new__(MainWindow)
+    window._config = {}
+    window._ui_lang = "en"
+    window._deferred_cleanup_lock = threading.RLock()
+    window._deferred_tts_managers = []
+    window._on_config_saved = lambda: None
+    window._on_settings_listen_state_changed = lambda *_args: None
+    window._on_settings_theme_changed = lambda *_args: None
+    window._open_audio_diagnostics_window = lambda *_args: None
+    window._open_vad_calibration_window = lambda *_args: None
+    window.open_mode_wizard = lambda: None
+    window._on_language_changed = lambda *_args: None
+    window._sync_settings_window_vrc_listen_state = lambda: None
+
+    created = window._create_settings_window()
+    manager = object()
+    captured["on_deferred_tts_manager"](manager)
+
+    assert isinstance(created, FakeSettingsWindow)
+    assert window._deferred_tts_managers == [manager]
+
+
+def test_runtime_cleanup_tracks_supervised_provider_cleanup(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._pipeline_cleanup_in_progress = lambda: False
+    window._deferred_tts_cleanup_in_progress = lambda: False
+    window._deferred_manual_cleanup_in_progress = lambda: False
+    active = True
+    monkeypatch.setattr(
+        main_window,
+        "provider_background_work_in_progress",
+        lambda: active,
+    )
+
+    assert window._runtime_cleanup_in_progress() is True
+    active = False
+    assert window._runtime_cleanup_in_progress() is False
+
+
+def test_shutdown_terminal_event_waits_for_tts_and_manual_quiescence(caplog):
+    release = threading.Event()
+
+    class TtsManager:
+        def close(self):
+            return self.get_quiescence_state()
+
+        def get_quiescence_state(self):
+            ready = release.is_set()
+            return SimpleNamespace(
+                quiescent=ready,
+                engine_close_deferred=not ready,
+            )
+
+    class ManualController:
+        def invalidate(self):
+            return None
+
+        def close(self, *, wait_timeout_s=None):
+            return release.is_set()
+
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._running = False
+    window._listen_session = 4
+    window._startup_cancel_event = threading.Event()
+    window._sender = None
+    window._osc_service = None
+    window._tts_manager = TtsManager()
+    window._tts_manager_signature = object()
+    window._manual_translation_controller = ManualController()
+    window._rewrite_coordinator = None
+    window._asr_close_lock = threading.RLock()
+    window._startup_thread = None
+    window._asr_cleanup_threads = []
+    window._closing_asr_providers = []
+    window._stop_hotkeys = lambda: None
+    window._stop_owned_timers = lambda: None
+    window._release_overlay_service = lambda: None
+    window._close_independent_tool_windows = lambda: None
+    window._flush_config_save = lambda: None
+    window._reset_streaming_state = lambda: None
+    window._stop_listen = lambda: None
+    window._stop_microphone_capture = lambda: None
+    window._stop_workers = lambda: threading.Event()
+    window._close_asr_providers = lambda *args, **kwargs: None
+    window._close_osc_sender = lambda: None
+    window._clear_cached_translator = lambda: None
+    window._discard_ui_callbacks = lambda: None
+
+    with caplog.at_level("INFO", logger="src.ui_qt.main_window"):
+        window._shutdown()
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("foreground shutdown complete" in message for message in messages)
+        assert not any("shutdown cleanup complete" in message for message in messages)
+
+        release.set()
+        window._shutdown_completion_thread.join(timeout=2.0)
+
+    assert not window._shutdown_completion_thread.is_alive()
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("shutdown cleanup complete" in message for message in messages)
 
 
 def test_do_start_defers_before_constructing_replacement_runtime():
@@ -1091,6 +1372,73 @@ def test_translation_workers_keep_translators_confined_to_worker_state(monkeypat
     assert window._translator is main_window_translator
 
 
+def test_translation_stage_uses_request_aggregated_provider_metrics(monkeypatch):
+    class FakePipeline:
+        def __init__(self, _config, _dispatcher, translator_factory=None) -> None:
+            del translator_factory
+
+        def create_plan(self, *_args, **_kwargs):
+            return SimpleNamespace(needs_api_translation=True)
+
+        def translate_plan(self, _plan, translator, **_kwargs):
+            active = translator or object()
+            return (
+                RealtimeTranslationResult(
+                    original_text="hello",
+                    translated_text="translated",
+                    api_translation_used=True,
+                    provider_metrics={
+                        "provider_calls": 3,
+                        "pool_wait_s": 0.06,
+                        "full_response_s": 0.60,
+                    },
+                ),
+                active,
+            )
+
+    monkeypatch.setattr(main_window, "MicPipeline", FakePipeline)
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 17
+    window._translation_cooldown_active = lambda _source: False
+    window._record_source_translation_success = lambda _source: None
+    window._record_source_translation_failure = lambda *_args: None
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="zh",
+        third_target_language="ko",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=False,
+        config_snapshot={},
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=17,
+        sequence=3,
+        provider_key="provider",
+        payload=payload,
+        submitted_at=time.monotonic(),
+        diagnostics=payload.diagnostics,
+    )
+
+    window._scheduler_translation_stage(
+        task,
+        "hello",
+        _RealtimeTranslationWorkerState(),
+        threading.Event(),
+    )
+
+    assert payload.diagnostics["translation_provider_calls"] == 3
+    assert payload.diagnostics["translation_pool_wait_s"] == 0.06
+    assert payload.diagnostics["translation_full_response_s"] == 0.60
+
+
 def test_translation_worker_keeps_reverse_client_separate_from_microphone():
     class Translator:
         def __init__(self) -> None:
@@ -1117,7 +1465,23 @@ def test_translation_worker_keeps_reverse_client_separate_from_microphone():
     assert mic.closed == 1
 
 
-def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
+def test_realtime_worker_cleanup_logs_hide_raw_provider_prose(caplog):
+    secret = "raw provider close failure with relay/private-path"
+
+    class Translator:
+        def close(self) -> None:
+            raise RuntimeError(secret)
+
+    caplog.set_level("DEBUG", logger="src.ui_qt.main_window")
+    _RealtimeTranslationWorkerState(translator=Translator()).close()
+    _RealtimeRewriteWorkerState(translator=Translator()).close()
+
+    assert secret not in caplog.text
+    assert caplog.text.count("type=RuntimeError") == 2
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_realtime_translator_caps_all_provider_timeouts(monkeypatch):
     captured = {}
 
     def fake_create_translator(config, *, context_store=None):
@@ -1135,6 +1499,11 @@ def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
             "realtime_timeout_s": 6.0,
             "openai_compatible": {
                 "timeout_s": 15.0,
+                "connect_timeout_s": 12.0,
+                "pool_timeout_s": 11.0,
+                "read_timeout_s": 10.0,
+                "write_timeout_s": 9.0,
+                "wall_timeout_s": 20.0,
                 "max_retries": 2,
             },
             "qianwen": {
@@ -1149,6 +1518,11 @@ def test_realtime_translator_caps_only_realtime_timeout(monkeypatch):
     runtime_backend = captured["config"]["translation"]["openai_compatible"]
     runtime_fallback = captured["config"]["translation"]["qianwen"]
     assert runtime_backend["timeout_s"] == 6.0
+    assert runtime_backend["connect_timeout_s"] == 6.0
+    assert runtime_backend["pool_timeout_s"] == 6.0
+    assert runtime_backend["read_timeout_s"] == 6.0
+    assert runtime_backend["write_timeout_s"] == 6.0
+    assert runtime_backend["wall_timeout_s"] == 6.0
     assert runtime_backend["max_retries"] == 0
     assert runtime_fallback["timeout_s"] == 6.0
     assert runtime_fallback["max_retries"] == 0
@@ -1397,6 +1771,168 @@ def test_rewrite_worker_keeps_warm_client_for_style_only_snapshot_changes():
     assert first.closed == 1
 
 
+def test_failed_realtime_rewrite_retains_provider_phase_metrics():
+    class Translator:
+        def rewrite_asr(self, *_args, **_kwargs):
+            raise TimeoutError("provider stalled")
+
+        def translation_metrics(self):
+            return {
+                "pool_wait_s": 0.02,
+                "response_headers_s": 0.10,
+                "full_response_s": 0.30,
+                "wall_timeout_triggered": True,
+            }
+
+        def close(self):
+            return None
+
+    snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "openai",
+                "openai": {"model": "gpt-test", "api_key": "secret"},
+                "asr_rewrite_style": "catgirl",
+            }
+        }
+    )
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="en",
+        third_target_language="",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=False,
+        config_snapshot=snapshot,
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=1,
+        sequence=9,
+        provider_key="provider",
+        payload=payload,
+        submitted_at=time.monotonic(),
+        diagnostics=payload.diagnostics,
+    )
+    window = MainWindow.__new__(MainWindow)
+    window._realtime_task_active = lambda _task: True
+    window._rewrite_coordinator = None
+    window._create_realtime_translator = lambda _config: Translator()
+
+    state = _RealtimeRewriteWorkerState()
+    rewritten = window._scheduler_rewrite_stage(
+        task,
+        "hello",
+        state,
+        threading.Event(),
+    )
+
+    assert rewritten == "hello"
+    assert payload.diagnostics["rewrite_pool_wait_s"] == 0.02
+    assert payload.diagnostics["rewrite_response_headers_s"] == 0.10
+    assert payload.diagnostics["rewrite_full_response_s"] == 0.30
+    assert payload.diagnostics["rewrite_wall_timeout_triggered"] is True
+    assert state.translator is None
+    assert state.runtime_signature is None
+
+
+def test_realtime_rewrite_rotates_retired_client_after_wall_timeout():
+    created = []
+
+    class Translator:
+        def __init__(self, *, fail: bool) -> None:
+            self.fail = fail
+            self.closed = 0
+            self.retired = False
+
+        def rewrite_asr(self, text, *_args, **_kwargs):
+            if self.fail:
+                self.retired = True
+                raise ProviderWallTimeoutError("raw provider timeout prose")
+            return f"recovered:{text}"
+
+        def translation_metrics(self):
+            return {"wall_timeout_triggered": self.retired}
+
+        def _pending_requests_retired(self):
+            return self.retired
+
+        def close(self):
+            self.closed += 1
+
+    first = Translator(fail=True)
+    second = Translator(fail=False)
+    candidates = iter((first, second))
+    snapshot = _freeze_snapshot_value(
+        {
+            "translation": {
+                "backend": "openai",
+                "openai": {"model": "gpt-test", "api_key": "secret"},
+                "asr_rewrite_style": "catgirl",
+            }
+        }
+    )
+
+    def task_for(sequence: int) -> RealtimeTask:
+        payload = _RealtimeAudioPayload(
+            audio=b"audio",
+            asr_provider=object(),
+            asr_language=None,
+            source_language="en",
+            target_language="ja",
+            second_target_language="",
+            third_target_language="",
+            listen_target_language="ja",
+            listen_prefix="",
+            send_to_chatbox=False,
+            config_snapshot=snapshot,
+        )
+        return RealtimeTask(
+            source=MIC_SOURCE,
+            session_id=1,
+            sequence=sequence,
+            provider_key="provider",
+            payload=payload,
+            submitted_at=time.monotonic(),
+            diagnostics=payload.diagnostics,
+        )
+
+    window = MainWindow.__new__(MainWindow)
+    window._realtime_task_active = lambda _task: True
+    window._rewrite_coordinator = None
+
+    def create_translator(_config):
+        translator = next(candidates)
+        created.append(translator)
+        return translator
+
+    window._create_realtime_translator = create_translator
+    state = _RealtimeRewriteWorkerState()
+
+    assert window._scheduler_rewrite_stage(
+        task_for(0),
+        "first",
+        state,
+        threading.Event(),
+    ) == "first"
+    assert state.translator is None
+    assert state.runtime_signature is None
+    assert first.closed == 0
+
+    assert window._scheduler_rewrite_stage(
+        task_for(1),
+        "second",
+        state,
+        threading.Event(),
+    ) == "recovered:second"
+    assert created == [first, second]
+    assert state.translator is second
+
+
 def test_invalidating_reverse_source_cancels_only_reverse_generation_and_context():
     class Scheduler:
         def __init__(self) -> None:
@@ -1577,3 +2113,82 @@ def test_translation_failure_discards_worker_client_for_clean_retry():
 
     assert translator.closed == 1
     assert state.translator is None
+
+
+def test_wall_timeout_detaches_worker_client_without_competing_blocking_close():
+    class RetiredTranslator:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def _pending_requests_retired(self) -> bool:
+            return True
+
+        def translation_metrics(self):
+            return {"wall_timeout_triggered": True, "wall_timeout_s": 0.1}
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise AssertionError("cleanup thread must own destructive close")
+
+    class FailingPipeline:
+        @staticmethod
+        def create_plan(*_args, **_kwargs):
+            return SimpleNamespace(needs_api_translation=True)
+
+        @staticmethod
+        def translate_plan(*_args, **_kwargs):
+            raise ProviderWallTimeoutError("provider request timed out")
+
+    snapshot = _freeze_snapshot_value({"translation": {}})
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language="en",
+        source_language="en",
+        target_language="ja",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="zh",
+        listen_prefix="",
+        send_to_chatbox=False,
+        config_snapshot=snapshot,
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=32,
+        sequence=0,
+        provider_key="mic",
+        payload=payload,
+        submitted_at=time.monotonic(),
+    )
+    translator = RetiredTranslator()
+    state = _RealtimeTranslationWorkerState(
+        translator=translator,
+        config_snapshot=snapshot,
+        config={},
+        dispatcher=object(),
+        mic_pipeline=FailingPipeline(),
+        listen_pipeline=object(),
+    )
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 32
+    window._realtime_source_generations = {MIC_SOURCE: 0, DESKTOP_SOURCE: 0}
+    window._translation_cooldown_active = lambda _source: False
+    window._format_translation_error = lambda _error: SimpleNamespace(
+        category="timeout"
+    )
+    window._record_translation_failure = lambda _friendly: 0.0
+
+    with pytest.raises(ProviderWallTimeoutError):
+        window._scheduler_translation_stage(
+            task,
+            "hello",
+            state,
+            threading.Event(),
+        )
+
+    assert translator.close_calls == 0
+    assert state.translator is None
+    assert payload.diagnostics["translation_wall_timeout_triggered"] is True

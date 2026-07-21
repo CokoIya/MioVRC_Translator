@@ -98,3 +98,23 @@ def test_ensure_tts_config_migrates_qwen_region_from_raw_loaded_config(
     assert config_manager._ensure_tts_config(config, loaded=loaded) is True
     assert config["tts"]["qwen_tts"]["region"] == expected_region
     assert config["tts"]["qwen_tts"]["base_url"] == expected_base_url
+
+
+def test_qwen_custom_model_id_and_timeout_controls_are_preserved_exactly():
+    resolved = resolve_tts_api_config(
+        "qwen_tts",
+        {
+            "region": "custom",
+            "base_url": CUSTOM_QWEN_TTS_BASE_URL,
+            "model": "relay/qwen3-tts-private-2026-07",
+            "connect_timeout_seconds": 2.5,
+            "read_timeout_seconds": 11.0,
+            "wall_timeout_seconds": 19.0,
+        },
+    )
+
+    assert resolved["model"] == "relay/qwen3-tts-private-2026-07"
+    assert resolved["base_url"] == CUSTOM_QWEN_TTS_BASE_URL
+    assert resolved["connect_timeout_seconds"] == 2.5
+    assert resolved["read_timeout_seconds"] == 11.0
+    assert resolved["wall_timeout_seconds"] == 19.0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import logging
 import queue
@@ -26,6 +27,12 @@ class _QueuedOSCMessage:
     queued_at: float = 0.0
     min_interval_s: float | None = None
     generation: int = 0
+    source: str = ""
+    session_id: object = None
+    sequence: object = None
+    upstream_started_at: float = 0.0
+    ui_delivered_at: float = 0.0
+    completion_callback: Callable[[Mapping[str, object]], None] | None = None
 
 
 class VRCOSCSender:
@@ -113,15 +120,27 @@ class VRCOSCSender:
         stop_event = getattr(self, "_stop_event", None)
         while True:
             payload = self._queue.get()
-            if payload is None or (stop_event is not None and stop_event.is_set()):
+            if payload is None:
+                return
+            if stop_event is not None and stop_event.is_set():
+                self._notify_payload_completion(
+                    payload,
+                    outcome="stopped",
+                    dequeued_at=time.monotonic(),
+                )
                 return
 
             dequeued_at = time.monotonic()
             rate_wait_s = 0.0
+            send_started_at = 0.0
+            sent_at = 0.0
+            outcome = "cancelled"
+            error_type = ""
             try:
                 if payload.rate_limited:
                     with self._state_lock:
                         if payload.generation != self._chatbox_generation:
+                            outcome = "stale"
                             continue
                     min_interval_s = (
                         payload.min_interval_s
@@ -133,35 +152,52 @@ class VRCOSCSender:
                         rate_wait_s = wait_s
                         if stop_event is not None:
                             if stop_event.wait(wait_s):
+                                outcome = "stopped"
                                 return
                         else:
                             time.sleep(wait_s)
                     with self._state_lock:
                         if self._closed or payload.generation != self._chatbox_generation:
+                            outcome = "stale" if not self._closed else "stopped"
                             continue
 
                 with self._state_lock:
                     if self._closed:
+                        outcome = "stopped"
                         return
 
                 send_started_at = time.monotonic()
                 self._client.send_message(payload.address, list(payload.arguments))
                 sent_at = time.monotonic()
+                outcome = "success"
                 with self._state_lock:
                     self._last_error = ""
                     if payload.rate_limited:
                         self._last_sent_at = sent_at
                 queued_at = payload.queued_at or dequeued_at
                 logger.info(
-                    "OSC send finished (address=%s rate_limited=%s queue_wait_ms=%.0f rate_wait_ms=%.0f udp_send_ms=%.0f total_ms=%.0f)",
+                    "OSC send finished (address=%s source=%s session_id=%s "
+                    "sequence=%s rate_limited=%s queue_wait_ms=%.0f "
+                    "rate_wait_ms=%.0f udp_send_ms=%.0f total_ms=%.0f "
+                    "pipeline_total_ms=%s)",
                     payload.address,
+                    payload.source or "unknown",
+                    payload.session_id if payload.session_id is not None else "unknown",
+                    payload.sequence if payload.sequence is not None else "unknown",
                     payload.rate_limited,
                     (dequeued_at - queued_at) * 1000.0,
                     rate_wait_s * 1000.0,
                     (sent_at - send_started_at) * 1000.0,
                     (sent_at - queued_at) * 1000.0,
+                    (
+                        f"{max(0.0, sent_at - payload.upstream_started_at) * 1000.0:.0f}"
+                        if payload.upstream_started_at > 0
+                        else "na"
+                    ),
                 )
             except Exception as exc:
+                outcome = "failed"
+                error_type = type(exc).__name__
                 with self._state_lock:
                     self._last_error = str(exc).strip() or exc.__class__.__name__
                 logger.warning(
@@ -170,9 +206,91 @@ class VRCOSCSender:
                     payload.rate_limited,
                     exc,
                 )
+            finally:
+                self._notify_payload_completion(
+                    payload,
+                    outcome=outcome,
+                    dequeued_at=dequeued_at,
+                    rate_wait_s=rate_wait_s,
+                    send_started_at=send_started_at,
+                    sent_at=sent_at,
+                    error_type=error_type,
+                )
+
+    @staticmethod
+    def _request_context_fields(
+        request_context: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        context = request_context if isinstance(request_context, Mapping) else {}
+
+        def timestamp(name: str) -> float:
+            try:
+                return max(0.0, float(context.get(name, 0.0) or 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        return {
+            "source": str(context.get("source", "") or ""),
+            "session_id": context.get("session_id"),
+            "sequence": context.get("sequence"),
+            "upstream_started_at": timestamp("upstream_started_at"),
+            "ui_delivered_at": timestamp("ui_delivered_at"),
+        }
+
+    @staticmethod
+    def _notify_payload_completion(
+        payload: _QueuedOSCMessage,
+        *,
+        outcome: str,
+        dequeued_at: float = 0.0,
+        rate_wait_s: float = 0.0,
+        send_started_at: float = 0.0,
+        sent_at: float = 0.0,
+        error_type: str = "",
+    ) -> None:
+        callback = payload.completion_callback
+        if not callable(callback):
+            return
+        queued_at = float(payload.queued_at or dequeued_at or time.monotonic())
+        terminal_at = float(sent_at or time.monotonic())
+        dequeued = float(dequeued_at or terminal_at)
+        send_started = float(send_started_at or terminal_at)
+        diagnostics: dict[str, object] = {
+            "outcome": str(outcome or "unknown"),
+            "source": payload.source,
+            "session_id": payload.session_id,
+            "sequence": payload.sequence,
+            "queued_at": queued_at,
+            "dequeued_at": dequeued,
+            "finished_at": terminal_at,
+            "queue_wait_s": max(0.0, dequeued - queued_at),
+            "rate_wait_s": max(0.0, float(rate_wait_s or 0.0)),
+            "send_s": (
+                max(0.0, terminal_at - send_started)
+                if sent_at > 0 and send_started_at > 0
+                else 0.0
+            ),
+            "osc_total_s": max(0.0, terminal_at - queued_at),
+            "pipeline_total_s": (
+                max(0.0, terminal_at - payload.upstream_started_at)
+                if payload.upstream_started_at > 0
+                else None
+            ),
+            "ui_to_osc_s": (
+                max(0.0, terminal_at - payload.ui_delivered_at)
+                if payload.ui_delivered_at > 0
+                else None
+            ),
+            "error_type": str(error_type or ""),
+        }
+        try:
+            callback(diagnostics)
+        except Exception:
+            logger.debug("OSC completion callback failed", exc_info=True)
 
     def _enqueue_payload(self, payload: _QueuedOSCMessage | None) -> bool:
         if payload is not None and not self._ensure_worker_running():
+            self._notify_payload_completion(payload, outcome="stopped")
             return False
         enqueue_lock = getattr(self, "_enqueue_lock", None)
         if enqueue_lock is None:
@@ -182,6 +300,7 @@ class VRCOSCSender:
             if payload is not None:
                 with self._state_lock:
                     if getattr(self, "_closed", False):
+                        self._notify_payload_completion(payload, outcome="stopped")
                         return False
             try:
                 self._queue.put_nowait(payload)
@@ -209,6 +328,7 @@ class VRCOSCSender:
                     "OSC chatbox queue full; preserving earlier sentences and "
                     "dropping newest payload"
                 )
+                self._notify_payload_completion(payload, outcome="queue_full")
                 return False
 
             # Avatar parameters are latest-wins only for the same address. They
@@ -226,6 +346,7 @@ class VRCOSCSender:
                     "OSC avatar queue full; dropping newest update (address=%s)",
                     payload.address,
                 )
+                self._notify_payload_completion(payload, outcome="queue_full")
             return replaced
 
     def _replace_queued_payload(
@@ -281,6 +402,8 @@ class VRCOSCSender:
         immediate: bool = True,
         *,
         force: bool = False,
+        request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[Mapping[str, object]], None] | None = None,
     ) -> str:
         safe = self._normalize_text(text)
         if not safe:
@@ -290,6 +413,7 @@ class VRCOSCSender:
         del force
         with self._state_lock:
             generation = int(getattr(self, "_chatbox_generation", 0))
+        context = self._request_context_fields(request_context)
         queued = self._enqueue_payload(
             _QueuedOSCMessage(
                 address="/chatbox/input",
@@ -298,6 +422,8 @@ class VRCOSCSender:
                 queued_at=time.monotonic(),
                 min_interval_s=self._chatbox_min_interval_s(safe),
                 generation=generation,
+                completion_callback=completion_callback,
+                **context,
             )
         )
         return safe if queued else ""
@@ -336,6 +462,7 @@ class VRCOSCSender:
                     break
                 if item is not None and item.rate_limited:
                     removed += 1
+                    self._notify_payload_completion(item, outcome="cancelled")
                     continue
                 pending.append(item)
             for item in pending:
@@ -405,9 +532,11 @@ class VRCOSCSender:
         self._worker = None
         while True:
             try:
-                self._queue.get_nowait()
+                pending = self._queue.get_nowait()
             except queue.Empty:
                 break
+            if pending is not None:
+                self._notify_payload_completion(pending, outcome="stopped")
         with self._state_lock:
             self._avatar_state.clear()
         self._close_client()

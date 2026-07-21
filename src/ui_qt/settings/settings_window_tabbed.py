@@ -22,14 +22,20 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from .quick_setup_tab import QuickSetupTab
 from .api_models_tab import APIModelsTab
+from .quick_setup_tab import QuickSetupTab
 from .audio_microphone_tab import AudioMicrophoneTab
 from .tts_voice_tab import TTSVoiceTab
 from .vrchat_integration_tab import VRChatIntegrationTab
 from .advanced_tab import AdvancedTab
 from src.utils import config_manager
 from src.utils.i18n import tr
+from src.utils.provider_settings import (
+    preserve_provider_id,
+    resolve_tabbed_provider_authority,
+)
+from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.ui_config import get_backend_order
 
 from .localized_tab import normalize_settings_language
 from src.ui_qt.credential_prompt import show_missing_credential_prompt
@@ -248,11 +254,21 @@ class SettingsWindowTabbed(QDialog):
         previous = copy.deepcopy(self._config)
         try:
             new_config = self._collect_config()
-            missing = first_missing_required_credential(
-                new_config,
-                scopes=("translation",),
-                ui_language=self._ui_language,
-                active_only=False,
+            current_backend = preserve_provider_id(
+                new_config.get("translation", {}).get("backend", "openai")
+            )
+            # Newer/plugin provider ids are opaque here.  Sending an unknown id
+            # through credential validation would normalize it to OpenAI and
+            # could block saving with a misleading OpenAI credential prompt.
+            missing = (
+                first_missing_required_credential(
+                    new_config,
+                    scopes=("translation",),
+                    ui_language=self._ui_language,
+                    active_only=False,
+                )
+                if current_backend in get_backend_order()
+                else None
             )
             if missing is not None:
                 self._saving = False
@@ -263,19 +279,25 @@ class SettingsWindowTabbed(QDialog):
             self._config.update(new_config)
             config_manager.save_config(self._config)
         except ValueError as exc:
-            logger.warning("Tabbed settings validation failed: %s", exc)
+            logger.warning(
+                "Tabbed settings validation failed (%s)",
+                safe_exception_summary(exc),
+            )
             self._config.clear()
             self._config.update(previous)
             self._saving = False
             self._set_save_controls_enabled(True)
-            message = str(exc)
             QMessageBox.warning(
                 self,
                 tr(self._ui_language, "save_failed"),
-                message,
+                tr(
+                    self._ui_language,
+                    "settings_save_failed_detail",
+                    error=tr(self._ui_language, "unknown_error"),
+                ),
             )
             return
-        except Exception as exc:
+        except Exception:
             logger.exception("Failed to save tabbed settings")
             self._config.clear()
             self._config.update(previous)
@@ -318,8 +340,9 @@ class SettingsWindowTabbed(QDialog):
         """Collect and merge configuration from all tabs."""
         cfg = copy.deepcopy(self._config)
 
+        api_models_config = self._api_models_tab.get_config()
         for tab_config in (
-            self._api_models_tab.get_config(),
+            api_models_config,
             self._audio_tab.get_config(),
             self._tts_tab.get_config(),
             self._vrchat_tab.get_config(),
@@ -336,12 +359,20 @@ class SettingsWindowTabbed(QDialog):
             quick_translation["source_language"] = quick_config["source_language"]
         if "target_language" in quick_config:
             quick_translation["target_language"] = quick_config["target_language"]
-        provider = quick_config.get("translation_provider")
-        if provider:
-            quick_translation["backend"] = provider
-            api_key = quick_config.get("api_key")
-            if api_key:
-                quick_translation.setdefault(provider, {})["api_key"] = api_key
+        original_translation = self._config.get("translation", {})
+        api_models_translation = api_models_config.get("translation", {})
+        provider, api_key = resolve_tabbed_provider_authority(
+            original_translation,
+            api_models_translation,
+            quick_config.get("translation_provider"),
+            quick_config.get("api_key"),
+        )
+        quick_translation["backend"] = provider
+        provider_cfg = quick_translation.get(provider)
+        if not isinstance(provider_cfg, dict):
+            provider_cfg = {}
+            quick_translation[provider] = provider_cfg
+        provider_cfg["api_key"] = api_key
 
         return cfg
 
@@ -367,10 +398,16 @@ class SettingsWindowTabbed(QDialog):
             "ui_language": self._ui_language,
             "source_language": translation_cfg.get("source_language", "auto"),
             "target_language": translation_cfg.get("target_language", "zh-CN"),
-            "translation_provider": translation_cfg.get("backend", "openai"),
+            "translation_provider": preserve_provider_id(
+                translation_cfg.get("backend", "openai")
+            ),
         }
         provider = quick_config["translation_provider"]
-        provider_cfg = translation_cfg.get(provider, {}) if isinstance(translation_cfg.get(provider), dict) else {}
+        provider_cfg = (
+            translation_cfg.get(provider, {})
+            if isinstance(translation_cfg.get(provider), dict)
+            else {}
+        )
         quick_config["api_key"] = provider_cfg.get("api_key", "")
 
         loaders = (

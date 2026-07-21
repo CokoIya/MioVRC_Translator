@@ -7,6 +7,7 @@ import requests
 
 from src.utils.secure_http import validate_api_base_url
 from src.utils.http_session_pool import ThreadLocalSessionPool
+from src.utils.provider_diagnostics import safe_exception_summary
 
 from .base import BaseTranslator
 from src.utils.input_validation import ValidationError, validate_translation_text
@@ -162,7 +163,10 @@ class DeepLTranslator(BaseTranslator):
                 return str(text or "")
             except Exception as exc:
                 last_exc = exc
-                logger.warning("DeepL translation attempt failed: %s", exc)
+                logger.warning(
+                    "DeepL translation attempt failed: %s",
+                    safe_exception_summary(exc),
+                )
                 if attempt < self._max_retries:
                     time.sleep(min(0.25 * (attempt + 1), 1.0))
         raise RuntimeError(f"DeepL translation failed: {last_exc}") from last_exc

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import _thread
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -17,7 +19,13 @@ from src.translators.asr_rewriter import (
     ASR_REWRITE_DISABLED,
     normalize_asr_rewrite_style,
 )
+from src.translators.base import translation_context_scope
 from src.utils.lang_detect import detect_language
+from src.utils.latency_metrics import (
+    merge_translation_metrics,
+    translation_metrics_snapshot,
+)
+from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import get_backend_config_value, get_backend_spec, normalize_backend
 
@@ -93,6 +101,12 @@ class ManualTranslationController(QObject):
         self._active_translator_uses: dict[int, int] = {}
         self._retired_translators: dict[int, Any] = {}
         self._threads: set[threading.Thread] = set()
+        self._cleanup_threads: set[threading.Thread] = set()
+        self._cleanup_translator_ids: set[int] = set()
+        self._pending_cleanup_retries: dict[int, tuple[Any, bool, str]] = {}
+        self._cleanup_sequence = 0
+        self._state_changed = threading.Condition(self._lock)
+        self._cancelled_through_generation = 0
         self._closed = False
 
     @property
@@ -106,23 +120,36 @@ class ManualTranslationController(QObject):
 
     @translator.setter
     def translator(self, value: Any) -> None:
-        close_now = None
         with self._lock:
+            if value is not None and self._translator_cleanup_is_supervised_locked(
+                value
+            ):
+                if self._translator is value:
+                    self._translator = None
+                    self._state_changed.notify_all()
+                return
             if self._closed:
-                close_now = value
+                if value is not None:
+                    self._schedule_translator_cleanup_locked(
+                        value,
+                        cancel=True,
+                        reason="closed-controller-assignment",
+                    )
                 value = None
             previous = self._translator
             if previous is value:
-                if close_now is None:
-                    return
+                return
             self._translator = value
             if previous is not None:
                 identity = id(previous)
                 if self._active_translator_uses.get(identity, 0) > 0:
                     self._retired_translators[identity] = previous
                 else:
-                    close_now = previous
-        self._close_translator(close_now)
+                    self._schedule_translator_cleanup_locked(
+                        previous,
+                        cancel=False,
+                        reason="translator-replaced",
+                    )
 
     def start(self, request: ManualTranslationRequest) -> int | None:
         src_text = str(request.text or "").strip()
@@ -245,25 +272,76 @@ class ManualTranslationController(QObject):
 
         generation = self._next_generation()
         self._emit_if_open(self.started, generation)
+        submitted_at = time.monotonic()
 
         def run() -> None:
+            worker_started_at = time.monotonic()
+            rewrite_duration_s = 0.0
+            provider_duration_s = 0.0
+            provider_calls = 0
+            rewrite_metrics: dict[str, object] = {}
+            provider_metrics: dict[str, object] = {}
+            outcome = "failed"
+            active_translator = translator
+            active_translator_leased = translator_leased
+
+            def translate_target(target_language: str) -> str:
+                nonlocal provider_duration_s, provider_calls
+                if self._request_destructively_cancelled(generation):
+                    raise RuntimeError("Manual translation request was cancelled")
+                if active_translator is None:
+                    raise RuntimeError("Manual translation provider is unavailable")
+                started_at = time.monotonic()
+                try:
+                    with translation_context_scope(
+                        session_id="manual",
+                        sequence=generation,
+                    ):
+                        return active_translator.translate(
+                            processed_text,
+                            source_language,
+                            target_language,
+                            context_source="manual",
+                        )
+                finally:
+                    provider_duration_s += max(
+                        0.0,
+                        time.monotonic() - started_at,
+                    )
+                    provider_calls += 1
+                    merge_translation_metrics(
+                        provider_metrics,
+                        translation_metrics_snapshot(active_translator),
+                    )
+
             try:
                 processed_text = src_text
                 if needs_rewrite:
+                    rewrite_started_at = time.monotonic()
                     try:
-                        rewrite = getattr(translator, "rewrite_asr", None)
+                        rewrite = getattr(active_translator, "rewrite_asr", None)
                         if not callable(rewrite):
                             raise RuntimeError(
                                 "The selected translation provider cannot rewrite typed text"
                             )
 
                         def rewrite_operation() -> object:
-                            return rewrite(
-                                src_text,
-                                rewrite_style,
-                                language_hint=source_language,
-                                context_source="manual",
-                            )
+                            try:
+                                with translation_context_scope(
+                                    session_id="typed-rewrite",
+                                    sequence=generation,
+                                ):
+                                    return rewrite(
+                                        src_text,
+                                        rewrite_style,
+                                        language_hint=source_language,
+                                        context_source="manual",
+                                    )
+                            finally:
+                                merge_translation_metrics(
+                                    rewrite_metrics,
+                                    translation_metrics_snapshot(active_translator),
+                                )
 
                         coordinator = self._rewrite_coordinator
                         if coordinator is None:
@@ -285,23 +363,42 @@ class ManualTranslationController(QObject):
                     except Exception as exc:
                         processed_text = src_text
                         logger.warning(
-                            "Typed-text style rewrite failed open (style=%s): %s",
+                            "Typed-text style rewrite failed open "
+                            "(style=%s error=%s)",
                             rewrite_style,
-                            exc,
+                            safe_exception_summary(exc),
                         )
-                        logger.debug(
-                            "Typed-text style rewrite traceback",
-                            exc_info=True,
+                    finally:
+                        rewrite_duration_s = max(
+                            0.0,
+                            time.monotonic() - rewrite_started_at,
                         )
+                    if self._translator_cleanup_is_supervised(
+                        active_translator,
+                        rewrite_metrics,
+                    ):
+                        if self._request_destructively_cancelled(generation):
+                            raise RuntimeError(
+                                "Manual translation request was cancelled"
+                            )
+                        if active_translator_leased:
+                            self._release_translator(
+                                active_translator,
+                                metrics=rewrite_metrics,
+                            )
+                            active_translator_leased = False
+                        active_translator = None
+                        if (
+                            needs_primary_translation
+                            or needs_second_translation
+                            or needs_third_translation
+                        ):
+                            active_translator = self._acquire_translator()
+                            active_translator_leased = True
 
                 result = processed_text
                 if needs_primary_translation:
-                    result = translator.translate(
-                        processed_text,
-                        source_language,
-                        target_language,
-                        context_source="manual",
-                    )
+                    result = translate_target(target_language)
                 result2 = ""
                 if not output_original_only and include_second_target:
                     if second_target_language == source_language:
@@ -309,12 +406,7 @@ class ManualTranslationController(QObject):
                     elif second_target_language == target_language:
                         result2 = result
                     else:
-                        result2 = translator.translate(
-                            processed_text,
-                            source_language,
-                            second_target_language,
-                            context_source="manual",
-                        )
+                        result2 = translate_target(second_target_language)
                 result3 = ""
                 if (
                     not output_original_only
@@ -328,13 +420,9 @@ class ManualTranslationController(QObject):
                     elif third_target_language == second_target_language and include_second_target:
                         result3 = result2
                     else:
-                        result3 = translator.translate(
-                            processed_text,
-                            source_language,
-                            third_target_language,
-                            context_source="manual",
-                        )
+                        result3 = translate_target(third_target_language)
                 display = self._output_dispatcher.manual_display_text(result, result2, result3)
+                outcome = "success"
                 self._emit_if_open(
                     self.succeeded,
                     ManualTranslationResult(
@@ -348,17 +436,109 @@ class ManualTranslationController(QObject):
                     )
                 )
             except Exception as exc:
-                logger.warning("Manual translation failed: %s", exc)
+                logger.warning(
+                    "Manual translation failed (%s)",
+                    safe_exception_summary(exc),
+                )
                 self._emit_if_open(
                     self.failed,
                     ManualTranslationError(generation, exc, self._format_error(exc)),
                 )
             finally:
-                if translator_leased:
-                    self._release_translator(translator)
+                finished_at = time.monotonic()
+                with self._lock:
+                    if not self._closed and generation != self._generation:
+                        outcome = "stale"
+                def metric_ms(metrics: dict[str, object], key: str) -> str:
+                    value = metrics.get(key)
+                    if value is None:
+                        return "na"
+                    try:
+                        parsed = float(value)
+                    except (TypeError, ValueError):
+                        return "na"
+                    return f"{max(0.0, parsed) * 1000.0:.1f}"
+
+                def metric_count(
+                    metrics: dict[str, object],
+                    key: str,
+                    default: int = 0,
+                ) -> int:
+                    try:
+                        return max(0, int(metrics.get(key, default) or 0))
+                    except (TypeError, ValueError):
+                        return max(0, int(default))
+
+                logger.info(
+                    "Manual translation latency generation=%d outcome=%s "
+                    "local_queue_ms=%.1f rewrite_ms=%.1f "
+                    "rewrite_pool_wait_ms=%s rewrite_dns_ms=%s "
+                    "rewrite_tcp_ms=%s rewrite_tls_ms=%s "
+                    "rewrite_response_header_ms=%s "
+                    "rewrite_provider_processing_ms=%s "
+                    "rewrite_first_token_ms=%s rewrite_full_response_ms=%s "
+                    "rewrite_parsing_postprocessing_ms=%.1f "
+                    "rewrite_provider_calls=%d rewrite_http_requests=%d "
+                    "provider_calls=%d http_requests=%d "
+                    "connection_pool_wait_ms=%s dns_ms=%s tcp_ms=%s tls_ms=%s "
+                    "response_header_ms=%s provider_processing_ms=%s "
+                    "streaming_first_token_ms=%s full_response_ms=%s "
+                    "parsing_postprocessing_ms=%.1f provider_wall_ms=%.1f "
+                    "local_postprocess_ms=%.1f total_wall_ms=%.1f",
+                    generation,
+                    outcome,
+                    max(0.0, worker_started_at - submitted_at) * 1000.0,
+                    rewrite_duration_s * 1000.0,
+                    metric_ms(rewrite_metrics, "pool_wait_s"),
+                    metric_ms(rewrite_metrics, "dns_s"),
+                    metric_ms(rewrite_metrics, "tcp_s"),
+                    metric_ms(rewrite_metrics, "tls_s"),
+                    metric_ms(rewrite_metrics, "response_headers_s"),
+                    metric_ms(rewrite_metrics, "provider_processing_s"),
+                    metric_ms(rewrite_metrics, "first_token_s"),
+                    metric_ms(rewrite_metrics, "full_response_s"),
+                    (
+                        float(rewrite_metrics.get("parse_s", 0.0) or 0.0)
+                        + float(rewrite_metrics.get("postprocess_s", 0.0) or 0.0)
+                    )
+                    * 1000.0,
+                    metric_count(rewrite_metrics, "provider_calls"),
+                    metric_count(rewrite_metrics, "http_request_count"),
+                    metric_count(provider_metrics, "provider_calls", provider_calls),
+                    metric_count(provider_metrics, "http_request_count"),
+                    metric_ms(provider_metrics, "pool_wait_s"),
+                    metric_ms(provider_metrics, "dns_s"),
+                    metric_ms(provider_metrics, "tcp_s"),
+                    metric_ms(provider_metrics, "tls_s"),
+                    metric_ms(provider_metrics, "response_headers_s"),
+                    metric_ms(provider_metrics, "provider_processing_s"),
+                    metric_ms(provider_metrics, "first_token_s"),
+                    metric_ms(provider_metrics, "full_response_s"),
+                    (
+                        float(provider_metrics.get("parse_s", 0.0) or 0.0)
+                        + float(provider_metrics.get("postprocess_s", 0.0) or 0.0)
+                    )
+                    * 1000.0,
+                    provider_duration_s * 1000.0,
+                    max(
+                        0.0,
+                        finished_at
+                        - worker_started_at
+                        - rewrite_duration_s
+                        - provider_duration_s,
+                    )
+                    * 1000.0,
+                    max(0.0, finished_at - submitted_at) * 1000.0,
+                )
+                if active_translator_leased and active_translator is not None:
+                    self._release_translator(
+                        active_translator,
+                        metrics=provider_metrics,
+                    )
+                self._emit_if_open(self.worker_finished, generation)
                 with self._lock:
                     self._threads.discard(threading.current_thread())
-                self._emit_if_open(self.worker_finished, generation)
+                    self._state_changed.notify_all()
 
         thread = threading.Thread(target=run, daemon=True, name="manual-translate")
         rejected_at_capacity = False
@@ -371,6 +551,7 @@ class ManualTranslationController(QObject):
                 rejected_at_capacity = True
             else:
                 self._threads.add(thread)
+                self._state_changed.notify_all()
         if rejected_at_capacity:
             if translator_leased:
                 self._release_translator(translator)
@@ -390,6 +571,7 @@ class ManualTranslationController(QObject):
         except BaseException:
             with self._lock:
                 self._threads.discard(thread)
+                self._state_changed.notify_all()
             if translator_leased:
                 self._release_translator(translator)
             raise
@@ -420,6 +602,48 @@ class ManualTranslationController(QObject):
     def invalidate(self) -> int:
         return self._next_generation()
 
+    def cancel_active_requests(self) -> int:
+        """Cancel timed-out manual calls and rotate provider clients.
+
+        A UI generation invalidation alone hides a late result but leaves the
+        synchronous SDK call, worker slot, and persistent connection alive.
+        Detaching the clients before cancellation lets the next request create
+        a clean runtime while late workers remain signal-suppressed.
+        """
+
+        translators: list[Any] = []
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+            self._cancelled_through_generation = max(
+                self._cancelled_through_generation,
+                generation,
+            )
+            for translator in (
+                self._translator,
+                *self._retired_translators.values(),
+            ):
+                if translator is not None and all(
+                    translator is not existing for existing in translators
+                ):
+                    translators.append(translator)
+            self._translator = None
+            self._retired_translators.clear()
+            self._active_translator_uses.clear()
+            for translator in translators:
+                self._schedule_translator_cleanup_locked(
+                    translator,
+                    cancel=True,
+                    reason="manual-timeout",
+                )
+            self._state_changed.notify_all()
+        logger.info(
+            "Manual translation requests cancelled generation=%d clients=%d",
+            generation,
+            len(translators),
+        )
+        return generation
+
     def _next_generation(self) -> int:
         with self._lock:
             self._generation += 1
@@ -436,10 +660,67 @@ class ManualTranslationController(QObject):
                 logger.debug("Suppressed signal delivery from a disposed manual translator")
                 return False
 
+    def _request_destructively_cancelled(self, generation: int) -> bool:
+        with self._lock:
+            return bool(
+                self._closed
+                or generation <= self._cancelled_through_generation
+            )
+
+    def _translator_cleanup_is_supervised(
+        self,
+        translator: Any,
+        metrics: Mapping[str, object] | None = None,
+    ) -> bool:
+        with self._lock:
+            return self._translator_cleanup_is_supervised_locked(
+                translator,
+                metrics,
+            )
+
+    def _translator_cleanup_is_supervised_locked(
+        self,
+        translator: Any,
+        metrics: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Return true when destructive cleanup already owns this client."""
+
+        if translator is None:
+            return False
+        if id(translator) in self._cleanup_translator_ids:
+            return True
+        retired = getattr(translator, "_pending_requests_retired", None)
+        if callable(retired):
+            try:
+                if bool(retired()):
+                    return True
+            except Exception as exc:
+                logger.debug(
+                    "Failed to inspect manual translator retirement (%s)",
+                    safe_exception_summary(exc),
+                )
+                return True
+        snapshot: Mapping[str, object]
+        if isinstance(metrics, Mapping):
+            snapshot = metrics
+        else:
+            snapshot = translation_metrics_snapshot(translator)
+        return bool(snapshot.get("wall_timeout_triggered"))
+
+    def _create_usable_translator_locked(self) -> Any:
+        translator = self._translator_factory(self._config)
+        if translator is None:
+            raise RuntimeError("Translation provider is unavailable")
+        if self._translator_cleanup_is_supervised_locked(translator):
+            raise RuntimeError("Translation provider returned a retired client")
+        return translator
+
     def _ensure_translator(self) -> Any:
         with self._lock:
+            if self._translator_cleanup_is_supervised_locked(self._translator):
+                self._translator = None
             if self._translator is None:
-                self._translator = self._translator_factory(self._config)
+                self._translator = self._create_usable_translator_locked()
             return self._translator
 
     def _acquire_translator(self) -> Any:
@@ -449,14 +730,19 @@ class ManualTranslationController(QObject):
             if self._closed:
                 raise RuntimeError("Manual translation controller is closed")
             translator = self._translator
+            if self._translator_cleanup_is_supervised_locked(translator):
+                self._translator = None
+                translator = None
             if translator is None:
-                translator = self._translator_factory(self._config)
+                translator = self._create_usable_translator_locked()
                 self._translator = translator
             elif self._active_translator_uses.get(id(translator), 0) > 0:
-                candidate = self._translator_factory(self._config)
-                if candidate is not translator:
+                previous = translator
+                candidate = self._create_usable_translator_locked()
+                if candidate is not previous:
                     translator = candidate
-                    self._retired_translators[id(translator)] = translator
+                    self._translator = candidate
+                    self._retired_translators[id(previous)] = previous
 
             identity = id(translator)
             self._active_translator_uses[identity] = (
@@ -464,8 +750,12 @@ class ManualTranslationController(QObject):
             )
             return translator
 
-    def _release_translator(self, translator: Any) -> None:
-        close_now = None
+    def _release_translator(
+        self,
+        translator: Any,
+        *,
+        metrics: Mapping[str, object] | None = None,
+    ) -> None:
         identity = id(translator)
         with self._lock:
             remaining = self._active_translator_uses.get(identity, 0) - 1
@@ -473,17 +763,157 @@ class ManualTranslationController(QObject):
                 self._active_translator_uses[identity] = remaining
             else:
                 self._active_translator_uses.pop(identity, None)
-                close_now = self._retired_translators.pop(identity, None)
-        self._close_translator(close_now)
+                retired = self._retired_translators.pop(identity, None)
+                cleanup_supervised = self._translator_cleanup_is_supervised_locked(
+                    translator,
+                    metrics,
+                )
+                if self._translator is translator and cleanup_supervised:
+                    self._translator = None
+                if retired is not None and not cleanup_supervised:
+                    self._schedule_translator_cleanup_locked(
+                        retired,
+                        cancel=False,
+                        reason="retired-worker-release",
+                    )
+            self._state_changed.notify_all()
 
-    @staticmethod
-    def _close_translator(translator: Any) -> None:
-        close = getattr(translator, "close", None)
-        if callable(close):
+    def _schedule_translator_cleanup_locked(
+        self,
+        translator: Any,
+        *,
+        cancel: bool,
+        reason: str,
+    ) -> bool:
+        """Register cleanup before start and never run SDK teardown inline."""
+
+        if translator is None:
+            return False
+        identity = id(translator)
+        if identity in self._cleanup_translator_ids:
+            return False
+        if self._translator_cleanup_is_supervised_locked(translator):
+            return False
+        self._cleanup_translator_ids.add(identity)
+        return self._launch_translator_cleanup_locked(
+            translator,
+            cancel=cancel,
+            reason=reason,
+            identity=identity,
+        )
+
+    def _launch_translator_cleanup_locked(
+        self,
+        translator: Any,
+        *,
+        cancel: bool,
+        reason: str,
+        identity: int,
+    ) -> bool:
+        """Launch one already-registered cleanup job."""
+
+        self._pending_cleanup_retries.pop(identity, None)
+        self._cleanup_sequence += 1
+        sequence = self._cleanup_sequence
+        claim_lock = threading.Lock()
+        claimed = False
+        cleanup: threading.Thread
+
+        def run_cleanup() -> None:
+            nonlocal claimed
+            with claim_lock:
+                if claimed:
+                    return
+                claimed = True
             try:
-                close()
-            except Exception:
-                logger.debug("Failed to close manual translator client", exc_info=True)
+                if cancel:
+                    cancel_pending = getattr(
+                        translator,
+                        "cancel_pending_requests",
+                        None,
+                    )
+                    if callable(cancel_pending):
+                        try:
+                            cancel_pending()
+                        except Exception as exc:
+                            logger.debug(
+                                "Failed to cancel detached manual translator "
+                                "reason=%s error=%s",
+                                reason,
+                                safe_exception_summary(exc),
+                            )
+                close = getattr(translator, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to close detached manual translator "
+                            "reason=%s error=%s",
+                            reason,
+                            safe_exception_summary(exc),
+                        )
+            finally:
+                with self._lock:
+                    self._cleanup_threads.discard(cleanup)
+                    self._cleanup_translator_ids.discard(identity)
+                    self._pending_cleanup_retries.pop(identity, None)
+                    self._state_changed.notify_all()
+
+        cleanup = threading.Thread(
+            target=run_cleanup,
+            daemon=True,
+            name=f"manual-translator-cleanup-{sequence}",
+        )
+        self._cleanup_threads.add(cleanup)
+        self._state_changed.notify_all()
+        try:
+            cleanup.start()
+        except BaseException as exc:
+            if cleanup.is_alive():
+                return True
+            logger.warning(
+                "Failed to start manual translator cleanup thread; "
+                "using emergency cleanup (%s)",
+                safe_exception_summary(exc),
+            )
+            try:
+                _thread.start_new_thread(run_cleanup, ())
+            except BaseException as fallback_exc:
+                self._cleanup_threads.discard(cleanup)
+                self._pending_cleanup_retries[identity] = (
+                    translator,
+                    cancel,
+                    reason,
+                )
+                self._state_changed.notify_all()
+                logger.error(
+                    "Failed to start emergency manual translator cleanup; "
+                    "cleanup remains pending for retry (%s)",
+                    safe_exception_summary(fallback_exc),
+                )
+        return True
+
+    def _retry_pending_cleanup_locked(self) -> None:
+        pending = tuple(self._pending_cleanup_retries.items())
+        for identity, (translator, cancel, reason) in pending:
+            if identity not in self._cleanup_translator_ids:
+                self._cleanup_translator_ids.add(identity)
+            self._launch_translator_cleanup_locked(
+                translator,
+                cancel=cancel,
+                reason=reason,
+                identity=identity,
+            )
+
+    def _quiescent_locked(self, current: threading.Thread) -> bool:
+        return (
+            not any(thread is not current for thread in self._threads)
+            and not any(
+                thread is not current for thread in self._cleanup_threads
+            )
+            and not self._pending_cleanup_retries
+        )
 
     def close(self, *, wait_timeout_s: float | None = None) -> bool:
         """Cancel active client work and optionally wait for worker release.
@@ -495,13 +925,15 @@ class ManualTranslationController(QObject):
         """
 
         translators: list[Any] = []
-        workers: tuple[threading.Thread, ...] = ()
         with self._lock:
-            if self._closed:
-                workers = tuple(self._threads)
-            else:
+            self._retry_pending_cleanup_locked()
+            if not self._closed:
                 self._closed = True
                 self._generation += 1
+                self._cancelled_through_generation = max(
+                    self._cancelled_through_generation,
+                    self._generation,
+                )
                 for translator in (self._translator, *self._retired_translators.values()):
                     if translator is not None and all(
                         translator is not existing for existing in translators
@@ -510,36 +942,44 @@ class ManualTranslationController(QObject):
                 self._translator = None
                 self._retired_translators.clear()
                 self._active_translator_uses.clear()
-                workers = tuple(self._threads)
+                for translator in translators:
+                    self._schedule_translator_cleanup_locked(
+                        translator,
+                        cancel=True,
+                        reason="controller-close",
+                    )
+                self._state_changed.notify_all()
 
-        for translator in translators:
-            cancel = getattr(translator, "cancel_pending_requests", None)
-            if callable(cancel):
-                try:
-                    cancel()
-                except Exception:
-                    logger.debug("Failed to cancel manual translator request", exc_info=True)
-            self._close_translator(translator)
-
+        current = threading.current_thread()
         if wait_timeout_s is not None:
             deadline = time.monotonic() + max(0.0, float(wait_timeout_s))
-            current = threading.current_thread()
-            for worker in workers:
-                if worker is current:
-                    continue
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    worker.join(remaining)
-                except Exception:
-                    logger.debug("Failed to join manual translation worker", exc_info=True)
+            retry_delay_s = 0.05
+            next_retry_at = time.monotonic() + retry_delay_s
+            with self._state_changed:
+                while not self._quiescent_locked(current):
+                    now = time.monotonic()
+                    if (
+                        self._pending_cleanup_retries
+                        and now >= next_retry_at
+                    ):
+                        self._retry_pending_cleanup_locked()
+                        retry_delay_s = min(retry_delay_s * 2.0, 0.5)
+                        next_retry_at = now + retry_delay_s
+                        if self._quiescent_locked(current):
+                            break
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        break
+                    wait_s = min(remaining, 0.05)
+                    if self._pending_cleanup_retries:
+                        wait_s = min(
+                            wait_s,
+                            max(0.001, next_retry_at - now),
+                        )
+                    self._state_changed.wait(timeout=wait_s)
 
         with self._lock:
-            return not any(
-                worker is not threading.current_thread() and worker.is_alive()
-                for worker in self._threads
-            )
+            return self._quiescent_locked(current)
 
     def _format_error(self, error: object) -> object:
         if self._error_formatter is not None:

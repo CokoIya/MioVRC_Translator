@@ -8,6 +8,7 @@ import requests
 from .base import BaseTranslator
 from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.input_validation import ValidationError, validate_translation_text
+from src.utils.provider_diagnostics import safe_exception_summary
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,10 @@ class GoogleWebTranslator(BaseTranslator):
                 return translated
             except Exception as exc:
                 last_exc = exc
-                logger.warning("Google Web translation attempt failed: %s", exc)
+                logger.warning(
+                    "Google Web translation attempt failed: %s",
+                    safe_exception_summary(exc),
+                )
                 if attempt < self._max_retries:
                     time.sleep(min(0.2 * (attempt + 1), 0.8))
         raise RuntimeError(f"Google Web translation failed: {last_exc}") from last_exc

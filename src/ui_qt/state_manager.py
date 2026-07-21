@@ -233,11 +233,11 @@ class StateProperty:
             return self
         state = getattr(obj, '_state', None)
         if state is None:
-            raise AttributeError(f"Object has no _state attribute")
+            raise AttributeError("Object has no _state attribute")
         return state.get(self.key)
 
     def __set__(self, obj: Any, value: Any) -> None:
         state = getattr(obj, '_state', None)
         if state is None:
-            raise AttributeError(f"Object has no _state attribute")
+            raise AttributeError("Object has no _state attribute")
         state.set(self.key, value)

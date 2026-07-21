@@ -604,7 +604,7 @@ def test_stale_asr_marker_preserves_strict_delivery_order():
         assert _submit(scheduler, "third", provider="other").accepted
         assert third_finished_asr.wait(timeout=1)
         assert _wait_for(
-            lambda: scheduler.snapshot().delivery_pending >= 1,
+            lambda: scheduler.snapshot().recognized_pending[MIC] == 1,
             timeout=1,
         )
 
@@ -612,6 +612,7 @@ def test_stale_asr_marker_preserves_strict_delivery_order():
         assert asr_sequences == [0, 2]
         snapshot = scheduler.snapshot()
         assert snapshot.stale_asr_dropped == 1
+        assert snapshot.delivery_pending >= 1
         assert snapshot.recognized_pending[MIC] == 1
         stale_marker = scheduler._completed[MIC][stale.task.sequence]
         assert stale_marker.cancelled is False
@@ -1237,6 +1238,266 @@ def test_asr_error_and_empty_text_create_ordering_markers():
     finally:
         assert scheduler.stop(timeout=2)
 
+
+def _assert_scheduler_error_logs_are_safe(caplog, *secrets, expected):
+    rendered = caplog.text
+    for secret in secrets:
+        assert secret not in rendered
+    assert expected in rendered
+    scheduler_records = [
+        record
+        for record in caplog.records
+        if record.name == "src.core.realtime_scheduler"
+    ]
+    assert scheduler_records
+    assert all(record.exc_info is None for record in scheduler_records)
+
+
+def test_asr_error_log_hides_raw_provider_prose(caplog):
+    delivered = []
+    secret = "asr-provider-secret and echoed player speech"
+
+    def asr(_task, _cancel):
+        raise RuntimeError(secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0].asr_error, RuntimeError)
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        secret,
+        expected="Realtime ASR failed source=mic sequence=0 error=type=RuntimeError",
+    )
+
+
+def test_rewrite_predicate_error_log_hides_raw_provider_prose(caplog):
+    delivered = []
+    secret = "rewrite-predicate-secret and echoed player text"
+
+    def rewrite_required(_task, _text):
+        raise RuntimeError(secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=lambda _task, text, _state, _cancel: f"styled:{text}",
+        rewrite_required=rewrite_required,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        translation_concurrency=1,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert [completion.result for completion in delivered] == ["styled:hello"]
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        secret,
+        expected=(
+            "Realtime rewrite predicate failed; preserving rewrite "
+            "source=mic sequence=0 error=type=RuntimeError"
+        ),
+    )
+
+
+def test_rewrite_error_log_hides_raw_provider_prose(caplog):
+    delivered = []
+    secret = "rewrite-provider-secret and echoed player text"
+
+    def rewrite(_task, _text, _state, _cancel):
+        raise RuntimeError(secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=rewrite,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        translation_concurrency=1,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0].rewrite_error, RuntimeError)
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        secret,
+        expected=(
+            "Realtime ASR rewrite failed open "
+            "source=mic sequence=0 error=type=RuntimeError"
+        ),
+    )
+
+
+def test_worker_state_initialization_logs_hide_raw_provider_prose(caplog):
+    delivered = []
+    rewrite_secret = "rewrite-state-init-secret"
+    translation_secret = "translation-state-init-secret"
+
+    def rewrite_state_factory(_worker_index):
+        raise RuntimeError(rewrite_secret)
+
+    def translation_state_factory(_worker_index):
+        raise RuntimeError(translation_secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=lambda _task, text, _state, _cancel: text,
+        rewrite_state_factory=rewrite_state_factory,
+        translate=lambda _task, text, _state, _cancel: text,
+        state_factory=translation_state_factory,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        translation_concurrency=1,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0].rewrite_error, RuntimeError)
+    assert isinstance(delivered[0].translation_error, RuntimeError)
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        rewrite_secret,
+        translation_secret,
+        expected=(
+            "Realtime rewrite worker state initialization failed "
+            "worker=0 error=type=RuntimeError"
+        ),
+    )
+    assert (
+        "Realtime translation worker state initialization failed "
+        "worker=0 error=type=RuntimeError"
+    ) in caplog.text
+
+
+def test_worker_state_cleanup_logs_hide_raw_provider_prose(caplog):
+    delivered = []
+    rewrite_secret = "rewrite-state-cleanup-secret"
+    translation_secret = "translation-state-cleanup-secret"
+
+    def rewrite_state_finalizer(_state):
+        raise RuntimeError(rewrite_secret)
+
+    def translation_state_finalizer(_state):
+        raise RuntimeError(translation_secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        rewrite=lambda _task, text, _state, _cancel: text,
+        rewrite_state_factory=lambda _worker_index: object(),
+        rewrite_state_finalizer=rewrite_state_finalizer,
+        translate=lambda _task, text, _state, _cancel: text,
+        state_factory=lambda _worker_index: object(),
+        state_finalizer=translation_state_finalizer,
+        deliver=delivered.append,
+        rewrite_concurrency=1,
+        translation_concurrency=1,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert len(delivered) == 1
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        rewrite_secret,
+        translation_secret,
+        expected=(
+            "Realtime rewrite worker state cleanup failed "
+            "worker=0 error=type=RuntimeError"
+        ),
+    )
+    assert (
+        "Realtime translation worker state cleanup failed "
+        "worker=0 error=type=RuntimeError"
+    ) in caplog.text
+
+
+def test_delivery_error_log_hides_raw_provider_prose(caplog):
+    secret = "delivery-callback-secret and echoed player text"
+
+    def deliver(_completion):
+        raise RuntimeError(secret)
+
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=deliver,
+    )
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        secret,
+        expected=(
+            "Realtime delivery callback failed "
+            "source=mic sequence=0 error=type=RuntimeError"
+        ),
+    )
+
+
+def test_translation_error_log_hides_raw_provider_prose(caplog):
+    delivered = []
+    secret = "raw-provider-secret and echoed player text"
+
+    def translate(_task, _text, _state, _cancel):
+        raise RuntimeError(secret)
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=translate,
+        deliver=delivered.append,
+    )
+    caplog.set_level("DEBUG", logger="src.core.realtime_scheduler")
+    try:
+        assert _submit(scheduler, "hello").accepted
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
+        assert scheduler.stop(timeout=2)
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0].translation_error, RuntimeError)
+    _assert_scheduler_error_logs_are_safe(
+        caplog,
+        secret,
+        expected=(
+            "Realtime translation failed "
+            "source=mic sequence=0 error=type=RuntimeError"
+        ),
+    )
 
 
 def test_outstanding_limit_bounds_out_of_order_completion_buffer():

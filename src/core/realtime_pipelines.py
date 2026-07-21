@@ -7,12 +7,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
 from src.translators.factory import create_translator
 from src.translators.base import translation_context_scope
+from src.utils.latency_metrics import (
+    merge_translation_metrics,
+    translation_metrics_snapshot,
+)
 
 
 def _close_translator(translator: Any) -> None:
@@ -22,6 +26,16 @@ def _close_translator(translator: Any) -> None:
             close()
         except Exception:
             pass
+
+
+def _attach_provider_metrics(
+    error: BaseException,
+    metrics: Mapping[str, object],
+) -> None:
+    try:
+        setattr(error, "provider_metrics", dict(metrics))
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -34,6 +48,7 @@ class RealtimeTranslationResult:
     chatbox_text: str = ""
     output_message: OutputMessage | None = None
     api_translation_used: bool = False
+    provider_metrics: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -184,6 +199,21 @@ class MicPipeline:
         translated = plan.original_text
         translated_2 = ""
         translated_3 = ""
+        provider_metrics: dict[str, object] = {}
+
+        def translate_target(target_language: str) -> str:
+            try:
+                return active_translator.translate(
+                    plan.original_text,
+                    plan.source_language,
+                    target_language,
+                    context_source=plan.context_source,
+                )
+            finally:
+                merge_translation_metrics(
+                    provider_metrics,
+                    translation_metrics_snapshot(active_translator),
+                )
 
         context_manager = (
             translation_context_scope(
@@ -194,40 +224,29 @@ class MicPipeline:
             if context_session_id is not None
             else nullcontext()
         )
-        with context_manager:
-            if plan.needs_primary_translation:
-                translated = active_translator.translate(
-                    plan.original_text,
-                    plan.source_language,
-                    plan.target_language,
-                    context_source=plan.context_source,
-                )
-            if plan.output_format != "original_only" and plan.include_second_target:
-                if plan.second_target_language == plan.target_language:
-                    translated_2 = translated
-                elif plan.source_language != "auto" and plan.source_language == plan.second_target_language:
-                    translated_2 = plan.original_text
-                else:
-                    translated_2 = active_translator.translate(
-                        plan.original_text,
-                        plan.source_language,
-                        plan.second_target_language,
-                        context_source=plan.context_source,
-                    )
-            if plan.output_format != "original_only" and plan.include_third_target:
-                if plan.third_target_language == plan.target_language:
-                    translated_3 = translated
-                elif plan.third_target_language == plan.second_target_language and plan.include_second_target:
-                    translated_3 = translated_2
-                elif plan.source_language != "auto" and plan.source_language == plan.third_target_language:
-                    translated_3 = plan.original_text
-                else:
-                    translated_3 = active_translator.translate(
-                        plan.original_text,
-                        plan.source_language,
-                        plan.third_target_language,
-                        context_source=plan.context_source,
-                    )
+        try:
+            with context_manager:
+                if plan.needs_primary_translation:
+                    translated = translate_target(plan.target_language)
+                if plan.output_format != "original_only" and plan.include_second_target:
+                    if plan.second_target_language == plan.target_language:
+                        translated_2 = translated
+                    elif plan.source_language != "auto" and plan.source_language == plan.second_target_language:
+                        translated_2 = plan.original_text
+                    else:
+                        translated_2 = translate_target(plan.second_target_language)
+                if plan.output_format != "original_only" and plan.include_third_target:
+                    if plan.third_target_language == plan.target_language:
+                        translated_3 = translated
+                    elif plan.third_target_language == plan.second_target_language and plan.include_second_target:
+                        translated_3 = translated_2
+                    elif plan.source_language != "auto" and plan.source_language == plan.third_target_language:
+                        translated_3 = plan.original_text
+                    else:
+                        translated_3 = translate_target(plan.third_target_language)
+        except BaseException as exc:
+            _attach_provider_metrics(exc, provider_metrics)
+            raise
 
         display_text = self._output_dispatcher.manual_display_text(translated, translated_2, translated_3)
         chatbox_text = self._output_dispatcher.format_chatbox_output(
@@ -255,6 +274,7 @@ class MicPipeline:
                 chatbox_text=chatbox_text,
                 output_message=output_message,
                 api_translation_used=plan.needs_api_translation,
+                provider_metrics=provider_metrics,
             ),
             active_translator,
         )
@@ -349,6 +369,7 @@ class ListenPipeline:
         defer_context_commit: bool,
         context_sequence: int | None,
     ) -> tuple[RealtimeTranslationResult, Any]:
+        provider_metrics: dict[str, object] = {}
         if plan.needs_api_translation:
             context_manager = (
                 translation_context_scope(
@@ -359,13 +380,23 @@ class ListenPipeline:
                 if context_session_id is not None
                 else nullcontext()
             )
-            with context_manager:
-                translated = active_translator.translate(
-                    plan.original_text,
-                    plan.source_language,
-                    plan.target_language,
-                    context_source=plan.context_source,
-                )
+            try:
+                with context_manager:
+                    try:
+                        translated = active_translator.translate(
+                            plan.original_text,
+                            plan.source_language,
+                            plan.target_language,
+                            context_source=plan.context_source,
+                        )
+                    finally:
+                        merge_translation_metrics(
+                            provider_metrics,
+                            translation_metrics_snapshot(active_translator),
+                        )
+            except BaseException as exc:
+                _attach_provider_metrics(exc, provider_metrics)
+                raise
         else:
             translated = plan.original_text
 
@@ -386,6 +417,7 @@ class ListenPipeline:
                 chatbox_text=chatbox_text,
                 output_message=output_message,
                 api_translation_used=plan.needs_api_translation,
+                provider_metrics=provider_metrics,
             ),
             active_translator,
         )

@@ -11,13 +11,13 @@ import time
 import unicodedata
 import weakref
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, QObject, Signal, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -63,7 +62,11 @@ from src.core.rewrite_coordinator import (
     RewriteCallCoordinator,
     provider_runtime_config_signature,
 )
-from src.translators.base import TranslationContextStore
+from src.translators.base import (
+    TranslationContextStore,
+    provider_background_work_in_progress,
+    translation_context_scope,
+)
 from src.translators.asr_rewriter import (
     ASR_REWRITE_DISABLED,
     normalize_asr_rewrite_style,
@@ -78,23 +81,23 @@ from src.ui_qt.window_utils import apply_window_chrome_theme, play_theme_fade
 from src.ui_qt.widgets import NoWheelComboBox
 from src.ui_qt.realtime_tweaks_panel import RealtimeTweaksPanel
 from src.ui_qt.state_manager import AppState
-from src.tts.error_utils import is_tts_authentication_error, is_tts_network_error
+from src.tts.error_utils import tts_error_code
 from src.utils import config_manager
 from src.utils.app_paths import resource_base_dirs
 from src.utils.credential_validation import first_missing_required_credential
 from src.utils.global_hotkey import GlobalHotkey, DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
 from src.utils.i18n import tr
 from src.utils.lang_detect import detect_language
+from src.utils.latency_metrics import translation_metrics_snapshot
 from src.utils.localization import (
     format_locale_number,
     format_locale_percent,
     normalize_ui_language,
     translate_key_catalog,
 )
+from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
-    LANGUAGE_DISPLAY_NAMES,
-    OUTPUT_FORMAT_OPTIONS,
     UI_LANGUAGE_OPTIONS,
     get_backend_value,
     get_manual_source_language_options,
@@ -416,6 +419,83 @@ MAIN_COPY = {
         "ru": "Сетевое соединение Qwen TTS прервано; проверьте сеть или настройки прокси и повторите попытку",
         "ko": "Qwen TTS 네트워크 연결이 중단되었습니다. 네트워크 또는 프록시 설정을 확인한 뒤 다시 시도하세요",
     },
+    "qwen_tts_timeout_error": {
+        "zh-CN": "Qwen TTS 请求超时，已释放任务，请稍后重试",
+        "en": "Qwen TTS timed out and released the task; try again shortly",
+        "ja": "Qwen TTS がタイムアウトしたためタスクを解放しました。しばらくしてから再試行してください",
+        "ru": "Истекло время ожидания Qwen TTS, задача освобождена; повторите попытку позже",
+        "ko": "Qwen TTS 요청 시간이 초과되어 작업을 해제했습니다. 잠시 후 다시 시도하세요",
+    },
+    "qwen_tts_rate_limit_error": {
+        "zh-CN": "Qwen TTS 请求过于频繁，请稍候再试",
+        "en": "Qwen TTS is rate-limited; wait briefly and try again",
+        "ja": "Qwen TTS の利用制限に達しました。しばらく待ってから再試行してください",
+        "ru": "Достигнут лимит запросов Qwen TTS; немного подождите и повторите попытку",
+        "ko": "Qwen TTS 요청 한도에 도달했습니다. 잠시 후 다시 시도하세요",
+    },
+    "qwen_tts_model_error": {
+        "zh-CN": "Qwen TTS 不支持当前模型，请检查模型与服务区域",
+        "en": "Qwen TTS does not support the selected model; check the model and service region",
+        "ja": "Qwen TTS は選択したモデルに対応していません。モデルとサービス地域を確認してください",
+        "ru": "Qwen TTS не поддерживает выбранную модель; проверьте модель и регион сервиса",
+        "ko": "Qwen TTS가 선택한 모델을 지원하지 않습니다. 모델과 서비스 지역을 확인하세요",
+    },
+    "qwen_tts_endpoint_error": {
+        "zh-CN": "Qwen TTS 服务地址无效，请检查区域与 API 地址",
+        "en": "The Qwen TTS endpoint is invalid; check the region and API URL",
+        "ja": "Qwen TTS の接続先が無効です。地域と API URL を確認してください",
+        "ru": "Недопустимый адрес Qwen TTS; проверьте регион и URL API",
+        "ko": "Qwen TTS 엔드포인트가 올바르지 않습니다. 지역과 API URL을 확인하세요",
+    },
+    "qwen_tts_busy_error": {
+        "zh-CN": "Qwen TTS 队列繁忙或已暂时恢复保护，请稍候再试",
+        "en": "Qwen TTS is busy or temporarily recovering; wait briefly and try again",
+        "ja": "Qwen TTS が混雑中または一時復旧中です。しばらく待ってから再試行してください",
+        "ru": "Qwen TTS занят или временно восстанавливается; немного подождите и повторите попытку",
+        "ko": "Qwen TTS가 혼잡하거나 일시적으로 복구 중입니다. 잠시 후 다시 시도하세요",
+    },
+    "qwen_tts_playback_error": {
+        "zh-CN": "Qwen TTS 音频播放失败，请检查输出设备后重试",
+        "en": "Qwen TTS audio playback failed; check the output device and try again",
+        "ja": "Qwen TTS の音声再生に失敗しました。出力デバイスを確認して再試行してください",
+        "ru": "Не удалось воспроизвести звук Qwen TTS; проверьте устройство вывода и повторите попытку",
+        "ko": "Qwen TTS 오디오 재생에 실패했습니다. 출력 장치를 확인한 뒤 다시 시도하세요",
+    },
+    "qwen_tts_provider_error": {
+        "zh-CN": "Qwen TTS 服务暂时失败，任务已释放，请稍后重试",
+        "en": "Qwen TTS temporarily failed and released the task; try again shortly",
+        "ja": "Qwen TTS サービスで一時的な障害が発生し、タスクを解放しました。しばらくしてから再試行してください",
+        "ru": "Временный сбой Qwen TTS, задача освобождена; повторите попытку позже",
+        "ko": "Qwen TTS 서비스에 일시적인 오류가 발생해 작업을 해제했습니다. 잠시 후 다시 시도하세요",
+    },
+    "qwen_tts_input_error": {
+        "zh-CN": "Qwen TTS 无法处理当前文本，请修改内容后重试",
+        "en": "Qwen TTS could not accept the current text; edit it and try again",
+        "ja": "Qwen TTS が現在のテキストを受け付けませんでした。内容を修正して再試行してください",
+        "ru": "Qwen TTS не принял текущий текст; измените его и повторите попытку",
+        "ko": "Qwen TTS가 현재 텍스트를 처리할 수 없습니다. 내용을 수정한 뒤 다시 시도하세요",
+    },
+    "qwen_tts_configuration_error": {
+        "zh-CN": "Qwen TTS 凭据配置不可用，请重新保存 API Key 并检查服务区域",
+        "en": "The Qwen TTS credential configuration is unusable; save the API key again and check the service region",
+        "ja": "Qwen TTS の認証設定を使用できません。API Key を再保存し、サービス地域を確認してください",
+        "ru": "Настройки учетных данных Qwen TTS непригодны; снова сохраните API-ключ и проверьте регион сервиса",
+        "ko": "Qwen TTS 인증 설정을 사용할 수 없습니다. API Key를 다시 저장하고 서비스 지역을 확인하세요",
+    },
+    "qwen_tts_safety_error": {
+        "zh-CN": "Qwen TTS 因内容安全检查未合成此文本，请修改内容后重试",
+        "en": "Qwen TTS did not synthesize this text because of a content-safety check; edit it and try again",
+        "ja": "Qwen TTS はコンテンツ安全性チェックによりこのテキストを合成しませんでした。内容を修正して再試行してください",
+        "ru": "Qwen TTS не синтезировал этот текст из-за проверки безопасности содержимого; измените текст и повторите попытку",
+        "ko": "Qwen TTS가 콘텐츠 안전성 검사로 이 텍스트를 합성하지 않았습니다. 내용을 수정한 뒤 다시 시도하세요",
+    },
+    "qwen_tts_unavailable_error": {
+        "zh-CN": "Qwen TTS 当前不可用，请检查凭据、模型和服务区域",
+        "en": "Qwen TTS is unavailable; check the credential, model, and service region",
+        "ja": "Qwen TTS を利用できません。認証情報、モデル、サービス地域を確認してください",
+        "ru": "Qwen TTS недоступен; проверьте учетные данные, модель и регион сервиса",
+        "ko": "Qwen TTS를 사용할 수 없습니다. 인증 정보, 모델, 서비스 지역을 확인하세요",
+    },
     "desktop_audio_saved": {
         "zh-CN": "听别人说话已切换",
         "en": "VRC listen updated",
@@ -681,10 +761,10 @@ def _create_asr_pair(config: dict):
     except Exception:
         try:
             main_asr.close()
-        except Exception:
+        except Exception as close_exc:
             logger.debug(
-                "Failed to close partially constructed main ASR provider",
-                exc_info=True,
+                "Failed to close partially constructed main ASR provider: %s",
+                safe_exception_summary(close_exc),
             )
         raise
     return main_asr, listen_asr
@@ -773,7 +853,12 @@ class _RealtimeTranslationWorkerState:
     mic_pipeline: MicPipeline | None = None
     listen_pipeline: ListenPipeline | None = None
 
-    def close_translator(self, source: str | None = None) -> None:
+    def close_translator(
+        self,
+        source: str | None = None,
+        *,
+        close_client: bool = True,
+    ) -> None:
         if source == DESKTOP_SOURCE:
             translators = (self.listen_translator,)
             self.listen_translator = None
@@ -789,15 +874,17 @@ class _RealtimeTranslationWorkerState:
             if translator is None or any(translator is item for item in closed):
                 continue
             closed.append(translator)
+            if not close_client:
+                continue
             close = getattr(translator, "close", None)
             if not callable(close):
                 continue
             try:
                 close()
-            except Exception:
+            except Exception as exc:
                 logger.debug(
-                    "Failed to close realtime translation worker client",
-                    exc_info=True,
+                    "Failed to close realtime translation worker client: %s",
+                    safe_exception_summary(exc),
                 )
 
     def close(self) -> None:
@@ -827,11 +914,29 @@ class _RealtimeRewriteWorkerState:
         if callable(close):
             try:
                 close()
-            except Exception:
+            except Exception as exc:
                 logger.debug(
-                    "Failed to close realtime ASR rewrite worker client",
-                    exc_info=True,
+                    "Failed to close realtime ASR rewrite worker client: %s",
+                    safe_exception_summary(exc),
                 )
+
+
+def _translator_cleanup_is_supervised(
+    translator: Any,
+    metrics: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return true when timeout cleanup already owns destructive close."""
+
+    if translator is None:
+        return False
+    retired = getattr(translator, "_pending_requests_retired", None)
+    if callable(retired):
+        try:
+            if bool(retired()):
+                return True
+        except Exception:
+            pass
+    return bool(isinstance(metrics, Mapping) and metrics.get("wall_timeout_triggered"))
 
 
 def _freeze_snapshot_value(value: Any) -> Any:
@@ -934,6 +1039,9 @@ class MainWindow(QMainWindow):
         self._osc_service = None
         self._overlay_service: OverlayService | None = None
         self._tts_manager: TTSManager | None = None
+        self._deferred_cleanup_lock = threading.RLock()
+        self._deferred_tts_managers: list[object] = []
+        self._deferred_manual_translation_controllers: list[object] = []
         self._tts_enabled = bool(config.get("tts", {}).get("enabled", False))
         self._mic_muted = False
         self._mic_capture_paused_for_mute = False
@@ -1206,6 +1314,7 @@ class MainWindow(QMainWindow):
                 on_audio_diagnostics_requested=self._open_audio_diagnostics_window,
                 on_vad_calibration_requested=self._open_vad_calibration_window,
                 on_mode_wizard_requested=self.open_mode_wizard,
+                on_deferred_tts_manager=self._remember_deferred_tts_manager,
                 preload=preload,
                 defer_initial_page=defer_initial_page,
             )
@@ -1349,7 +1458,10 @@ class MainWindow(QMainWindow):
             # ASR providers only after scheduler workers have stopped.
             shutdown_barrier = self._do_stop()
             if shutdown_barrier is not None:
-                remaining = deadline - time.monotonic()
+                remaining = min(
+                    UPDATE_INSTALL_QUIESCE_TIMEOUT_S,
+                    deadline - time.monotonic(),
+                )
                 if remaining <= 0 or not shutdown_barrier.wait(remaining):
                     logger.error("Timed out waiting for realtime workers before update")
                     return False
@@ -1367,7 +1479,8 @@ class MainWindow(QMainWindow):
             ):
                 logger.error("Timed out closing manual translation workers before update")
                 return False
-            self._reset_tts_manager()
+            remaining = max(0.0, deadline - time.monotonic())
+            self._reset_tts_manager(timeout_seconds=remaining)
             self._close_update_osc_service()
 
             coordinator = getattr(self, "_rewrite_coordinator", None)
@@ -1388,9 +1501,9 @@ class MainWindow(QMainWindow):
             self._update_install_preparing = False
 
     def _wait_for_update_runtime_quiescence(self, deadline: float) -> bool:
-        """Wait for deferred ASR cleanup without making normal Stop block."""
+        """Wait for all deferred runtime cleanup before installer handoff."""
 
-        while self._pipeline_cleanup_in_progress():
+        while self._runtime_cleanup_in_progress():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
@@ -1448,6 +1561,7 @@ class MainWindow(QMainWindow):
     def _shutdown(self) -> None:
         if self._destroying:
             return
+        shutdown_started_at = time.monotonic()
         self._destroying = True
         with self._asr_lifecycle_lock():
             startup_cancel_event = getattr(self, "_startup_cancel_event", None)
@@ -1492,6 +1606,91 @@ class MainWindow(QMainWindow):
         if coordinator is not None:
             coordinator.close()
         self._discard_ui_callbacks()
+        deferred_cleanup = self._runtime_cleanup_in_progress()
+        foreground_elapsed_s = max(0.0, time.monotonic() - shutdown_started_at)
+        logger.info(
+            "Qt MainWindow foreground shutdown complete elapsed_ms=%.1f "
+            "deferred_cleanup=%s",
+            foreground_elapsed_s * 1000.0,
+            deferred_cleanup,
+        )
+        if deferred_cleanup:
+            self._start_shutdown_completion_monitor(shutdown_started_at)
+        else:
+            logger.info(
+                "Qt MainWindow shutdown cleanup complete elapsed_ms=%.1f "
+                "deferred_cleanup=false",
+                foreground_elapsed_s * 1000.0,
+            )
+
+    def _start_shutdown_completion_monitor(self, shutdown_started_at: float) -> None:
+        """Log the terminal lifecycle event after deferred provider cleanup."""
+
+        existing = getattr(self, "_shutdown_completion_thread", None)
+        if existing is not None:
+            try:
+                if existing.is_alive():
+                    return
+            except Exception:
+                return
+
+        def monitor() -> None:
+            while True:
+                lock = self._asr_lifecycle_lock()
+                with lock:
+                    tracked = tuple(
+                        thread
+                        for thread in self.__dict__.setdefault(
+                            "_asr_cleanup_threads",
+                            [],
+                        )
+                        if thread is not threading.current_thread()
+                    )
+                    startup_thread = getattr(self, "_startup_thread", None)
+                    closing = bool(
+                        self.__dict__.setdefault("_closing_asr_providers", [])
+                    )
+                alive: list[threading.Thread] = []
+                for thread in tracked:
+                    try:
+                        if thread.is_alive():
+                            alive.append(thread)
+                    except Exception:
+                        alive.append(thread)
+                if startup_thread is not None:
+                    try:
+                        if startup_thread.is_alive():
+                            alive.append(startup_thread)
+                    except Exception:
+                        alive.append(startup_thread)
+                runtime_cleanup = self._runtime_cleanup_in_progress()
+                if not alive and not closing and not runtime_cleanup:
+                    break
+                if alive:
+                    for thread in alive:
+                        if thread is not threading.current_thread():
+                            try:
+                                thread.join(timeout=0.25)
+                            except Exception:
+                                logger.debug(
+                                    "Failed to wait for deferred shutdown cleanup",
+                                    exc_info=True,
+                                )
+                else:
+                    time.sleep(0.05)
+            logger.info(
+                "Qt MainWindow shutdown cleanup complete elapsed_ms=%.1f "
+                "deferred_cleanup=true",
+                max(0.0, time.monotonic() - shutdown_started_at) * 1000.0,
+            )
+
+        thread = threading.Thread(
+            target=monitor,
+            daemon=True,
+            name="shutdown-completion-monitor",
+        )
+        self._shutdown_completion_thread = thread
+        thread.start()
 
     def _stop_owned_timers(self) -> None:
         """Stop child timers so a closed window cannot keep doing background work."""
@@ -1551,8 +1750,11 @@ class MainWindow(QMainWindow):
             return True
         try:
             controller.invalidate()
-        except Exception:
-            logger.debug("Failed to invalidate manual translation", exc_info=True)
+        except Exception as exc:
+            logger.debug(
+                "Failed to invalidate manual translation: %s",
+                safe_exception_summary(exc),
+            )
         for signal_name, callback_name in (
             ("started", "_on_manual_translate_started"),
             ("succeeded", "_on_manual_translate_success"),
@@ -1569,20 +1771,36 @@ class MainWindow(QMainWindow):
                     pass
         try:
             if wait_timeout_s is None:
-                controller.close()
-                return True
-            try:
-                stopped = controller.close(wait_timeout_s=wait_timeout_s)
-            except TypeError:
-                # Keep compatibility with an older controller supplied by a
-                # plugin while still allowing the normal app controller to
-                # synchronously drain its network workers during an update.
-                controller.close()
-                return True
-            return stopped is not False
-        except Exception:
-            logger.debug("Failed to close manual translation controller", exc_info=True)
+                stopped = controller.close()
+            else:
+                try:
+                    stopped = controller.close(wait_timeout_s=wait_timeout_s)
+                except TypeError:
+                    # Keep compatibility with an older controller supplied by a
+                    # plugin while still allowing the normal app controller to
+                    # synchronously drain its network workers during an update.
+                    stopped = controller.close()
+            complete = True if stopped is None else bool(stopped)
+            if not complete:
+                self._remember_deferred_manual_controller(controller)
+            return complete
+        except Exception as exc:
+            self._remember_deferred_manual_controller(controller)
+            logger.debug(
+                "Failed to close manual translation controller: %s",
+                safe_exception_summary(exc),
+            )
             return False
+
+    def _remember_deferred_manual_controller(self, controller: object) -> None:
+        lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
+        with lock:
+            deferred = self.__dict__.setdefault(
+                "_deferred_manual_translation_controllers",
+                [],
+            )
+            if all(existing is not controller for existing in deferred):
+                deferred.append(controller)
 
     def _discard_ui_callbacks(self) -> None:
         """Release queued closures and their payloads after UI delivery is disabled."""
@@ -1946,11 +2164,11 @@ class MainWindow(QMainWindow):
             return
         try:
             setter(bool(enabled))
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to %s ASR-owned microphone capture",
+                "Failed to %s ASR-owned microphone capture: %s",
                 "resume" if enabled else "pause",
-                exc_info=True,
+                safe_exception_summary(exc),
             )
 
     def _cancel_pending_asr_requests(self, *, reason: str) -> None:
@@ -1975,12 +2193,13 @@ class MainWindow(QMainWindow):
                     getattr(provider, "provider_id", type(provider).__name__),
                     reason,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Failed to cancel pending ASR provider requests provider=%s reason=%s",
+                    "Failed to cancel pending ASR provider requests "
+                    "provider=%s reason=%s error=%s",
                     getattr(provider, "provider_id", type(provider).__name__),
                     reason,
-                    exc_info=True,
+                    safe_exception_summary(exc),
                 )
 
     def _set_app_mode(self, mode: AppMode, *, persist: bool) -> None:
@@ -2991,6 +3210,7 @@ class MainWindow(QMainWindow):
     def _pipeline_cleanup_in_progress(self) -> bool:
         """Prevent a replacement model load while the previous runtime still owns memory."""
 
+        asr_cleanup = False
         lock = self._asr_lifecycle_lock()
         with lock:
             startup_thread = getattr(self, "_startup_thread", None)
@@ -3003,7 +3223,7 @@ class MainWindow(QMainWindow):
                     if self._startup_thread is startup_thread:
                         self._startup_thread = None
                 else:
-                    return True
+                    asr_cleanup = True
 
             cleanup_threads = self.__dict__.setdefault("_asr_cleanup_threads", [])
             alive_cleanup: list[threading.Thread] = []
@@ -3014,10 +3234,103 @@ class MainWindow(QMainWindow):
                 except Exception:
                     alive_cleanup.append(thread)
             cleanup_threads[:] = alive_cleanup
-            return bool(
+            asr_cleanup = asr_cleanup or bool(
                 alive_cleanup
                 or self.__dict__.setdefault("_closing_asr_providers", [])
             )
+        return bool(asr_cleanup)
+
+    def _runtime_cleanup_in_progress(self) -> bool:
+        """Report all deferred resources that must finish before process handoff."""
+
+        return bool(
+            self._pipeline_cleanup_in_progress()
+            or self._deferred_tts_cleanup_in_progress()
+            or self._deferred_manual_cleanup_in_progress()
+            or provider_background_work_in_progress()
+        )
+
+    def _deferred_tts_cleanup_in_progress(self) -> bool:
+        lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
+        with lock:
+            managers = tuple(self.__dict__.setdefault("_deferred_tts_managers", []))
+        remaining: list[object] = []
+        for manager in managers:
+            complete = False
+            try:
+                getter = getattr(manager, "get_quiescence_state", None)
+                if callable(getter):
+                    state = getter()
+                else:
+                    close = getattr(manager, "close", None)
+                    if not callable(close):
+                        complete = True
+                        state = None
+                    else:
+                        try:
+                            state = close(timeout_seconds=0.0)
+                        except TypeError:
+                            state = close()
+                if state is not None:
+                    complete = bool(
+                        getattr(state, "quiescent", state)
+                    ) and not bool(
+                        getattr(state, "engine_close_deferred", False)
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Failed to poll deferred TTS cleanup: %s",
+                    safe_exception_summary(exc),
+                )
+            if not complete:
+                remaining.append(manager)
+        with lock:
+            deferred = self.__dict__.setdefault("_deferred_tts_managers", [])
+            newly_added = [
+                manager
+                for manager in deferred
+                if all(manager is not existing for existing in managers)
+            ]
+            deferred[:] = remaining + newly_added
+            return bool(deferred)
+
+    def _deferred_manual_cleanup_in_progress(self) -> bool:
+        lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
+        with lock:
+            controllers = tuple(
+                self.__dict__.setdefault(
+                    "_deferred_manual_translation_controllers",
+                    [],
+                )
+            )
+        remaining: list[object] = []
+        for controller in controllers:
+            try:
+                try:
+                    state = controller.close(wait_timeout_s=0.0)
+                except TypeError:
+                    state = controller.close()
+                complete = True if state is None else bool(state)
+            except Exception as exc:
+                complete = False
+                logger.debug(
+                    "Failed to poll deferred manual cleanup: %s",
+                    safe_exception_summary(exc),
+                )
+            if not complete:
+                remaining.append(controller)
+        with lock:
+            deferred = self.__dict__.setdefault(
+                "_deferred_manual_translation_controllers",
+                [],
+            )
+            newly_added = [
+                controller
+                for controller in deferred
+                if all(controller is not existing for existing in controllers)
+            ]
+            deferred[:] = remaining + newly_added
+            return bool(deferred)
 
     def _schedule_pipeline_start_retry(self, delay_ms: int) -> None:
         if self._destroying:
@@ -3224,8 +3537,11 @@ class MainWindow(QMainWindow):
         def run() -> None:
             try:
                 target()
-            except Exception:
-                logger.exception("Deferred ASR cleanup failed")
+            except Exception as exc:
+                logger.error(
+                    "Deferred ASR cleanup failed: %s",
+                    safe_exception_summary(exc),
+                )
             finally:
                 current = threading.current_thread()
                 with lock:
@@ -3289,8 +3605,11 @@ class MainWindow(QMainWindow):
             for provider in to_close:
                 try:
                     provider.close()
-                except Exception:
-                    logger.debug("Failed to close ASR provider", exc_info=True)
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to close ASR provider: %s",
+                        safe_exception_summary(exc),
+                    )
                 finally:
                     with lock:
                         closing = self.__dict__.setdefault(
@@ -3426,8 +3745,11 @@ class MainWindow(QMainWindow):
                 stop_playback = getattr(tts_manager, "stop_playback", None)
                 if callable(stop_playback):
                     stop_playback()
-            except Exception:
-                logger.debug("Failed to cancel stale TTS session work", exc_info=True)
+            except Exception as exc:
+                logger.debug(
+                    "Failed to cancel stale TTS session work: %s",
+                    safe_exception_summary(exc),
+                )
 
         osc_sender = getattr(self, "_sender", None)
         if osc_sender is None:
@@ -3482,9 +3804,12 @@ class MainWindow(QMainWindow):
             try:
                 result = scheduler.stop(timeout=WORKER_STOP_TIMEOUT_S)
                 scheduler_stopped = result is not False
-            except Exception:
+            except Exception as exc:
                 scheduler_stopped = False
-                logger.exception("Realtime scheduler stop failed")
+                logger.error(
+                    "Realtime scheduler stop failed: %s",
+                    safe_exception_summary(exc),
+                )
 
         current = threading.current_thread()
         for worker in partial_workers:
@@ -3528,9 +3853,12 @@ class MainWindow(QMainWindow):
                 try:
                     result = scheduler.stop(timeout=None)
                     safe_to_close = result is not False
-                except Exception:
+                except Exception as exc:
                     safe_to_close = False
-                    logger.exception("Deferred realtime scheduler stop failed")
+                    logger.error(
+                        "Deferred realtime scheduler stop failed: %s",
+                        safe_exception_summary(exc),
+                    )
 
             for worker in partial_workers:
                 join = getattr(worker, "join", None)
@@ -4942,20 +5270,30 @@ class MainWindow(QMainWindow):
             except (TypeError, ValueError):
                 realtime_timeout = timeout_default
             realtime_timeout = max(2.0, min(realtime_timeout, 30.0))
+            timeout_fields = (
+                "timeout_s",
+                "connect_timeout_s",
+                "pool_timeout_s",
+                "read_timeout_s",
+                "write_timeout_s",
+                "wall_timeout_s",
+            )
             for backend_config in runtime_translation.values():
                 if isinstance(backend_config, dict):
                     backend_config["max_retries"] = 0
-                    if "timeout_s" in backend_config:
+                    for field_name in timeout_fields:
+                        if field_name not in backend_config:
+                            continue
                         try:
                             configured_timeout = float(
                                 backend_config.get(
-                                    "timeout_s",
+                                    field_name,
                                     DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S,
                                 )
                             )
                         except (TypeError, ValueError):
                             configured_timeout = DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S
-                        backend_config["timeout_s"] = min(
+                        backend_config[field_name] = min(
                             max(configured_timeout, 1.0),
                             realtime_timeout,
                         )
@@ -5025,38 +5363,74 @@ class MainWindow(QMainWindow):
                     raise RuntimeError(
                         "The selected translation provider cannot rewrite ASR text"
                     )
-                def rewrite_operation() -> object:
-                    return rewrite(
-                        clean,
-                        style,
-                        language_hint=payload.source_language or "auto",
-                        context_source=MIC_SOURCE,
-                    )
+                rewrite_operation_invoked = False
 
-                coordinator = getattr(self, "_rewrite_coordinator", None)
-                if coordinator is None:
-                    rewrite_result = rewrite_operation()
-                else:
-                    rewrite_result = coordinator.execute(
-                        priority=REWRITE_PRIORITY_REALTIME,
-                        config=config_snapshot,
-                        style=style,
-                        language_hint=payload.source_language or "auto",
-                        text=clean,
-                        operation=rewrite_operation,
-                        wait_timeout_s=1.0,
-                    )
-                rewritten = str(rewrite_result or "").strip() or clean
+                def rewrite_operation() -> object:
+                    nonlocal rewrite_operation_invoked
+                    rewrite_operation_invoked = True
+                    with translation_context_scope(
+                        session_id=task.session_id,
+                        sequence=task.sequence,
+                    ):
+                        return rewrite(
+                            clean,
+                            style,
+                            language_hint=payload.source_language or "auto",
+                            context_source=MIC_SOURCE,
+                        )
+
+                try:
+                    coordinator = getattr(self, "_rewrite_coordinator", None)
+                    if coordinator is None:
+                        rewrite_result = rewrite_operation()
+                    else:
+                        rewrite_result = coordinator.execute(
+                            priority=REWRITE_PRIORITY_REALTIME,
+                            config=config_snapshot,
+                            style=style,
+                            language_hint=payload.source_language or "auto",
+                            text=clean,
+                            operation=rewrite_operation,
+                            wait_timeout_s=1.0,
+                        )
+                    rewritten = str(rewrite_result or "").strip() or clean
+                finally:
+                    if rewrite_operation_invoked:
+                        metrics = translation_metrics_snapshot(
+                            worker_state.translator
+                        )
+                        payload.diagnostics.update(
+                            {
+                                f"rewrite_{key}": value
+                                for key, value in metrics.items()
+                            }
+                        )
             except Exception as exc:
                 rewritten = clean
+                failed_translator = (
+                    worker_state.translator
+                    if isinstance(worker_state, _RealtimeRewriteWorkerState)
+                    else None
+                )
+                failure_metrics = translation_metrics_snapshot(failed_translator)
+                if _translator_cleanup_is_supervised(
+                    failed_translator,
+                    failure_metrics,
+                ):
+                    # A wall-timeout cleanup thread already owns destructive
+                    # close. Detach now so the next sentence creates a healthy
+                    # client without racing a potentially blocking SDK close.
+                    worker_state.translator = None
+                    worker_state.runtime_signature = None
+                    worker_state.config_snapshot = None
                 logger.warning(
-                    "ASR style rewrite failed open (style=%s source=%s sequence=%d): %s",
+                    "ASR style rewrite failed open "
+                    "(style=%s source=%s sequence=%d error=%s)",
                     style,
                     task.source,
                     task.sequence,
-                    exc,
+                    safe_exception_summary(exc),
                 )
-                logger.debug("ASR rewrite traceback", exc_info=True)
 
         return rewritten
 
@@ -5225,26 +5599,36 @@ class MainWindow(QMainWindow):
                 worker_state.listen_translator = translator
             else:
                 worker_state.translator = translator
-            metrics_getter = getattr(translator, "translation_metrics", None)
-            if callable(metrics_getter):
-                try:
-                    metrics = metrics_getter()
-                except Exception:
-                    metrics = {}
-                if isinstance(metrics, Mapping):
-                    payload.diagnostics.update(
-                        {
-                            f"translation_{key}": value
-                            for key, value in metrics.items()
-                        }
-                    )
+            metrics = getattr(result, "provider_metrics", None)
+            if not isinstance(metrics, Mapping) or not metrics:
+                metrics = translation_metrics_snapshot(translator)
+            payload.diagnostics.update(
+                {f"translation_{key}": value for key, value in metrics.items()}
+            )
             if result.api_translation_used:
                 self._record_source_translation_success(task.source)
             return result
         except Exception as exc:
+            failed_translator = (
+                worker_state.listen_translator
+                if task.source == DESKTOP_SOURCE
+                else worker_state.translator
+            )
+            metrics = getattr(exc, "provider_metrics", None)
+            if not isinstance(metrics, Mapping) or not metrics:
+                metrics = translation_metrics_snapshot(failed_translator)
+            payload.diagnostics.update(
+                {f"translation_{key}": value for key, value in metrics.items()}
+            )
             friendly = self._format_translation_error(exc)
             self._record_source_translation_failure(task.source, friendly)
-            worker_state.close_translator(task.source)
+            worker_state.close_translator(
+                task.source,
+                close_client=not _translator_cleanup_is_supervised(
+                    failed_translator,
+                    metrics,
+                ),
+            )
             raise
 
     def _scheduler_delivery_stage(self, completion: RealtimeCompletion) -> None:
@@ -5261,13 +5645,20 @@ class MainWindow(QMainWindow):
         ui_timing = {
             "started_at": ui_enqueued_at,
             "finished_at": ui_enqueued_at,
+            "output_metrics": {},
         }
 
         def deliver_on_ui() -> None:
             ui_timing["started_at"] = time.monotonic()
             try:
                 if cancel_event is None or not cancel_event.is_set():
-                    self._deliver_scheduler_completion_ui(completion)
+                    diagnostics = getattr(task, "diagnostics", None)
+                    if isinstance(diagnostics, dict):
+                        diagnostics["ui_enqueued_at"] = ui_enqueued_at
+                        diagnostics["ui_started_at"] = ui_timing["started_at"]
+                    output_metrics = self._deliver_scheduler_completion_ui(completion)
+                    if isinstance(output_metrics, Mapping):
+                        ui_timing["output_metrics"] = dict(output_metrics)
             finally:
                 ui_timing["finished_at"] = time.monotonic()
                 acknowledged.set()
@@ -5279,6 +5670,7 @@ class MainWindow(QMainWindow):
                 ui_enqueued_at=ui_enqueued_at,
                 ui_started_at=ui_timing["started_at"],
                 ui_finished_at=ui_timing["finished_at"],
+                output_metrics=ui_timing["output_metrics"],
             )
             return
         if not self._call_in_ui(deliver_on_ui, priority=True):
@@ -5294,6 +5686,7 @@ class MainWindow(QMainWindow):
             ui_enqueued_at=ui_enqueued_at,
             ui_started_at=ui_timing["started_at"],
             ui_finished_at=ui_timing["finished_at"],
+            output_metrics=ui_timing["output_metrics"],
         )
 
     def _log_reverse_latency(
@@ -5303,19 +5696,40 @@ class MainWindow(QMainWindow):
         ui_enqueued_at: float,
         ui_started_at: float,
         ui_finished_at: float,
+        output_metrics: Mapping[str, object] | None = None,
     ) -> None:
         task = completion.task
-        if getattr(task, "source", None) != DESKTOP_SOURCE:
+        if getattr(task, "source", None) not in {MIC_SOURCE, DESKTOP_SOURCE}:
             return
-        diagnostics = task.diagnostics
+        diagnostics = getattr(task, "diagnostics", {})
         if not isinstance(diagnostics, Mapping):
             diagnostics = {}
+        output = output_metrics if isinstance(output_metrics, Mapping) else {}
 
         def seconds(name: str, default: float = 0.0) -> float:
             try:
                 return max(0.0, float(diagnostics.get(name, default) or default))
             except (TypeError, ValueError):
                 return max(0.0, float(default))
+
+        def optional_ms(name: str) -> str:
+            value = diagnostics.get(name)
+            if value is None:
+                return "na"
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return "na"
+            if parsed < 0.0:
+                return "na"
+            return f"{parsed * 1000.0:.1f}"
+
+        def output_wait(name: str) -> tuple[str, str]:
+            attempted = bool(output.get(f"{name}_attempted", False))
+            queued = bool(output.get(f"{name}_queued", False))
+            if not attempted:
+                return "na", "false"
+            return ("pending" if queued else "not_queued"), str(queued).lower()
 
         context_s = seconds("translation_context_lookup_s") + seconds(
             "translation_prompt_build_s"
@@ -5330,15 +5744,43 @@ class MainWindow(QMainWindow):
             + completion.rewrite_reorder_wait_s
             + completion.ordered_delivery_wait_s
         )
+        local_queue_s = (
+            completion.asr_queue_wait_s
+            + completion.rewrite_queue_wait_s
+            + completion.translation_queue_wait_s
+        )
+        parsing_postprocess_s = seconds("translation_parse_s") + seconds(
+            "translation_postprocess_s"
+        )
+        osc_wait_ms, osc_queued = output_wait("osc")
+        tts_wait_ms, tts_queued = output_wait("tts")
+        log_prefix = (
+            "Reverse latency"
+            if getattr(task, "source", None) == DESKTOP_SOURCE
+            else "Realtime request latency"
+        )
         logger.info(
-            "Reverse latency source=%s sequence=%d stale_asr=%s stale_translation=%s "
+            "%s source=%s sequence=%d stale_asr=%s stale_translation=%s "
             "vad_ms=%.1f capture_to_admission_ms=%.1f asr_queue_ms=%.1f "
             "asr_event_loop_queue_ms=%.1f asr_provider_queue_ms=%.1f "
-            "asr_provider_ms=%.1f translation_context_ms=%.1f "
-            "translation_queue_ms=%.1f translation_provider_ms=%.1f "
+            "asr_provider_ms=%.1f rewrite_queue_ms=%.1f rewrite_ms=%.1f "
+            "rewrite_connection_pool_wait_ms=%s rewrite_dns_ms=%s "
+            "rewrite_tcp_ms=%s rewrite_tls_ms=%s rewrite_response_header_ms=%s "
+            "rewrite_provider_processing_ms=%s rewrite_first_token_ms=%s "
+            "rewrite_full_response_ms=%s rewrite_parsing_postprocessing_ms=%.1f "
+            "rewrite_provider_calls=%s rewrite_http_requests=%s "
+            "translation_context_ms=%.1f "
+            "translation_queue_ms=%.1f local_queue_ms=%.1f "
+            "connection_pool_wait_ms=%s dns_ms=%s tcp_ms=%s tls_ms=%s "
+            "response_header_ms=%s provider_processing_ms=%s "
+            "translation_provider_ms=%.1f provider_calls=%s http_requests=%s "
+            "streaming_first_token_ms=%s "
+            "full_response_ms=%s parsing_postprocessing_ms=%.1f "
             "reorder_ms=%.1f ui_queue_ms=%.1f ui_delivery_ms=%.1f "
-            "tts_wait_ms=0.0 tts_queued=false asr_connection_reused=%s "
-            "total_ms=%.1f",
+            "osc_wait_ms=%s osc_queued=%s tts_wait_ms=%s tts_queued=%s "
+            "asr_connection_reused=%s translation_connection_reused=%s "
+            "total_wall_ms=%.1f",
+            log_prefix,
             task.source,
             task.sequence,
             completion.stale_asr,
@@ -5350,13 +5792,47 @@ class MainWindow(QMainWindow):
             seconds("asr_event_loop_queue_s") * 1000.0,
             seconds("asr_provider_queue_s") * 1000.0,
             seconds("asr_provider_s", completion.asr_duration_s) * 1000.0,
+            completion.rewrite_queue_wait_s * 1000.0,
+            completion.rewrite_duration_s * 1000.0,
+            optional_ms("rewrite_pool_wait_s"),
+            optional_ms("rewrite_dns_s"),
+            optional_ms("rewrite_tcp_s"),
+            optional_ms("rewrite_tls_s"),
+            optional_ms("rewrite_response_headers_s"),
+            optional_ms("rewrite_provider_processing_s"),
+            optional_ms("rewrite_first_token_s"),
+            optional_ms("rewrite_full_response_s"),
+            (
+                seconds("rewrite_parse_s")
+                + seconds("rewrite_postprocess_s")
+            )
+            * 1000.0,
+            diagnostics.get("rewrite_provider_calls", 0),
+            diagnostics.get("rewrite_http_request_count", 0),
             context_s * 1000.0,
             completion.translation_queue_wait_s * 1000.0,
+            local_queue_s * 1000.0,
+            optional_ms("translation_pool_wait_s"),
+            optional_ms("translation_dns_s"),
+            optional_ms("translation_tcp_s"),
+            optional_ms("translation_tls_s"),
+            optional_ms("translation_response_headers_s"),
+            optional_ms("translation_provider_processing_s"),
             provider_s * 1000.0,
+            diagnostics.get("translation_provider_calls", 0),
+            diagnostics.get("translation_http_request_count", 0),
+            optional_ms("translation_first_token_s"),
+            optional_ms("translation_full_response_s"),
+            parsing_postprocess_s * 1000.0,
             reorder_s * 1000.0,
             max(0.0, ui_started_at - ui_enqueued_at) * 1000.0,
             max(0.0, ui_finished_at - ui_started_at) * 1000.0,
+            osc_wait_ms,
+            osc_queued,
+            tts_wait_ms,
+            tts_queued,
             diagnostics.get("asr_connection_reused", "unknown"),
+            diagnostics.get("translation_connection_reused", "unknown"),
             max(0.0, ui_finished_at - total_anchor) * 1000.0,
         )
 
@@ -5429,10 +5905,101 @@ class MainWindow(QMainWindow):
             context_source=self._realtime_context_source(task.source),
         )
 
+    @staticmethod
+    def _realtime_output_request_context(
+        completion: RealtimeCompletion,
+        *,
+        ui_delivered_at: float,
+    ) -> dict[str, object]:
+        task = completion.task
+        diagnostics = task.diagnostics if isinstance(task.diagnostics, Mapping) else {}
+
+        def timestamp(name: str, default: float) -> float:
+            try:
+                value = float(diagnostics.get(name, default) or default)
+            except (TypeError, ValueError):
+                value = float(default)
+            return max(0.0, value)
+
+        upstream_started_at = timestamp("speech_ended_at", task.submitted_at)
+        ui_started_at = timestamp("ui_started_at", ui_delivered_at)
+        return {
+            "source": task.source,
+            "session_id": task.session_id,
+            "sequence": task.sequence,
+            "upstream_started_at": upstream_started_at,
+            "ui_delivered_at": ui_delivered_at,
+            "ui_delivery_s": max(0.0, ui_delivered_at - ui_started_at),
+        }
+
+    @staticmethod
+    def _realtime_osc_terminal_callback(
+        *,
+        source: str,
+        session_id: int,
+        sequence: int,
+        diagnostics: dict[str, object] | None,
+    ) -> Callable[[Mapping[str, object]], None]:
+        """Build a terminal callback without retaining audio or provider state."""
+
+        def callback(metrics: Mapping[str, object]) -> None:
+            MainWindow._log_realtime_osc_terminal(
+                source=source,
+                session_id=session_id,
+                sequence=sequence,
+                diagnostics=diagnostics,
+                metrics=metrics,
+            )
+
+        return callback
+
+    @staticmethod
+    def _log_realtime_osc_terminal(
+        *,
+        source: str,
+        session_id: int,
+        sequence: int,
+        diagnostics: dict[str, object] | None,
+        metrics: Mapping[str, object],
+    ) -> None:
+        if isinstance(diagnostics, dict):
+            diagnostics.update(
+                {f"osc_{key}": value for key, value in metrics.items()}
+            )
+
+        def milliseconds(name: str) -> str:
+            value = metrics.get(name)
+            if value is None:
+                return "na"
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return "na"
+            if parsed < 0.0:
+                return "na"
+            return f"{parsed * 1000.0:.1f}"
+
+        logger.info(
+            "Realtime OSC terminal source=%s session_id=%s sequence=%d outcome=%s "
+            "local_queue_ms=%s rate_limit_wait_ms=%s udp_send_ms=%s "
+            "osc_wait_ms=%s ui_to_osc_ms=%s total_wall_ms=%s error_type=%s",
+            source,
+            session_id,
+            sequence,
+            metrics.get("outcome", "unknown"),
+            milliseconds("queue_wait_s"),
+            milliseconds("rate_wait_s"),
+            milliseconds("send_s"),
+            milliseconds("osc_total_s"),
+            milliseconds("ui_to_osc_s"),
+            milliseconds("pipeline_total_s"),
+            metrics.get("error_type", ""),
+        )
+
     def _deliver_scheduler_completion_ui(
         self,
         completion: RealtimeCompletion,
-    ) -> None:
+    ) -> Mapping[str, object] | None:
         """Apply a completion as one UI transaction on the Qt thread."""
 
         task = completion.task
@@ -5519,14 +6086,38 @@ class MainWindow(QMainWindow):
                 return
 
             output_message = result.output_message
+            output_metrics: dict[str, object] = {
+                "osc_attempted": False,
+                "osc_queued": False,
+                "tts_attempted": False,
+                "tts_queued": False,
+            }
             if task.source == DESKTOP_SOURCE:
                 self._last_listen_result_at = time.monotonic()
                 if output_message is not None:
                     self._dispatch_output_message(output_message, sinks=("overlay",))
+                request_context = self._realtime_output_request_context(
+                    completion,
+                    ui_delivered_at=time.monotonic(),
+                )
                 if payload.send_to_chatbox:
-                    self._send_listen_chatbox(
-                        result.chatbox_text,
-                        session_id=task.session_id,
+                    output_metrics["osc_attempted"] = True
+                    output_metrics["osc_queued"] = bool(
+                        self._send_listen_chatbox(
+                            result.chatbox_text,
+                            session_id=task.session_id,
+                            request_context=request_context,
+                            completion_callback=self._realtime_osc_terminal_callback(
+                                source=task.source,
+                                session_id=task.session_id,
+                                sequence=task.sequence,
+                                diagnostics=(
+                                    task.diagnostics
+                                    if isinstance(task.diagnostics, dict)
+                                    else None
+                                ),
+                            ),
+                        )
                     )
             else:
                 if output_message is not None:
@@ -5534,13 +6125,49 @@ class MainWindow(QMainWindow):
                         output_message,
                         sinks=("ui", "overlay"),
                     )
+                request_context = self._realtime_output_request_context(
+                    completion,
+                    ui_delivered_at=time.monotonic(),
+                )
                 if payload.send_to_chatbox:
-                    self._send_chatbox_payload(
-                        result.chatbox_text,
-                        session_id=task.session_id,
+                    output_metrics["osc_attempted"] = True
+                    output_metrics["osc_queued"] = bool(
+                        self._send_chatbox_payload(
+                            result.chatbox_text,
+                            session_id=task.session_id,
+                            request_context=request_context,
+                            completion_callback=self._realtime_osc_terminal_callback(
+                                source=task.source,
+                                session_id=task.session_id,
+                                sequence=task.sequence,
+                                diagnostics=(
+                                    task.diagnostics
+                                    if isinstance(task.diagnostics, dict)
+                                    else None
+                                ),
+                            ),
+                        )
                     )
                 if output_message is not None:
-                    self._dispatch_output_message(output_message, sinks=("tts",))
+                    output_metrics["tts_attempted"] = True
+                    tts_message = output_message
+                    if isinstance(output_message, OutputMessage):
+                        metadata = (
+                            dict(output_message.metadata)
+                            if isinstance(output_message.metadata, Mapping)
+                            else {}
+                        )
+                        metadata["request_context"] = request_context
+                        tts_message = replace(output_message, metadata=metadata)
+                    dispatch_result = self._dispatch_output_message(
+                        tts_message,
+                        sinks=("tts",),
+                    )
+                    if isinstance(dispatch_result, Mapping):
+                        output_metrics["tts_queued"] = bool(
+                            dispatch_result.get("tts", False)
+                        )
+            return output_metrics
         finally:
             self._restore_scheduler_status_ui(task.source, task.session_id)
 
@@ -5584,7 +6211,10 @@ class MainWindow(QMainWindow):
                 )
             )
         except Exception as exc:
-            logger.debug("Partial transcription failed: %s", exc)
+            logger.debug(
+                "Partial transcription failed: %s",
+                safe_exception_summary(exc),
+            )
 
     def _asr_for_source(self, source: str):
         listen_asr = getattr(self, "_listen_asr", None)
@@ -5827,23 +6457,49 @@ class MainWindow(QMainWindow):
         if self._listen_send_to_chatbox_enabled():
             self._call_in_ui(lambda payload=result.chatbox_text, sid=session_id: self._send_listen_chatbox(payload, session_id=sid))
 
-    def _send_chatbox_payload(self, message: str, *, session_id: int | None = None) -> None:
+    def _send_chatbox_payload(
+        self,
+        message: str,
+        *,
+        session_id: int | None = None,
+        request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> bool:
         if session_id is not None and (not self._running or session_id != self._listen_session):
-            return
+            return False
         clean = _normalize_chatbox_text(message)
         if not clean:
-            return
+            return False
         try:
-            sent = self._ensure_output_dispatcher().send_chatbox_text(self._ensure_sender(), clean)
+            sent = self._ensure_output_dispatcher().send_chatbox_text(
+                self._ensure_sender(),
+                clean,
+                request_context=request_context,
+                completion_callback=completion_callback,
+            )
             if not sent:
                 self._set_bottom(self._copy("chatbox_send_not_queued"))
-        except Exception as exc:
+            return bool(sent)
+        except Exception:
             logger.warning("Failed to send chatbox payload", exc_info=True)
             self._set_bottom(self._t("main_send_failed_detail"), "warning")
             self._pulse_avatar_error()
+            return False
 
-    def _send_listen_chatbox(self, message: str, *, session_id: int | None = None) -> None:
-        self._send_chatbox_payload(message, session_id=session_id)
+    def _send_listen_chatbox(
+        self,
+        message: str,
+        *,
+        session_id: int | None = None,
+        request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> bool:
+        return self._send_chatbox_payload(
+            message,
+            session_id=session_id,
+            request_context=request_context,
+            completion_callback=completion_callback,
+        )
 
     def _mic_send_to_chatbox_enabled(self) -> bool:
         trans_cfg = self._config.get("translation", {})
@@ -5906,7 +6562,10 @@ class MainWindow(QMainWindow):
                     )
                 )
         except Exception as e:
-            logger.debug("Final transcription failed: %s", e)
+            logger.debug(
+                "Final transcription failed: %s",
+                safe_exception_summary(e),
+            )
             if source == DESKTOP_SOURCE:
                 friendly = self._format_translation_error(e)
                 self._call_in_ui(
@@ -6028,16 +6687,28 @@ class MainWindow(QMainWindow):
         source = str(message.source or "")
         if message.is_error or source == "listen":
             return False
+        metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
+        request_context = metadata.get("request_context")
+        if not isinstance(request_context, Mapping):
+            request_context = None
         if source == "manual":
+            kwargs: dict[str, object] = {
+                "original_text": message.original_text,
+                "translated_text": message.translated_text,
+            }
+            if request_context is not None:
+                kwargs["request_context"] = request_context
             return self._auto_read_translation_result(
-                original_text=message.original_text,
-                translated_text=message.translated_text,
+                **kwargs,
             )
         if source == "mic":
-            return self._auto_read_mic_translation(
-                original_text=message.original_text,
-                translated_text=message.translated_text,
-            )
+            kwargs = {
+                "original_text": message.original_text,
+                "translated_text": message.translated_text,
+            }
+            if request_context is not None:
+                kwargs["request_context"] = request_context
+            return self._auto_read_mic_translation(**kwargs)
         return False
 
     def _ensure_mic_pipeline(self) -> MicPipeline:
@@ -6179,7 +6850,11 @@ class MainWindow(QMainWindow):
     def _on_manual_translation_timeout(self, generation: int, timeout_s: float) -> None:
         if generation != getattr(self, "_manual_translation_generation", 0) or not self._translating:
             return
-        self._manual_translation_generation = self._ensure_manual_translation_controller().invalidate()
+        controller = self._ensure_manual_translation_controller()
+        cancel = getattr(controller, "cancel_active_requests", None)
+        self._manual_translation_generation = (
+            cancel() if callable(cancel) else controller.invalidate()
+        )
         self._translating = False
         friendly = self._format_translation_error(
             TimeoutError(f"Translation request timed out after {timeout_s:.0f}s")
@@ -6337,7 +7012,7 @@ class MainWindow(QMainWindow):
                 port=int(osc_cfg.get("receive_port", 9001)),
                 sync_mute_self=sync_mute_self,
             )
-        except Exception as exc:
+        except Exception:
             logger.warning("Failed to start VRChat OSC listener", exc_info=True)
             self._set_bottom(self._t("main_osc_listener_failed"), "warning")
 
@@ -6517,7 +7192,12 @@ class MainWindow(QMainWindow):
             self.__dict__.get("_listen_tts_echo_suppress_until", 0.0) or 0.0
         )
 
-    def _queue_tts_playback(self, text: str) -> bool:
+    def _queue_tts_playback(
+        self,
+        text: str,
+        *,
+        request_context: Mapping[str, object] | None = None,
+    ) -> bool:
         if not self._sync_tts_enabled_from_config():
             return False
         clean = str(text or "").strip()
@@ -6531,7 +7211,11 @@ class MainWindow(QMainWindow):
             clean == last_tts_text
             and now - last_tts_at < tts_dedup_s
         ):
-            logger.debug("TTS deduplicated (same text within %.1fs): %s", tts_dedup_s, clean)
+            logger.debug(
+                "TTS deduplicated (window_s=%.1f text_chars=%d)",
+                tts_dedup_s,
+                len(clean),
+            )
             return False
         self._last_tts_text = clean
         self._last_tts_at = now
@@ -6548,21 +7232,64 @@ class MainWindow(QMainWindow):
             self._begin_listen_tts_echo_suppression()
 
         def _done(success: bool, _message: str) -> None:
+            terminal_at = time.monotonic()
             if suppress_echo:
                 self._finish_listen_tts_echo_suppression(
                     LISTEN_TTS_ECHO_SUPPRESS_TAIL_S if success else 0.0
                 )
             if not success:
                 self._handle_tts_failure(_message)
+            if isinstance(request_context, Mapping):
+                try:
+                    ui_delivered_at = float(
+                        request_context.get("ui_delivered_at", terminal_at)
+                        or terminal_at
+                    )
+                except (TypeError, ValueError):
+                    ui_delivered_at = terminal_at
+                try:
+                    upstream_started_at = float(
+                        request_context.get("upstream_started_at", ui_delivered_at)
+                        or ui_delivered_at
+                    )
+                except (TypeError, ValueError):
+                    upstream_started_at = ui_delivered_at
+                logger.info(
+                    "Realtime TTS terminal source=%s session_id=%s sequence=%s "
+                    "outcome=%s tts_wait_ms=%.1f total_wall_ms=%.1f error_code=%s",
+                    request_context.get("source", "-"),
+                    request_context.get("session_id", "-"),
+                    request_context.get("sequence", "-"),
+                    "success" if success else "failed",
+                    max(0.0, terminal_at - ui_delivered_at) * 1000.0,
+                    max(0.0, terminal_at - upstream_started_at) * 1000.0,
+                    tts_error_code(_message) if not success else "",
+                )
 
         engine_cfg = self._current_tts_engine_config()
-        accepted = manager.speak(
-            clean,
-            voice,
-            self._safe_tts_rate(engine_cfg.get("rate")),
-            self._safe_tts_volume(engine_cfg.get("volume")),
-            callback=_done,
-        )
+        speak_kwargs = {
+            "callback": _done,
+        }
+        if request_context is not None:
+            speak_kwargs["request_context"] = request_context
+        try:
+            accepted = manager.speak(
+                clean,
+                voice,
+                self._safe_tts_rate(engine_cfg.get("rate")),
+                self._safe_tts_volume(engine_cfg.get("volume")),
+                **speak_kwargs,
+            )
+        except TypeError as exc:
+            if "request_context" not in str(exc) or request_context is None:
+                raise
+            accepted = manager.speak(
+                clean,
+                voice,
+                self._safe_tts_rate(engine_cfg.get("rate")),
+                self._safe_tts_volume(engine_cfg.get("volume")),
+                callback=_done,
+            )
         if not accepted and suppress_echo:
             self._finish_listen_tts_echo_suppression(0.0)
         return bool(accepted)
@@ -6570,12 +7297,26 @@ class MainWindow(QMainWindow):
     def _handle_tts_failure(self, message: object) -> None:
         if self._current_tts_engine().strip().lower() != "qwen_tts":
             return
-        if is_tts_authentication_error(message):
-            message_key = "qwen_tts_auth_error"
-        elif is_tts_network_error(message):
-            message_key = "qwen_tts_network_error"
-        else:
+        code = tts_error_code(message)
+        if code in {"cancelled", "stopped"}:
             return
+        message_key = {
+            "authentication": "qwen_tts_auth_error",
+            "configuration": "qwen_tts_configuration_error",
+            "network": "qwen_tts_network_error",
+            "timeout": "qwen_tts_timeout_error",
+            "rate_limit": "qwen_tts_rate_limit_error",
+            "unsupported_model": "qwen_tts_model_error",
+            "invalid_endpoint": "qwen_tts_endpoint_error",
+            "safety": "qwen_tts_safety_error",
+            "queue_full": "qwen_tts_busy_error",
+            "pipeline_full": "qwen_tts_busy_error",
+            "suspended": "qwen_tts_busy_error",
+            "playback": "qwen_tts_playback_error",
+            "provider": "qwen_tts_provider_error",
+            "invalid_input": "qwen_tts_input_error",
+            "unavailable": "qwen_tts_unavailable_error",
+        }.get(code, "qwen_tts_provider_error")
 
         def report() -> None:
             self._set_bottom(
@@ -6591,7 +7332,13 @@ class MainWindow(QMainWindow):
             return original_text
         return translated_text or original_text
 
-    def _auto_read_translation_result(self, *, original_text: str, translated_text: str) -> bool:
+    def _auto_read_translation_result(
+        self,
+        *,
+        original_text: str,
+        translated_text: str,
+        request_context: Mapping[str, object] | None = None,
+    ) -> bool:
         tts_cfg = self._tts_config()
         if not self._sync_tts_enabled_from_config():
             return False
@@ -6601,12 +7348,24 @@ class MainWindow(QMainWindow):
             original_text=original_text,
             translated_text=translated_text,
         )
-        return self._queue_tts_playback(text)
+        if request_context is None:
+            return self._queue_tts_playback(text)
+        return self._queue_tts_playback(
+            text,
+            request_context=request_context,
+        )
 
-    def _auto_read_mic_translation(self, *, original_text: str, translated_text: str) -> bool:
+    def _auto_read_mic_translation(
+        self,
+        *,
+        original_text: str,
+        translated_text: str,
+        request_context: Mapping[str, object] | None = None,
+    ) -> bool:
         return self._auto_read_translation_result(
             original_text=original_text,
             translated_text=translated_text,
+            request_context=request_context,
         )
 
     def _auto_read_manual_translation(self) -> bool:
@@ -6948,11 +7707,7 @@ class MainWindow(QMainWindow):
         value = self._clean_status_text(text)
         if not value and key:
             value = self._clean_status_text(self._copy(key))
-        if key in {
-            "qwen_tts_auth_error",
-            "qwen_tts_network_error",
-            "update_install_success_message",
-        }:
+        if (key and key.startswith("qwen_tts_")) or key == "update_install_success_message":
             return value
         lowered = value.lower()
         if any(token in lowered for token in ("network", "connection", "timeout", "timed out", "dns", "socket", "网络")):
@@ -7014,7 +7769,6 @@ class MainWindow(QMainWindow):
 
 
     def _refresh_theme_button(self) -> None:
-        palette = _main_theme_palette(self._main_theme)
         strong_icon = icon_tint(self._main_theme, strong=True)
         muted_icon = icon_tint(self._main_theme)
         if self._theme_btn:
@@ -8389,10 +9143,10 @@ class MainWindow(QMainWindow):
                 controller_translator = controller.translator
                 controller.translator = None
                 controller_released = True
-            except Exception:
+            except Exception as exc:
                 logger.debug(
-                    "Failed to release manual translator client",
-                    exc_info=True,
+                    "Failed to release manual translator client: %s",
+                    safe_exception_summary(exc),
                 )
         if (
             cached_translator is not None
@@ -8405,10 +9159,10 @@ class MainWindow(QMainWindow):
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except Exception as exc:
                     logger.debug(
-                        "Failed to close cached translator client",
-                        exc_info=True,
+                        "Failed to close cached translator client: %s",
+                        safe_exception_summary(exc),
                     )
 
     def _set_quick_translation_provider(self, provider: object) -> None:
@@ -8615,22 +9369,62 @@ class MainWindow(QMainWindow):
         self._tts_manager_signature = signature
         return manager
 
-    def _reset_tts_manager(self) -> None:
+    def _reset_tts_manager(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> bool:
         manager = getattr(self, "_tts_manager", None)
         self._tts_manager = None
         self._tts_manager_signature = None
         if manager is None:
-            return
+            return True
         try:
             close = getattr(manager, "close", None)
             if callable(close):
-                close()
+                if timeout_seconds is None:
+                    state = close()
+                else:
+                    try:
+                        state = close(timeout_seconds=timeout_seconds)
+                    except TypeError:
+                        state = close()
             else:
                 stop = getattr(manager, "stop", None)
                 if callable(stop):
-                    stop()
-        except Exception:
-            logger.debug("Failed to stop TTS manager", exc_info=True)
+                    if timeout_seconds is None:
+                        state = stop()
+                    else:
+                        try:
+                            state = stop(timeout_seconds=timeout_seconds)
+                        except TypeError:
+                            state = stop()
+                else:
+                    state = None
+            complete = (
+                True
+                if state is None
+                else bool(getattr(state, "quiescent", state))
+            )
+            if bool(getattr(state, "engine_close_deferred", False)):
+                complete = False
+            if not complete:
+                self._remember_deferred_tts_manager(manager)
+            return complete
+        except Exception as exc:
+            self._remember_deferred_tts_manager(manager)
+            logger.debug(
+                "Failed to stop TTS manager: %s",
+                safe_exception_summary(exc),
+            )
+            return False
+
+    def _remember_deferred_tts_manager(self, manager: object) -> None:
+        lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
+        with lock:
+            deferred = self.__dict__.setdefault("_deferred_tts_managers", [])
+            if all(existing is not manager for existing in deferred):
+                deferred.append(manager)
 
     def _reset_tts_manager_if_runtime_changed(self) -> None:
         if getattr(self, "_tts_manager", None) is None:

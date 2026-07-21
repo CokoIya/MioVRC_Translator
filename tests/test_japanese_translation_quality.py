@@ -16,6 +16,7 @@ from src.translators.base import (
 )
 from src.translators.openai_translator import OpenAITranslator
 from src.utils.lang_detect import detect_language
+from src.utils.provider_diagnostics import provider_endpoint_diagnostics
 
 
 class DummyTranslator(BaseTranslator):
@@ -51,6 +52,9 @@ def _openai_translator_stub(
         "https://dashscope.aliyuncs.com/compatible-mode/v1"
         if is_qwen
         else "https://api.openai.com/v1"
+    )
+    translator._log_endpoint, translator._log_endpoint_id = (
+        provider_endpoint_diagnostics(translator._base_url)
     )
     translator._is_qwen_backend = is_qwen
     translator._uses_qwen_mt_translation_options = uses_qwen_mt

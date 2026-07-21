@@ -11,6 +11,7 @@ from .base import BaseTranslator
 from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.input_validation import ValidationError, validate_translation_text
 from src.utils.lang_detect import detect_language
+from src.utils.provider_diagnostics import safe_exception_summary
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,10 @@ class MyMemoryTranslator(BaseTranslator):
                 return translated
             except Exception as exc:
                 last_exc = exc
-                logger.warning("MyMemory translation attempt failed: %s", exc)
+                logger.warning(
+                    "MyMemory translation attempt failed: %s",
+                    safe_exception_summary(exc),
+                )
                 if attempt < self._max_retries:
                     time.sleep(min(0.25 * (attempt + 1), 1.0))
         raise RuntimeError(f"MyMemory translation failed: {last_exc}") from last_exc

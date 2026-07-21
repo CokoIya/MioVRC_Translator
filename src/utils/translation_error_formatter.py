@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 
 from src.utils.localization import normalize_ui_language
-from src.utils.ui_config import normalize_backend
+from src.utils.ui_config import get_backend_label, normalize_backend
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "network_short": "翻译失败：网络连接异常",
         "network_inline": "{prefix} 网络连接失败或请求超时，请稍后重试。",
         "network_detail": "无法连接到翻译服务，或请求已超时。\n\n请检查网络、代理和 Base URL 设置后重试。{detail_suffix}",
+        "safety_short": "翻译失败：内容被供应商安全策略拦截",
+        "safety_inline": "{prefix} 供应商的内容安全策略拒绝了本次请求，请调整原文后重试。",
+        "safety_detail": "供应商的内容安全检查拒绝了本次请求。\n\n请调整原文措辞后重试；这不是 API Key、模型或网络故障。",
+        "cancelled_short": "翻译已取消",
+        "cancelled_inline": "{prefix} 翻译请求已取消，请重试。",
+        "cancelled_detail": "翻译请求已取消。\n\n如果这是超时恢复或设置切换触发的，请重新提交文本。",
+        "provider_short": "翻译失败：供应商服务暂时不可用",
+        "provider_inline": "{prefix} 翻译供应商暂时不可用，请稍后重试。",
+        "provider_detail": "翻译供应商返回了临时服务故障。\n\n请稍后重试；若持续发生，请查看供应商状态页或切换服务。",
         "ready_short": "翻译失败：翻译器尚未就绪",
         "ready_inline": "{prefix} 翻译器尚未就绪，请检查 API 设置后重试。",
         "ready_detail": "翻译器尚未就绪。\n\n请先确认 API Key、模型和后端设置是否正确，然后重新开始。{detail_suffix}",
@@ -88,6 +97,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "network_short": "Translation failed: network connection issue",
         "network_inline": "{prefix} The request timed out or could not reach the translation service.",
         "network_detail": "The app could not reach the translation service, or the request timed out.\n\nPlease check your network, proxy, and Base URL settings and try again.{detail_suffix}",
+        "safety_short": "Translation failed: blocked by the provider's safety policy",
+        "safety_inline": "{prefix} The provider's content-safety policy rejected this request. Revise the source text and try again.",
+        "safety_detail": "The provider's content-safety check rejected this request.\n\nRevise the source wording and try again; this is not an API key, model, or network failure.",
+        "cancelled_short": "Translation cancelled",
+        "cancelled_inline": "{prefix} The translation request was cancelled. Please try again.",
+        "cancelled_detail": "The translation request was cancelled.\n\nIf timeout recovery or a settings change triggered this, submit the text again.",
+        "provider_short": "Translation failed: provider temporarily unavailable",
+        "provider_inline": "{prefix} The translation provider is temporarily unavailable. Please try again later.",
+        "provider_detail": "The translation provider returned a temporary service failure.\n\nTry again later; if it continues, check the provider status page or switch services.",
         "ready_short": "Translation failed: translator is not ready",
         "ready_inline": "{prefix} The translator is not ready. Please check your API settings and try again.",
         "ready_detail": "The translator is not ready.\n\nPlease confirm your API key, model, and backend settings, then start again.{detail_suffix}",
@@ -138,6 +156,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "network_short": "翻訳失敗: ネットワーク接続エラーです",
         "network_inline": "{prefix} 翻訳サービスに接続できないか、リクエストがタイムアウトしました。",
         "network_detail": "翻訳サービスに接続できないか、リクエストがタイムアウトしました。\n\nネットワーク、プロキシ、Base URL の設定を確認して再試行してください。{detail_suffix}",
+        "safety_short": "翻訳失敗: プロバイダの安全ポリシーにより拒否されました",
+        "safety_inline": "{prefix} プロバイダのコンテンツ安全ポリシーがこのリクエストを拒否しました。原文を調整して再試行してください。",
+        "safety_detail": "プロバイダのコンテンツ安全チェックがこのリクエストを拒否しました。\n\n原文の表現を調整して再試行してください。API Key、モデル、ネットワークの障害ではありません。",
+        "cancelled_short": "翻訳はキャンセルされました",
+        "cancelled_inline": "{prefix} 翻訳リクエストはキャンセルされました。再試行してください。",
+        "cancelled_detail": "翻訳リクエストはキャンセルされました。\n\nタイムアウト復旧や設定変更による場合は、もう一度送信してください。",
+        "provider_short": "翻訳失敗: プロバイダが一時的に利用できません",
+        "provider_inline": "{prefix} 翻訳プロバイダが一時的に利用できません。しばらくしてから再試行してください。",
+        "provider_detail": "翻訳プロバイダで一時的なサービス障害が発生しました。\n\n時間をおいて再試行し、続く場合は状態ページを確認するかサービスを切り替えてください。",
         "ready_short": "翻訳失敗: 翻訳機能の準備ができていません",
         "ready_inline": "{prefix} 翻訳機能の準備ができていません。API 設定を確認して再試行してください。",
         "ready_detail": "翻訳機能の準備ができていません。\n\nAPI Key、モデル、バックエンド設定を確認してから、もう一度開始してください。{detail_suffix}",
@@ -188,6 +215,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "network_short": "Ошибка перевода: проблема с сетью",
         "network_inline": "{prefix} Не удалось подключиться к сервису перевода или истекло время ожидания.",
         "network_detail": "Не удалось подключиться к сервису перевода или запрос завершился по тайм-ауту.\n\nПроверьте сеть, прокси и настройки Base URL, затем повторите попытку.{detail_suffix}",
+        "safety_short": "Ошибка перевода: запрос отклонён политикой безопасности провайдера",
+        "safety_inline": "{prefix} Политика безопасности контента провайдера отклонила запрос. Измените исходный текст и повторите попытку.",
+        "safety_detail": "Проверка безопасности контента провайдера отклонила запрос.\n\nИзмените формулировку и повторите попытку; это не ошибка API Key, модели или сети.",
+        "cancelled_short": "Перевод отменён",
+        "cancelled_inline": "{prefix} Запрос перевода отменён. Повторите попытку.",
+        "cancelled_detail": "Запрос перевода отменён.\n\nЕсли это произошло из-за восстановления после тайм-аута или смены настроек, отправьте текст снова.",
+        "provider_short": "Ошибка перевода: провайдер временно недоступен",
+        "provider_inline": "{prefix} Провайдер перевода временно недоступен. Повторите попытку позже.",
+        "provider_detail": "Провайдер перевода сообщил о временном сбое сервиса.\n\nПовторите попытку позже; если проблема сохраняется, проверьте статус провайдера или смените сервис.",
         "ready_short": "Ошибка перевода: переводчик не готов",
         "ready_inline": "{prefix} Переводчик еще не готов. Проверьте API-настройки и повторите попытку.",
         "ready_detail": "Переводчик еще не готов.\n\nПроверьте API Key, модель и настройки бэкенда, затем запустите снова.{detail_suffix}",
@@ -238,6 +274,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "network_short": "번역 실패: 네트워크 연결 문제",
         "network_inline": "{prefix} 번역 서비스에 연결할 수 없거나 요청 시간이 초과되었습니다.",
         "network_detail": "번역 서비스에 연결할 수 없거나 요청 시간이 초과되었습니다.\n\n네트워크, 프록시, Base URL 설정을 확인한 뒤 다시 시도해 주세요.{detail_suffix}",
+        "safety_short": "번역 실패: 공급자 안전 정책에 의해 차단됨",
+        "safety_inline": "{prefix} 공급자의 콘텐츠 안전 정책이 요청을 거부했습니다. 원문을 조정한 뒤 다시 시도해 주세요.",
+        "safety_detail": "공급자의 콘텐츠 안전 검사가 요청을 거부했습니다.\n\n원문 표현을 조정한 뒤 다시 시도해 주세요. API Key, 모델 또는 네트워크 오류가 아닙니다.",
+        "cancelled_short": "번역이 취소되었습니다",
+        "cancelled_inline": "{prefix} 번역 요청이 취소되었습니다. 다시 시도해 주세요.",
+        "cancelled_detail": "번역 요청이 취소되었습니다.\n\n시간 초과 복구나 설정 변경으로 취소된 경우 텍스트를 다시 제출해 주세요.",
+        "provider_short": "번역 실패: 공급자 서비스를 일시적으로 사용할 수 없음",
+        "provider_inline": "{prefix} 번역 공급자를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        "provider_detail": "번역 공급자가 일시적인 서비스 장애를 반환했습니다.\n\n잠시 후 다시 시도하고, 계속되면 공급자 상태 페이지를 확인하거나 서비스를 변경해 주세요.",
         "ready_short": "번역 실패: 번역기가 아직 준비되지 않았습니다",
         "ready_inline": "{prefix} 번역기가 아직 준비되지 않았습니다. API 설정을 확인한 뒤 다시 시도해 주세요.",
         "ready_detail": "번역기가 아직 준비되지 않았습니다.\n\nAPI Key, 모델, 백엔드 설정을 확인한 뒤 다시 시작해 주세요.{detail_suffix}",
@@ -306,9 +351,40 @@ _GROK_ERROR_TEXTS = {
 for _language, _values in _GROK_ERROR_TEXTS.items():
     _TEXTS[_language].update(_values)
 
+_COMPATIBLE_AUTH_HINTS = {
+    "zh-CN": {
+        "auth_hint_openai_compatible": "请填写中继服务提供的有效 API Key，并检查 Base URL 与自定义请求头。",
+        "auth_hint_anthropic_compatible": "请填写 Claude 兼容中继提供的有效 API Key，并检查 Base URL 与自定义请求头。",
+        "auth_hint_xai": "请填写有效的 xAI API Key，并确认使用官方 xAI 端点。",
+    },
+    "en": {
+        "auth_hint_openai_compatible": "Use the API key supplied by the relay, and verify the Base URL and custom request headers.",
+        "auth_hint_anthropic_compatible": "Use the API key supplied by the Claude-compatible relay, and verify the Base URL and custom request headers.",
+        "auth_hint_xai": "Use a valid xAI API key and verify that the official xAI endpoint is selected.",
+    },
+    "ja": {
+        "auth_hint_openai_compatible": "リレーが発行した有効な API Key を入力し、Base URL とカスタムリクエストヘッダーを確認してください。",
+        "auth_hint_anthropic_compatible": "Claude 互換リレーが発行した有効な API Key を入力し、Base URL とカスタムリクエストヘッダーを確認してください。",
+        "auth_hint_xai": "有効な xAI API Key を入力し、xAI 公式エンドポイントが選択されていることを確認してください。",
+    },
+    "ru": {
+        "auth_hint_openai_compatible": "Укажите API-ключ от шлюза и проверьте Base URL и пользовательские заголовки.",
+        "auth_hint_anthropic_compatible": "Укажите API-ключ Claude-совместимого шлюза и проверьте Base URL и пользовательские заголовки.",
+        "auth_hint_xai": "Укажите действительный API-ключ xAI и убедитесь, что выбран официальный адрес xAI.",
+    },
+    "ko": {
+        "auth_hint_openai_compatible": "중계 서비스가 제공한 유효한 API Key를 입력하고 Base URL과 사용자 지정 요청 헤더를 확인하세요.",
+        "auth_hint_anthropic_compatible": "Claude 호환 중계가 제공한 유효한 API Key를 입력하고 Base URL과 사용자 지정 요청 헤더를 확인하세요.",
+        "auth_hint_xai": "유효한 xAI API Key를 입력하고 xAI 공식 엔드포인트가 선택되어 있는지 확인하세요.",
+    },
+}
+for _language, _values in _COMPATIBLE_AUTH_HINTS.items():
+    _TEXTS[_language].update(_values)
+
 
 _PROVIDER_NAMES = {
     "openai": "OpenAI",
+    "openai_compatible": "GPT Compatible",
     "local_ai": "Local AI",
     "deepseek": "DeepSeek",
     "zhipu": "GLM",
@@ -322,6 +398,7 @@ _PROVIDER_NAMES = {
     "doubao": "Doubao / Ark",
     "nvidia": "NVIDIA AI",
     "anthropic": "Claude",
+    "anthropic_compatible": "Claude Compatible",
 }
 
 _AUTH_KEYWORDS = (
@@ -390,6 +467,32 @@ _ENDPOINT_KEYWORDS = (
     "invalid base url",
     "invalid url",
 )
+_SAFETY_KEYWORDS = (
+    "data_inspection_failed",
+    "inappropriate content",
+    "content policy",
+    "content_policy_violation",
+    "content moderation",
+    "moderation blocked",
+    "safety policy",
+    "safety violation",
+    "blocked by safety",
+)
+_CANCELLED_KEYWORDS = (
+    "cancelled",
+    "canceled",
+    "request was cancelled",
+    "request was canceled",
+    "operation aborted",
+)
+_PROVIDER_FAILURE_KEYWORDS = (
+    "internal server error",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "provider error",
+    "server_error",
+)
 
 
 def format_translation_error(
@@ -400,10 +503,17 @@ def format_translation_error(
     raw_text = _clean_text(raw_error)
     detail = _extract_detail_message(raw_text)
     combined = "\n".join(part for part in (detail, raw_text) if part).lower()
+    status_code = _extract_http_status(raw_text)
     lang = _normalize_language(ui_language)
     texts = _TEXTS[lang]
     normalized_backend = normalize_backend(backend)
-    provider = _PROVIDER_NAMES.get(normalized_backend, texts["unknown_provider"])
+    try:
+        provider = get_backend_label(normalized_backend, lang)
+    except Exception:
+        provider = _PROVIDER_NAMES.get(
+            normalized_backend,
+            texts["unknown_provider"],
+        )
     detail_suffix = _detail_suffix(texts, detail)
     parameter = _extract_parameter_name(detail or raw_text)
     subject = _parameter_subject(texts, parameter)
@@ -426,6 +536,9 @@ def format_translation_error(
         "api key is required",
         "model is required",
         "custom request headers",
+        "could not be decrypted",
+        "invalid control characters",
+        "is too long",
     ):
         category = "config"
         return FriendlyTranslationError(
@@ -446,7 +559,18 @@ def format_translation_error(
             detail=detail,
         )
 
-    if _contains_any(combined, *_AUTH_KEYWORDS):
+    if _contains_any(combined, *_SAFETY_KEYWORDS):
+        return FriendlyTranslationError(
+            short_message=texts["safety_short"],
+            inline_message=texts["safety_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["safety_detail"],
+            category="safety",
+            detail=detail,
+        )
+
+    if status_code in {401, 403} or _contains_any(combined, *_AUTH_KEYWORDS):
         category = "auth"
         hint_key = f"auth_hint_{normalized_backend}"
         hint = texts.get(hint_key, texts["auth_hint_default"])
@@ -495,7 +619,11 @@ def format_translation_error(
             detail=detail,
         )
 
-    if _contains_any(combined, *_MODEL_KEYWORDS):
+    model_not_found = bool(
+        "not_found_error" in combined
+        and re.search(r"\bmodel\s*[:=]", combined, flags=re.IGNORECASE)
+    )
+    if model_not_found or _contains_any(combined, *_MODEL_KEYWORDS):
         category = "model"
         hint_key = "model_hint_doubao" if normalized_backend == "doubao" else "model_hint_default"
         return FriendlyTranslationError(
@@ -509,13 +637,67 @@ def format_translation_error(
             detail=detail,
         )
 
-    if _contains_any(combined, *_QUOTA_KEYWORDS):
+    if (
+        status_code is not None
+        and 500 <= status_code <= 599
+        or (
+            normalized_backend in {"anthropic", "anthropic_compatible"}
+            and _contains_any(combined, "overloaded_error", "overloaded")
+            and status_code != 429
+        )
+    ):
+        return FriendlyTranslationError(
+            short_message=texts["provider_short"],
+            inline_message=texts["provider_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["provider_detail"],
+            category="provider",
+            detail=detail,
+        )
+
+    if status_code == 429 or _contains_any(combined, *_QUOTA_KEYWORDS):
         category = "quota"
         return FriendlyTranslationError(
             short_message=texts["quota_short"],
             inline_message=texts["quota_inline"].format(prefix=texts["error_prefix"]),
             detailed_message=texts["quota_detail"].format(detail_suffix=detail_suffix),
             category=category,
+            detail=detail,
+        )
+
+    if status_code == 404:
+        return FriendlyTranslationError(
+            short_message=texts["endpoint_short"],
+            inline_message=texts["endpoint_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["endpoint_detail"].format(
+                detail_suffix=detail_suffix
+            ),
+            category="endpoint",
+            detail=detail,
+        )
+
+    if _contains_any(combined, *_CANCELLED_KEYWORDS):
+        return FriendlyTranslationError(
+            short_message=texts["cancelled_short"],
+            inline_message=texts["cancelled_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["cancelled_detail"],
+            category="cancelled",
+            detail=detail,
+        )
+
+    if _contains_any(combined, *_PROVIDER_FAILURE_KEYWORDS):
+        return FriendlyTranslationError(
+            short_message=texts["provider_short"],
+            inline_message=texts["provider_inline"].format(
+                prefix=texts["error_prefix"]
+            ),
+            detailed_message=texts["provider_detail"],
+            category="provider",
             detail=detail,
         )
 
@@ -566,13 +748,33 @@ def _parameter_subject(texts: dict[str, str], parameter: str | None) -> str:
 
 
 def _detail_suffix(texts: dict[str, str], detail: str) -> str:
-    if not detail:
-        return ""
-    return f"\n\n{texts['detail_label']}: {detail}"
+    # Provider prose may remain in the internal classification detail, but it
+    # must not reach localized UI copy or safe runtime diagnostics.
+    del texts, detail
+    return ""
 
 
 def _contains_any(text: str, *keywords: str) -> bool:
     return any(keyword in text for keyword in keywords)
+
+
+def _extract_http_status(text: str) -> int | None:
+    patterns = (
+        r"\berror\s+code\s*:\s*(\d{3})\b",
+        r"\bstatus\s+code\s*:\s*(\d{3})\b",
+        r"\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b",
+        r"\bhttp/[0-9.]+\s+(\d{3})\b",
+        r"\bhttp\s+(\d{3})\b",
+        r"\b(?:client|server)\s+error\s+['\"]?(\d{3})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, str(text or ""), flags=re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def _clean_text(value: object) -> str:

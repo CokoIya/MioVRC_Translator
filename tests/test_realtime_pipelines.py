@@ -1,3 +1,5 @@
+import pytest
+
 from src.core.output_dispatcher import OutputDispatcher
 from src.core.realtime_pipelines import ListenPipeline, MicPipeline
 
@@ -5,10 +7,21 @@ from src.core.realtime_pipelines import ListenPipeline, MicPipeline
 class _Translator:
     def __init__(self):
         self.calls = []
+        self._metrics = {}
 
     def translate(self, text, src, tgt, *, context_source=None):
         self.calls.append((text, src, tgt, context_source))
+        call_number = len(self.calls)
+        self._metrics = {
+            "pool_wait_s": call_number / 100.0,
+            "full_response_s": call_number / 10.0,
+            "first_token_s": call_number / 20.0,
+            "connection_reused": call_number > 1,
+        }
         return f"{tgt}:{text}"
+
+    def translation_metrics(self):
+        return dict(self._metrics)
 
 
 def test_mic_pipeline_translates_second_and_third_targets_from_template():
@@ -44,6 +57,11 @@ def test_mic_pipeline_translates_second_and_third_targets_from_template():
         ("你好", "zh", "en", "mic"),
         ("你好", "zh", "ko", "mic"),
     ]
+    assert result.provider_metrics["provider_calls"] == 3
+    assert result.provider_metrics["pool_wait_s"] == 0.06
+    assert result.provider_metrics["full_response_s"] == pytest.approx(0.6)
+    assert result.provider_metrics["first_token_s"] == 0.05
+    assert result.provider_metrics["connection_reused_calls"] == 2
 
 
 def test_mic_pipeline_original_only_skips_translator():

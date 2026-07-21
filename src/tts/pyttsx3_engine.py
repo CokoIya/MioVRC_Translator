@@ -1,10 +1,8 @@
 """pyttsx3 offline TTS implementation."""
 from __future__ import annotations
 
-import io
 import logging
 import tempfile
-import wave
 from pathlib import Path
 from typing import Optional
 

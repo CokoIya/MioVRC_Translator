@@ -1,7 +1,7 @@
 """Unit tests for TTS audio playback improvements."""
 import pytest
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from src.tts.manager import TTSManager
 
 
@@ -116,11 +116,11 @@ class TestTTSAudioPlayback:
         manager._engine = Mock()
 
         # Empty text should fail
-        assert manager.speak("", "voice") == False
-        assert manager.speak("   ", "voice") == False
+        assert not manager.speak("", "voice")
+        assert not manager.speak("   ", "voice")
 
         # Valid text should succeed (queue)
-        assert manager.speak("Hello", "voice") == True
+        assert manager.speak("Hello", "voice")
 
     def test_device_name_matching(self):
         """Test device name fuzzy matching."""

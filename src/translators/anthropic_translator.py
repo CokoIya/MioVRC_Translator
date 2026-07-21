@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import httpx
 
 import logging
+import math
 import time
 import urllib.parse
 
@@ -13,6 +15,12 @@ from .base import (
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
+from src.utils.openai_compat import normalize_openai_custom_headers
+from src.utils.provider_diagnostics import (
+    provider_endpoint_diagnostics,
+    safe_exception_summary,
+)
+from src.utils.provider_http_timing import ProviderHttpTimingHooks
 from src.utils.secure_http import validate_api_base_url
 
 
@@ -60,37 +68,255 @@ class AnthropicTranslator(BaseTranslator):
         max_output_tokens: int = 192,
         prompt_profile: dict[str, object] | None = None,
         context_store: TranslationContextStore | None = None,
+        provider_id: str = "anthropic",
+        custom_headers: object = None,
+        streaming: bool = False,
+        connect_timeout_s: float | None = None,
+        pool_timeout_s: float | None = None,
+        read_timeout_s: float | None = None,
+        write_timeout_s: float | None = None,
+        wall_timeout_s: float | None = None,
     ):
         super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
             import anthropic
         except ImportError:
-            raise RuntimeError("anthropic 未安装，请先执行: pip install anthropic")
+            raise RuntimeError("Translation dependency is not installed: anthropic")
         validated_base_url = normalize_anthropic_base_url(base_url)
-        self._timeout_s = max(float(timeout_s), 1.0)
+        self._timeout_s = self._positive_timeout(timeout_s, 15.0, minimum=1.0)
+        self._connect_timeout_s = self._positive_timeout(
+            connect_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._pool_timeout_s = self._positive_timeout(
+            pool_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._read_timeout_s = self._positive_timeout(
+            read_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._write_timeout_s = self._positive_timeout(
+            write_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._wall_timeout_s = self._positive_timeout(
+            wall_timeout_s,
+            self._timeout_s,
+            minimum=0.1,
+        )
+        self._request_timeout = httpx.Timeout(
+            connect=self._connect_timeout_s,
+            pool=self._pool_timeout_s,
+            read=self._read_timeout_s,
+            write=self._write_timeout_s,
+        )
+        self._custom_headers = normalize_openai_custom_headers(custom_headers)
+        self._http_timing = ProviderHttpTimingHooks()
         self._http_client = httpx.Client(
-            timeout=httpx.Timeout(self._timeout_s),
+            timeout=self._request_timeout,
             limits=httpx.Limits(
                 max_connections=4,
                 max_keepalive_connections=2,
                 keepalive_expiry=ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S,
             ),
+            event_hooks={
+                "request": [self._http_timing.on_request],
+                "response": [self._http_timing.on_response],
+            },
+            trust_env=True,
         )
         try:
-            self._client = anthropic.Anthropic(
+            client_kwargs = dict(
                 api_key=api_key,
                 base_url=validated_base_url,
                 timeout=self._timeout_s,
                 max_retries=max(int(max_retries), 0),
                 http_client=self._http_client,
             )
+            if self._custom_headers:
+                client_kwargs["default_headers"] = dict(self._custom_headers)
+            self._client = anthropic.Anthropic(**client_kwargs)
         except BaseException:
             self._http_client.close()
             raise
         self.model = model
         self._base_url = validated_base_url
+        self._log_endpoint, self._log_endpoint_id = provider_endpoint_diagnostics(
+            validated_base_url
+        )
+        self._provider_id = str(provider_id or "anthropic").strip().casefold()
         self._max_output_tokens = max(int(max_output_tokens), 32)
+        self._streaming_enabled = bool(streaming)
+        self._streaming_supported = True
         self._last_response_summary = ""
+
+    @staticmethod
+    def _positive_timeout(
+        value: object,
+        fallback: float,
+        *,
+        minimum: float,
+    ) -> float:
+        try:
+            parsed = float(value) if value is not None else float(fallback)
+        except (TypeError, ValueError):
+            parsed = float(fallback)
+        if not math.isfinite(parsed):
+            parsed = float(fallback)
+        return max(parsed, minimum)
+
+    def _sdk_timeout(self) -> object:
+        return getattr(self, "_request_timeout", getattr(self, "_timeout_s", None))
+
+    def _raise_if_wall_timeout(self, started_at: float) -> None:
+        wall_timeout = getattr(
+            self,
+            "_wall_timeout_s",
+            getattr(self, "_timeout_s", None),
+        )
+        if wall_timeout is None:
+            return
+        elapsed = max(0.0, time.perf_counter() - started_at)
+        if elapsed > float(wall_timeout):
+            raise httpx.TimeoutException(
+                "Translation request exceeded the wall-clock timeout "
+                f"({float(wall_timeout):.2f}s)"
+            )
+
+    @staticmethod
+    def _capture_metrics(capture: object) -> dict[str, object]:
+        metrics = getattr(capture, "metrics", None)
+        if not callable(metrics):
+            return {}
+        try:
+            result = metrics()
+        except Exception:
+            return {}
+        return dict(result) if isinstance(result, dict) else {}
+
+    def _http_timing_capture(self):
+        timing = getattr(self, "_http_timing", None)
+        capture = getattr(timing, "capture", None)
+        if callable(capture):
+            return capture()
+        return contextlib.nullcontext(None)
+
+    @staticmethod
+    def _unsupported_streaming(exc: Exception) -> bool:
+        message = str(exc or "").strip().casefold()
+        if not message or not any(
+            marker in message for marker in ("stream", "streaming")
+        ):
+            return False
+        return any(
+            marker in message
+            for marker in (
+                "unsupported",
+                "not supported",
+                "unknown",
+                "unrecognized",
+                "not allowed",
+                "not permitted",
+                "invalid parameter",
+                "extra inputs are not permitted",
+            )
+        )
+
+    @staticmethod
+    def _stream_event_text(event: object) -> str:
+        if isinstance(event, str):
+            return event
+        if isinstance(event, dict):
+            delta = event.get("delta")
+            if isinstance(delta, dict):
+                return str(delta.get("text") or "")
+            return str(event.get("text") or "")
+        delta = getattr(event, "delta", None)
+        text = getattr(delta, "text", None) if delta is not None else None
+        if text:
+            return str(text)
+        return str(getattr(event, "text", "") or "")
+
+    def _message_request(self, kwargs: dict) -> tuple[str, object]:
+        return self._run_with_wall_timeout(
+            lambda: self._message_request_unbounded(kwargs),
+            timeout_s=getattr(self, "_wall_timeout_s", None),
+            operation_name="Anthropic-compatible request",
+        )
+
+    def _message_request_unbounded(self, kwargs: dict) -> tuple[str, object]:
+        request_started = time.perf_counter()
+        messages = self._client.messages
+        stream_method = getattr(messages, "stream", None)
+        if (
+            getattr(self, "_streaming_enabled", False)
+            and getattr(self, "_streaming_supported", True)
+            and callable(stream_method)
+        ):
+            try:
+                fragments: list[str] = []
+                first_token_s: float | None = None
+                parse_s = 0.0
+                final_response: object | None = None
+                with stream_method(**kwargs) as stream:
+                    text_stream = getattr(stream, "text_stream", None)
+                    events = text_stream if text_stream is not None else stream
+                    for event in events:
+                        self._raise_if_wall_timeout(request_started)
+                        parse_started = time.perf_counter()
+                        text = self._stream_event_text(event)
+                        parse_s += max(0.0, time.perf_counter() - parse_started)
+                        if not text:
+                            continue
+                        if first_token_s is None:
+                            first_token_s = max(
+                                0.0,
+                                time.perf_counter() - request_started,
+                            )
+                        fragments.append(text)
+                    get_final_message = getattr(stream, "get_final_message", None)
+                    if callable(get_final_message):
+                        final_response = get_final_message()
+                self._raise_if_wall_timeout(request_started)
+                parse_started = time.perf_counter()
+                output = "".join(fragments)
+                if not output and final_response is not None:
+                    output = self._message_output_text(final_response)
+                parse_s += max(0.0, time.perf_counter() - parse_started)
+                self._record_translation_metrics(
+                    first_token_s=first_token_s,
+                    parse_s=parse_s,
+                )
+                return output, final_response if final_response is not None else stream
+            except Exception as exc:
+                if not self._unsupported_streaming(exc):
+                    raise
+                self._streaming_supported = False
+                logger.warning(
+                    "Anthropic-compatible provider rejected streaming; retrying "
+                    "without it (model=%s endpoint=%s endpoint_id=%s)",
+                    self.model,
+                    self._log_endpoint,
+                    self._log_endpoint_id,
+                )
+        elif getattr(self, "_streaming_enabled", False) and not callable(stream_method):
+            self._streaming_supported = False
+
+        self._raise_if_wall_timeout(request_started)
+        response = messages.create(**kwargs)
+        self._raise_if_wall_timeout(request_started)
+        parse_started = time.perf_counter()
+        output = self._message_output_text(response)
+        self._record_translation_metrics(
+            first_token_s=None,
+            parse_s=max(0.0, time.perf_counter() - parse_started),
+        )
+        return output, response
 
     def translate(
         self,
@@ -105,8 +331,16 @@ class AnthropicTranslator(BaseTranslator):
         try:
             text = validate_translation_text(text)
         except ValidationError as e:
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise ValueError(f"Invalid translation input: {e}")
         if self._source_matches_target(src_lang, tgt_lang):
+            self._record_translation_metrics(
+                cache_hit=False,
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return text
 
         context_started = time.perf_counter()
@@ -149,25 +383,90 @@ class AnthropicTranslator(BaseTranslator):
             prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
             prompt_chars=len(prompt) + len(_TRANSLATION_SYSTEM_PROMPT),
         )
-        provider_started = time.perf_counter()
-        message = self._client.messages.create(
-            model=self.model,
-            system=_TRANSLATION_SYSTEM_PROMPT,
-            max_tokens=self._estimate_max_tokens(text),
-            messages=[
+        kwargs = {
+            "model": self.model,
+            "system": _TRANSLATION_SYSTEM_PROMPT,
+            "max_tokens": self._estimate_max_tokens(text),
+            "messages": [
                 {
                     "role": "user",
                     "content": prompt,
                 }
             ],
-        )
+        }
+        request_timeout = self._sdk_timeout()
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
+        provider_started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                output, message = self._message_request(kwargs)
+        except Exception as exc:
+            elapsed = max(0.0, time.perf_counter() - provider_started)
+            transport_metrics = self._capture_metrics(http_capture)
+            self._record_translation_metrics(
+                provider_s=elapsed,
+                full_response_s=elapsed,
+                total_s=max(0.0, time.perf_counter() - call_started),
+                **transport_metrics,
+            )
+            active_context = self._active_context()
+            logger.warning(
+                "Anthropic translation API request failed "
+                "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+                "source=%s sequence=%s "
+                "pool_wait_s=%s tcp_s=%s tls_s=%s response_headers_s=%s "
+                "error=%s)",
+                self.model,
+                self._log_endpoint,
+                self._log_endpoint_id,
+                elapsed,
+                context_source,
+                active_context.sequence,
+                transport_metrics.get("pool_wait_s"),
+                transport_metrics.get("tcp_s"),
+                transport_metrics.get("tls_s"),
+                transport_metrics.get("response_headers_s"),
+                safe_exception_summary(exc),
+            )
+            raise
+        elapsed = max(0.0, time.perf_counter() - provider_started)
+        transport_metrics = self._capture_metrics(http_capture)
         self._record_translation_metrics(
-            provider_s=max(0.0, time.perf_counter() - provider_started)
+            provider_s=elapsed,
+            full_response_s=elapsed,
+            **transport_metrics,
         )
-        output = self._message_output_text(message)
+        active_context = self._active_context()
+        logger.info(
+            "Anthropic translation API request finished "
+            "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+            "source=%s sequence=%s "
+            "prompt_chars=%d context_turns=%d pool_wait_s=%s tcp_s=%s "
+            "tls_s=%s response_headers_s=%s first_token_s=%s reused=%s)",
+            self.model,
+            self._log_endpoint,
+            self._log_endpoint_id,
+            elapsed,
+            context_source,
+            active_context.sequence,
+            len(prompt) + len(_TRANSLATION_SYSTEM_PROMPT),
+            len(context_snapshot or ()),
+            transport_metrics.get("pool_wait_s"),
+            transport_metrics.get("tcp_s"),
+            transport_metrics.get("tls_s"),
+            transport_metrics.get("response_headers_s"),
+            self.translation_metrics().get("first_token_s"),
+            transport_metrics.get("connection_reused"),
+        )
+        postprocess_started = time.perf_counter()
         translated = self._finalize_translation_output(
             output,
             source_text=text,
+        )
+        self._record_translation_metrics(
+            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
         )
         if not translated:
             self._last_response_summary = self._response_debug_summary(message)
@@ -177,9 +476,15 @@ class AnthropicTranslator(BaseTranslator):
             )
             summary = str(getattr(self, "_last_response_summary", "") or "").strip()
             if summary:
+                self._record_translation_metrics(
+                    total_s=max(0.0, time.perf_counter() - call_started)
+                )
                 raise RuntimeError(
                     f"Translation API returned an empty response ({summary})"
                 )
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise RuntimeError("Translation API returned an empty response")
         translated = self._store_cached_translation(
             text,
@@ -211,13 +516,22 @@ class AnthropicTranslator(BaseTranslator):
         language_hint: str = "auto",
         context_source: str = "mic",
     ) -> str:
+        call_started = time.perf_counter()
+        self._reset_translation_metrics()
         try:
             text = validate_translation_text(text)
         except ValidationError as exc:
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise ValueError(f"Invalid ASR rewrite input: {exc}") from exc
 
         normalized_style = normalize_asr_rewrite_style(style)
         if normalized_style == "off":
+            self._record_translation_metrics(
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return text
         cache_source = f"rewrite:{normalized_style}"
         cached = self._get_cached_translation(
@@ -228,8 +542,14 @@ class AnthropicTranslator(BaseTranslator):
             context_source=f"asr_rewrite:{context_source}",
         )
         if cached is not None:
+            self._record_translation_metrics(
+                cache_hit=True,
+                provider_s=0.0,
+                total_s=max(0.0, time.perf_counter() - call_started),
+            )
             return cached
 
+        prompt_started = time.perf_counter()
         messages = build_asr_rewrite_messages(
             text,
             normalized_style,
@@ -241,18 +561,63 @@ class AnthropicTranslator(BaseTranslator):
             self._max_output_tokens,
             max(32, self._estimate_max_tokens(text) + 12),
         )
-        response = self._client.messages.create(
-            model=self.model,
-            system=system,
-            max_tokens=output_tokens,
-            messages=[{"role": "user", "content": user}],
+        self._record_translation_metrics(
+            prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
+            prompt_chars=len(system) + len(user),
         )
+        kwargs = {
+            "model": self.model,
+            "system": system,
+            "max_tokens": output_tokens,
+            "messages": [{"role": "user", "content": user}],
+        }
+        request_timeout = self._sdk_timeout()
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
+        provider_started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                output, response = self._message_request(kwargs)
+        except Exception as exc:
+            elapsed = max(0.0, time.perf_counter() - provider_started)
+            self._record_translation_metrics(
+                provider_s=elapsed,
+                full_response_s=elapsed,
+                total_s=max(0.0, time.perf_counter() - call_started),
+                **self._capture_metrics(http_capture),
+            )
+            logger.warning(
+                "Anthropic ASR rewrite API request failed "
+                "(model=%s endpoint=%s endpoint_id=%s elapsed=%.2fs "
+                "source=%s error=%s)",
+                self.model,
+                self._log_endpoint,
+                self._log_endpoint_id,
+                elapsed,
+                context_source,
+                safe_exception_summary(exc),
+            )
+            raise
+        elapsed = max(0.0, time.perf_counter() - provider_started)
+        self._record_translation_metrics(
+            provider_s=elapsed,
+            full_response_s=elapsed,
+            **self._capture_metrics(http_capture),
+        )
+        postprocess_started = time.perf_counter()
         rewritten = self._finalize_asr_rewrite_output(
-            self._message_output_text(response),
+            output,
             source_text=text,
+        )
+        self._record_translation_metrics(
+            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
         )
         if not rewritten:
             self._last_response_summary = self._response_debug_summary(response)
+            self._record_translation_metrics(
+                total_s=max(0.0, time.perf_counter() - call_started)
+            )
             raise RuntimeError(
                 "ASR rewrite API returned an empty response"
                 + (
@@ -261,7 +626,7 @@ class AnthropicTranslator(BaseTranslator):
                     else ""
                 )
             )
-        return self._store_cached_translation(
+        rewritten = self._store_cached_translation(
             text,
             cache_source,
             str(language_hint or "auto"),
@@ -269,6 +634,11 @@ class AnthropicTranslator(BaseTranslator):
             rewritten,
             context_source=f"asr_rewrite:{context_source}",
         )
+        self._record_translation_metrics(
+            cache_hit=False,
+            total_s=max(0.0, time.perf_counter() - call_started),
+        )
+        return rewritten
 
     def _estimate_max_tokens(self, text: str) -> int:
         compact = "".join(str(text or "").split())
@@ -290,36 +660,70 @@ class AnthropicTranslator(BaseTranslator):
 
     def _message_output_text(self, response) -> str:
         try:
-            content = list(getattr(response, "content", []) or [])
+            if isinstance(response, dict):
+                raw_content = response.get("content", [])
+            else:
+                raw_content = getattr(response, "content", [])
+            content = list(raw_content or [])
         except TypeError:
             content = []
         parts: list[str] = []
         for block in content:
-            text = getattr(block, "text", None)
+            if isinstance(block, dict):
+                text = block.get("text")
+            else:
+                text = getattr(block, "text", None)
             if text:
                 parts.append(str(text))
         return "".join(parts)
 
     def _response_debug_summary(self, response) -> str:
         parts = [f"model={self.model}"]
-        stop_reason = getattr(response, "stop_reason", None)
+        if isinstance(response, dict):
+            stop_reason = response.get("stop_reason")
+            raw_content = response.get("content", [])
+            usage = response.get("usage")
+        else:
+            stop_reason = getattr(response, "stop_reason", None)
+            raw_content = getattr(response, "content", [])
+            usage = getattr(response, "usage", None)
         if stop_reason:
-            parts.append(f"stop_reason={stop_reason}")
+            normalized_stop_reason = str(stop_reason).strip().casefold()
+            if normalized_stop_reason in {
+                "end_turn",
+                "max_tokens",
+                "pause_turn",
+                "refusal",
+                "stop_sequence",
+                "tool_use",
+            }:
+                parts.append(f"stop_reason={normalized_stop_reason}")
+            else:
+                parts.append("stop_reason=present")
         try:
-            content = list(getattr(response, "content", []) or [])
+            content = list(raw_content or [])
         except TypeError:
             content = []
         parts.append(f"content_blocks={len(content)}")
         text_chars = 0
         for block in content:
-            text = getattr(block, "text", None)
+            if isinstance(block, dict):
+                text = block.get("text")
+            else:
+                text = getattr(block, "text", None)
             if text:
                 text_chars += len(str(text))
         parts.append(f"text_chars={text_chars}")
-        usage = getattr(response, "usage", None)
         if usage is not None:
             for name in ("input_tokens", "output_tokens"):
-                value = getattr(usage, name, None)
-                if value is not None:
-                    parts.append(f"{name}={value}")
+                if isinstance(usage, dict):
+                    value = usage.get(name)
+                else:
+                    value = getattr(usage, name, None)
+                try:
+                    parsed_value = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_value >= 0:
+                    parts.append(f"{name}={parsed_value}")
         return ", ".join(parts)

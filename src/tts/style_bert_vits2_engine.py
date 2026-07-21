@@ -1273,7 +1273,7 @@ class StyleBertVits2TTS(BaseTTS):
         # Enforce LRU cap: evict oldest entries if at the limit
         while len(self._model_cache) >= _MAX_CACHED_SBV2_MODELS:
             oldest_key = next(iter(self._model_cache))
-            evicted = self._model_cache.pop(oldest_key)
+            self._model_cache.pop(oldest_key)
             logger.debug("Evicted SBV2 model from cache to enforce limit: %s", oldest_key)
 
         self._model_cache[cache_key] = model

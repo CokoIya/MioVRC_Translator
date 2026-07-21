@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.ui_config import normalize_output_format
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,12 @@ class OutputDispatcher:
                 continue
             try:
                 results[key] = sink(message) is not False
-            except Exception:
-                logger.warning("Output sink failed: %s", key, exc_info=True)
+            except Exception as exc:
+                logger.warning(
+                    "Output sink failed sink=%s error=%s",
+                    key,
+                    safe_exception_summary(exc),
+                )
                 results[key] = False
         return results
 
@@ -247,11 +252,36 @@ class OutputDispatcher:
             metadata=dict(metadata or {}),
         )
 
-    def send_chatbox_text(self, sender: Any, text: str) -> bool:
+    def send_chatbox_text(
+        self,
+        sender: Any,
+        text: str,
+        *,
+        request_context: Mapping[str, Any] | None = None,
+        completion_callback: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> bool:
         clean = str(text or "").strip()
         if not clean:
             return False
-        return bool(sender.send_chatbox(clean))
+        if request_context is None and completion_callback is None:
+            return bool(sender.send_chatbox(clean))
+        try:
+            return bool(
+                sender.send_chatbox(
+                    clean,
+                    request_context=request_context,
+                    completion_callback=completion_callback,
+                )
+            )
+        except TypeError as exc:
+            # Preserve compatibility with third-party/legacy sender objects
+            # that still implement only ``send_chatbox(text)``.
+            if not any(
+                field in str(exc)
+                for field in ("request_context", "completion_callback")
+            ):
+                raise
+            return bool(sender.send_chatbox(clean))
 
     def send_chatbox(
         self,

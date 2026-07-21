@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import base64
+import logging
 import ssl
+import threading
+import time
 
 import pytest
 import requests
 
 import src.tts.api_tts_engines as api_tts_engines
 from src.tts.api_tts_engines import MimoTTS, QwenTTS
-from src.tts.error_utils import is_tts_authentication_error
+from src.tts.error_utils import is_tts_authentication_error, tts_error_code
 
 
 class _FakeResponse:
@@ -184,6 +187,137 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
     ]
 
 
+def test_qwen_tts_uses_distinct_connect_and_read_timeouts(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+            "connect_timeout_seconds": 2.0,
+            "read_timeout_seconds": 9.0,
+            "wall_timeout_seconds": 20.0,
+        }
+    )
+
+    engine.synthesize("Hello there", "Cherry")
+
+    assert fake.posts[0][3] == (2.0, 9.0)
+    assert fake.gets[0][1] == (2.0, 9.0)
+
+
+def test_qwen_tts_wall_deadline_aborts_trickling_response_body(monkeypatch):
+    engine_ref = {}
+
+    class TricklingResponse(_FakeResponse):
+        def iter_content(self, chunk_size):
+            del chunk_size
+            yield b'{"output":'
+            engine_ref["engine"]._request_state_local.deadline = time.monotonic() - 1.0
+            yield b'{"audio":{"data":"ignored"}}}'
+
+    response = TricklingResponse()
+
+    class Session(_FakeSession):
+        def post(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", Session)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+            "wall_timeout_seconds": 3.0,
+        }
+    )
+    engine_ref["engine"] = engine
+
+    with pytest.raises(RuntimeError, match="wall-clock timeout"):
+        engine.synthesize("Hello there", "Cherry")
+
+    diagnostics = engine.consume_last_synthesis_diagnostics()
+    assert diagnostics["succeeded"] is False
+    assert diagnostics["total_s"] >= 0.0
+    assert response.closed is True
+
+
+def test_qwen_tts_reports_reuse_and_per_phase_latency_diagnostics(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "custom-qwen-tts-model",
+        }
+    )
+
+    engine.synthesize("First", "Cherry")
+    first = engine.consume_last_synthesis_diagnostics()
+    engine.synthesize("Second", "Cherry")
+    second = engine.consume_last_synthesis_diagnostics()
+
+    assert first["api_session_reused"] is False
+    assert second["api_session_reused"] is True
+    assert first["audio_download_session_reused"] is False
+    assert second["audio_download_session_reused"] is True
+    assert first["connection_pool_wait_s"] >= 0.0
+    assert first["api_response_header_s"] >= 0.0
+    assert first["first_audio_s"] >= 0.0
+    assert first["full_response_s"] >= first["first_audio_s"]
+    assert first["parsing_postprocess_s"] >= 0.0
+    assert first["tcp_s"] is None
+    assert first["tls_s"] is None
+    assert fake.posts[0][2]["model"] == "custom-qwen-tts-model"
+
+
+def test_qwen_tts_rejects_control_characters_in_api_key(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key\nInjected: true",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="invalid characters"):
+        engine.synthesize("Hello", "Cherry")
+
+    assert fake.posts == []
+
+
+def test_qwen_tts_request_close_releases_session_and_rejects_new_work(monkeypatch):
+    class Session(_FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    session = Session()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: session)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    engine.prewarm()
+
+    engine.request_close()
+
+    assert session.closed is True
+    with pytest.raises(RuntimeError, match="cancelled during shutdown"):
+        engine.synthesize("Hello", "Cherry")
+    assert session.posts == []
+
+
 def test_qwen_tts_retries_tls_eof_with_fresh_session_and_backoff(monkeypatch):
     created = []
     request_urls = []
@@ -224,7 +358,6 @@ def test_qwen_tts_retries_tls_eof_with_fresh_session_and_backoff(monkeypatch):
         return session
 
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", session_factory)
-    monkeypatch.setattr(api_tts_engines.time, "sleep", sleeps.append)
     engine = QwenTTS(
         {
             "api_key": "qwen-key",
@@ -233,6 +366,8 @@ def test_qwen_tts_retries_tls_eof_with_fresh_session_and_backoff(monkeypatch):
             "model": "qwen3-tts-flash",
         }
     )
+
+    monkeypatch.setattr(engine._close_requested, "wait", sleeps.append)
 
     assert engine.synthesize("Hello there", "Cherry") == audio
     assert len(created) == 2
@@ -286,7 +421,6 @@ def test_qwen_tts_retries_audio_download_without_resubmitting_synthesis(monkeypa
         return session
 
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", session_factory)
-    monkeypatch.setattr(api_tts_engines.time, "sleep", sleeps.append)
     engine = QwenTTS(
         {
             "api_key": "qwen-key",
@@ -294,6 +428,8 @@ def test_qwen_tts_retries_audio_download_without_resubmitting_synthesis(monkeypa
             "model": "qwen3-tts-flash",
         }
     )
+
+    monkeypatch.setattr(engine._close_requested, "wait", sleeps.append)
 
     assert engine.synthesize("Hello there", "Cherry").startswith(b"RIFF")
     assert len(post_calls) == 1
@@ -315,7 +451,6 @@ def test_qwen_tts_exhausted_tls_eof_uses_safe_network_error(monkeypatch):
             )
 
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", Session)
-    monkeypatch.setattr(api_tts_engines.time, "sleep", sleeps.append)
     engine = QwenTTS(
         {
             "api_key": "qwen-key",
@@ -323,6 +458,8 @@ def test_qwen_tts_exhausted_tls_eof_uses_safe_network_error(monkeypatch):
             "model": "qwen3-tts-flash",
         }
     )
+
+    monkeypatch.setattr(engine._close_requested, "wait", sleeps.append)
 
     with pytest.raises(RuntimeError) as exc_info:
         engine.synthesize("Hello there", "Cherry")
@@ -333,6 +470,74 @@ def test_qwen_tts_exhausted_tls_eof_uses_safe_network_error(monkeypatch):
     assert "network connection was interrupted" in message
     assert "UNEXPECTED_EOF" not in message
     assert "dashscope-intl.aliyuncs.com" not in message
+
+
+def test_qwen_retry_backoff_cannot_exceed_absolute_wall_deadline():
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    engine.wall_timeout_seconds = 0.05
+    engine._begin_synthesis_diagnostics()
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(api_tts_engines._APITTSWallClockTimeout):
+            engine._with_transient_transport_retry(
+                lambda: (_ for _ in ()).throw(
+                    requests.exceptions.ConnectionError("temporary reset")
+                ),
+                operation_label="test",
+                retry_delays=(0.6,),
+            )
+    finally:
+        engine._finish_synthesis_diagnostics(succeeded=False)
+        engine.close()
+
+    assert time.monotonic() - started_at < 0.2
+
+
+def test_qwen_retry_backoff_is_interrupted_by_shutdown():
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    attempted = threading.Event()
+    finished = threading.Event()
+    failures: list[BaseException] = []
+
+    def operation():
+        attempted.set()
+        raise requests.exceptions.ConnectionError("temporary reset")
+
+    def run():
+        engine._begin_synthesis_diagnostics()
+        try:
+            engine._with_transient_transport_retry(
+                operation,
+                operation_label="test",
+                retry_delays=(1.0,),
+            )
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            engine._finish_synthesis_diagnostics(succeeded=False)
+            finished.set()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    assert attempted.wait(timeout=0.5)
+    engine.request_close()
+
+    assert finished.wait(timeout=0.3)
+    worker.join(timeout=0.1)
+    assert len(failures) == 1
+    assert isinstance(failures[0], api_tts_engines._APITTSCancelled)
 
 
 def test_qwen_tts_does_not_retry_certificate_validation_failure(monkeypatch):
@@ -452,6 +657,62 @@ def test_qwen_decorated_auth_error_remains_classifiable_without_provider_detail(
 
     assert "Authentication was rejected" in message
     assert is_tts_authentication_error(message) is True
+
+
+@pytest.mark.parametrize(
+    ("status_code", "detail", "expected_code"),
+    (
+        (403, "Forbidden", "authentication"),
+        (429, "Throttling.RateQuota", "rate_limit"),
+        (404, "Not Found", "invalid_endpoint"),
+        (400, "Model is not supported", "unsupported_model"),
+        (503, "Service unavailable", "provider"),
+    ),
+)
+def test_qwen_tts_http_failures_map_to_stable_categories(
+    status_code,
+    detail,
+    expected_code,
+):
+    engine = QwenTTS(
+        {
+            "region": "singapore",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    message = engine._api_request_failure_message(status_code, detail)
+
+    assert tts_error_code(message) == expected_code
+
+
+def test_qwen_tts_logs_hide_raw_provider_error_body(monkeypatch, caplog):
+    secret = "raw-provider-secret and echoed player text"
+
+    class Session(_FakeSession):
+        def post(self, *_args, **_kwargs):
+            return _FakeResponse(
+                payload={"code": "InternalError", "message": secret},
+                status_code=500,
+            )
+
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", Session)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="provider failure"):
+            engine.synthesize("Hello", "Cherry")
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert secret not in rendered
+    assert "type=RuntimeError status=500" in rendered
 
 
 def test_qwen_tts_does_not_retry_client_error_response(monkeypatch):
@@ -756,6 +1017,141 @@ def test_audio_url_validation_allows_only_same_port_loopback_for_local_api():
         "http://127.0.0.1:9090/audio.wav",
         api_base_url="http://127.0.0.1:8080/v1",
     )
+
+
+def test_audio_download_target_pins_the_validated_dns_address():
+    calls: list[str] = []
+
+    def resolve(host, _port):
+        calls.append(host)
+        if host == "cdn.example":
+            # A second resolution would simulate rebinding to loopback.
+            address = "93.184.216.35" if calls.count(host) == 1 else "127.0.0.1"
+        else:
+            address = "93.184.216.34"
+        return (api_tts_engines.ipaddress.ip_address(address),)
+
+    target = api_tts_engines._validated_audio_download_target(
+        "https://cdn.example/audio.wav",
+        api_base_url="https://api.example/v1",
+        resolver=resolve,
+    )
+
+    assert target is not None
+    assert target.address == "93.184.216.35"
+    assert calls.count("cdn.example") == 1
+    adapter = api_tts_engines._PinnedAddressAdapter(target)
+    request = requests.Request(
+        "GET",
+        "https://cdn.example/audio.wav",
+    ).prepare()
+    adapter.add_headers(request)
+    pool = adapter.get_connection_with_tls_context(request, True)
+    assert pool.host == "93.184.216.35"
+    assert request.headers["Host"] == "cdn.example"
+    adapter.close()
+
+
+@pytest.mark.parametrize(
+    "equivalent_url",
+    (
+        "https://cdn.example:443/second.wav",
+        "https://cdn.example./second.wav",
+    ),
+)
+def test_cached_audio_origin_mounts_pinned_adapter_for_equivalent_url_spellings(
+    monkeypatch,
+    equivalent_url,
+):
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://cdn.example/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    resolutions: list[str] = []
+
+    def resolve(host, _port):
+        resolutions.append(host)
+        return (api_tts_engines.ipaddress.ip_address("93.184.216.35"),)
+
+    monkeypatch.setattr(engine, "_resolve_audio_addresses_bounded", resolve)
+    session = engine._session
+    try:
+        assert engine._prepare_pinned_audio_url(
+            session,
+            "https://cdn.example/first.wav",
+        )
+        pinned_adapter = session.get_adapter("https://cdn.example/first.wav")
+        assert isinstance(pinned_adapter, api_tts_engines._PinnedAddressAdapter)
+
+        assert engine._prepare_pinned_audio_url(session, equivalent_url)
+        prepared_url = requests.Request("GET", equivalent_url).prepare().url
+        assert session.get_adapter(prepared_url) is pinned_adapter
+        assert resolutions == ["cdn.example"]
+    finally:
+        engine.close()
+
+
+def test_audio_dns_resolution_obeys_qwen_wall_deadline(monkeypatch):
+    release = threading.Event()
+
+    def blocked_resolve(*_args, **_kwargs):
+        release.wait(1.0)
+        return []
+
+    monkeypatch.setattr(api_tts_engines.socket, "getaddrinfo", blocked_resolve)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    engine.wall_timeout_seconds = 0.05
+    engine._begin_synthesis_diagnostics()
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(api_tts_engines._APITTSWallClockTimeout):
+            engine._resolve_audio_addresses_bounded("cdn.example", 443)
+        assert engine.background_work_count() == 1
+    finally:
+        release.set()
+        engine._finish_synthesis_diagnostics(succeeded=False)
+
+    assert time.monotonic() - started_at < 0.5
+    deadline = time.monotonic() + 1.0
+    while engine.background_work_count() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert engine.background_work_count() == 0
+
+
+def test_audio_dns_thread_start_failure_releases_resolver_slot(monkeypatch):
+    semaphore = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(api_tts_engines, "_AUDIO_DNS_RESOLVER_SLOTS", semaphore)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    engine._begin_synthesis_diagnostics()
+
+    def fail_start(_thread):
+        raise RuntimeError("thread start failed")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    try:
+        with pytest.raises(RuntimeError, match="thread start failed"):
+            engine._resolve_audio_addresses_bounded("cdn.example", 443)
+    finally:
+        engine._finish_synthesis_diagnostics(succeeded=False)
+
+    assert engine.background_work_count() == 0
+    assert semaphore.acquire(blocking=False) is True
+    semaphore.release()
 
 
 def test_base64_audio_decode_is_size_bounded(monkeypatch):

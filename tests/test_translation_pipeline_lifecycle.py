@@ -64,3 +64,43 @@ def test_close_suppresses_late_async_signals_and_closes_translator(
     assert ready == []
     assert errors == []
     assert busy == [True]
+
+
+def test_provider_failure_and_cleanup_logs_hide_raw_prose(monkeypatch, caplog):
+    _app()
+    request_secret = "raw provider response with echoed player text"
+    cleanup_secret = "relay/private-path cleanup failure"
+
+    class Translator:
+        def translate(self, *_args, **_kwargs):
+            raise RuntimeError(request_secret)
+
+        def close(self):
+            raise RuntimeError(cleanup_secret)
+
+    monkeypatch.setattr(
+        translation_pipeline,
+        "create_translator",
+        lambda _config: Translator(),
+    )
+    pipeline = TranslationPipeline(
+        {
+            "translation": {
+                "source_language": "en",
+                "target_language": "ja",
+                "output_format": "translated_only",
+            },
+            "ui": {"language": "en"},
+        }
+    )
+    caplog.set_level("DEBUG", logger="src.core.translation_pipeline")
+
+    pipeline.translate_async("hello")
+    for thread in tuple(pipeline._threads):
+        thread.join(timeout=1)
+    pipeline.close()
+
+    assert request_secret not in caplog.text
+    assert cleanup_secret not in caplog.text
+    assert caplog.text.count("type=RuntimeError") >= 2
+    assert all(record.exc_info is None for record in caplog.records)

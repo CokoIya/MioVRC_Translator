@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from src.asr.model_manager import (
     bundled_model_dirs as _bundled_model_dirs,
-    cache_dir,
     download_model_to,
     download_model,
     existing_model_path,

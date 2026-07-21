@@ -561,7 +561,8 @@ def test_style_bert_disables_typeguard_in_frozen_runtime(monkeypatch):
 
     fake_typeguard = SimpleNamespace(typechecked=broken_typechecked)
     fake_decorators = SimpleNamespace(typechecked=broken_typechecked)
-    wrapped = lambda: "ok"
+    def wrapped():
+        return "ok"
 
     monkeypatch.setattr(engine_store.sys, "frozen", True, raising=False)
     monkeypatch.setattr(engine_store, "_SBV2_TYPEGUARD_PATCHED", False)

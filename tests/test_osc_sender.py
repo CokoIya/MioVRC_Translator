@@ -82,6 +82,67 @@ def test_chatbox_send_reports_failure_when_enqueue_fails():
     assert sender.send_chatbox("hello") == ""
 
 
+def test_chatbox_completion_reports_request_identity_and_downstream_latency(monkeypatch):
+    completed = []
+
+    class FakeUDPClient:
+        def __init__(self, _host, _port):
+            pass
+
+        def send_message(self, _address, _arguments):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.osc.sender.udp_client.SimpleUDPClient", FakeUDPClient)
+    sender = VRCOSCSender(min_send_interval_s=0.0)
+    started_at = time.monotonic()
+    try:
+        assert sender.send_chatbox(
+            "hello",
+            request_context={
+                "source": "mic",
+                "session_id": 7,
+                "sequence": 11,
+                "upstream_started_at": started_at,
+                "ui_delivered_at": started_at,
+            },
+            completion_callback=completed.append,
+        ) == "hello"
+        deadline = time.monotonic() + 1.0
+        while not completed and time.monotonic() < deadline:
+            time.sleep(0.005)
+    finally:
+        sender.close()
+
+    assert len(completed) == 1
+    timing = completed[0]
+    assert timing["outcome"] == "success"
+    assert timing["source"] == "mic"
+    assert timing["session_id"] == 7
+    assert timing["sequence"] == 11
+    assert timing["queue_wait_s"] >= 0.0
+    assert timing["rate_wait_s"] == 0.0
+    assert timing["osc_total_s"] >= 0.0
+    assert timing["pipeline_total_s"] >= 0.0
+
+
+def test_clearing_pending_chatbox_notifies_cancelled_completion():
+    sender = _sender_without_worker(maxsize=2)
+    completed = []
+
+    assert sender.send_chatbox(
+        "old",
+        request_context={"source": "mic", "sequence": 2},
+        completion_callback=completed.append,
+    ) == "old"
+
+    assert sender.clear_pending_chatbox() == 1
+    assert [item["outcome"] for item in completed] == ["cancelled"]
+    assert completed[0]["sequence"] == 2
+
+
 def test_queue_full_evicts_oldest_message_for_new_chatbox_payload():
     sender = _sender_without_worker(maxsize=1)
     sender._queue.put_nowait(

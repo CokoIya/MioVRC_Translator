@@ -340,7 +340,7 @@ def _install_staged_directory(
     try:
         os.rename(target_dir, backup_dir)
     except OSError as exc:
-        raise RuntimeError(f"Unable to reserve the existing ASR model installation") from exc
+        raise RuntimeError("Unable to reserve the existing ASR model installation") from exc
 
     try:
         backup_identity = _directory_identity(backup_dir)
