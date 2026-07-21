@@ -84,20 +84,21 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
         "https://github.com/CokoIya/MioVRC_Translator/releases/download/"
         f"{version_token}/{expected_installer}"
     )
-    expected_checksum_url = (
-        "https://github.com/CokoIya/MioVRC_Translator/releases/download/"
-        f"{version_token}/MioTranslator-{version_token}-SHA256SUMS.txt"
+    hidden_verification_tokens = (
+        f"MioTranslator-{version_token}-SHA256SUMS.txt",
+        "download-checksum",
+        "download-signature",
+        "download-signing",
+        "release_signing_keys.json",
+        "2a4ec078ce01b14b935a45cb04ac12eba7445a619075dbb0f50c25618e337b83",
     )
-    expected_signature_url = f"{expected_checksum_url}.sig.json"
     for relative_path in ("docs/index.html", "docs/downloads/index.html"):
         page = _read(relative_path)
         assert expected_installer in page
         assert expected_url in page
-        assert expected_checksum_url in page
-        assert expected_signature_url in page
-        assert (
-            "2a4ec078ce01b14b935a45cb04ac12eba7445a619075dbb0f50c25618e337b83" in page
-        )
+        assert version_token in page
+        assert "v1.3.8.5" in page
+        assert all(token not in page for token in hidden_verification_tokens)
         for previous_patch in range(6):
             previous_version = f"v1.3.8.{previous_patch}"
             assert f"MioTranslator-Setup-{previous_version}.exe" not in page
@@ -134,11 +135,14 @@ def test_current_release_docs_describe_single_installer_and_custom_relays() -> N
     assert "Base URL 与 Model 将按后端自动锁定" not in website
     assert "compatible relays keep custom Base URLs" in website
     assert "兼容中继的自定义 Base URL" in website
-    for field in (
-        "download-checksum-text",
-        "download-signature-text",
-        "download-signing-note",
-        "download-signing-catalog-text",
-    ):
+    for field in ("download-sub", "download-card-body"):
         assert f'id="{field}"' in website
         assert website.count(f"'{field}':") == 5
+    for removed_field in (
+        "download-checksum",
+        "download-signature",
+        "download-signing",
+        "download-model-link",
+        "download-community",
+    ):
+        assert removed_field not in website
