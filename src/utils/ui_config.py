@@ -177,6 +177,10 @@ LANGUAGE_DISPLAY_NAMES: dict[str, dict[str, str]] = {
 
 OUTPUT_FORMAT_ORIGINAL_ONLY = "original_only"
 OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION = "original_only_read_translation"
+ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY = (
+    "original_only_read_translation_wait_for_tts"
+)
+ORIGINAL_ONLY_READ_TRANSLATION_OSC_DELAY_MS = 200
 ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS = frozenset(
     {
         OUTPUT_FORMAT_ORIGINAL_ONLY,

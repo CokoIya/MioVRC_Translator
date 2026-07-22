@@ -70,8 +70,14 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
         "tts_voice",
         "asr_rewrite_style",
     }
-    assert set(panel._toggles) == {"rewrite_typed_text"}
+    assert set(panel._toggles) == {
+        "rewrite_typed_text",
+        "original_only_read_translation_wait_for_tts",
+    }
     assert panel._toggles["rewrite_typed_text"].isChecked() is False
+    assert panel._toggles[
+        "original_only_read_translation_wait_for_tts"
+    ].isHidden() is True
     assert "frieren" in panel._combo_reverse["asr_rewrite_style"]
     assert "language_exchange" in panel._combo_reverse["asr_rewrite_style"]
     assert not hasattr(panel, "mic_gain_slider")
@@ -94,6 +100,31 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
     assert changes[-1] == ("rewrite_typed_text", True)
 
 
+def test_realtime_tweaks_panel_shows_tts_wait_toggle_only_for_original_read_mode(qtbot):
+    config = _quick_switch_config()
+    config["translation"]["output_format"] = "original_only_read_translation"
+    changes: list[tuple[str, object]] = []
+    panel = RealtimeTweaksPanel(
+        None,
+        config,
+        "en",
+        "dark",
+        lambda key, value: changes.append((key, value)),
+    )
+    qtbot.addWidget(panel)
+
+    toggle = panel._toggles["original_only_read_translation_wait_for_tts"]
+    assert toggle.isHidden() is False
+    assert toggle.isChecked() is True
+
+    toggle.setChecked(False)
+    assert changes[-1] == ("original_only_read_translation_wait_for_tts", False)
+
+    config["translation"]["output_format"] = "translated_only"
+    panel._refresh_controls()
+    assert toggle.isHidden() is True
+
+
 def test_realtime_tweaks_panel_localizes_shared_rewrite_controls(qtbot):
     panel = RealtimeTweaksPanel(None, _quick_switch_config(), "en", "dark")
     qtbot.addWidget(panel)
@@ -107,6 +138,12 @@ def test_realtime_tweaks_panel_localizes_shared_rewrite_controls(qtbot):
         assert panel._toggles["rewrite_typed_text"].text() == tr(
             language,
             "quick_switch_rewrite_typed_text",
+        )
+        assert panel._toggles[
+            "original_only_read_translation_wait_for_tts"
+        ].text() == tr(
+            language,
+            "quick_switch_original_only_read_translation_wait_for_tts",
         )
 
 

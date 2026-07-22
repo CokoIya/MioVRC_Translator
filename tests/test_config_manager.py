@@ -855,8 +855,34 @@ class TestConfigValidation(unittest.TestCase):
         assert config["translation"]["chatbox_template"] == ""
         assert config["translation"]["fallback_backends"] == []
         assert config["translation"]["rewrite_typed_text"] is False
+        assert (
+            config["translation"][
+                "original_only_read_translation_wait_for_tts"
+            ]
+            is True
+        )
         assert "output_format_2" not in config["translation"]
         assert config["translation"]["language_pair_source"] == "auto"
+
+    def test_original_read_translation_tts_wait_toggle_preserves_explicit_false(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "openai",
+                "backend_source": "manual",
+                "original_only_read_translation_wait_for_tts": False,
+            },
+        }
+        loaded = json.loads(json.dumps(config))
+
+        config_manager._ensure_translation_config(config, loaded=loaded)
+
+        assert (
+            config["translation"][
+                "original_only_read_translation_wait_for_tts"
+            ]
+            is False
+        )
 
     def test_auto_language_pair_defaults_non_chinese_to_chinese(self):
         """Japanese or other supported computer languages should translate into Chinese."""

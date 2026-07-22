@@ -105,6 +105,9 @@ from src.utils.ui_config import (
     get_ui_language,
     normalize_backend,
     normalize_output_format,
+    ORIGINAL_ONLY_READ_TRANSLATION_OSC_DELAY_MS,
+    ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+    OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION,
     target_language_osc_value,
 )
 
@@ -6143,23 +6146,31 @@ class MainWindow(QMainWindow):
                     completion,
                     ui_delivered_at=time.monotonic(),
                 )
-                if payload.send_to_chatbox:
+                osc_completion_callback = self._realtime_osc_terminal_callback(
+                    source=task.source,
+                    session_id=task.session_id,
+                    sequence=task.sequence,
+                    diagnostics=(
+                        task.diagnostics
+                        if isinstance(task.diagnostics, dict)
+                        else None
+                    ),
+                )
+                wait_for_tts = bool(
+                    payload.send_to_chatbox
+                    and output_message is not None
+                    and self._should_wait_for_original_osc_after_tts(
+                        payload.config_snapshot
+                    )
+                )
+                if payload.send_to_chatbox and not wait_for_tts:
                     output_metrics["osc_attempted"] = True
                     output_metrics["osc_queued"] = bool(
                         self._send_chatbox_payload(
                             result.chatbox_text,
                             session_id=task.session_id,
                             request_context=request_context,
-                            completion_callback=self._realtime_osc_terminal_callback(
-                                source=task.source,
-                                session_id=task.session_id,
-                                sequence=task.sequence,
-                                diagnostics=(
-                                    task.diagnostics
-                                    if isinstance(task.diagnostics, dict)
-                                    else None
-                                ),
-                            ),
+                            completion_callback=osc_completion_callback,
                         )
                     )
                 if output_message is not None:
@@ -6172,6 +6183,15 @@ class MainWindow(QMainWindow):
                             else {}
                         )
                         metadata["request_context"] = request_context
+                        if wait_for_tts:
+                            metadata["tts_completion_callback"] = (
+                                self._delayed_original_chatbox_after_tts(
+                                    output_message.original_text,
+                                    session_id=task.session_id,
+                                    request_context=request_context,
+                                    completion_callback=osc_completion_callback,
+                                )
+                            )
                         tts_message = replace(output_message, metadata=metadata)
                     dispatch_result = self._dispatch_output_message(
                         tts_message,
@@ -6181,6 +6201,11 @@ class MainWindow(QMainWindow):
                         output_metrics["tts_queued"] = bool(
                             dispatch_result.get("tts", False)
                         )
+                if wait_for_tts:
+                    output_metrics["osc_attempted"] = True
+                    output_metrics["osc_queued"] = bool(
+                        output_metrics["tts_queued"]
+                    )
             return output_metrics
         finally:
             self._restore_scheduler_status_ui(task.source, task.session_id)
@@ -6558,23 +6583,40 @@ class MainWindow(QMainWindow):
                 self._record_source_translation_success(source)
             output_message = result.output_message
 
-            def update_translation_ui() -> None:
+            def deliver_outputs() -> None:
                 if not self._running or session_id != self._listen_session:
                     return
                 if output_message is not None:
                     self._dispatch_output_message(output_message, sinks=("ui", "overlay"))
-
-            self._call_in_ui(update_translation_ui)
-            if self._mic_send_to_chatbox_enabled():
-                self._call_in_ui(lambda payload=result.chatbox_text, sid=session_id: self._send_chatbox_payload(payload, session_id=sid))
-            if output_message is not None:
-                self._call_in_ui(
-                    lambda message=output_message, sid=session_id: (
-                        self._dispatch_output_message(message, sinks=("tts",))
-                        if self._running and sid == self._listen_session
-                        else False
-                    )
+                send_to_chatbox = self._mic_send_to_chatbox_enabled()
+                wait_for_tts = bool(
+                    send_to_chatbox
+                    and output_message is not None
+                    and self._should_wait_for_original_osc_after_tts(self._config)
                 )
+                if send_to_chatbox and not wait_for_tts:
+                    self._send_chatbox_payload(
+                        result.chatbox_text,
+                        session_id=session_id,
+                    )
+                if output_message is not None:
+                    tts_message = output_message
+                    if wait_for_tts:
+                        metadata = (
+                            dict(output_message.metadata)
+                            if isinstance(output_message.metadata, Mapping)
+                            else {}
+                        )
+                        metadata["tts_completion_callback"] = (
+                            self._delayed_original_chatbox_after_tts(
+                                output_message.original_text,
+                                session_id=session_id,
+                            )
+                        )
+                        tts_message = replace(output_message, metadata=metadata)
+                    self._dispatch_output_message(tts_message, sinks=("tts",))
+
+            self._call_in_ui(deliver_outputs)
         except Exception as e:
             logger.debug(
                 "Final transcription failed: %s",
@@ -6705,6 +6747,9 @@ class MainWindow(QMainWindow):
         request_context = metadata.get("request_context")
         if not isinstance(request_context, Mapping):
             request_context = None
+        completion_callback = metadata.get("tts_completion_callback")
+        if not callable(completion_callback):
+            completion_callback = None
         if source == "manual":
             kwargs: dict[str, object] = {
                 "original_text": message.original_text,
@@ -6712,6 +6757,8 @@ class MainWindow(QMainWindow):
             }
             if request_context is not None:
                 kwargs["request_context"] = request_context
+            if completion_callback is not None:
+                kwargs["completion_callback"] = completion_callback
             return self._auto_read_translation_result(
                 **kwargs,
             )
@@ -6722,6 +6769,8 @@ class MainWindow(QMainWindow):
             }
             if request_context is not None:
                 kwargs["request_context"] = request_context
+            if completion_callback is not None:
+                kwargs["completion_callback"] = completion_callback
             return self._auto_read_mic_translation(**kwargs)
         return False
 
@@ -6893,10 +6942,39 @@ class MainWindow(QMainWindow):
         callback = self._manual_done_callback
         self._manual_done_callback = None
         sent = False
-        if success and send_after:
+        wait_for_tts = bool(
+            success
+            and send_after
+            and self._should_wait_for_original_osc_after_tts(self._config)
+        )
+        if success and send_after and not wait_for_tts:
             sent = self._send_to_vrc()
         if success:
-            if output_message is not None:
+            if wait_for_tts:
+                tts_callback = self._delayed_original_chatbox_after_tts(
+                    (
+                        output_message.original_text
+                        if output_message is not None
+                        else self._src_text
+                    )
+                )
+                if output_message is not None:
+                    metadata = (
+                        dict(output_message.metadata)
+                        if isinstance(output_message.metadata, Mapping)
+                        else {}
+                    )
+                    metadata["tts_completion_callback"] = tts_callback
+                    dispatch_result = self._dispatch_output_message(
+                        replace(output_message, metadata=metadata),
+                        sinks=("tts",),
+                    )
+                    sent = bool(dispatch_result.get("tts", False))
+                else:
+                    sent = self._auto_read_manual_translation(
+                        completion_callback=tts_callback,
+                    )
+            elif output_message is not None:
                 self._dispatch_output_message(output_message, sinks=("tts",))
             else:
                 self._auto_read_manual_translation()
@@ -7211,6 +7289,7 @@ class MainWindow(QMainWindow):
         text: str,
         *,
         request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[bool, str], None] | None = None,
     ) -> bool:
         if not self._sync_tts_enabled_from_config():
             return False
@@ -7244,6 +7323,24 @@ class MainWindow(QMainWindow):
         suppress_echo = self._should_suppress_tts_echo_from_listen()
         if suppress_echo:
             self._begin_listen_tts_echo_suppression()
+        completion_lock = threading.Lock()
+        completion_state: dict[str, object] = {
+            "decision_made": False,
+            "accepted": False,
+            "delivered": False,
+            "pending": None,
+        }
+
+        def deliver_completion(success: bool, message: str) -> None:
+            if not callable(completion_callback):
+                return
+            try:
+                completion_callback(bool(success), str(message or ""))
+            except Exception:
+                logger.debug(
+                    "TTS completion callback failed",
+                    exc_info=True,
+                )
 
         def _done(success: bool, _message: str) -> None:
             terminal_at = time.monotonic()
@@ -7279,6 +7376,21 @@ class MainWindow(QMainWindow):
                     max(0.0, terminal_at - upstream_started_at) * 1000.0,
                     tts_error_code(_message) if not success else "",
                 )
+            should_deliver = False
+            with completion_lock:
+                if not bool(completion_state["decision_made"]):
+                    completion_state["pending"] = (
+                        bool(success),
+                        str(_message or ""),
+                    )
+                elif (
+                    bool(completion_state["accepted"])
+                    and not bool(completion_state["delivered"])
+                ):
+                    completion_state["delivered"] = True
+                    should_deliver = True
+            if should_deliver:
+                deliver_completion(bool(success), str(_message or ""))
 
         engine_cfg = self._current_tts_engine_config()
         speak_kwargs = {
@@ -7303,6 +7415,25 @@ class MainWindow(QMainWindow):
                 self._safe_tts_rate(engine_cfg.get("rate")),
                 self._safe_tts_volume(engine_cfg.get("volume")),
                 callback=_done,
+            )
+        pending_completion = None
+        with completion_lock:
+            completion_state["decision_made"] = True
+            completion_state["accepted"] = bool(accepted)
+            pending_completion = completion_state["pending"]
+            completion_state["pending"] = None
+            should_deliver_pending = bool(
+                accepted
+                and isinstance(pending_completion, tuple)
+                and len(pending_completion) == 2
+                and not completion_state["delivered"]
+            )
+            if should_deliver_pending:
+                completion_state["delivered"] = True
+        if should_deliver_pending and isinstance(pending_completion, tuple):
+            deliver_completion(
+                bool(pending_completion[0]),
+                str(pending_completion[1] or ""),
             )
         if not accepted and suppress_echo:
             self._finish_listen_tts_echo_suppression(0.0)
@@ -7346,12 +7477,67 @@ class MainWindow(QMainWindow):
             return original_text
         return translated_text or original_text
 
+    @staticmethod
+    def _should_wait_for_original_osc_after_tts(
+        config: Mapping[str, object] | None,
+    ) -> bool:
+        if not isinstance(config, Mapping):
+            return False
+        translation = config.get("translation", {})
+        if not isinstance(translation, Mapping):
+            return False
+        output_format = normalize_output_format(translation.get("output_format"))
+        if output_format != OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION:
+            return False
+        return bool(
+            translation.get(
+                ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+                True,
+            )
+        )
+
+    def _delayed_original_chatbox_after_tts(
+        self,
+        original_text: str,
+        *,
+        session_id: int | None = None,
+        request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> Callable[[bool, str], None]:
+        delivered_lock = threading.Lock()
+        delivered = False
+
+        def on_tts_terminal(success: bool, _message: str) -> None:
+            nonlocal delivered
+            if not success:
+                return
+            with delivered_lock:
+                if delivered:
+                    return
+                delivered = True
+
+            def send_original() -> None:
+                self._send_chatbox_payload(
+                    original_text,
+                    session_id=session_id,
+                    request_context=request_context,
+                    completion_callback=completion_callback,
+                )
+
+            self._call_in_ui(
+                send_original,
+                delay_ms=ORIGINAL_ONLY_READ_TRANSLATION_OSC_DELAY_MS,
+            )
+
+        return on_tts_terminal
+
     def _auto_read_translation_result(
         self,
         *,
         original_text: str,
         translated_text: str,
         request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[bool, str], None] | None = None,
     ) -> bool:
         tts_cfg = self._tts_config()
         if not self._sync_tts_enabled_from_config():
@@ -7363,10 +7549,21 @@ class MainWindow(QMainWindow):
             translated_text=translated_text,
         )
         if request_context is None:
-            return self._queue_tts_playback(text)
+            if completion_callback is None:
+                return self._queue_tts_playback(text)
+            return self._queue_tts_playback(
+                text,
+                completion_callback=completion_callback,
+            )
+        if completion_callback is None:
+            return self._queue_tts_playback(
+                text,
+                request_context=request_context,
+            )
         return self._queue_tts_playback(
             text,
             request_context=request_context,
+            completion_callback=completion_callback,
         )
 
     def _auto_read_mic_translation(
@@ -7375,17 +7572,24 @@ class MainWindow(QMainWindow):
         original_text: str,
         translated_text: str,
         request_context: Mapping[str, object] | None = None,
+        completion_callback: Callable[[bool, str], None] | None = None,
     ) -> bool:
         return self._auto_read_translation_result(
             original_text=original_text,
             translated_text=translated_text,
             request_context=request_context,
+            completion_callback=completion_callback,
         )
 
-    def _auto_read_manual_translation(self) -> bool:
+    def _auto_read_manual_translation(
+        self,
+        *,
+        completion_callback: Callable[[bool, str], None] | None = None,
+    ) -> bool:
         return self._auto_read_translation_result(
             original_text=self._src_text,
             translated_text=self._last_tgt_text,
+            completion_callback=completion_callback,
         )
 
     def _listen_suppress_reason(self, text: str) -> str | None:
@@ -9211,6 +9415,14 @@ class MainWindow(QMainWindow):
     def _set_quick_output_format(self, value: object) -> None:
         self._config.setdefault("translation", {})["output_format"] = normalize_output_format(str(value or ""))
 
+    def _set_quick_original_only_read_translation_wait_for_tts(
+        self,
+        value: object,
+    ) -> None:
+        self._config.setdefault("translation", {})[
+            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY
+        ] = bool(value)
+
     def _set_quick_asr_rewrite_style(self, value: object) -> None:
         self._config.setdefault("translation", {})["asr_rewrite_style"] = (
             normalize_asr_rewrite_style(value)
@@ -9261,6 +9473,9 @@ class MainWindow(QMainWindow):
             "translation_provider": self._set_quick_translation_provider,
             "translation_model": self._set_quick_translation_model,
             "output_format": self._set_quick_output_format,
+            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY: (
+                self._set_quick_original_only_read_translation_wait_for_tts
+            ),
             "asr_rewrite_style": self._set_quick_asr_rewrite_style,
             "rewrite_typed_text": self._set_quick_rewrite_typed_text,
             "tts_language": self._set_quick_tts_language,
@@ -9275,6 +9490,7 @@ class MainWindow(QMainWindow):
             "translation_provider",
             "translation_model",
             "output_format",
+            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
             "asr_rewrite_style",
         }:
             self._refresh_realtime_config_snapshot()

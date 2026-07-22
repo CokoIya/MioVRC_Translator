@@ -2,6 +2,7 @@ import threading
 
 import pytest
 
+from src.core.output_dispatcher import OutputMessage
 from src.ui_qt.main_window import MIC_SOURCE, MainWindow
 
 
@@ -88,6 +89,61 @@ def test_manual_translation_finish_reads_original_for_original_only_format():
     window._finish_manual_translation(success=True)
 
     assert queued == ["hello"]
+
+
+def test_manual_send_after_translate_waits_for_tts_before_original_osc():
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "translation": {
+            "output_format": "original_only_read_translation",
+            "original_only_read_translation_wait_for_tts": True,
+        }
+    }
+    window._manual_send_after_translate = True
+    window._manual_done_callback = None
+    window._running = True
+    window._src_text = "hello"
+    window._last_tgt_text = "こんにちは"
+    window._t = lambda key, **_kwargs: key
+    window._set_status = lambda *_args, **_kwargs: None
+    scheduled = []
+    sent = []
+    captured = {}
+    window._send_to_vrc = lambda: pytest.fail("OSC must not send before TTS")
+    window._call_in_ui = (
+        lambda callback, delay_ms=0, **_kwargs: scheduled.append(
+            (delay_ms, callback)
+        )
+        or True
+    )
+    window._send_chatbox_payload = lambda text, **kwargs: sent.append(
+        (text, kwargs)
+    ) or True
+
+    def dispatch(message, *, sinks):
+        assert sinks == ("tts",)
+        captured["tts_callback"] = message.metadata[
+            "tts_completion_callback"
+        ]
+        return {"tts": True}
+
+    window._dispatch_output_message = dispatch
+    message = OutputMessage(
+        source="manual",
+        original_text="hello",
+        translated_text="こんにちは",
+    )
+
+    window._finish_manual_translation(
+        success=True,
+        output_message=message,
+    )
+
+    assert sent == []
+    captured["tts_callback"](True, "")
+    assert scheduled[0][0] == 200
+    scheduled[0][1]()
+    assert sent[0][0] == "hello"
 
 
 def test_realtime_mic_auto_read_respects_tts_flags():
@@ -317,6 +373,75 @@ def test_tts_request_context_is_forwarded_for_terminal_latency_correlation():
     assert window._queue_tts_playback("hello", request_context=context) is True
 
     assert manager.contexts == [context]
+
+
+def test_tts_completion_callback_runs_only_after_accepted_playback_finishes():
+    window, _manager = _window_for_tts_strategy("queue")
+    callbacks = []
+
+    class DeferredManager(_FakeTtsManager):
+        def __init__(self):
+            super().__init__()
+            self.terminal_callback = None
+
+        def speak(self, text, voice, rate, volume, callback=None):
+            self.requests.append(text)
+            self.terminal_callback = callback
+            return True
+
+    manager = DeferredManager()
+    window._ensure_tts_manager = lambda: manager
+
+    assert window._queue_tts_playback(
+        "hello",
+        completion_callback=lambda success, message: callbacks.append(
+            (success, message)
+        ),
+    ) is True
+    assert callbacks == []
+
+    manager.terminal_callback(True, "")
+
+    assert callbacks == [(True, "")]
+
+
+def test_delayed_original_chatbox_callback_waits_200ms_after_successful_tts():
+    window = MainWindow.__new__(MainWindow)
+    scheduled = []
+    sent = []
+    window._call_in_ui = (
+        lambda callback, delay_ms=0, **_kwargs: scheduled.append(
+            (delay_ms, callback)
+        )
+        or True
+    )
+    window._send_chatbox_payload = lambda text, **kwargs: sent.append(
+        (text, kwargs)
+    ) or True
+
+    callback = window._delayed_original_chatbox_after_tts(
+        "原文",
+        session_id=7,
+        request_context={"source": "mic"},
+    )
+    callback(False, "tts_error:playback")
+    assert scheduled == []
+
+    callback(True, "")
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 200
+    scheduled[0][1]()
+
+    assert sent == [
+        (
+            "原文",
+            {
+                "session_id": 7,
+                "request_context": {"source": "mic"},
+                "completion_callback": None,
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize(

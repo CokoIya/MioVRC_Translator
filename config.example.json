@@ -122,6 +122,7 @@
     "asr_rewrite_style": "off",
     "rewrite_typed_text": false,
     "output_format": "translated_with_original",
+    "original_only_read_translation_wait_for_tts": true,
     "chatbox_template": "",
     "send_to_chatbox": true,
     "realtime_timeout_s": 6.0,

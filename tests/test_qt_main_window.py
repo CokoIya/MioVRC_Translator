@@ -896,6 +896,25 @@ def test_quick_switch_output_format_persists_without_settings_window():
     assert bottom == ["Quick switch updated"]
 
 
+def test_quick_switch_original_read_translation_tts_wait_toggle_persists():
+    config = {
+        "translation": {
+            "output_format": "original_only_read_translation",
+            "original_only_read_translation_wait_for_tts": True,
+        }
+    }
+    window, saved, _bottom = _quick_switch_window(config)
+
+    MainWindow._on_quick_switch_changed(
+        window,
+        "original_only_read_translation_wait_for_tts",
+        False,
+    )
+
+    assert config["translation"]["original_only_read_translation_wait_for_tts"] is False
+    assert saved == [True]
+
+
 def test_quick_switch_asr_rewrite_style_is_normalized_and_published():
     config = {"translation": {"asr_rewrite_style": "off"}}
     window, saved, _bottom = _quick_switch_window(config)

@@ -2,6 +2,8 @@ import queue
 import threading
 import time
 
+import pytest
+
 from src.osc.sender import (
     MAX_AVATAR_STATE_ENTRIES,
     _QueuedOSCMessage,
@@ -36,6 +38,33 @@ def test_chatbox_duplicate_text_is_still_queued():
     assert second.address == "/chatbox/input"
     assert first.arguments == ("hello", True, False)
     assert second.arguments == ("hello", True, False)
+
+
+@pytest.mark.parametrize(
+    "text",
+    (".", "。", "!", "？", "...", "，。", "‼️"),
+)
+def test_chatbox_rejects_punctuation_only_payloads(text):
+    sender = _sender_without_worker()
+
+    assert sender.send_chatbox(text) == ""
+    assert sender._queue.empty()
+
+
+@pytest.mark.parametrize("text", ("!?", "！？"))
+def test_chatbox_allows_standalone_reaction_punctuation(text):
+    sender = _sender_without_worker()
+
+    assert sender.send_chatbox(text) == text
+    assert sender._queue.get_nowait().arguments[0] == text
+
+
+@pytest.mark.parametrize("text", ("hello.", "。hello", "😂", "VRChat！？"))
+def test_chatbox_allows_text_or_emoji_with_punctuation(text):
+    sender = _sender_without_worker()
+
+    assert sender.send_chatbox(text) == text
+    assert sender._queue.get_nowait().arguments[0] == text
 
 
 def test_chatbox_pacing_uses_fixed_configured_interval():

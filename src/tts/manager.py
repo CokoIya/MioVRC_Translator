@@ -635,8 +635,19 @@ class TTSManager:
         state = self.get_quiescence_state(
             elapsed_s=time.monotonic() - stop_started_at,
         )
+        closing_with_workers_stopped = bool(
+            state.engine_close_deferred
+            and getattr(self, "_manager_close_in_progress", False)
+            and state.synthesis_workers_alive == 0
+            and not state.playback_worker_alive
+            and state.outstanding_requests == 0
+            and state.playback_streams_active == 0
+            and state.engine_background_tasks == 0
+        )
         if state.quiescent:
             logger.info("TTS manager stopped and quiescent")
+        elif closing_with_workers_stopped:
+            logger.info("TTS manager workers stopped; engine close is pending")
         else:
             logger.warning(
                 "TTS manager stop incomplete "

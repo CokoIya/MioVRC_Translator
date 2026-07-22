@@ -359,6 +359,29 @@ def test_replacement_managers_do_not_accumulate_live_workers_or_engines(monkeypa
     assert all(reference() is None for reference in engine_refs)
 
 
+def test_clean_close_does_not_warn_that_zero_worker_stop_is_incomplete(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: FakeTTS(),
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+    )
+    manager.start()
+
+    with caplog.at_level(logging.INFO, logger="src.tts.manager"):
+        state = manager.close(timeout_seconds=1.0)
+
+    assert state.quiescent is True
+    assert "TTS manager stop incomplete" not in caplog.text
+    assert "TTS manager workers stopped; engine close is pending" in caplog.text
+
+
 def test_tts_manager_defers_engine_close_until_blocked_synthesis_exits(monkeypatch):
     class BlockingTTS(FakeTTS):
         def __init__(self):

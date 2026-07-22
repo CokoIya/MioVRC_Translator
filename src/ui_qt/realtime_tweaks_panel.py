@@ -39,6 +39,8 @@ from src.utils.ui_config import (
     get_output_format_options,
     normalize_backend,
     normalize_output_format,
+    ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+    OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,6 +230,11 @@ class RealtimeTweaksPanel(QDialog):
         self._add_combo(self._translation_section, "translation_provider", "quick_switch_translation_provider")
         self._add_combo(self._translation_section, "translation_model", "quick_switch_translation_model")
         self._add_combo(self._translation_section, "output_format", "quick_switch_output_format")
+        self._add_toggle(
+            self._translation_section,
+            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+            "quick_switch_original_only_read_translation_wait_for_tts",
+        )
 
         self._audio_section = self._section("mic.svg", "quick_switch_section_audio")
         self._add_noise_slider(self._audio_section, "quick_switch_noise_reduction")
@@ -391,14 +398,35 @@ class RealtimeTweaksPanel(QDialog):
 
     def _refresh_toggle_controls(self) -> None:
         trans_cfg = _dict_section(self._config, "translation")
-        toggle = self._toggles.get("rewrite_typed_text")
-        if toggle is None:
-            return
-        toggle.blockSignals(True)
-        try:
-            toggle.setChecked(bool(trans_cfg.get("rewrite_typed_text", False)))
-        finally:
-            toggle.blockSignals(False)
+        rewrite_toggle = self._toggles.get("rewrite_typed_text")
+        if rewrite_toggle is not None:
+            rewrite_toggle.blockSignals(True)
+            try:
+                rewrite_toggle.setChecked(bool(trans_cfg.get("rewrite_typed_text", False)))
+            finally:
+                rewrite_toggle.blockSignals(False)
+
+        tts_wait_toggle = self._toggles.get(
+            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY
+        )
+        if tts_wait_toggle is not None:
+            output_format = normalize_output_format(
+                str(trans_cfg.get("output_format", ""))
+            )
+            visible = output_format == OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION
+            tts_wait_toggle.setVisible(visible)
+            tts_wait_toggle.blockSignals(True)
+            try:
+                tts_wait_toggle.setChecked(
+                    bool(
+                        trans_cfg.get(
+                            ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+                            True,
+                        )
+                    )
+                )
+            finally:
+                tts_wait_toggle.blockSignals(False)
 
     def _refresh_noise_control(self) -> None:
         if self._noise_slider is None:
@@ -458,7 +486,7 @@ class RealtimeTweaksPanel(QDialog):
             return
         if self._on_change is not None:
             self._on_change(key, code)
-        if key in {"translation_provider", "tts_language"}:
+        if key in {"translation_provider", "tts_language", "output_format"}:
             self._refresh_controls()
 
     def _on_toggle_changed(self, key: str, checked: bool) -> None:

@@ -439,6 +439,76 @@ def test_qwen_tts_retries_audio_download_without_resubmitting_synthesis(monkeypa
     assert sleeps == [api_tts_engines._QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS[0]]
 
 
+def test_qwen_tts_retries_transient_audio_dns_failure_without_resubmitting_synthesis(
+    monkeypatch,
+):
+    created = []
+    post_calls = []
+    get_calls = []
+    validation_calls = []
+    sleeps = []
+    audio_url = (
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/"
+        "qwen.wav?Signature=secret"
+    )
+
+    class Session(_FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+
+        def post(self, url, *_args, **_kwargs):
+            post_calls.append(url)
+            return _FakeResponse({"output": {"audio": {"url": audio_url}}})
+
+        def get(self, url, *_args, **_kwargs):
+            get_calls.append(url)
+            return _FakeResponse(
+                content=b"RIFF\x04\x00\x00\x00WAVE",
+                headers={"content-type": "audio/wav"},
+                url=url,
+            )
+
+        def close(self):
+            self.closed = True
+
+    def session_factory():
+        session = Session()
+        created.append(session)
+        return session
+
+    def prepare(_self, _session, candidate):
+        validation_calls.append(candidate)
+        if len(validation_calls) == 1:
+            raise api_tts_engines._AudioDNSResolutionError(
+                "temporary DNS failure"
+            )
+        return True
+
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", session_factory)
+    monkeypatch.setattr(
+        api_tts_engines._APITTSBase,
+        "_prepare_pinned_audio_url",
+        prepare,
+    )
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    monkeypatch.setattr(engine._close_requested, "wait", sleeps.append)
+
+    assert engine.synthesize("Hello there", "Cherry").startswith(b"RIFF")
+    assert len(post_calls) == 1
+    assert validation_calls == [audio_url, audio_url, audio_url]
+    assert get_calls == [audio_url]
+    assert len(created) == 2
+    assert created[0].closed is True
+    assert sleeps == [api_tts_engines._QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS[0]]
+
+
 def test_qwen_tts_exhausted_tls_eof_uses_safe_network_error(monkeypatch):
     request_urls = []
     sleeps = []
@@ -1125,6 +1195,63 @@ def test_audio_dns_resolution_obeys_qwen_wall_deadline(monkeypatch):
     while engine.background_work_count() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert engine.background_work_count() == 0
+
+
+def test_audio_dns_resolution_failure_is_retryable(monkeypatch):
+    def fail_resolve(*_args, **_kwargs):
+        raise api_tts_engines.socket.gaierror(
+            "temporary resolver failure with secret details"
+        )
+
+    monkeypatch.setattr(api_tts_engines.socket, "getaddrinfo", fail_resolve)
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    engine._begin_synthesis_diagnostics()
+    try:
+        with pytest.raises(api_tts_engines._AudioDNSResolutionError):
+            engine._resolve_audio_addresses_bounded("cdn.example", 443)
+    finally:
+        engine._finish_synthesis_diagnostics(succeeded=False)
+        engine.close()
+
+
+def test_audio_dns_validation_log_redacts_signed_url(monkeypatch, caplog):
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+
+    def fail_resolve(_host, _port):
+        raise api_tts_engines._AudioDNSResolutionError("temporary DNS failure")
+
+    monkeypatch.setattr(engine, "_resolve_audio_addresses_bounded", fail_resolve)
+    signed_url = (
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/"
+        "private/path.wav?Signature=super-secret&Token=also-secret"
+    )
+    engine._begin_synthesis_diagnostics()
+    try:
+        with caplog.at_level(logging.WARNING, logger="src.tts.api_tts_engines"):
+            with pytest.raises(api_tts_engines._AudioDNSResolutionError):
+                engine._prepare_pinned_audio_url(engine._session, signed_url)
+    finally:
+        engine._finish_synthesis_diagnostics(succeeded=False)
+        engine.close()
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "reason=dns_resolution_failed" in rendered
+    assert "dashscope-result-bj.oss-cn-beijing.aliyuncs.com" in rendered
+    assert "private/path.wav" not in rendered
+    assert "super-secret" not in rendered
+    assert "also-secret" not in rendered
 
 
 def test_audio_dns_thread_start_failure_releases_resolver_slot(monkeypatch):

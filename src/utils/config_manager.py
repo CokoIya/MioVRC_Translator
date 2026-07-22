@@ -53,6 +53,7 @@ from src.utils.ui_config import (
     normalize_output_format,
     normalize_output_format_2,
     normalize_ui_font_preference,
+    ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
     OUTPUT_FORMAT_2_DISABLED,
 )
 from src.tts.api_tts_config import (
@@ -1463,6 +1464,12 @@ def _ensure_translation_config(
 
     if "send_to_chatbox" not in trans_cfg:
         trans_cfg["send_to_chatbox"] = True
+        changed = True
+    if _coerce_bool_config(
+        trans_cfg,
+        ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
+        True,
+    ):
         changed = True
     social_cfg = trans_cfg.get("social", {})
     legacy_social_mode = (

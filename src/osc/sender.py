@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import time
+import unicodedata
 
 from pythonosc import udp_client
 
@@ -16,6 +17,7 @@ _VALID_AVATAR_PARAM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
 SEND_QUEUE_MAXSIZE = 32
 MAX_AVATAR_STATE_ENTRIES = 256
+_ALLOWED_STANDALONE_PUNCTUATION = frozenset({"!?", "\uff01\uff1f"})
 logger = logging.getLogger(__name__)
 
 
@@ -105,6 +107,20 @@ class VRCOSCSender:
     @staticmethod
     def _normalize_text(text: str) -> str:
         safe = str(text or "").strip()
+        punctuation = [
+            char
+            for char in safe
+            if not char.isspace()
+            and unicodedata.category(char) not in {"Cf", "Mn", "Me"}
+        ]
+        if (
+            safe not in _ALLOWED_STANDALONE_PUNCTUATION
+            and punctuation
+            and all(
+                unicodedata.category(char).startswith("P") for char in punctuation
+            )
+        ):
+            return ""
         if len(safe) > MAX_CHATBOX_CHARS:
             safe = safe[: MAX_CHATBOX_CHARS - 3] + "..."
         return safe

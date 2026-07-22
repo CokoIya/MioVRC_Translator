@@ -604,6 +604,101 @@ def test_scheduler_completion_correlates_osc_and_tts_request_context():
     assert payload.diagnostics["osc_outcome"] == "sent"
 
 
+def test_original_read_mode_defers_realtime_osc_until_tts_finishes():
+    now = time.monotonic()
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 31
+    scheduled = []
+    sent = []
+    captured = {}
+
+    def dispatch(message, *, sinks):
+        if sinks == ("tts",):
+            captured["tts_callback"] = message.metadata[
+                "tts_completion_callback"
+            ]
+            return {"tts": True}
+        return {name: True for name in sinks}
+
+    window._dispatch_output_message = dispatch
+    window._send_chatbox_payload = lambda text, **kwargs: sent.append(
+        (text, kwargs)
+    ) or True
+    window._call_in_ui = (
+        lambda callback, delay_ms=0, **_kwargs: scheduled.append(
+            (delay_ms, callback)
+        )
+        or True
+    )
+    window._restore_runtime_status = lambda *_keys: None
+
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=True,
+        config_snapshot={
+            "translation": {
+                "output_format": "original_only_read_translation",
+                "original_only_read_translation_wait_for_tts": True,
+            }
+        },
+        diagnostics={"speech_ended_at": now - 0.5},
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=31,
+        sequence=4,
+        provider_key="provider",
+        payload=payload,
+        submitted_at=now - 0.4,
+        diagnostics=payload.diagnostics,
+    )
+    message = OutputMessage(
+        source="mic",
+        original_text="hello",
+        translated_text="こんにちは",
+        chatbox_text="hello",
+    )
+    completion = RealtimeCompletion(
+        task=task,
+        recognized_text="hello",
+        result=RealtimeTranslationResult(
+            original_text="hello",
+            translated_text="こんにちは",
+            chatbox_text="hello",
+            output_message=message,
+        ),
+    )
+
+    output = window._deliver_scheduler_completion_ui(completion)
+
+    assert sent == []
+    assert output == {
+        "osc_attempted": True,
+        "osc_queued": True,
+        "tts_attempted": True,
+        "tts_queued": True,
+    }
+
+    captured["tts_callback"](True, "")
+    assert sent == []
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 200
+
+    scheduled[0][1]()
+    assert sent[0][0] == "hello"
+    assert sent[0][1]["session_id"] == 31
+
+
 def test_qwen_asr_timeout_uses_localized_asr_failure_instead_of_translation_error():
     window = MainWindow.__new__(MainWindow)
     window._running = True

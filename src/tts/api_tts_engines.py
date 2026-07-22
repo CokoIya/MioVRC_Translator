@@ -47,7 +47,7 @@ _DASHSCOPE_RESULT_HOST_RE = re.compile(
     re.IGNORECASE,
 )
 _QWEN_SYNTHESIS_RETRY_DELAYS = (0.2,)
-_QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS = (0.2, 0.6)
+_QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS = (0.25, 1.0, 2.0)
 _AUDIO_DNS_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 _REQUESTS_SESSION_CLASS = requests.sessions.Session
 _QWEN_NETWORK_ERROR_MESSAGE = (
@@ -87,6 +87,10 @@ class _APITTSWallClockTimeout(TimeoutError):
 
 class _APITTSCancelled(RuntimeError):
     """A synthesis operation was interrupted by engine shutdown."""
+
+
+class _AudioDNSResolutionError(requests.exceptions.ConnectionError):
+    """A provider audio hostname could not be resolved to a usable address."""
 
 
 @dataclass(frozen=True)
@@ -504,7 +508,9 @@ class _APITTSBase(BaseTTS):
 
         self._check_request_active()
         if not _AUDIO_DNS_RESOLVER_SLOTS.acquire(blocking=False):
-            raise RuntimeError(f"{self.ENGINE_LABEL} DNS resolver is busy")
+            raise _AudioDNSResolutionError(
+                f"{self.ENGINE_LABEL} DNS resolver capacity is temporarily unavailable"
+            )
 
         finished = threading.Event()
         result: dict[str, object] = {}
@@ -550,8 +556,17 @@ class _APITTSBase(BaseTTS):
             wait_s = 0.05 if remaining is None else min(0.05, remaining)
             finished.wait(max(0.001, wait_s))
         self._check_request_active()
+        resolution_error = result.get("error")
+        if isinstance(resolution_error, BaseException):
+            raise _AudioDNSResolutionError(
+                f"{self.ENGINE_LABEL} audio hostname resolution failed"
+            ) from resolution_error
         addresses = result.get("addresses")
-        return addresses if isinstance(addresses, tuple) else ()
+        if not isinstance(addresses, tuple) or not addresses:
+            raise _AudioDNSResolutionError(
+                f"{self.ENGINE_LABEL} audio hostname returned no usable addresses"
+            )
+        return addresses
 
     def _prepare_pinned_audio_url(
         self,
@@ -601,12 +616,35 @@ class _APITTSBase(BaseTTS):
                 session.mount(candidate_mount_prefix, adapter)
                 return True
 
-        target = _validated_audio_download_target(
-            candidate,
-            api_base_url=self.base_url,
-            resolver=self._resolve_audio_addresses_bounded,
-        )
+        try:
+            target = _validated_audio_download_target(
+                candidate,
+                api_base_url=self.base_url,
+                resolver=self._resolve_audio_addresses_bounded,
+            )
+        except _AudioDNSResolutionError:
+            self._set_diagnostic("audio_url_validation", "dns_resolution_failed")
+            scheme, hostname, port = _audio_url_origin_for_log(candidate)
+            logger.warning(
+                "%s audio URL validation deferred "
+                "(reason=dns_resolution_failed scheme=%s host=%s port=%s)",
+                self.ENGINE_LABEL,
+                scheme,
+                hostname,
+                port,
+            )
+            raise
         if target is None:
+            self._set_diagnostic("audio_url_validation", "rejected")
+            scheme, hostname, port = _audio_url_origin_for_log(candidate)
+            logger.warning(
+                "%s audio URL rejected "
+                "(reason=security_policy scheme=%s host=%s port=%s)",
+                self.ENGINE_LABEL,
+                scheme,
+                hostname,
+                port,
+            )
             return False
         adapter = _PinnedAddressAdapter(target)
         previous = adapters.get(origin_key)
@@ -1390,6 +1428,21 @@ def _url_origin(url: str) -> tuple[str, str, int] | None:
         return None
     default_port = 443 if parsed.scheme.casefold() == "https" else 80
     return parsed.scheme.casefold(), host, port or default_port
+
+
+def _audio_url_origin_for_log(url: str) -> tuple[str, str, object]:
+    """Return path/query-free provider URL fields suitable for diagnostics."""
+
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        scheme = str(parsed.scheme or "invalid").casefold()
+        hostname = str(parsed.hostname or "invalid-host").rstrip(".").casefold()
+        port: object = parsed.port
+    except (TypeError, ValueError):
+        return "invalid", "invalid-host", "invalid"
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else "default"
+    return scheme, hostname, port
 
 
 def _requests_adapter_mount_prefix(url: str) -> str | None:
