@@ -2,6 +2,25 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.7] - 2026-07-22
+
+### Transform-only AI output safety
+
+- Strengthened system prompts across ASR rewrite, typed-text rewrite, forward translation, and reverse translation so providers may use history only to resolve pronouns, omitted subjects, terminology, and ambiguity, never to answer the player or continue a conversation.
+- Added provider-independent output validation, conversational-reply rejection, and bounded retry handling for GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible, DeepSeek, and Qwen paths.
+- Added regression coverage for reply-like outputs, explanations, labels, quotations, unrelated additions, and structured-output failures while preserving valid rewritten and translated text.
+
+### Output modes and TTS
+
+- Added `Original Text Only (Read Translation)`, which displays or sends only the original text while reading the translated result through TTS.
+- Applied the mode consistently to realtime, manual, reverse, chatbox, and speech-output dispatch paths with localized settings labels and focused regression coverage.
+
+### Reverse-translation responsiveness
+
+- Prioritized fresh reverse-translation work when busy scenes produce sustained desktop-audio activity, preventing ambient speech from monopolizing the realtime scheduler.
+- Added bounded admission and stale-work retirement for reverse recognition and translation so nearby players' newer speech can progress without waiting behind obsolete noisy-scene work.
+- Hardened reverse-pipeline lifecycle handling and tests for saturation, cancellation, restart, and shutdown behavior.
+
 ## [1.3.8.6] - 2026-07-21
 
 ### Provider compatibility and secure diagnostics

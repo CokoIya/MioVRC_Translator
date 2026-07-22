@@ -98,21 +98,21 @@ The build performs source and frozen runtime self-tests, creates the Inno
 installer, signs and verifies both updater manifests, and creates a
 domain-separated detached signature over deterministic checksums.
 
-Expected `v1.3.8.6` assets:
+Expected `v1.3.8.7` assets:
 
-- `dist\MioTranslator-Setup-v1.3.8.6.exe`
+- `dist\MioTranslator-Setup-v1.3.8.7.exe`
 - `mio_update.json`
 - `docs\installer_manifest.json`
 - `docs\release_signing_keys.json`
-- `dist\MioTranslator-v1.3.8.6-SHA256SUMS.txt`
-- `dist\MioTranslator-v1.3.8.6-SHA256SUMS.txt.sig.json`
+- `dist\MioTranslator-v1.3.8.7-SHA256SUMS.txt`
+- `dist\MioTranslator-v1.3.8.7-SHA256SUMS.txt.sig.json`
 
 Run seedless verification:
 
 ```powershell
 .\.venv-release311\Scripts\python.exe `
   tools\release\generate_release_checksums.py `
-  .\dist\MioTranslator-Setup-v1.3.8.6.exe `
+  .\dist\MioTranslator-Setup-v1.3.8.7.exe `
   .\mio_update.json `
   .\docs\installer_manifest.json `
   .\docs\release_signing_keys.json `
@@ -137,15 +137,15 @@ credentials in the remote URL.
 ```powershell
 git remote set-url --push origin git@github.com:CokoIya/MioVRC_Translator.git
 git push origin main
-git push origin v1.3.8.6
+git push origin v1.3.8.7
 ```
 
-The GitHub Release must be tagged `v1.3.8.6` and must upload the installer,
+The GitHub Release must be tagged `v1.3.8.7` and must upload the installer,
 both updater JSON manifests, the public-key catalog, the checksum file, and
 detached signature metadata.
 `docs/installer_manifest.json` must be uploaded with the exact asset name
 `installer_manifest.json`, because the in-app updater fallback URL depends on
-that name. Use `docs/RELEASE_NOTES_v1.3.8.6.md` as the release body.
+that name. Use `docs/RELEASE_NOTES_v1.3.8.7.md` as the release body.
 
 After upload, download the public assets again, rerun seedless verification on
 the downloaded copies, and confirm the website and updater URLs resolve to the
