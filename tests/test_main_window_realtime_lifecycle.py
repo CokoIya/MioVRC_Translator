@@ -158,6 +158,7 @@ def test_only_admitted_microphone_partial_lane_receives_chunk_callback(monkeypat
     assert created["mic"]["chunk_window_s"] == 2.0
     assert created["mic"]["ring_buffer_s"] == 5.0
     assert created["mic"]["recent_speech_hold_s"] == 0.4
+    assert created["desktop"]["max_segment_s"] == 1.0
     created["mic"]["on_chunk"]("mic chunk")
     assert chunks == [(MIC_SOURCE, "mic chunk")]
 
@@ -238,6 +239,19 @@ def test_simultaneous_mode_uses_low_latency_vad_chunking_limits():
     window._config["simul_mode"]["aggressive_chunking"] = True
     assert window._effective_mic_tail_silence_s(audio_cfg) == 0.22
     assert window._effective_mic_max_segment_s(audio_cfg) == 2.5
+
+
+def test_reverse_segment_duration_caps_continuous_loopback_speech():
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "audio": {"max_segment_s": 6.0},
+        "vrc_listen": {"segment_duration_s": 2.0},
+    }
+
+    assert window._effective_listen_max_segment_s(window._config["audio"]) == 2.0
+
+    window._config["audio"]["max_segment_s"] = 1.5
+    assert window._effective_listen_max_segment_s(window._config["audio"]) == 1.5
 
 
 def test_translation_worker_concurrency_is_provider_aware():

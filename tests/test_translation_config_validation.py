@@ -30,6 +30,21 @@ def test_missing_translation_api_key_allows_original_only():
     assert missing is False
 
 
+def test_missing_translation_api_key_blocks_original_only_read_translation():
+    missing, backend = missing_required_translation_api_key(
+        {
+            "translation": {
+                "backend": "qianwen",
+                "output_format": "original_only_read_translation",
+                "qianwen": {"api_key": ""},
+            }
+        }
+    )
+
+    assert missing is True
+    assert backend == "Qwen"
+
+
 def test_missing_translation_api_key_allows_local_backend():
     missing, _backend = missing_required_translation_api_key(
         {

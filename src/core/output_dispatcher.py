@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.utils.provider_diagnostics import safe_exception_summary
-from src.utils.ui_config import normalize_output_format
+from src.utils.ui_config import (
+    ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS,
+    normalize_output_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +110,15 @@ class OutputDispatcher:
     def output_format_uses_second_target(self) -> bool:
         return self.output_format() in SECOND_TARGET_OUTPUT_FORMATS
 
+    def output_format_displays_original_only(self) -> bool:
+        return self.output_format() in ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS
+
     def chatbox_template(self) -> str:
         return str(self._translation_config().get("chatbox_template", "") or "").strip()
 
     def chatbox_template_uses_second_target(self) -> bool:
+        if self.output_format_displays_original_only():
+            return False
         template = self.chatbox_template()
         if not template:
             return False
@@ -118,6 +126,8 @@ class OutputDispatcher:
         return bool(placeholders & {"translatedText2", "translation2"})
 
     def chatbox_template_uses_third_target(self) -> bool:
+        if self.output_format_displays_original_only():
+            return False
         template = self.chatbox_template()
         if not template:
             return False
@@ -172,7 +182,7 @@ class OutputDispatcher:
         tgt2_text = str(tgt2_text or "")
         tgt3_text = str(tgt3_text or "")
         fmt = self.output_format()
-        if fmt == "original_only":
+        if fmt in ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS:
             return src_text or tgt_text
 
         templated = self.format_chatbox_template(src_text, tgt_text, tgt2_text, tgt3_text)
@@ -208,7 +218,11 @@ class OutputDispatcher:
         translated_text: str,
         translated_text_2: str = "",
         translated_text_3: str = "",
+        *,
+        original_text: str = "",
     ) -> str:
+        if self.output_format_displays_original_only():
+            return str(original_text or translated_text or "")
         return "\n".join(
             part for part in (translated_text, translated_text_2, translated_text_3) if part
         )
@@ -233,7 +247,12 @@ class OutputDispatcher:
         resolved_display = (
             str(display_text or "")
             if display_text is not None
-            else self.manual_display_text(translated, translated_2, translated_3)
+            else self.manual_display_text(
+                translated,
+                translated_2,
+                translated_3,
+                original_text=original,
+            )
         )
         resolved_chatbox = (
             str(chatbox_text or "")

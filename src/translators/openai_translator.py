@@ -11,8 +11,8 @@ import httpx
 
 from .base import (
     BaseTranslator,
+    TransformationOutputRejected,
     TranslationContextStore,
-    _TRANSLATION_SYSTEM_PROMPT,
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
@@ -757,12 +757,12 @@ class OpenAITranslator(BaseTranslator):
             return cached
 
         prompt_started = time.perf_counter()
-        messages = build_asr_rewrite_messages(
+        base_messages = build_asr_rewrite_messages(
             text,
             normalized_style,
             language_hint=language_hint,
         )
-        messages = self._chat_messages_for_backend(messages)
+        messages = self._chat_messages_for_backend(base_messages)
         output_tokens = min(
             self._max_output_tokens,
             max(32, self._estimate_max_tokens(text) + 12),
@@ -867,13 +867,35 @@ class OpenAITranslator(BaseTranslator):
         )
 
         postprocess_started = time.perf_counter()
-        rewritten = self._finalize_asr_rewrite_output(
-            output,
-            source_text=text,
-        )
-        self._record_translation_metrics(
-            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
-        )
+        try:
+            rewritten = self._validated_asr_rewrite_output(
+                output,
+                source_text=text,
+            )
+        except TransformationOutputRejected as exc:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
+            if self._use_responses_api:
+                rewritten = self._retry_responses_transformation(
+                    messages=base_messages,
+                    source_text=text,
+                    operation="rewrite",
+                    reason=exc.reason,
+                    output_tokens=output_tokens,
+                )
+            else:
+                rewritten = self._retry_chat_transformation(
+                    messages=base_messages,
+                    source_text=text,
+                    operation="rewrite",
+                    reason=exc.reason,
+                    output_tokens=output_tokens,
+                )
+        else:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
         if not rewritten:
             self._last_response_summary = (
                 self._last_response_summary
@@ -918,6 +940,7 @@ class OpenAITranslator(BaseTranslator):
         )
         if context_snapshot and TranslationContextStore.context_likely_needed(text):
             uses_translation_options = False
+        output_tokens = self._estimate_max_tokens(text)
         if uses_translation_options:
             extra_body["translation_options"] = {
                 "source_lang": self._translation_option_language(src_lang),
@@ -933,7 +956,6 @@ class OpenAITranslator(BaseTranslator):
                 }
             ]
         else:
-            output_tokens = self._estimate_max_tokens(text)
             messages = self._build_messages(
                 text,
                 src_lang,
@@ -1037,13 +1059,33 @@ class OpenAITranslator(BaseTranslator):
             transport_metrics.get("connection_reused"),
         )
         postprocess_started = time.perf_counter()
-        translated = self._finalize_translation_output(
-            output,
-            source_text=text,
-        )
-        self._record_translation_metrics(
-            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
-        )
+        try:
+            translated = self._validated_translation_output(
+                output,
+                source_text=text,
+            )
+        except TransformationOutputRejected as exc:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
+            retry_messages = self._build_messages(
+                text,
+                src_lang,
+                tgt_lang,
+                context_snapshot=context_snapshot,
+                context_source=context_source,
+            )
+            translated = self._retry_chat_transformation(
+                messages=retry_messages,
+                source_text=text,
+                operation="translation",
+                reason=exc.reason,
+                output_tokens=output_tokens,
+            )
+        else:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
         if not translated:
             self._last_response_summary = (
                 self._last_response_summary
@@ -1114,6 +1156,191 @@ class OpenAITranslator(BaseTranslator):
 
         return converted or [{"role": "user", "content": ""}]
 
+    def _record_structured_output_retry(
+        self,
+        *,
+        elapsed: float,
+        capture: object,
+    ) -> None:
+        metrics = self.translation_metrics()
+        try:
+            provider_s = float(metrics.get("provider_s") or 0.0)
+        except (TypeError, ValueError):
+            provider_s = 0.0
+        try:
+            full_response_s = float(metrics.get("full_response_s") or 0.0)
+        except (TypeError, ValueError):
+            full_response_s = 0.0
+        self._record_translation_metrics(
+            provider_s=provider_s + max(0.0, elapsed),
+            full_response_s=full_response_s + max(0.0, elapsed),
+            transformation_attempts=2,
+            output_retries=1,
+            **self._capture_metrics(capture),
+        )
+
+    def _retry_chat_transformation(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        source_text: str,
+        operation: str,
+        reason: str,
+        output_tokens: int,
+    ) -> str:
+        logger.warning(
+            "Rejected non-transformational provider output; retrying with "
+            "structured contract (provider=%s model=%s operation=%s reason=%s)",
+            self._provider_id or "openai",
+            self.model,
+            operation,
+            reason,
+        )
+        retry_messages = self._build_structured_retry_messages(
+            messages,
+            operation=operation,
+            reason=reason,
+        )
+        retry_messages = self._chat_messages_for_backend(retry_messages)
+        retry_tokens = min(
+            self._max_output_tokens,
+            max(64, int(output_tokens) + 24),
+        )
+        kwargs: dict[str, object] = {
+            "model": self.model,
+            "messages": retry_messages,
+        }
+        request_timeout = self._sdk_timeout()
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
+        if not self._omits_temperature:
+            kwargs["temperature"] = 0.0
+        if self._uses_max_completion_tokens:
+            kwargs["max_completion_tokens"] = retry_tokens
+        else:
+            kwargs["max_tokens"] = retry_tokens
+        if (
+            getattr(self, "_no_thinking_request_supported", True)
+            and self._uses_reasoning_effort_control()
+        ):
+            kwargs["reasoning_effort"] = "none"
+        extra_body = self._request_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
+        started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                output, _response = self._chat_completion_request(kwargs)
+        except Exception:
+            self._record_structured_output_retry(
+                elapsed=max(0.0, time.perf_counter() - started),
+                capture=http_capture,
+            )
+            raise
+        elapsed = max(0.0, time.perf_counter() - started)
+        self._record_structured_output_retry(
+            elapsed=elapsed,
+            capture=http_capture,
+        )
+        if operation == "rewrite":
+            return self._validated_asr_rewrite_output(
+                output,
+                source_text=source_text,
+                structured=True,
+            )
+        return self._validated_translation_output(
+            output,
+            source_text=source_text,
+            structured=True,
+        )
+
+    def _retry_responses_transformation(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        source_text: str,
+        operation: str,
+        reason: str,
+        output_tokens: int,
+    ) -> str:
+        logger.warning(
+            "Rejected non-transformational provider output; retrying Responses API "
+            "with structured contract (provider=%s model=%s operation=%s reason=%s)",
+            self._provider_id or "openai",
+            self.model,
+            operation,
+            reason,
+        )
+        retry_messages = self._build_structured_retry_messages(
+            messages,
+            operation=operation,
+            reason=reason,
+        )
+        prompt = "\n\n".join(
+            f"{str(message.get('role') or 'user').upper()}:\n{message.get('content', '')}"
+            for message in retry_messages
+        )
+        retry_tokens = min(
+            self._max_output_tokens,
+            max(64, int(output_tokens) + 24),
+        )
+        kwargs: dict[str, object] = {
+            "model": self.model,
+            "input": prompt,
+            "max_output_tokens": retry_tokens,
+        }
+        request_timeout = self._sdk_timeout()
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
+        if not self._omits_temperature:
+            kwargs["temperature"] = 0.0
+        if (
+            getattr(self, "_no_thinking_request_supported", True)
+            and self._uses_reasoning_effort_control()
+        ):
+            kwargs["reasoning"] = {"effort": "none"}
+        extra_body = self._request_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+
+        started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                response = self._run_with_wall_timeout(
+                    lambda: self._create_with_control_fallback(
+                        self._client.responses.create,
+                        kwargs,
+                    ),
+                    timeout_s=getattr(self, "_wall_timeout_s", None),
+                    operation_name=f"OpenAI Responses {operation} structured retry",
+                )
+        except Exception:
+            self._record_structured_output_retry(
+                elapsed=max(0.0, time.perf_counter() - started),
+                capture=http_capture,
+            )
+            raise
+        elapsed = max(0.0, time.perf_counter() - started)
+        self._record_structured_output_retry(
+            elapsed=elapsed,
+            capture=http_capture,
+        )
+        output = str(getattr(response, "output_text", "") or "")
+        if operation == "rewrite":
+            return self._validated_asr_rewrite_output(
+                output,
+                source_text=source_text,
+                structured=True,
+            )
+        return self._validated_translation_output(
+            output,
+            source_text=source_text,
+            structured=True,
+        )
+
     def _translate_with_responses(
         self,
         text: str,
@@ -1123,7 +1350,7 @@ class OpenAITranslator(BaseTranslator):
         context_source: str = "default",
     ) -> str:
         prompt_started = time.perf_counter()
-        prompt_body = self._build_prompt(
+        base_messages = self._build_messages(
             text,
             src_lang,
             tgt_lang,
@@ -1131,13 +1358,16 @@ class OpenAITranslator(BaseTranslator):
             context_source=context_source,
         )
         prompt = (
-            f"{_TRANSLATION_SYSTEM_PROMPT}\n\n"
-            f"{prompt_body}"
+            "\n\n".join(
+                str(message.get("content", ""))
+                for message in base_messages
+            )
         )
+        output_tokens = self._estimate_max_tokens(text)
         kwargs = dict(
             model=self.model,
             input=prompt,
-            max_output_tokens=self._estimate_max_tokens(text),
+            max_output_tokens=output_tokens,
         )
         request_timeout = self._sdk_timeout()
         if request_timeout:
@@ -1233,13 +1463,26 @@ class OpenAITranslator(BaseTranslator):
             transport_metrics.get("connection_reused"),
         )
         postprocess_started = time.perf_counter()
-        translated = self._finalize_translation_output(
-            output_text,
-            source_text=text,
-        )
-        self._record_translation_metrics(
-            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
-        )
+        try:
+            translated = self._validated_translation_output(
+                output_text,
+                source_text=text,
+            )
+        except TransformationOutputRejected as exc:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
+            translated = self._retry_responses_transformation(
+                messages=base_messages,
+                source_text=text,
+                operation="translation",
+                reason=exc.reason,
+                output_tokens=output_tokens,
+            )
+        else:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
         if not translated:
             self._last_response_summary = (
                 self._last_response_summary

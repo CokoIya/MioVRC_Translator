@@ -2651,7 +2651,12 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
     },
     "output_format": {
         "zh-CN": "决定发到 VRChat 聊天框里的样子，例如只发译文，或译文后面带上原文。",
-        "en": "Controls what is sent to the VRChat chatbox, such as translation only or translation with original text.",
+        "en": (
+            "Controls what is shown and sent to the VRChat chatbox, such as "
+            "translation only, original with translation, or Original Text Only "
+            "(Read Translation), which keeps the original visible while TTS reads "
+            "the translation."
+        ),
         "ja": "VRChat チャットボックスへ送る形式です。翻訳のみ、原文付きなどを選べます。",
     },
     "send_to_chatbox": {

@@ -29,6 +29,24 @@ def test_translation_requirement_respects_active_original_only_mode():
     assert missing.focus_target == "backend_api_key"
 
 
+def test_original_only_read_translation_requires_translation_api_key():
+    config = {
+        "translation": {
+            "backend": "qianwen",
+            "output_format": "original_only_read_translation",
+            "qianwen": {"api_key": ""},
+        }
+    }
+
+    missing = first_missing_required_credential(
+        config,
+        scopes=("translation",),
+    )
+
+    assert missing is not None
+    assert missing.provider_id == "qianwen"
+
+
 def test_original_only_translation_still_requires_key_for_enabled_asr_rewrite():
     config = {
         "translation": {

@@ -14,7 +14,10 @@ from src.translators.factory import create_translator
 from src.utils.lang_detect import detect_language
 from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.translation_error_formatter import format_translation_error
-from src.utils.ui_config import normalize_output_format
+from src.utils.ui_config import (
+    ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS,
+    normalize_output_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +179,7 @@ class TranslationPipeline(QObject):
             if fmt == "translated1_with_translated2_original":
                 return f"{translated}（{translated_2}）（{original}）" if original and translated else translated or translated_2 or original
 
-        if fmt == "original_only":
+        if fmt in ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS:
             return original or translated
         if fmt == "translated_only":
             return translated or original

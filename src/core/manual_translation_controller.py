@@ -421,7 +421,12 @@ class ManualTranslationController(QObject):
                         result3 = result2
                     else:
                         result3 = translate_target(third_target_language)
-                display = self._output_dispatcher.manual_display_text(result, result2, result3)
+                display = self._output_dispatcher.manual_display_text(
+                    result,
+                    result2,
+                    result3,
+                    original_text=processed_text,
+                )
                 outcome = "success"
                 self._emit_if_open(
                     self.succeeded,

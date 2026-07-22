@@ -175,10 +175,23 @@ LANGUAGE_DISPLAY_NAMES: dict[str, dict[str, str]] = {
     },
 }
 
+OUTPUT_FORMAT_ORIGINAL_ONLY = "original_only"
+OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION = "original_only_read_translation"
+ORIGINAL_TEXT_ONLY_OUTPUT_FORMATS = frozenset(
+    {
+        OUTPUT_FORMAT_ORIGINAL_ONLY,
+        OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION,
+    }
+)
+
 OUTPUT_FORMAT_OPTIONS = (
     ("\u8bd1\u6587\uff08\u539f\u53e5\uff09", "translated_with_original"),
     ("\u4ec5\u8bd1\u6587", "translated_only"),
-    ("\u4ec5\u539f\u53e5", "original_only"),
+    ("\u4ec5\u539f\u53e5", OUTPUT_FORMAT_ORIGINAL_ONLY),
+    (
+        "\u4ec5\u539f\u53e5\uff08\u6717\u8bfb\u8bd1\u6587\uff09",
+        OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION,
+    ),
     ("\u539f\u53e5\uff08\u8bd1\u6587\uff09", "original_with_translated"),
     # Second-translation-aware formats (shown when target_2 is configured):
     (
@@ -221,12 +234,19 @@ OUTPUT_FORMAT_LABELS = {
         "ru": "\u0422\u043e\u043b\u044c\u043a\u043e \u043f\u0435\u0440\u0435\u0432\u043e\u0434",
         "ko": "\ubc88\uc5ed\ubb38\ub9cc",
     },
-    "original_only": {
+    OUTPUT_FORMAT_ORIGINAL_ONLY: {
         "zh-CN": "\u4ec5\u539f\u6587",
         "en": "Original only",
         "ja": "\u539f\u6587\u306e\u307f",
         "ru": "\u0422\u043e\u043b\u044c\u043a\u043e \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b",
         "ko": "\uc6d0\ubb38\ub9cc",
+    },
+    OUTPUT_FORMAT_ORIGINAL_ONLY_READ_TRANSLATION: {
+        "zh-CN": "\u4ec5\u539f\u6587\uff08\u6717\u8bfb\u8bd1\u6587\uff09",
+        "en": "Original Text Only (Read Translation)",
+        "ja": "\u539f\u6587\u306e\u307f\uff08\u7ffb\u8a33\u3092\u8aad\u307f\u4e0a\u3052\uff09",
+        "ru": "\u0422\u043e\u043b\u044c\u043a\u043e \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b (\u043e\u0437\u0432\u0443\u0447\u0438\u0432\u0430\u0442\u044c \u043f\u0435\u0440\u0435\u0432\u043e\u0434)",
+        "ko": "\uc6d0\ubb38\ub9cc (\ubc88\uc5ed \uc77d\uae30)",
     },
     "original_with_translated": {
         "zh-CN": "\u539f\u6587\uff08\u8bd1\u6587\uff09",

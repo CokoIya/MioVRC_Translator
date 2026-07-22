@@ -46,6 +46,20 @@ def test_realtime_mic_auto_read_uses_original_text_for_original_only_format():
     assert queued == ["hello"]
 
 
+def test_original_only_read_translation_auto_reads_translated_text():
+    window, queued = _window_for_auto_read(
+        output_format="original_only_read_translation"
+    )
+
+    accepted = window._auto_read_mic_translation(
+        original_text="hello",
+        translated_text="こんにちは",
+    )
+
+    assert accepted is True
+    assert queued == ["こんにちは"]
+
+
 def test_manual_translation_finish_auto_reads_translated_text():
     window, queued = _window_for_auto_read()
     window._t = lambda key, **kwargs: key
@@ -180,6 +194,22 @@ def test_qwen_tts_config_does_not_force_hint_for_original_only_output():
     engine_cfg = MainWindow._current_tts_engine_config(window)
 
     assert "language_type" not in engine_cfg
+
+
+def test_qwen_tts_uses_translation_language_for_original_only_read_translation():
+    window = MainWindow.__new__(MainWindow)
+    window._current_tgt_lang = "ja"
+    window._config = {
+        "translation": {"output_format": "original_only_read_translation"},
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {"voice": "Cherry", "rate": 1.0, "volume": 0.8},
+        },
+    }
+
+    engine_cfg = MainWindow._current_tts_engine_config(window)
+
+    assert engine_cfg["language_type"] == "Japanese"
 
 
 class _FakeTtsManager:

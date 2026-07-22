@@ -78,6 +78,7 @@ def test_output_format_options_are_localized():
     korean_labels = [label for label, _code in get_output_format_2_options("ko")]
 
     assert "Translation only" in english_labels
+    assert "Original Text Only (Read Translation)" in english_labels
     assert "Только перевод" in russian_labels
     assert "번역2 끄기" in korean_labels
 

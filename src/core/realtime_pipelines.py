@@ -248,7 +248,12 @@ class MicPipeline:
             _attach_provider_metrics(exc, provider_metrics)
             raise
 
-        display_text = self._output_dispatcher.manual_display_text(translated, translated_2, translated_3)
+        display_text = self._output_dispatcher.manual_display_text(
+            translated,
+            translated_2,
+            translated_3,
+            original_text=plan.original_text,
+        )
         chatbox_text = self._output_dispatcher.format_chatbox_output(
             plan.original_text,
             translated,

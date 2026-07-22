@@ -129,7 +129,8 @@ ASR_WORKER_CONCURRENCY = 2
 ASR_REWRITE_WORKER_CONCURRENCY = 2
 TRANSLATION_WORKER_CONCURRENCY = 2
 MAX_REALTIME_ASR_QUEUE_AGE_S = 5.0
-MAX_REVERSE_TRANSLATION_QUEUE_AGE_S = 4.0
+MAX_REVERSE_ASR_QUEUE_AGE_S = 2.5
+MAX_REVERSE_TRANSLATION_QUEUE_AGE_S = 2.5
 MIC_PRIORITY_BURST = 3
 DEFAULT_REALTIME_TRANSLATION_TIMEOUT_S = 6.0
 DEFAULT_REVERSE_TRANSLATION_TIMEOUT_S = 4.0
@@ -3708,7 +3709,10 @@ class MainWindow(QMainWindow):
             translation_concurrency=self._realtime_translation_worker_concurrency(),
             priority_source=DESKTOP_SOURCE,
             priority_burst=MIC_PRIORITY_BURST,
-            max_asr_queue_age_s=MAX_REALTIME_ASR_QUEUE_AGE_S,
+            max_asr_queue_age_s={
+                MIC_SOURCE: MAX_REALTIME_ASR_QUEUE_AGE_S,
+                DESKTOP_SOURCE: MAX_REVERSE_ASR_QUEUE_AGE_S,
+            },
             max_translation_queue_age_s={
                 DESKTOP_SOURCE: MAX_REVERSE_TRANSLATION_QUEUE_AGE_S,
             },
@@ -4099,7 +4103,10 @@ class MainWindow(QMainWindow):
             vad_min_rms=float(listen_cfg.get("vad_min_rms", 0.020)),
             min_segment_s=float(audio_cfg.get("min_segment_s", 0.45)),
             partial_min_speech_s=float(audio_cfg.get("partial_min_speech_s", 0.45)),
-            max_segment_s=float(audio_cfg.get("max_segment_s", 6.0)),
+            # Reverse listening should emit bounded clips even when loopback
+            # audio never falls silent. The user-facing segment duration is
+            # also the final VAD segment cap for this lane.
+            max_segment_s=self._effective_listen_max_segment_s(audio_cfg),
             denoise_strength=float(listen_cfg.get("denoise_strength", 0.35)),
             silero_speech_threshold=float(listen_cfg.get("silero_speech_threshold", 0.15)),
             vad_type=str(listen_cfg.get("vad_type", "webrtc")).strip().lower(),
@@ -4463,6 +4470,13 @@ class MainWindow(QMainWindow):
             return max(0.5, float(listen_cfg.get("segment_duration_s", 2.0)))
         except (TypeError, ValueError):
             return 2.0
+
+    def _effective_listen_max_segment_s(self, audio_cfg: Mapping[str, Any]) -> float:
+        try:
+            audio_max = max(0.5, float(audio_cfg.get("max_segment_s", 6.0)))
+        except (TypeError, ValueError):
+            audio_max = 6.0
+        return min(audio_max, self._listen_segment_duration_s())
 
     def _listen_tail_silence_s(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}

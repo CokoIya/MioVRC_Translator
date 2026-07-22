@@ -66,6 +66,29 @@ def test_output_dispatcher_original_only_ignores_chatbox_template():
     assert text == "原文"
 
 
+def test_original_only_read_translation_keeps_translation_off_display_sinks():
+    dispatcher = OutputDispatcher(
+        {
+            "translation": {
+                "output_format": "original_only_read_translation",
+                "chatbox_template": "{translatedText}\n{translatedText2}\n{text}",
+            }
+        }
+    )
+
+    message = dispatcher.build_message(
+        source="mic",
+        original_text="原文",
+        translated_text="译文",
+        translated_text_2="translation 2",
+    )
+
+    assert dispatcher.chatbox_template_uses_second_target() is False
+    assert message.display_text == "原文"
+    assert message.chatbox_text == "原文"
+    assert message.translated_text == "译文"
+
+
 def test_output_dispatcher_sends_formatted_chatbox_payload():
     dispatcher = OutputDispatcher(
         {

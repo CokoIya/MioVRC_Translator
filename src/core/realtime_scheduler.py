@@ -225,7 +225,7 @@ class RealtimeScheduler:
         thread_name_prefix: str = "realtime",
         clock: Callable[[], float] = time.monotonic,
         stale_task_age_s: float = 30.0,
-        max_asr_queue_age_s: float | None = None,
+        max_asr_queue_age_s: float | Mapping[str, float] | None = None,
         max_translation_queue_age_s: Mapping[str, float] | None = None,
         backlog_ratio: float = 0.75,
         health_check_interval_s: float = 1.0,
@@ -245,16 +245,25 @@ class RealtimeScheduler:
             raise ValueError("Priority burst must be at least one")
         if stale_task_age_s <= 0 or health_check_interval_s <= 0:
             raise ValueError("Realtime health timing values must be positive")
-        normalized_max_asr_queue_age = (
-            None
-            if max_asr_queue_age_s is None
-            else float(max_asr_queue_age_s)
-        )
-        if (
-            normalized_max_asr_queue_age is not None
-            and normalized_max_asr_queue_age <= 0
-        ):
-            raise ValueError("max_asr_queue_age_s must be positive when configured")
+        normalized_max_asr_queue_ages: dict[str, float] = {}
+        if isinstance(max_asr_queue_age_s, Mapping):
+            for source, value in dict(max_asr_queue_age_s).items():
+                normalized_source = str(source)
+                if normalized_source not in normalized_sources:
+                    continue
+                age = float(value)
+                if age <= 0:
+                    raise ValueError(
+                        "max_asr_queue_age_s values must be positive"
+                    )
+                normalized_max_asr_queue_ages[normalized_source] = age
+        elif max_asr_queue_age_s is not None:
+            age = float(max_asr_queue_age_s)
+            if age <= 0:
+                raise ValueError("max_asr_queue_age_s must be positive when configured")
+            normalized_max_asr_queue_ages = {
+                source: age for source in normalized_sources
+            }
         normalized_translation_queue_ages: dict[str, float] = {}
         for source, value in dict(max_translation_queue_age_s or {}).items():
             normalized_source = str(source)
@@ -318,7 +327,12 @@ class RealtimeScheduler:
         self._thread_name_prefix = str(thread_name_prefix or "realtime")
         self._clock = clock
         self._stale_task_age_s = float(stale_task_age_s)
-        self._max_asr_queue_age_s = normalized_max_asr_queue_age
+        self._max_asr_queue_age_s = (
+            min(normalized_max_asr_queue_ages.values())
+            if normalized_max_asr_queue_ages
+            else None
+        )
+        self._max_asr_queue_age_by_source = normalized_max_asr_queue_ages
         self._max_translation_queue_age_s = normalized_translation_queue_ages
         self._backlog_ratio = float(backlog_ratio)
         self._health_check_interval_s = float(health_check_interval_s)
@@ -764,10 +778,16 @@ class RealtimeScheduler:
         previous: SchedulerHealth | None = None
         last_stalled_report = 0.0
         check_interval = self._health_check_interval_s
-        if self._max_asr_queue_age_s is not None:
+        if self._max_asr_queue_age_by_source:
             check_interval = min(
                 check_interval,
-                max(0.05, min(self._max_asr_queue_age_s / 4.0, 0.5)),
+                max(
+                    0.05,
+                    min(
+                        min(self._max_asr_queue_age_by_source.values()) / 4.0,
+                        0.5,
+                    ),
+                ),
             )
         if self._max_translation_queue_age_s:
             shortest_translation_age = min(
@@ -949,7 +969,7 @@ class RealtimeScheduler:
         now: float,
         claimed: bool,
     ) -> bool:
-        max_age = self._max_asr_queue_age_s
+        max_age = self._max_asr_queue_age_by_source.get(task.source)
         if max_age is None or self._cancel_event.is_set():
             return False
         queue_age = max(0.0, now - task.submitted_at)
@@ -1008,7 +1028,7 @@ class RealtimeScheduler:
         return True
 
     def _drop_stale_asr_tasks_locked(self, now: float) -> int:
-        if self._max_asr_queue_age_s is None or self._cancel_event.is_set():
+        if not self._max_asr_queue_age_by_source or self._cancel_event.is_set():
             return 0
 
         dropped = 0

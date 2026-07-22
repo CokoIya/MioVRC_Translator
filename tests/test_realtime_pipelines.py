@@ -77,6 +77,34 @@ def test_mic_pipeline_original_only_skips_translator():
     assert result.chatbox_text == "hello"
 
 
+def test_mic_pipeline_original_only_read_translation_translates_for_tts_only():
+    config = {
+        "translation": {
+            "output_format": "original_only_read_translation",
+            "chatbox_template": "{translatedText2}\n{text}",
+        }
+    }
+    dispatcher = OutputDispatcher(config)
+    pipeline = MicPipeline(config, dispatcher)
+    translator = _Translator()
+
+    plan = pipeline.create_plan(
+        "hello",
+        source_language="en",
+        target_language="ja",
+        second_target_language="zh",
+    )
+    result, returned_translator = pipeline.translate_plan(plan, translator)
+
+    assert returned_translator is translator
+    assert result.api_translation_used is True
+    assert result.translated_text == "ja:hello"
+    assert result.translated_text_2 == ""
+    assert result.display_text == "hello"
+    assert result.chatbox_text == "hello"
+    assert translator.calls == [("hello", "en", "ja", "mic")]
+
+
 def test_listen_pipeline_builds_prefixed_chatbox_text():
     dispatcher = OutputDispatcher({})
     pipeline = ListenPipeline({}, dispatcher)

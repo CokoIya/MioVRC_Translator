@@ -139,6 +139,44 @@ def test_manual_translation_controller_original_only_does_not_create_translator(
     assert results[0].display_text == "hello"
 
 
+def test_manual_original_only_read_translation_keeps_translation_for_tts(qtbot):
+    _app()
+    config = {
+        "translation": {
+            "output_format": "original_only_read_translation",
+            "chatbox_template": "{translatedText2}\n{text}",
+        }
+    }
+    dispatcher = OutputDispatcher(config)
+    translator = _Translator()
+    results = []
+    finished: list[int] = []
+    controller = ManualTranslationController(
+        config,
+        dispatcher,
+        translator_factory=lambda _config: translator,
+        language_detector=lambda _text: "en",
+    )
+    controller.succeeded.connect(results.append)
+    controller.worker_finished.connect(finished.append)
+
+    controller.start(
+        ManualTranslationRequest(
+            text="hello",
+            source_language=None,
+            target_language="ja",
+            second_target_language="zh",
+        )
+    )
+
+    qtbot.waitUntil(lambda: bool(finished), timeout=1000)
+    assert translator.calls == [("hello", "en", "ja", "manual")]
+    assert results[0].original_text == "hello"
+    assert results[0].translated_text == "ja:hello"
+    assert results[0].translated_text_2 == ""
+    assert results[0].display_text == "hello"
+
+
 def test_manual_translation_controller_rewrites_once_before_all_targets(qtbot):
     _app()
     config = {

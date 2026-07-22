@@ -1239,6 +1239,77 @@ def test_asr_error_and_empty_text_create_ordering_markers():
         assert scheduler.stop(timeout=2)
 
 
+def test_source_specific_asr_expiry_drops_stale_reverse_audio_first():
+    now = [100.0]
+    first_started = threading.Event()
+    release_first = threading.Event()
+    delivered = []
+
+    def asr(task, _cancel):
+        if task.payload == "running-mic":
+            first_started.set()
+            release_first.wait(timeout=3)
+        return task.payload
+
+    scheduler = _scheduler(
+        asr=asr,
+        translate=lambda _task, text, _state, _cancel: text,
+        deliver=delivered.append,
+        asr_concurrency=1,
+        ingress_limits={MIC: 3, DESKTOP: 3},
+        outstanding_limits={MIC: 3, DESKTOP: 3},
+        priority_source=DESKTOP,
+        max_asr_queue_age_s={MIC: 5.0, DESKTOP: 1.0},
+        health_check_interval_s=60.0,
+        clock=lambda: now[0],
+    )
+    try:
+        assert _submit(
+            scheduler,
+            "running-mic",
+            source=MIC,
+            provider="shared",
+        ).accepted
+        assert first_started.wait(timeout=1)
+        queued_mic = _submit(
+            scheduler,
+            "fresh-mic",
+            source=MIC,
+            provider="shared",
+        )
+        queued_reverse = _submit(
+            scheduler,
+            bytearray(b"stale-reverse-audio"),
+            source=DESKTOP,
+            provider="shared",
+        )
+        assert queued_mic.accepted
+        assert queued_reverse.accepted
+
+        now[0] = 102.0
+        assert scheduler._drop_stale_asr_tasks() == 1
+        snapshot = scheduler.snapshot()
+        assert snapshot.stale_asr_dropped_by_source == {MIC: 0, DESKTOP: 1}
+        assert snapshot.ingress_pending[MIC] == 1
+        assert snapshot.ingress_pending[DESKTOP] == 0
+        marker = scheduler._completed[DESKTOP][queued_reverse.task.sequence]
+        assert marker.stale_asr is True
+        assert marker.task.payload is None
+
+        release_first.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert [item.result for item in delivered if item.task.source == MIC] == [
+            "running-mic",
+            "fresh-mic",
+        ]
+        assert [item.stale_asr for item in delivered if item.task.source == DESKTOP] == [
+            True
+        ]
+    finally:
+        release_first.set()
+        assert scheduler.stop(timeout=2)
+
+
 def _assert_scheduler_error_logs_are_safe(caplog, *secrets, expected):
     rendered = caplog.text
     for secret in secrets:

@@ -10,8 +10,8 @@ import urllib.parse
 
 from .base import (
     BaseTranslator,
+    TransformationOutputRejected,
     TranslationContextStore,
-    _TRANSLATION_SYSTEM_PROMPT,
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
@@ -318,6 +318,95 @@ class AnthropicTranslator(BaseTranslator):
         )
         return output, response
 
+    def _retry_message_transformation(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        source_text: str,
+        operation: str,
+        reason: str,
+        output_tokens: int,
+    ) -> str:
+        logger.warning(
+            "Rejected non-transformational Anthropic output; retrying with "
+            "structured contract (provider=%s model=%s operation=%s reason=%s)",
+            self._provider_id or "anthropic",
+            self.model,
+            operation,
+            reason,
+        )
+        retry_messages = self._build_structured_retry_messages(
+            messages,
+            operation=operation,
+            reason=reason,
+        )
+        system_parts = [
+            str(message.get("content", ""))
+            for message in retry_messages
+            if str(message.get("role") or "").strip() == "system"
+        ]
+        user_parts = [
+            str(message.get("content", ""))
+            for message in retry_messages
+            if str(message.get("role") or "").strip() != "system"
+        ]
+        retry_tokens = min(
+            self._max_output_tokens,
+            max(64, int(output_tokens) + 24),
+        )
+        kwargs: dict[str, object] = {
+            "model": self.model,
+            "system": "\n\n".join(system_parts),
+            "max_tokens": retry_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "\n\n".join(user_parts),
+                }
+            ],
+        }
+        request_timeout = self._sdk_timeout()
+        if request_timeout:
+            kwargs["timeout"] = request_timeout
+
+        started = time.perf_counter()
+        http_capture = None
+        try:
+            with self._http_timing_capture() as http_capture:
+                output, _response = self._message_request(kwargs)
+        except Exception:
+            elapsed = max(0.0, time.perf_counter() - started)
+            metrics = self.translation_metrics()
+            self._record_translation_metrics(
+                provider_s=float(metrics.get("provider_s") or 0.0) + elapsed,
+                full_response_s=float(metrics.get("full_response_s") or 0.0)
+                + elapsed,
+                transformation_attempts=2,
+                output_retries=1,
+                **self._capture_metrics(http_capture),
+            )
+            raise
+        elapsed = max(0.0, time.perf_counter() - started)
+        metrics = self.translation_metrics()
+        self._record_translation_metrics(
+            provider_s=float(metrics.get("provider_s") or 0.0) + elapsed,
+            full_response_s=float(metrics.get("full_response_s") or 0.0) + elapsed,
+            transformation_attempts=2,
+            output_retries=1,
+            **self._capture_metrics(http_capture),
+        )
+        if operation == "rewrite":
+            return self._validated_asr_rewrite_output(
+                output,
+                source_text=source_text,
+                structured=True,
+            )
+        return self._validated_translation_output(
+            output,
+            source_text=source_text,
+            structured=True,
+        )
+
     def translate(
         self,
         text: str,
@@ -372,21 +461,24 @@ class AnthropicTranslator(BaseTranslator):
 
         self._last_response_summary = ""
         prompt_started = time.perf_counter()
-        prompt = self._build_prompt(
+        base_messages = self._build_messages(
             text,
             src_lang,
             tgt_lang,
             context_snapshot=context_snapshot,
             context_source=context_source,
         )
+        system = str(base_messages[0]["content"])
+        prompt = str(base_messages[1]["content"])
+        output_tokens = self._estimate_max_tokens(text)
         self._record_translation_metrics(
             prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
-            prompt_chars=len(prompt) + len(_TRANSLATION_SYSTEM_PROMPT),
+            prompt_chars=len(prompt) + len(system),
         )
         kwargs = {
             "model": self.model,
-            "system": _TRANSLATION_SYSTEM_PROMPT,
-            "max_tokens": self._estimate_max_tokens(text),
+            "system": system,
+            "max_tokens": output_tokens,
             "messages": [
                 {
                     "role": "user",
@@ -451,7 +543,7 @@ class AnthropicTranslator(BaseTranslator):
             elapsed,
             context_source,
             active_context.sequence,
-            len(prompt) + len(_TRANSLATION_SYSTEM_PROMPT),
+            len(prompt) + len(system),
             len(context_snapshot or ()),
             transport_metrics.get("pool_wait_s"),
             transport_metrics.get("tcp_s"),
@@ -461,13 +553,26 @@ class AnthropicTranslator(BaseTranslator):
             transport_metrics.get("connection_reused"),
         )
         postprocess_started = time.perf_counter()
-        translated = self._finalize_translation_output(
-            output,
-            source_text=text,
-        )
-        self._record_translation_metrics(
-            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
-        )
+        try:
+            translated = self._validated_translation_output(
+                output,
+                source_text=text,
+            )
+        except TransformationOutputRejected as exc:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
+            translated = self._retry_message_transformation(
+                messages=base_messages,
+                source_text=text,
+                operation="translation",
+                reason=exc.reason,
+                output_tokens=output_tokens,
+            )
+        else:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
         if not translated:
             self._last_response_summary = self._response_debug_summary(message)
             logger.warning(
@@ -550,13 +655,13 @@ class AnthropicTranslator(BaseTranslator):
             return cached
 
         prompt_started = time.perf_counter()
-        messages = build_asr_rewrite_messages(
+        base_messages = build_asr_rewrite_messages(
             text,
             normalized_style,
             language_hint=language_hint,
         )
-        system = str(messages[0]["content"])
-        user = str(messages[1]["content"])
+        system = str(base_messages[0]["content"])
+        user = str(base_messages[1]["content"])
         output_tokens = min(
             self._max_output_tokens,
             max(32, self._estimate_max_tokens(text) + 12),
@@ -606,13 +711,26 @@ class AnthropicTranslator(BaseTranslator):
             **self._capture_metrics(http_capture),
         )
         postprocess_started = time.perf_counter()
-        rewritten = self._finalize_asr_rewrite_output(
-            output,
-            source_text=text,
-        )
-        self._record_translation_metrics(
-            postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
-        )
+        try:
+            rewritten = self._validated_asr_rewrite_output(
+                output,
+                source_text=text,
+            )
+        except TransformationOutputRejected as exc:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
+            rewritten = self._retry_message_transformation(
+                messages=base_messages,
+                source_text=text,
+                operation="rewrite",
+                reason=exc.reason,
+                output_tokens=output_tokens,
+            )
+        else:
+            self._record_translation_metrics(
+                postprocess_s=max(0.0, time.perf_counter() - postprocess_started)
+            )
         if not rewritten:
             self._last_response_summary = self._response_debug_summary(response)
             self._record_translation_metrics(
