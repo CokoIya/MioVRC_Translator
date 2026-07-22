@@ -2,6 +2,14 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.8] - 2026-07-22
+
+### TTS and chatbox reliability
+
+- Added a quick-window option for `Original Text Only (Read Translation)` that waits for translated TTS playback to finish, then sends the original text after a 0.2-second delay.
+- Improved Qwen TTS recovery from temporary audio-address lookup failures while retaining secure URL validation and DNS pinning.
+- Prevented punctuation-only OSC messages from reaching VRChat, while allowing the standalone reactions `!?` and `！？`.
+
 ## [1.3.8.7] - 2026-07-22
 
 ### Transform-only AI output safety

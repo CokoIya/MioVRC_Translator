@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.8.7",
-  "installer_name": "MioTranslator-Setup-v1.3.8.7.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.7/MioTranslator-Setup-v1.3.8.7.exe",
-  "size_bytes": 458599120,
-  "sha256": "e9005fea74e9978ab97b9964f0b1dd23cff7794f5b2618539f5cf99b7a4bd81f",
+  "version": "v1.3.8.8",
+  "installer_name": "MioTranslator-Setup-v1.3.8.8.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.8/MioTranslator-Setup-v1.3.8.8.exe",
+  "size_bytes": 464570843,
+  "sha256": "c3d27f5af9887eabfa74a5269a0d819f45d82090c06a09b3ab335b1e6380358b",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "0a0251e8c4a268813841de58bb9012c83c69dbf6dab83749e4058c89edc37c0923d5f37a0d6a8ff8ab6e787d3bc518ecf895b07dd70f5e8796a24bb1daf48505",
-  "notes": "v1.3.8.7 strengthens transform-only safety across ASR rewrite, typed-text rewrite, forward translation, and reverse translation. Conversational replies, explanations, labels, and unrelated additions are rejected and retried across GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible, DeepSeek, and Qwen paths. It also adds Original Text Only (Read Translation), which sends only the original text while TTS reads the translation, and improves reverse-translation responsiveness in noisy, crowded scenes by prioritizing fresh speech and retiring stale work.",
+  "installer_signature": "e3932c52ca054e65cbaffbf2cfcc4bf15fe73559a0110e45aaee5c3902304ef494bdf0a1c363518e7f21e642cfba6b4edfd1920a4f53ceb80b92153f7a1dcf0f",
+  "notes": "v1.3.8.8 improves the Original Text Only (Read Translation) workflow, retries temporary Qwen TTS audio lookup failures, and allows standalone !? / ！？ reactions in VRChat.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.7 强化了 ASR 改写、手打文字改写、正向翻译和反向翻译的仅转换输出限制。GPT/OpenAI 兼容、Claude/Anthropic 兼容、Grok/xAI 兼容、DeepSeek 与 Qwen 路径会拒绝并重试对话式回复、解释、标签和无关补充。本版本还新增“仅原文（朗读译文）”模式：聊天框只发送原文，由 TTS 朗读译文；同时通过优先处理新语音并淘汰过期任务，提升嘈杂多人场景下的反向翻译响应速度。",
-    "en": "v1.3.8.7 strengthens transform-only safety across ASR rewrite, typed-text rewrite, forward translation, and reverse translation. Conversational replies, explanations, labels, and unrelated additions are rejected and retried across GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible, DeepSeek, and Qwen paths. It also adds Original Text Only (Read Translation), which sends only the original text while TTS reads the translation, and improves reverse-translation responsiveness in noisy, crowded scenes by prioritizing fresh speech and retiring stale work.",
-    "ja": "v1.3.8.7 では、ASR 書き換え、手入力テキスト書き換え、順方向翻訳、逆翻訳の変換専用出力制限を強化しました。GPT/OpenAI 互換、Claude/Anthropic 互換、Grok/xAI 互換、DeepSeek、Qwen の各経路で、会話への返答、説明、ラベル、無関係な追加を拒否して再試行します。また「原文のみ（訳文を読み上げ）」を追加し、チャットには原文だけを送り、TTS は訳文を読み上げます。さらに新しい音声を優先し、古い処理を破棄することで、騒がしい多人場面での逆翻訳応答を改善しました。",
-    "ru": "v1.3.8.7 усиливает режим только преобразования для перезаписи ASR, набранного текста, прямого и обратного перевода. Пути GPT/OpenAI-compatible, Claude/Anthropic-compatible, Grok/xAI-compatible, DeepSeek и Qwen отклоняют и повторяют ответы в форме диалога, объяснения, метки и посторонние дополнения. Также добавлен режим Original Text Only (Read Translation): в чат отправляется только исходный текст, а TTS озвучивает перевод. Обратный перевод в шумных многолюдных сценах стал быстрее благодаря приоритету новой речи и удалению устаревших задач.",
-    "ko": "v1.3.8.7은 ASR 재작성, 입력 텍스트 재작성, 정방향 번역, 역번역의 변환 전용 출력 제한을 강화합니다. GPT/OpenAI 호환, Claude/Anthropic 호환, Grok/xAI 호환, DeepSeek 및 Qwen 경로에서 대화형 답변, 설명, 라벨, 관련 없는 추가 내용을 거부하고 재시도합니다. 또한 채팅에는 원문만 보내고 TTS는 번역문을 읽는 'Original Text Only (Read Translation)' 모드를 추가했습니다. 최신 음성을 우선 처리하고 오래된 작업을 폐기하여 시끄럽고 사람이 많은 장면에서 역번역 반응성도 개선했습니다."
+    "zh-CN": "v1.3.8.8 改进了“仅原文（朗读译文）”模式的发送时机，可在 Qwen TTS 音频地址临时解析失败时自动重试，并允许向 VRChat 发送单独的 !? / ！？ 反应。",
+    "en": "v1.3.8.8 improves the Original Text Only (Read Translation) workflow, retries temporary Qwen TTS audio lookup failures, and allows standalone !? / ！？ reactions in VRChat.",
+    "ja": "v1.3.8.8 では、「原文のみ（訳文を読み上げ）」の送信タイミングを改善し、Qwen TTS の一時的な音声 URL 名前解決エラーを再試行するようにしました。また、VRChat へ単独の !? / ！？ を送信できます。",
+    "ru": "v1.3.8.8 улучшает режим Original Text Only (Read Translation), повторяет загрузку аудио Qwen TTS при временных ошибках DNS и разрешает отправлять в VRChat отдельные реакции !? / ！？.",
+    "ko": "v1.3.8.8은 Original Text Only (Read Translation) 모드의 전송 타이밍을 개선하고, 일시적인 DNS 오류가 발생한 Qwen TTS 오디오 다운로드를 재시도하며, VRChat에 단독 !? / ！？ 반응을 보낼 수 있게 합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-22T14:00:53+09:00",
+  "published_at": "2026-07-22T16:12:53+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "a4f9c1dcf000d1ddbfde659dc301620c559e868b117a46a5ce9fefedde8ed8ea00efb828c5933234d385519bd0dc4cb9df36040bd0f0e48d46d6232d01afd705"
+  "signature": "90b084316c87a944c35264b6679533e3818fccb9566940580aea0a77799f4291352b3213a7d8eff5bd4674f7f877d357a627c4a07a681ef9d8c1a0b2fe8bf702"
 }
