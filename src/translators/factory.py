@@ -19,6 +19,11 @@ from src.utils.latency_metrics import (
     translation_metrics_snapshot,
 )
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.provider_network import should_bypass_environment_proxies
+from src.utils.qwen_endpoints import (
+    QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+    require_qwen_tokyo_workspace_base_url,
+)
 from src.utils.ui_config import (
     DEFAULT_BACKEND,
     get_backend_order,
@@ -26,6 +31,7 @@ from src.utils.ui_config import (
     get_backend_label,
     get_backend_spec,
     normalize_backend,
+    normalize_backend_region,
 )
 
 logger = logging.getLogger(__name__)
@@ -400,7 +406,24 @@ def _create_openai_compatible_translator(
     spec = get_backend_spec(backend)
     backend_cfg = _backend_cfg(trans_cfg, backend)
     label = get_backend_label(backend)
-    api_key_required = bool(spec.get("api_key_required", True))
+    if backend == "qianwen" and normalize_backend_region(
+        backend,
+        backend_cfg.get("region"),
+    ) == "japan":
+        base_url = require_qwen_tokyo_workspace_base_url(
+            backend_cfg.get("base_url"),
+            endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+            label="Qwen Tokyo workspace API",
+        )
+    else:
+        base_url = get_backend_config_value(trans_cfg, backend, "base_url")
+    local_compatible_endpoint = bool(
+        backend in {"local_ai", "openai_compatible", "grok_compatible"}
+        and should_bypass_environment_proxies(base_url)
+    )
+    api_key_required = bool(spec.get("api_key_required", True)) and not (
+        local_compatible_endpoint
+    )
     configured_api_key = str(backend_cfg.get("api_key", "")).strip()
     api_key = configured_api_key
     if api_key_required:
@@ -420,10 +443,11 @@ def _create_openai_compatible_translator(
         minimum=3.0,
         maximum=120.0,
     )
+    is_local_ai = backend == "local_ai"
     return OpenAITranslator(
         api_key=api_key,
         model=model,
-        base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+        base_url=base_url,
         timeout_s=timeout_s,
         max_output_tokens=_int_setting(
             backend_cfg.get("max_output_tokens"),
@@ -443,7 +467,10 @@ def _create_openai_compatible_translator(
         ),
         context_store=context_store,
         provider_id=backend,
-        allow_private_http=backend == "local_ai" and not configured_api_key,
+        # Local and compatible servers may legitimately use keyless or
+        # credentialed HTTP on an explicit local route. Public HTTP remains
+        # prohibited by validate_api_base_url.
+        allow_private_http=is_local_ai or local_compatible_endpoint,
         custom_headers=backend_cfg.get("custom_headers", {}),
         streaming=_bool_setting(
             backend_cfg.get("streaming"),
@@ -479,6 +506,10 @@ def _create_openai_compatible_translator(
             minimum=0.1,
             maximum=300.0,
         ),
+        # The OpenAI SDK requires a non-null key in supported versions. Keep
+        # its internal placeholder out of the actual HTTP Authorization
+        # header when a local-compatible credential field was left blank.
+        omit_placeholder_authorization=(not api_key_required and not configured_api_key),
     )
 
 

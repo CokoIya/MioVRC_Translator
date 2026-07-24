@@ -61,6 +61,16 @@ def test_release_build_requires_ed25519_seed_and_keeps_authenticode_optional() -
     )
 
 
+def test_release_build_accepts_valid_per_user_inno_version_metadata() -> None:
+    script = _read("build_release.ps1")
+
+    assert "unins000.exe" in script
+    assert ").ProductVersion" in script
+    assert "uninstallerDirectory.Equals" in script
+    assert "[IO.FileAttributes]::ReparsePoint" in script
+    assert "[Version]'6.5.0'" in script
+
+
 def test_release_seed_file_must_be_external_reparse_safe_and_acl_restricted() -> None:
     script = _read("tools/release/release_signing_helpers.ps1")
 
@@ -270,6 +280,27 @@ def test_requests_floor_supports_tls_aware_dns_pinning_adapter() -> None:
 
     assert Version("2.32.2") in requirement.specifier
     assert Version("2.32.1") not in requirement.specifier
+
+
+def test_release_requires_native_system_trust_for_provider_https() -> None:
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    requirement = next(
+        Requirement(line.split("#", 1)[0].strip())
+        for line in _read("requirements.txt").splitlines()
+        if line.split("#", 1)[0].strip().lower().startswith("truststore")
+    )
+    locked = next(
+        Requirement(line)
+        for line in _read("requirements.lock.txt").splitlines()
+        if line.lower().startswith("truststore")
+    )
+    checker = _load_release_environment_checker()
+
+    assert Version("0.10.4") in requirement.specifier
+    assert locked == Requirement("truststore==0.10.4")
+    assert "truststore" in checker.REQUIRED_MODULES
 
 
 def test_provider_logs_do_not_emit_full_relay_urls_or_raw_tracebacks() -> None:

@@ -17,12 +17,16 @@ QWEN3_ASR_MODEL_CHOICES = (
 QWEN3_ASR_DEFAULT_REGION = "singapore"
 QWEN3_ASR_REGION_BASE_URLS = {
     "singapore": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    # Alibaba Cloud Model Studio in Tokyo uses a workspace-specific hostname.
+    "japan": "",
     "china_mainland": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 }
 QWEN3_ASR_REGION_ALIASES = {
     "intl": "singapore",
     "international": "singapore",
     "sg": "singapore",
+    "jp": "japan",
+    "japan": "japan",
     "china": "china_mainland",
     "cn": "china_mainland",
     "mainland": "china_mainland",

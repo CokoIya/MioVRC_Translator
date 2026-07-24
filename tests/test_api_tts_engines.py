@@ -187,6 +187,30 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
     ]
 
 
+def test_qwen_tts_accepts_only_the_tokyo_workspace_dashscope_endpoint():
+    workspace_url = "https://ws-player.ap-northeast-1.maas.aliyuncs.com/api/v1"
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "region": "japan",
+            "base_url": workspace_url,
+            "model": "workspace-enabled-model",
+        }
+    )
+
+    assert engine.base_url == workspace_url
+
+    with pytest.raises(ValueError, match="Tokyo workspace endpoint"):
+        QwenTTS(
+            {
+                "api_key": "qwen-key",
+                "region": "japan",
+                "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+                "model": "qwen3-tts-flash",
+            }
+        )
+
+
 def test_qwen_tts_uses_distinct_connect_and_read_timeouts(monkeypatch):
     fake = _FakeSession()
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
@@ -652,7 +676,7 @@ def test_qwen_tts_disables_hidden_adapter_retries_for_synthesis(monkeypatch):
 
     monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", Session)
     monkeypatch.setattr(
-        "src.tts.api_tts_engines.requests.adapters.HTTPAdapter",
+        "src.tts.api_tts_engines.SystemTrustHTTPAdapter",
         Adapter,
     )
     engine = QwenTTS(
@@ -668,6 +692,30 @@ def test_qwen_tts_disables_hidden_adapter_retries_for_synthesis(monkeypatch):
 
     assert len(adapter_options) == 1
     assert adapter_options[0]["max_retries"] == 0
+
+
+def test_api_tts_https_sessions_retain_native_system_trust_adapter():
+    engine = MimoTTS(
+        {
+            "api_key": "key",
+            "base_url": "https://llamacpp.example/v1",
+            "model": "local-tts-model",
+        }
+    )
+    try:
+        adapter = engine._session.get_adapter("https://llamacpp.example/v1")
+
+        assert isinstance(adapter, api_tts_engines.SystemTrustHTTPAdapter)
+        assert adapter.max_retries.total == 0
+    finally:
+        engine.close()
+
+
+def test_pinned_audio_download_adapter_uses_native_system_trust():
+    assert issubclass(
+        api_tts_engines._PinnedAddressAdapter,
+        api_tts_engines.SystemTrustHTTPAdapter,
+    )
 
 
 def test_qwen_tts_auth_error_names_selected_region_and_next_steps(monkeypatch):
@@ -1087,6 +1135,66 @@ def test_audio_url_validation_allows_only_same_port_loopback_for_local_api():
         "http://127.0.0.1:9090/audio.wav",
         api_base_url="http://127.0.0.1:8080/v1",
     )
+
+
+def test_qwen_signed_result_host_accepts_non_private_edge_address():
+    def resolve(_host, _port):
+        return (api_tts_engines.ipaddress.ip_address("100.64.0.1"),)
+
+    qwen_target = api_tts_engines._validated_audio_download_target(
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/audio.wav",
+        api_base_url="https://dashscope-intl.aliyuncs.com/api/v1",
+        resolver=resolve,
+    )
+    unrelated_target = api_tts_engines._validated_audio_download_target(
+        "https://cdn.example/audio.wav",
+        api_base_url="https://api.example/v1",
+        resolver=resolve,
+    )
+
+    assert qwen_target is not None
+    assert unrelated_target is None
+
+
+def test_local_qwen_tts_endpoint_allows_no_key_and_bypasses_environment_proxy():
+    engine = QwenTTS(
+        {
+            "api_key": "",
+            "region": "custom",
+            "base_url": "http://192.168.50.20:9000/api/v1",
+            "model": "local-qwen-tts",
+        }
+    )
+    try:
+        headers = engine._auth_headers()
+        assert "Authorization" not in headers
+        assert engine._session.trust_env is False
+        assert api_tts_engines._is_safe_api_request_url(
+            "http://192.168.50.20:9000/api/v1/generate",
+            allow_private_http=True,
+        )
+    finally:
+        engine.close()
+
+
+def test_local_audio_download_must_stay_on_the_api_origin():
+    same_origin = api_tts_engines._validated_audio_download_target(
+        "http://192.168.50.20:9000/audio.wav",
+        api_base_url="http://192.168.50.20:9000/api/v1",
+        resolver=lambda host, _port: (
+            api_tts_engines.ipaddress.ip_address(host),
+        ),
+    )
+    different_host = api_tts_engines._validated_audio_download_target(
+        "http://192.168.50.21:9000/audio.wav",
+        api_base_url="http://192.168.50.20:9000/api/v1",
+        resolver=lambda host, _port: (
+            api_tts_engines.ipaddress.ip_address(host),
+        ),
+    )
+
+    assert same_origin is not None
+    assert different_host is None
 
 
 def test_audio_download_target_pins_the_validated_dns_address():

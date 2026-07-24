@@ -48,7 +48,7 @@
     "auto_fallback": true,
     "sensevoice": {
       "model_id": "iic/SenseVoiceSmall",
-      "model_revision": "master",
+      "model_revision": "70514a3da51f1160f51d18449dab6128bbd4928b",
       "ncpu": null
     },
     "whisper": {
@@ -200,8 +200,8 @@
     },
     "qianwen": {
       "api_key": "",
-      "region": "china_mainland",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "region": "singapore",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "model": "qwen-mt-plus",
       "timeout_s": 20.0,
       "max_retries": 0
@@ -250,7 +250,7 @@
       "api_key": "",
       "region": "global",
       "base_url": "https://integrate.api.nvidia.com/v1",
-      "model": "nvidia/nemotron-3-super-120b-a12b"
+      "model": "nvidia/nemotron-3-nano-30b-a3b"
     },
     "anthropic": {
       "api_key": "",

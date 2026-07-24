@@ -12,6 +12,8 @@ from typing import Any
 
 import requests
 
+from src.utils.provider_network import is_local_provider_address, is_local_provider_host
+
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 _SENSITIVE_REDIRECT_HEADERS = frozenset(
     {"authorization", "cookie", "proxy-authorization"}
@@ -26,10 +28,11 @@ def validate_api_base_url(
 ) -> str:
     """Validate a base URL before attaching credentials to an API client.
 
-    Public and LAN endpoints must use HTTPS.  Plain HTTP is limited to an
-    explicit loopback address.  ``allow_private_http`` exists only for
-    keyless, self-hosted services and still requires a literal private IP so a
-    hostname cannot be DNS-rebound after validation.
+    Public endpoints must use HTTPS. Plain HTTP is permitted for explicit
+    loopback/private literal addresses when the caller has opted into a
+    self-hosted endpoint. This supports LAN model servers, including servers
+    that authenticate requests with their own API key, without trusting
+    arbitrary hostnames as local destinations.
     """
 
     candidate = str(url or "").strip()
@@ -59,18 +62,23 @@ def validate_api_base_url(
         raise ValueError(f"{label} base URL is malformed")
 
     if scheme == "http":
-        is_loopback = host == "localhost"
-        is_private_literal = False
+        is_loopback_name = host == "localhost" or host.endswith(".localhost")
+        is_allowed_local = False
         try:
             address = ipaddress.ip_address(host)
         except ValueError:
             address = None
         if address is not None:
-            is_loopback = address.is_loopback
-            is_private_literal = address.is_private or address.is_link_local
-        if not is_loopback and not (allow_private_http and is_private_literal):
+            is_loopback_name = address.is_loopback
+            is_allowed_local = is_local_provider_address(
+                address,
+                include_shared=True,
+            )
+        elif allow_private_http:
+            is_allowed_local = is_local_provider_host(host)
+        if not is_loopback_name and not (allow_private_http and is_allowed_local):
             raise ValueError(
-                f"{label} base URL must use HTTPS or literal loopback HTTP"
+                f"{label} base URL must use HTTPS or an explicit loopback/private local HTTP host"
             )
 
     return urllib.parse.urlunsplit(parsed).rstrip("/")

@@ -87,6 +87,28 @@ def test_final_numpy_audio_snapshot_is_owned_contiguous_and_read_only():
         snapshot[0, 0] = 99
 
 
+@pytest.mark.parametrize("language", ("auto", "pt", "it", "th"))
+def test_microphone_realtime_payload_preserves_global_asr_language_hint(language):
+    np = pytest.importorskip("numpy")
+    window, scheduler = _realtime_window_for_submission()
+    window._current_asr_lang = language
+    window._current_src_lang = None if language == "auto" else language
+
+    window._on_audio_segment(np.zeros(160, dtype=np.float32), MIC_SOURCE)
+
+    assert scheduler.submissions[0]["payload"].asr_language == language
+
+
+def test_desktop_realtime_payload_passes_explicit_auto_asr_hint():
+    np = pytest.importorskip("numpy")
+    window, scheduler = _realtime_window_for_submission()
+    window._listen_source_language = lambda: None
+
+    window._on_audio_segment(np.zeros(160, dtype=np.float32), DESKTOP_SOURCE)
+
+    assert scheduler.submissions[0]["payload"].asr_language == "auto"
+
+
 def test_only_admitted_microphone_partial_lane_receives_chunk_callback(monkeypatch):
     from src.audio import desktop_recorder as desktop_recorder_module
     from src.audio import recorder as recorder_module

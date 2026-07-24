@@ -21,6 +21,7 @@ REQUIRED_MODULES = (
     "PySide6.QtWebEngineWidgets",
     "PIL",
     "requests",
+    "truststore",
     "charset_normalizer",
     "cryptography",
     "numpy",

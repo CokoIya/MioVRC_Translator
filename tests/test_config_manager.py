@@ -12,6 +12,11 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils import config_manager
+from src.asr.model_registry import SENSEVOICE_DEFAULT_REVISION
+from src.tts.api_tts_config import (
+    QWEN_TTS_DEFAULT_MODEL,
+    XIAOMI_TTS_DEFAULT_MODEL,
+)
 from src.utils.ui_config import (
     DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
     OUTPUT_FORMAT_2_DISABLED,
@@ -1026,7 +1031,7 @@ class TestConfigValidation(unittest.TestCase):
         )
         assert normalize_output_format_2("unknown") == OUTPUT_FORMAT_2_DISABLED
 
-    def test_qwen_translation_default_uses_international_endpoint_for_non_chinese_ui(
+    def test_qwen_translation_default_uses_international_region_for_japanese_ui(
         self,
     ):
         config = {
@@ -1328,6 +1333,48 @@ class TestConfigValidation(unittest.TestCase):
         assert "kimi-k2-thinking" not in TRANSLATION_MODEL_PRESETS["kimi"]
         assert "grok-4.20-0309-reasoning" not in TRANSLATION_MODEL_PRESETS["xai"]
         assert "magistral-small-latest" not in TRANSLATION_MODEL_PRESETS["mistral"]
+
+    def test_config_example_uses_current_translation_model_defaults(self):
+        example_path = Path(__file__).resolve().parents[1] / "config.example.json"
+        example = json.loads(example_path.read_text(encoding="utf-8"))
+        translation = example["translation"]
+
+        for backend, spec in TRANSLATION_BACKENDS.items():
+            assert translation[backend]["model"] == spec["model"]
+
+        assert example["asr"]["sensevoice"]["model_revision"] == SENSEVOICE_DEFAULT_REVISION
+        assert example["tts"]["qwen_tts"]["model"] == QWEN_TTS_DEFAULT_MODEL
+        assert example["tts"]["mimo_tts"]["model"] == XIAOMI_TTS_DEFAULT_MODEL
+
+    def test_retired_hosted_models_are_preserved_for_custom_endpoints(self):
+        config = {
+            "ui": {"language": "en"},
+            "translation": {
+                "backend": "nvidia",
+                "backend_source": "manual",
+                "nvidia": {
+                    "region": "custom",
+                    "base_url": "https://nim.internal.example/v1",
+                    "model": "nvidia/nemotron-3-super-120b-a12b",
+                },
+                "qianwen": {
+                    "region": "custom",
+                    "base_url": "https://qwen-relay.internal.example/v1",
+                    "model": "qwen3.7-max",
+                },
+            },
+        }
+
+        config_manager._ensure_translation_config(
+            config,
+            loaded={"translation": dict(config["translation"])},
+        )
+
+        assert (
+            config["translation"]["nvidia"]["model"]
+            == "nvidia/nemotron-3-super-120b-a12b"
+        )
+        assert config["translation"]["qianwen"]["model"] == "qwen3.7-max"
 
     def test_every_selectable_translation_model_survives_config_normalization(self):
         for backend, models in TRANSLATION_MODEL_PRESETS.items():

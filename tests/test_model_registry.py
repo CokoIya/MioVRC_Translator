@@ -46,6 +46,7 @@ def test_qwen3_region_base_url_helpers():
     assert get_qwen3_asr_base_url("china_mainland") == (
         "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
+    assert get_qwen3_asr_base_url("japan") == ""
     assert get_qwen3_asr_base_url("custom") == ""
 
 

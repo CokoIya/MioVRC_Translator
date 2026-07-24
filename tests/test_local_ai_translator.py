@@ -1,6 +1,8 @@
+import socket
 import sys
 import types
 
+import httpx
 import pytest
 
 from src.translators.factory import (
@@ -10,6 +12,7 @@ from src.translators.factory import (
 )
 from src.translators.anthropic_translator import ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S
 from src.translators.openai_translator import OPENAI_HTTP_KEEPALIVE_EXPIRY_S
+from src.utils import provider_network
 from src.utils.ui_config import (
     NVIDIA_TRANSLATION_BASE_URL,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
@@ -92,7 +95,17 @@ def test_local_ai_backend_allows_editable_base_url_and_empty_api_key(monkeypatch
     assert backend_api_key_is_required("local_ai") is False
     assert translator._client.kwargs["api_key"] == "local-ai"
     assert translator._client.kwargs["base_url"] == "http://127.0.0.1:1234/v1"
+    assert translator._trust_env is False
     assert translator.model == "local-model"
+
+    request = httpx.Request(
+        "POST",
+        "http://127.0.0.1:1234/v1/chat/completions",
+        headers={"Authorization": "Bearer local-ai"},
+    )
+    for hook in translator._http_client._event_hooks["request"]:
+        hook(request)
+    assert "authorization" not in request.headers
 
 
 def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
@@ -124,8 +137,97 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert translator._client.kwargs["timeout"] == 9.0
     assert translator._client.kwargs["max_retries"] == 1
     assert translator._client.kwargs["http_client"] is translator._http_client
+    assert translator._trust_env is True
     assert OPENAI_HTTP_KEEPALIVE_EXPIRY_S == 60.0
     assert translator.model == "gpt-proxy-router"
+
+
+def test_keyless_openai_compatible_local_endpoint_uses_direct_http(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    monkeypatch.setattr(
+        provider_network.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("192.168.65.2", 0),
+            )
+        ],
+    )
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "openai_compatible": {
+                "api_key": "",
+                "base_url": "http://host.docker.internal:11434/v1",
+                "model": "local-compatible-model",
+            },
+        }
+    }
+
+    translator = create_translator(config)
+
+    assert translator._client.kwargs["api_key"] == "local-ai"
+    assert translator._trust_env is False
+    request = httpx.Request(
+        "POST",
+        "http://host.docker.internal:11434/v1/chat/completions",
+        headers={"Authorization": "Bearer local-ai"},
+    )
+    for hook in translator._http_client._event_hooks["request"]:
+        hook(request)
+    assert "authorization" not in request.headers
+    assert request.url.host == "192.168.65.2"
+    assert request.headers["host"] == "host.docker.internal:11434"
+
+
+def test_docker_host_public_dns_result_is_rejected_before_client_creation(
+    monkeypatch,
+):
+    class UnexpectedOpenAI:
+        def __init__(self, **_kwargs):
+            raise AssertionError("unsafe endpoint must not create an API client")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        types.SimpleNamespace(OpenAI=UnexpectedOpenAI),
+    )
+    monkeypatch.setattr(
+        provider_network.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("8.8.8.8", 0),
+            )
+        ],
+    )
+    secret = "must-not-leak"
+
+    with pytest.raises(ValueError, match="must use HTTPS") as exc_info:
+        create_translator(
+            {
+                "translation": {
+                    "backend": "local_ai",
+                    "local_ai": {
+                        "api_key": secret,
+                        "base_url": "http://host.docker.internal:11434/v1",
+                        "model": "local-model",
+                    },
+                }
+            }
+        )
+
+    assert secret not in str(exc_info.value)
 
 
 def test_credentialed_openai_proxy_rejects_plaintext_public_http(monkeypatch):
@@ -165,25 +267,29 @@ def test_keyless_local_ai_allows_literal_private_lan_http(monkeypatch):
     )
 
     assert translator._client.kwargs["base_url"] == "http://192.168.1.20:11434/v1"
+    assert translator._trust_env is False
 
 
-def test_credentialed_local_ai_requires_https_off_loopback(monkeypatch):
+def test_credentialed_local_ai_allows_literal_private_lan_http(monkeypatch):
     monkeypatch.setitem(
         sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
     )
-    with pytest.raises(ValueError, match="must use HTTPS"):
-        create_translator(
-            {
-                "translation": {
-                    "backend": "local_ai",
-                    "local_ai": {
-                        "api_key": "private-key",
-                        "base_url": "http://192.168.1.20:11434/v1",
-                        "model": "local-model",
-                    },
-                }
+    translator = create_translator(
+        {
+            "translation": {
+                "backend": "local_ai",
+                "local_ai": {
+                    "api_key": "private-key",
+                    "base_url": "http://192.168.1.20:11434/v1",
+                    "model": "local-model",
+                },
             }
-        )
+        }
+    )
+
+    assert translator._client.kwargs["api_key"] == "private-key"
+    assert translator._client.kwargs["base_url"] == "http://192.168.1.20:11434/v1"
+    assert translator._trust_env is False
 
 
 def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
@@ -475,3 +581,57 @@ def test_standard_social_config_with_saved_preset_does_not_affect_translation(
     assert "Saved Disabled Preset" not in prompt
     assert "social style instructions" not in prompt
     assert translator._should_use_qwen_mt_translation_options("en", "ja")
+
+
+def test_qwen_tokyo_workspace_endpoint_uses_qwen_mt_request_handling(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    workspace_url = (
+        "https://ws-player.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    translator = create_translator(
+        {
+            "translation": {
+                "backend": "qianwen",
+                "qianwen": {
+                    "api_key": "tokyo-key",
+                    "region": "japan",
+                    "base_url": workspace_url,
+                    "model": "qwen-mt-plus",
+                },
+            }
+        }
+    )
+
+    assert translator._client.kwargs["base_url"] == workspace_url
+    assert translator._is_qwen_api_endpoint is True
+    assert translator._uses_qwen_mt_translation_options is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "https://ws-player.ap-northeast-1.maas.aliyuncs.com.evil.test/compatible-mode/v1",
+    ),
+)
+def test_qwen_tokyo_region_rejects_non_workspace_endpoints(monkeypatch, base_url):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+
+    with pytest.raises(ValueError, match="Tokyo workspace endpoint"):
+        create_translator(
+            {
+                "translation": {
+                    "backend": "qianwen",
+                    "qianwen": {
+                        "api_key": "tokyo-key",
+                        "region": "japan",
+                        "base_url": base_url,
+                        "model": "qwen-mt-plus",
+                    },
+                }
+            }
+        )

@@ -97,6 +97,12 @@ This document lists the third-party libraries, tools, and bundled models used by
 - **URL**: https://github.com/psf/requests
 - **Usage**: HTTP library
 
+#### Truststore
+- **License**: MIT License
+- **Copyright**: Copyright (c) 2022 Seth Michael Larson
+- **URL**: https://github.com/sethmlarson/truststore
+- **Usage**: Native operating-system certificate trust for provider HTTPS connections
+
 ### VRChat Integration
 
 #### python-osc
@@ -245,4 +251,4 @@ If you have questions about licensing or compliance, please open an issue on Git
 
 ---
 
-**Last Updated**: 2026-05-02
+**Last Updated**: 2026-07-24

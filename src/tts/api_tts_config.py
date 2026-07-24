@@ -11,6 +11,8 @@ QWEN_TTS_DEFAULT_VOICE = "Cherry"
 QWEN_TTS_REGION_BASE_URLS = {
     "china_mainland": QWEN_TTS_BASE_URL_MAINLAND,
     "singapore": QWEN_TTS_BASE_URL_INTERNATIONAL,
+    # Tokyo uses a workspace-specific Model Studio hostname.
+    "japan": "",
 }
 QWEN_TTS_REGION_ALIASES = {
     "china": "china_mainland",
@@ -20,6 +22,8 @@ QWEN_TTS_REGION_ALIASES = {
     "intl": "singapore",
     "international": "singapore",
     "sg": "singapore",
+    "jp": "japan",
+    "japan": "japan",
 }
 
 XIAOMI_TTS_BASE_URL_PAYG = "https://api.xiaomimimo.com/v1"
@@ -68,6 +72,7 @@ TTS_API_REGION_OPTION_KEYS = {
     ),
     "qwen_tts": (
         ("qwen_region_singapore", "singapore"),
+        ("qwen_region_japan", "japan"),
         ("qwen_region_china_mainland", "china_mainland"),
         ("qwen_region_custom", "custom"),
     ),
@@ -250,7 +255,9 @@ def get_tts_api_known_base_urls(engine: object) -> frozenset[str]:
     engine_code = normalize_tts_api_engine(engine)
     if not engine_code:
         return frozenset()
-    return frozenset(TTS_API_REGION_BASE_URLS[engine_code].values())
+    return frozenset(
+        value for value in TTS_API_REGION_BASE_URLS[engine_code].values() if value
+    )
 
 
 def tts_api_region_from_base_url(engine: object, base_url: object) -> str:
@@ -313,5 +320,10 @@ def resolve_tts_api_config(engine: object, config: Mapping[str, object] | None) 
     auto_base_url = get_tts_api_base_url(engine_code, region)
     if auto_base_url and (not base_url or base_url in known_base_urls):
         base_url = auto_base_url
+    elif region in TTS_API_REGION_BASE_URLS.get(engine_code, {}) and not auto_base_url:
+        # Workspace-scoped regions must never inherit another region's shared
+        # default endpoint. Preserve only the URL explicitly supplied by the
+        # player; an empty value is surfaced as a configuration error at use.
+        base_url = raw_base_url
     defaults["base_url"] = base_url
     return defaults

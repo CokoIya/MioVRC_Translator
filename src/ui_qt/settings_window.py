@@ -49,6 +49,7 @@ from src.asr.model_registry import (
     QWEN3_ASR_DEFAULT_MODEL,
     QWEN3_ASR_DEFAULT_REGION,
     QWEN3_ASR_MODEL_CHOICES,
+    QWEN3_ASR_REGION_BASE_URLS,
     USER_SELECTABLE_ASR_ENGINES,
     get_qwen3_asr_base_url,
     normalize_qwen3_asr_region,
@@ -64,6 +65,7 @@ from src.tts.api_tts_config import (
     TTS_API_ENGINE_IDS,
     get_tts_api_base_url,
     get_tts_api_default_value,
+    get_tts_api_known_base_urls,
     get_tts_api_model_options,
     get_tts_api_region_options,
     get_tts_api_voice_options,
@@ -121,6 +123,11 @@ from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
 from src.utils.i18n import tr
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.qwen_endpoints import (
+    QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+    QWEN_TOKYO_DASHSCOPE_PATH,
+    require_qwen_tokyo_workspace_base_url,
+)
 from src.utils.secure_http import validate_api_base_url
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
@@ -140,6 +147,7 @@ from src.utils.ui_config import (
     get_backend_api_key_hint,
     get_backend_config_value,
     get_backend_label,
+    get_backend_known_base_urls,
     get_backend_region_base_url,
     get_backend_region_options,
     get_backend_model_hint,
@@ -2246,6 +2254,13 @@ QT_SETTINGS_COPY.update({
         "ru": "Запрос теста TTS не принят",
         "ko": "TTS 테스트 요청이 수락되지 않았습니다",
     },
+    "qwen_region_japan": {
+        "zh-CN": "日本",
+        "en": "Japan",
+        "ja": "日本",
+        "ru": "Япония",
+        "ko": "일본",
+    },
     "tts_test_failed": {
         "zh-CN": "TTS 测试失败。请检查语音设置后重试。",
         "en": "TTS test failed. Check the speech settings and try again.",
@@ -4097,10 +4112,9 @@ class SettingsWindow(QDialog):
                 self._qwen_translation_region_var.set(
                     self._label_for_code(options, region)
                 )
-                if region != "custom":
-                    self._backend_base_url_var.set(
-                        get_backend_region_base_url(backend, region)
-                    )
+                regional_base_url = get_backend_region_base_url(backend, region)
+                if regional_base_url:
+                    self._backend_base_url_var.set(regional_base_url)
         else:
             self._qwen_translation_region_codes = {}
             self._qwen_translation_region_var.set("")
@@ -4144,10 +4158,8 @@ class SettingsWindow(QDialog):
         self._qwen_translation_region_var.set(
             next((label for label, code in options if code == region), options[0][0])
         )
-        if region != "custom":
-            self._backend_base_url_var.set(get_backend_region_base_url(backend, region))
-        else:
-            self._backend_base_url_var.set(base_url)
+        regional_base_url = get_backend_region_base_url(backend, region)
+        self._backend_base_url_var.set(regional_base_url or base_url)
 
     def _init_asr_provider_vars(self, asr_cfg: dict) -> None:
         qwen_cfg = asr_cfg.get("qwen3_asr", {}) if isinstance(asr_cfg.get("qwen3_asr", {}), dict) else {}
@@ -4161,8 +4173,9 @@ class SettingsWindow(QDialog):
         self._qwen_region_codes = {label: code for label, code in region_options}
         self._qwen_region_var.set(next((label for label, code in region_options if code == qwen_region), region_options[0][0]))
         base_url = str(qwen_cfg.get("base_url", "") or "").strip().rstrip("/")
-        if qwen_region != "custom":
-            base_url = get_qwen3_asr_base_url(qwen_region)
+        regional_base_url = get_qwen3_asr_base_url(qwen_region)
+        if regional_base_url:
+            base_url = regional_base_url
         self._qwen_api_key_var.set(str(qwen_cfg.get("api_key", "") or ""))
         self._qwen_base_url_var.set(base_url)
 
@@ -4282,8 +4295,7 @@ class SettingsWindow(QDialog):
             )
             self._tts_api_base_url_var.set(
                 get_tts_api_base_url(engine, current_region)
-                if current_region != "custom"
-                else draft.get("base_url", "")
+                or draft.get("base_url", "")
             )
             self._tts_api_model_var.set(draft.get("model", ""))
             self._tts_api_timeout_var.set(draft.get("timeout_seconds", ""))
@@ -4362,15 +4374,18 @@ class SettingsWindow(QDialog):
             return
         region = self._selected_tts_api_region()
         self._sync_tts_api_region_combos()
-        if region != "custom":
-            self._tts_api_base_url_var.set(get_tts_api_base_url(engine, region))
+        regional_base_url = get_tts_api_base_url(engine, region)
+        if regional_base_url:
+            self._tts_api_base_url_var.set(regional_base_url)
+        elif region == "japan" and self._tts_api_base_url_var.value().strip() in get_tts_api_known_base_urls(engine):
+            self._tts_api_base_url_var.set("")
         entry = getattr(self, "_tts_api_base_url_entry", None)
         if entry is not None and not self._qt_widget_is_alive(entry):
             self._tts_api_base_url_entry = None
             entry = None
         if entry is not None:
             entry.setText(self._tts_api_base_url_var.value())
-            entry.setReadOnly(region != "custom")
+            entry.setReadOnly(bool(regional_base_url))
 
     def _sync_tts_api_region_combos(self) -> None:
         """Keep the API and TTS-page region selectors in lockstep."""
@@ -5055,7 +5070,7 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("asr_api_key"), api)
         self._row_layout(layout, self._copy("asr_region"), self._combo("qwen_region", self._qwen_region_var, list(self._qwen_region_codes.keys()), self._on_qwen_region_changed))
         base = self._line_edit("qwen_base", self._qwen_base_url_var)
-        base.setReadOnly(self._selected_qwen_region() != "custom")
+        base.setReadOnly(bool(get_qwen3_asr_base_url(self._selected_qwen_region())))
         self._qwen_base_url_entry = base
         self._row_layout(layout, self._copy("base_url"), base)
 
@@ -5094,7 +5109,14 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("tts_service_region"), region_combo)
 
         base_tts = self._line_edit("tts_api_base_url", self._tts_api_base_url_var)
-        base_tts.setReadOnly(self._selected_tts_api_region() != "custom")
+        base_tts.setReadOnly(
+            bool(
+                get_tts_api_base_url(
+                    self._selected_tts_api_engine(),
+                    self._selected_tts_api_region(),
+                )
+            )
+        )
         self._tts_api_base_url_entry = base_tts
         self._row_layout(layout, self._copy("base_url"), base_tts)
 
@@ -5968,7 +5990,15 @@ class SettingsWindow(QDialog):
         base = self._line_edit("backend_base_url", self._backend_base_url_var)
         base.setReadOnly(
             not backend_base_url_is_editable(backend)
-            or (backend_has_service_regions(backend) and self._selected_qwen_translation_region() != "custom")
+            or (
+                backend_has_service_regions(backend)
+                and bool(
+                    get_backend_region_base_url(
+                        backend,
+                        self._selected_qwen_translation_region(),
+                    )
+                )
+            )
         )
         self._backend_base_url_entry = base
         self._row_layout(self._backend_fields_layout, self._copy("base_url"), base)
@@ -6098,12 +6128,21 @@ class SettingsWindow(QDialog):
             backend_cfg = trans_cfg.setdefault(backend, {})
             if isinstance(backend_cfg, dict):
                 backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
+                backend_cfg["base_url"] = self._backend_base_url_var.value().strip()
+                if backend_has_service_regions(backend):
+                    backend_cfg["region"] = self._selected_qwen_translation_region()
         elif scope == "asr":
             asr_cfg = cfg.setdefault("asr", {})
             asr_cfg["engine"] = self._selected_asr_engine()
             qwen_cfg = asr_cfg.setdefault("qwen3_asr", {})
             if isinstance(qwen_cfg, dict):
+                qwen_region = self._selected_qwen_region()
                 qwen_cfg["api_key"] = self._qwen_api_key_var.value().strip()
+                qwen_cfg["region"] = qwen_region
+                qwen_cfg["base_url"] = (
+                    get_qwen3_asr_base_url(qwen_region)
+                    or self._qwen_base_url_var.value().strip().rstrip("/")
+                )
             gemini_cfg = asr_cfg.setdefault("gemini_live", {})
             if isinstance(gemini_cfg, dict):
                 gemini_cfg["api_key"] = self._gemini_api_key_var.value().strip()
@@ -6116,7 +6155,14 @@ class SettingsWindow(QDialog):
             tts_cfg["engine"] = engine
             engine_cfg = tts_cfg.setdefault(engine, {})
             if isinstance(engine_cfg, dict):
-                engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
+                if engine in TTS_API_ENGINE_IDS:
+                    region = self._selected_tts_api_region()
+                    engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
+                    engine_cfg["region"] = region
+                    engine_cfg["base_url"] = (
+                        get_tts_api_base_url(engine, region)
+                        or self._tts_api_base_url_var.value().strip().rstrip("/")
+                    )
         return cfg
 
     def _show_missing_credential(self, missing: MissingCredential) -> None:
@@ -6136,8 +6182,20 @@ class SettingsWindow(QDialog):
         *,
         config: dict | None = None,
     ) -> bool:
+        validation_config = (
+            config if config is not None else self._credential_validation_config(scope)
+        )
+        if scope == "translation":
+            translation = validation_config.get("translation", {})
+            selected_backend = normalize_backend(
+                translation.get("backend")
+                if isinstance(translation, dict)
+                else self._backend_code()
+            )
+            if not backend_api_key_is_required(selected_backend):
+                return False
         missing = first_missing_required_credential(
-            config if config is not None else self._credential_validation_config(scope),
+            validation_config,
             scopes=(scope,),
             ui_language=self._ui_lang,
             active_only=False,
@@ -6228,9 +6286,14 @@ class SettingsWindow(QDialog):
                 backend_cfg["region"] = region
                 backend_cfg["base_url"] = (
                     get_backend_region_base_url(backend, region)
-                    if region != "custom"
-                    else str(draft.get("base_url", "") or "").strip().rstrip("/")
+                    or str(draft.get("base_url", "") or "").strip().rstrip("/")
                 )
+                if backend == "qianwen" and region == "japan":
+                    backend_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                        backend_cfg["base_url"],
+                        endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+                        label="Qwen Tokyo workspace API",
+                    )
             else:
                 backend_cfg["base_url"] = (
                     str(draft.get("base_url", "") or "").strip()
@@ -6306,10 +6369,24 @@ class SettingsWindow(QDialog):
             backend_cfg = {}
             trans_cfg[backend] = backend_cfg
         backend_cfg["api_key"] = self._backend_api_key_var.value().strip()
-        backend_cfg["base_url"] = (
-            self._backend_base_url_var.value().strip()
-            or get_backend_value(backend, "base_url")
-        )
+        if backend_has_service_regions(backend):
+            region = self._selected_qwen_translation_region()
+            backend_cfg["region"] = region
+            backend_cfg["base_url"] = (
+                get_backend_region_base_url(backend, region)
+                or self._backend_base_url_var.value().strip().rstrip("/")
+            )
+            if backend == "qianwen" and region == "japan":
+                backend_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                    backend_cfg["base_url"],
+                    endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+                    label="Qwen Tokyo workspace API",
+                )
+        else:
+            backend_cfg["base_url"] = (
+                self._backend_base_url_var.value().strip()
+                or get_backend_value(backend, "base_url")
+            )
         self._validate_backend_base_url(backend, backend_cfg["base_url"])
         backend_cfg["model"] = (
             self._backend_model_var.value().strip()
@@ -6353,6 +6430,13 @@ class SettingsWindow(QDialog):
             validate_api_base_url(
                 str(value or "").strip(),
                 label=f"{get_backend_label(backend, self._ui_lang)} API",
+                allow_private_http=backend
+                in {
+                    "local_ai",
+                    "libretranslate",
+                    "openai_compatible",
+                    "grok_compatible",
+                },
             )
         except ValueError as exc:
             raise ValueError(
@@ -6487,12 +6571,18 @@ class SettingsWindow(QDialog):
     def _on_qwen_translation_region_changed(self, _label: str) -> None:
         backend = self._backend_code()
         region = self._selected_qwen_translation_region()
-        if region != "custom":
-            self._backend_base_url_var.set(get_backend_region_base_url(backend, region))
+        regional_base_url = get_backend_region_base_url(backend, region)
+        if regional_base_url:
+            self._backend_base_url_var.set(regional_base_url)
+        elif region == "japan" and self._backend_base_url_var.value().strip() in get_backend_known_base_urls(backend):
+            self._backend_base_url_var.set("")
         entry = getattr(self, "_backend_base_url_entry", None)
         if entry is not None:
             entry.setText(self._backend_base_url_var.value())
-            entry.setReadOnly(not backend_base_url_is_editable(backend) or region != "custom")
+            entry.setReadOnly(
+                not backend_base_url_is_editable(backend)
+                or bool(regional_base_url)
+            )
 
     def _asr_hint_text(self, engine: str) -> str:
         if engine == "webspeech":
@@ -6623,12 +6713,18 @@ class SettingsWindow(QDialog):
         return self._qwen_model_codes.get(self._qwen_model_var.value(), QWEN3_ASR_DEFAULT_MODEL)
 
     def _on_qwen_region_changed(self, _label: str) -> None:
-        if self._selected_qwen_region() != "custom":
-            self._qwen_base_url_var.set(get_qwen3_asr_base_url(self._selected_qwen_region()))
+        region = self._selected_qwen_region()
+        regional_base_url = get_qwen3_asr_base_url(region)
+        if regional_base_url:
+            self._qwen_base_url_var.set(regional_base_url)
+        elif region == "japan" and self._qwen_base_url_var.value().strip() in {
+            value for value in QWEN3_ASR_REGION_BASE_URLS.values() if value
+        }:
+            self._qwen_base_url_var.set("")
         entry = getattr(self, "_qwen_base_url_entry", None)
         if entry is not None:
             entry.setText(self._qwen_base_url_var.value())
-            entry.setReadOnly(self._selected_qwen_region() != "custom")
+            entry.setReadOnly(bool(regional_base_url))
 
     def _input_device_choices(self) -> list[str]:
         default = self._copy("input_device_default")
@@ -7077,9 +7173,14 @@ class SettingsWindow(QDialog):
             engine_cfg["region"] = region
             engine_cfg["base_url"] = (
                 get_tts_api_base_url(engine, region)
-                if region != "custom"
-                else str(draft.get("base_url", "") or "").strip().rstrip("/")
+                or str(draft.get("base_url", "") or "").strip().rstrip("/")
             )
+            if engine == "qwen_tts" and region == "japan":
+                engine_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                    engine_cfg["base_url"],
+                    endpoint_path=QWEN_TOKYO_DASHSCOPE_PATH,
+                    label="Qwen TTS Tokyo workspace API",
+                )
             engine_cfg["model"] = (
                 str(draft.get("model", "") or "").strip()
                 or str(get_tts_api_default_value(engine, "model") or "")
@@ -7110,9 +7211,14 @@ class SettingsWindow(QDialog):
             engine_cfg["region"] = region
             engine_cfg["base_url"] = (
                 get_tts_api_base_url(engine, region)
-                if region != "custom"
-                else self._tts_api_base_url_var.value().strip().rstrip("/")
+                or self._tts_api_base_url_var.value().strip().rstrip("/")
             )
+            if engine == "qwen_tts" and region == "japan":
+                engine_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                    engine_cfg["base_url"],
+                    endpoint_path=QWEN_TOKYO_DASHSCOPE_PATH,
+                    label="Qwen TTS Tokyo workspace API",
+                )
             engine_cfg["model"] = self._tts_api_model_var.value().strip() or str(
                 get_tts_api_default_value(engine, "model") or ""
             )
@@ -9196,8 +9302,7 @@ class SettingsWindow(QDialog):
             qwen_cfg["region"] = qwen_region
             qwen_cfg["base_url"] = (
                 get_qwen3_asr_base_url(qwen_region)
-                if qwen_region != "custom"
-                else self._qwen_base_url_var.value().strip().rstrip("/")
+                or self._qwen_base_url_var.value().strip().rstrip("/")
             )
             qwen_cfg["model"] = self._selected_qwen_model()
             qwen_cfg.setdefault("language", "ja")
@@ -9220,6 +9325,12 @@ class SettingsWindow(QDialog):
             gemini_cfg.setdefault("use_live_api", True)
 
         try:
+            if isinstance(qwen_cfg, dict) and qwen_cfg.get("region") == "japan":
+                qwen_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                    qwen_cfg.get("base_url"),
+                    endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+                    label="Qwen3-ASR Tokyo workspace API",
+                )
             self._apply_backend_draft_configs(trans_cfg)
             selected_tts_engine = self._selected_tts_engine()
             self._apply_tts_api_draft_configs(tts_cfg)

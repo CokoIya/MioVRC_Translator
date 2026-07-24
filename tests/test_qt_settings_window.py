@@ -297,6 +297,113 @@ def test_save_and_tts_test_stop_before_using_provider_without_key(
     assert manager_created == []
 
 
+def test_local_backend_validation_allows_literal_private_lan_http(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    dialog._validate_backend_base_url(
+        "local_ai",
+        "http://192.168.50.20:11434/v1",
+    )
+    dialog._validate_backend_base_url(
+        "libretranslate",
+        "http://192.168.50.21:5000",
+    )
+    dialog._validate_backend_base_url(
+        "openai_compatible",
+        "http://192.168.65.2:11434/v1",
+    )
+    with pytest.raises(ValueError):
+        dialog._validate_backend_base_url(
+            "openai_compatible",
+            "http://public.example/v1",
+        )
+
+
+def test_local_ai_empty_api_key_never_opens_credential_prompt(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+    _select_settings_page(qtbot, dialog, "api_config")
+    monkeypatch.setattr(
+        settings_module,
+        "first_missing_required_credential",
+        first_missing_required_credential,
+    )
+    prompts = _capture_credential_prompts(monkeypatch)
+
+    local_ai_label = next(
+        label
+        for label, backend in dialog._backend_codes.items()
+        if backend == "local_ai"
+    )
+    dialog._backend_var.set(local_ai_label)
+    dialog._on_backend_changed(local_ai_label)
+    dialog._on_backend_model_changed("qwen2.5:7b-instruct")
+
+    assert dialog._backend_api_key_var.value() == ""
+    assert dialog._prompt_for_missing_credential("translation") is False
+    assert prompts == []
+
+
+def test_unsaved_local_qwen_asr_and_tts_urls_do_not_require_api_keys(
+    qtbot,
+    config,
+    monkeypatch,
+):
+    _patch_dialog_deps(monkeypatch)
+    config["ui"]["language"] = "en"
+    config["asr"] = {
+        "engine": "qwen3-asr",
+        "qwen3_asr": {"api_key": "", "region": "singapore"},
+    }
+    config["tts"] = {
+        "enabled": True,
+        "engine": "qwen_tts",
+        "qwen_tts": {
+            "api_key": "",
+            "region": "singapore",
+            "model": "qwen3-tts-flash",
+        },
+    }
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    qwen_custom_label = next(
+        label for label, code in dialog._qwen_region_codes.items()
+        if code == "custom"
+    )
+    dialog._qwen_region_var.set(qwen_custom_label)
+    dialog._qwen_base_url_var.set("http://192.168.50.20:8000/v1")
+
+    tts_custom_label = next(
+        label for label, code in dialog._tts_api_region_codes.items()
+        if code == "custom"
+    )
+    dialog._tts_api_region_var.set(tts_custom_label)
+    dialog._tts_api_base_url_var.set("http://192.168.50.21:9000/api/v1")
+
+    assert first_missing_required_credential(
+        dialog._credential_validation_config("asr"),
+        scopes=("asr",),
+    ) is None
+    assert first_missing_required_credential(
+        dialog._credential_validation_config("tts"),
+        scopes=("tts",),
+    ) is None
+
+
 def test_parent_owned_settings_windows_release_timers_and_qobjects_on_close(
     qtbot,
     config,
@@ -1197,6 +1304,22 @@ def test_qwen_translation_region_controls_base_url(qtbot, config, monkeypatch):
     assert dialog._backend_base_url_var.value() == QWEN_TRANSLATION_BASE_URL_MAINLAND
     assert dialog._backend_base_url_entry is not None
     assert dialog._backend_base_url_entry.isReadOnly() is True
+
+    japan_label = next(
+        label for label, code in dialog._qwen_translation_region_codes.items()
+        if code == "japan"
+    )
+    dialog._qwen_translation_region_var.set(japan_label)
+    dialog._on_qwen_translation_region_changed(japan_label)
+    workspace_url = (
+        "https://ws-player.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    dialog._backend_base_url_var.set(workspace_url)
+
+    assert dialog._backend_base_url_entry.isReadOnly() is False
+    connection_config = dialog._translation_connection_config()
+    assert connection_config["translation"]["qianwen"]["region"] == "japan"
+    assert connection_config["translation"]["qianwen"]["base_url"] == workspace_url
 
     dialog.reject()
 

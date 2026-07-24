@@ -1,10 +1,11 @@
 from email.message import Message
 import io
+import socket
 import urllib.error
 
 import pytest
 
-from src.utils import secure_http
+from src.utils import provider_network, secure_http
 
 
 class _Response:
@@ -144,3 +145,86 @@ def test_keyless_local_service_can_explicitly_allow_literal_private_http():
             "http://translator.lan:8000/v1",
             allow_private_http=True,
         )
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://mio.localhost:11434/v1",
+        "http://100.100.100.100:11434/v1",
+    ),
+)
+def test_local_service_can_allow_reserved_local_http_hosts(url):
+    assert secure_http.validate_api_base_url(
+        url,
+        allow_private_http=True,
+    ) == url
+
+
+@pytest.mark.parametrize(
+    "host",
+    ("host.docker.internal", "gateway.docker.internal"),
+)
+def test_reserved_docker_http_host_requires_safe_dns_results(monkeypatch, host):
+    monkeypatch.setattr(
+        provider_network.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("192.168.65.2", 0),
+            ),
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("100.64.0.3", 0),
+            ),
+        ],
+    )
+    url = f"http://{host}:11434/v1"
+
+    assert secure_http.validate_api_base_url(
+        url,
+        allow_private_http=True,
+    ) == url
+
+
+@pytest.mark.parametrize(
+    "addresses",
+    (
+        ("8.8.8.8",),
+        ("192.168.65.2", "8.8.8.8"),
+    ),
+)
+def test_reserved_docker_http_host_rejects_public_dns_results(
+    monkeypatch,
+    addresses,
+):
+    monkeypatch.setattr(
+        provider_network.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                (address, 0),
+            )
+            for address in addresses
+        ],
+    )
+
+    with pytest.raises(ValueError, match="must use HTTPS") as exc_info:
+        secure_http.validate_api_base_url(
+            "http://host.docker.internal:11434/v1",
+            label="Translation API",
+            allow_private_http=True,
+        )
+
+    assert "host.docker.internal" not in str(exc_info.value)

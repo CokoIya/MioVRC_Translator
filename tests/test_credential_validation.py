@@ -98,6 +98,21 @@ def test_no_key_translation_provider_does_not_report_a_requirement():
     assert missing_required_credentials(config, scopes=("translation",)) == ()
 
 
+def test_keyless_openai_compatible_local_endpoint_does_not_require_api_key():
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "output_format": "translated_only",
+            "openai_compatible": {
+                "api_key": "",
+                "base_url": "http://192.168.65.2:11434/v1",
+            },
+        }
+    }
+
+    assert missing_required_credentials(config, scopes=("translation",)) == ()
+
+
 def test_main_and_enabled_listen_asr_requirements_are_checked_and_deduplicated():
     config = {
         "asr": {
@@ -116,6 +131,21 @@ def test_main_and_enabled_listen_asr_requirements_are_checked_and_deduplicated()
     assert missing[0].provider_id == "qwen3-asr"
     assert missing[0].credential_id == "asr.qwen3_asr.api_key"
     assert missing[0].focus_target == "qwen_api_key"
+
+
+def test_local_qwen_asr_endpoint_does_not_require_api_key():
+    config = {
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {
+                "api_key": "",
+                "region": "custom",
+                "base_url": "http://192.168.1.20:8000/v1",
+            },
+        }
+    }
+
+    assert missing_required_credentials(config, scopes=("asr",)) == ()
 
 
 def test_inactive_listen_asr_is_skipped_only_in_active_mode():
@@ -179,6 +209,22 @@ def test_api_tts_requirement_respects_enabled_state():
     assert len(missing) == 1
     assert missing[0].credential_id == "tts.qwen_tts.api_key"
     assert missing[0].focus_target == "tts_api_key"
+
+
+def test_local_api_tts_endpoint_does_not_require_api_key():
+    config = {
+        "tts": {
+            "enabled": True,
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "api_key": "",
+                "region": "custom",
+                "base_url": "http://10.0.0.20:9000/api/v1",
+            },
+        }
+    }
+
+    assert missing_required_credentials(config, scopes=("tts",)) == ()
 
 
 def test_nonblank_protected_secret_blob_counts_as_configured():

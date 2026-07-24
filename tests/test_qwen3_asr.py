@@ -13,6 +13,7 @@ import pytest
 
 from src.asr import qwen3_asr
 from src.asr.errors import (
+    ASRConfigurationError,
     ASRMissingAPIKeyError,
     ASRNetworkError,
     ASRProviderError,
@@ -147,11 +148,81 @@ def _provider_config(**overrides):
     return {"asr": {"qwen3_asr": provider_config}}
 
 
+def test_qwen3_asr_japan_region_uses_explicit_workspace_endpoint():
+    workspace_url = (
+        "https://ws-player.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    provider = Qwen3ASRProvider(
+        _provider_config(region="japan", base_url=workspace_url)
+    )
+
+    assert provider.region == "japan"
+    assert provider._resolved_base_url() == workspace_url
+
+
+def test_qwen3_asr_japan_region_rejects_shared_international_endpoint():
+    provider = Qwen3ASRProvider(
+        _provider_config(
+            region="japan",
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        )
+    )
+
+    with pytest.raises(ASRConfigurationError, match="Tokyo workspace endpoint"):
+        provider._resolved_base_url()
+
+
 def test_qwen3_asr_requires_api_key():
     provider = Qwen3ASRProvider({"asr": {"qwen3_asr": {"api_key": ""}}})
 
     with pytest.raises(ASRMissingAPIKeyError):
         provider.load()
+
+
+def test_qwen3_asr_local_lan_endpoint_allows_no_key_and_bypasses_proxy(monkeypatch):
+    state = _install_fake_runtime(monkeypatch, ["local transcript"])
+    provider = Qwen3ASRProvider(
+        _provider_config(
+            api_key="",
+            region="custom",
+            base_url="http://192.168.50.20:8000/v1",
+            language="ja",
+        )
+    )
+
+    try:
+        assert (
+            provider.transcribe(
+                np.zeros(1600, dtype=np.float32),
+                language="auto",
+            )
+            == "local transcript"
+        )
+        assert state.openai_clients[0].kwargs["api_key"] == "local-no-key"
+        assert state.http_clients[0].kwargs["trust_env"] is False
+        request = SimpleNamespace(
+            headers={"authorization": "Bearer local-no-key"}
+        )
+        request_hooks = state.http_clients[0].kwargs["event_hooks"]["request"]
+        assert len(request_hooks) == 1
+        asyncio.run(request_hooks[0](request))
+        assert "authorization" not in request.headers
+        assert state.calls[0]["extra_body"] == {
+            "asr_options": {"enable_itn": False}
+        }
+    finally:
+        provider.close()
+
+
+def test_qwen3_asr_forwards_supported_global_language_hint(monkeypatch):
+    state = _install_fake_runtime(monkeypatch, ["ol\u00e1"])
+    provider = Qwen3ASRProvider(_provider_config(language="ja"))
+
+    try:
+        assert provider.transcribe(np.zeros(1600), language="pt-BR") == "ol\u00e1"
+        assert state.calls[0]["extra_body"]["asr_options"]["language"] == "pt"
+    finally:
+        provider.close()
 
 
 def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(

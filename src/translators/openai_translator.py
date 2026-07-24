@@ -22,6 +22,13 @@ from src.utils.provider_diagnostics import (
     safe_exception_summary,
 )
 from src.utils.provider_http_timing import ProviderHttpTimingHooks
+from src.utils.provider_network import (
+    direct_connection_ssl_context,
+    is_special_local_provider_host,
+    resolve_special_local_provider_addresses,
+    should_bypass_environment_proxies,
+)
+from src.utils.qwen_endpoints import is_qwen_translation_api_host
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
@@ -71,6 +78,7 @@ class OpenAITranslator(BaseTranslator):
         read_timeout_s: float | None = None,
         write_timeout_s: float | None = None,
         wall_timeout_s: float | None = None,
+        omit_placeholder_authorization: bool = False,
     ):
         super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
@@ -83,6 +91,31 @@ class OpenAITranslator(BaseTranslator):
             label="Translation API",
             allow_private_http=allow_private_http,
         )
+        parsed_base_url = urllib.parse.urlsplit(validated_base_url)
+        base_hostname = (parsed_base_url.hostname or "").rstrip(".").casefold()
+        self._pinned_local_http_host = ""
+        self._pinned_local_http_address = ""
+        self._pinned_local_http_authority = ""
+        if (
+            parsed_base_url.scheme.casefold() == "http"
+            and is_special_local_provider_host(base_hostname)
+        ):
+            resolved_addresses = resolve_special_local_provider_addresses(
+                base_hostname
+            )
+            if not resolved_addresses:
+                raise ValueError(
+                    "Translation API base URL must use HTTPS or an explicit "
+                    "loopback/private local HTTP host"
+                )
+            self._pinned_local_http_host = base_hostname
+            self._pinned_local_http_address = str(resolved_addresses[0])
+            base_port = parsed_base_url.port
+            self._pinned_local_http_authority = (
+                base_hostname
+                if base_port in (None, 80)
+                else f"{base_hostname}:{base_port}"
+            )
         self._timeout_s = self._positive_timeout(timeout_s, 15.0, minimum=1.0)
         self._connect_timeout_s = self._positive_timeout(
             connect_timeout_s,
@@ -118,24 +151,44 @@ class OpenAITranslator(BaseTranslator):
         self._max_retries = max(int(max_retries), 0)
         self._custom_headers = normalize_openai_custom_headers(custom_headers)
         self._http_timing = ProviderHttpTimingHooks()
+        self._omit_placeholder_authorization = bool(
+            omit_placeholder_authorization
+        )
+        self._trust_env = not (
+            bool(self._pinned_local_http_address)
+            or should_bypass_environment_proxies(validated_base_url)
+        )
         # The realtime scheduler owns several long-lived translation workers.
         # httpx otherwise expires idle connections after five seconds, so a
         # worker rotation can turn nearly every conversational request into a
         # fresh proxy/TCP/TLS handshake. Keep each worker's pool warm long
         # enough to be reused across normal pauses between spoken sentences.
-        self._http_client = httpx.Client(
-            timeout=self._request_timeout,
-            limits=httpx.Limits(
+        request_hooks = []
+        if self._pinned_local_http_address:
+            request_hooks.append(self._pin_reserved_local_http_request)
+        if self._omit_placeholder_authorization:
+            request_hooks.append(self._remove_placeholder_authorization)
+        request_hooks.append(self._http_timing.on_request)
+        http_client_kwargs: dict[str, object] = {
+            "timeout": self._request_timeout,
+            "limits": httpx.Limits(
                 max_connections=4,
                 max_keepalive_connections=2,
                 keepalive_expiry=OPENAI_HTTP_KEEPALIVE_EXPIRY_S,
             ),
-            event_hooks={
-                "request": [self._http_timing.on_request],
+            "event_hooks": {
+                "request": request_hooks,
                 "response": [self._http_timing.on_response],
             },
-            trust_env=True,
-        )
+            # Local model servers should never detour through a desktop,
+            # corporate, or environment-configured proxy. Public providers
+            # retain normal proxy support for users who require it.
+            "trust_env": self._trust_env,
+        }
+        direct_ssl_context = direct_connection_ssl_context(validated_base_url)
+        if direct_ssl_context is not None:
+            http_client_kwargs["verify"] = direct_ssl_context
+        self._http_client = httpx.Client(**http_client_kwargs)
         try:
             client_kwargs = dict(
                 api_key=api_key,
@@ -164,6 +217,10 @@ class OpenAITranslator(BaseTranslator):
             urllib.parse.urlsplit(validated_base_url).hostname or ""
         ).rstrip(".").casefold()
         model_name = str(model).strip().casefold()
+        self._is_qwen_api_endpoint = is_qwen_translation_api_host(
+            self._base_hostname,
+            provider_id=self._provider_id,
+        )
         self._is_openai_api = self._base_hostname == "api.openai.com"
         self._is_reasoning_model = (
             "reasoner" in model_name
@@ -179,10 +236,10 @@ class OpenAITranslator(BaseTranslator):
             or model_name.startswith("mimo-")
         )
         self._uses_qwen_mt_translation_options = (
-            "dashscope" in self._base_hostname and model_name.startswith("qwen-mt-")
+            self._is_qwen_api_endpoint and model_name.startswith("qwen-mt-")
         )
         self._is_qwen_backend = (
-            "dashscope" in self._base_hostname
+            self._is_qwen_api_endpoint
             or model_name.startswith("qwen")
         )
         # Responses API is opt-in via env var so model routing stays driven by
@@ -207,6 +264,26 @@ class OpenAITranslator(BaseTranslator):
         self._streaming_enabled = bool(streaming)
         self._streaming_supported = True
         self._last_response_summary = ""
+
+    @staticmethod
+    def _remove_placeholder_authorization(request: httpx.Request) -> None:
+        """Do not send the SDK-only placeholder as a real bearer token."""
+
+        if request.headers.get("authorization", "").strip() == "Bearer local-ai":
+            request.headers.pop("authorization", None)
+
+    def _pin_reserved_local_http_request(self, request: httpx.Request) -> None:
+        """Connect a validated Docker gateway name to its pinned local address."""
+
+        request_host = str(request.url.host or "").rstrip(".").casefold()
+        allowed_hosts = {
+            self._pinned_local_http_host,
+            self._pinned_local_http_address.casefold(),
+        }
+        if request.url.scheme.casefold() != "http" or request_host not in allowed_hosts:
+            raise RuntimeError("Local Translation API request target was rejected")
+        request.url = request.url.copy_with(host=self._pinned_local_http_address)
+        request.headers["host"] = self._pinned_local_http_authority
 
     @staticmethod
     def _positive_timeout(
@@ -266,7 +343,10 @@ class OpenAITranslator(BaseTranslator):
             hostname = str(getattr(self, "_base_url", "") or "").casefold()
         if (
             self._provider_id in {"qianwen", "hunyuan"}
-            or "dashscope" in hostname
+            or is_qwen_translation_api_host(
+                hostname,
+                provider_id=self._provider_id,
+            )
         ) and not model_name.startswith("qwen-mt-"):
             body["enable_thinking"] = False
             self._managed_no_thinking_extra_keys.add("enable_thinking")
@@ -1128,7 +1208,10 @@ class OpenAITranslator(BaseTranslator):
         hostname = str(getattr(self, "_base_hostname", "") or "").casefold()
         if not hostname:
             hostname = str(getattr(self, "_base_url", "") or "").casefold()
-        if "dashscope" not in hostname:
+        if not is_qwen_translation_api_host(
+            hostname,
+            provider_id=getattr(self, "_provider_id", ""),
+        ):
             return messages
 
         system_parts: list[str] = []

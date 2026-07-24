@@ -27,7 +27,18 @@ from .persona_instructions import qwen_tts_model_supports_instructions
 from src.translators.factory import _float_setting, _int_setting
 from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
 from src.utils.http_session_pool import ThreadLocalSessionPool
+from src.utils.provider_network import (
+    SystemTrustHTTPAdapter,
+    configure_requests_session_for_url,
+    is_local_provider_address,
+    is_local_provider_host,
+    should_bypass_environment_proxies,
+)
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.qwen_endpoints import (
+    QWEN_TOKYO_DASHSCOPE_PATH,
+    require_qwen_tokyo_workspace_base_url,
+)
 from src.utils.secure_http import (
     open_validated_requests_response,
     read_bounded_requests_response,
@@ -103,7 +114,7 @@ class _PinnedAudioTarget:
     host_header: str
 
 
-class _PinnedAddressAdapter(requests.adapters.HTTPAdapter):
+class _PinnedAddressAdapter(SystemTrustHTTPAdapter):
     """Connect to one validated IP while preserving HTTP Host and TLS SNI."""
 
     def __init__(self, target: _PinnedAudioTarget) -> None:
@@ -299,10 +310,17 @@ class _APITTSBase(BaseTTS):
         self.api_key = str(resolved.get("api_key", "") or "").strip()
         self.region = str(resolved.get("region", "") or "").strip()
         raw_base_url = str(resolved.get("base_url", "") or "").strip()
+        if self.ENGINE_ID == "qwen_tts" and self.region == "japan":
+            raw_base_url = require_qwen_tokyo_workspace_base_url(
+                raw_base_url,
+                endpoint_path=QWEN_TOKYO_DASHSCOPE_PATH,
+                label="Qwen TTS Tokyo workspace API",
+            )
         self.base_url = (
             validate_api_base_url(
                 raw_base_url,
                 label=f"{self.ENGINE_LABEL} API",
+                allow_private_http=should_bypass_environment_proxies(raw_base_url),
             )
             if raw_base_url
             else ""
@@ -345,7 +363,9 @@ class _APITTSBase(BaseTTS):
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(
+        configure_requests_session_for_url(session, self.base_url)
+        previous_https_adapter = getattr(session, "adapters", {}).get("https://")
+        adapter = SystemTrustHTTPAdapter(
             max_retries=self._adapter_max_retries(),
             pool_connections=4,
             pool_maxsize=4,
@@ -353,6 +373,8 @@ class _APITTSBase(BaseTTS):
         )
         session.mount("https://", adapter)
         session.mount("http://", adapter)
+        if previous_https_adapter is not None and previous_https_adapter is not adapter:
+            previous_https_adapter.close()
         # Per-origin counters are diagnostic hints. A warm Session can still
         # reconnect after an idle timeout, so logs call this session reuse
         # rather than claiming socket reuse that requests cannot expose.
@@ -729,18 +751,21 @@ class _APITTSBase(BaseTTS):
         return voices
 
     def _auth_headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "audio/*, application/json",
+            "Accept-Encoding": "identity",
+        }
+        if not self.api_key and should_bypass_environment_proxies(self.base_url):
+            return headers
         self._require_api_key()
         auth_value = (
             f"{self.AUTH_HEADER_PREFIX}{self.api_key}"
             if self.AUTH_HEADER_PREFIX
             else self.api_key
         )
-        return {
-            self.AUTH_HEADER_NAME: auth_value,
-            "Content-Type": "application/json",
-            "Accept": "audio/*, application/json",
-            "Accept-Encoding": "identity",
-        }
+        headers[self.AUTH_HEADER_NAME] = auth_value
+        return headers
 
     def _require_api_key(self) -> None:
         if not self.api_key:
@@ -753,9 +778,12 @@ class _APITTSBase(BaseTTS):
             raise RuntimeError(f"{self.ENGINE_LABEL} API Key contains invalid characters")
 
     def _request_json_audio(self, url: str, payload: Mapping[str, object]) -> bytes:
-        if not _is_safe_api_request_url(url):
+        if not _is_safe_api_request_url(
+            url,
+            allow_private_http=should_bypass_environment_proxies(self.base_url),
+        ):
             raise RuntimeError(
-                f"{self.ENGINE_LABEL} API URL must use HTTPS or loopback HTTP"
+                f"{self.ENGINE_LABEL} API URL must use HTTPS or local HTTP"
             )
         response = self._post_json_response(
             url,
@@ -1522,28 +1550,45 @@ def _validated_audio_download_target(
     if not addresses:
         return None
 
-    is_loopback = all(address.is_loopback for address in addresses)
+    is_local = all(is_local_provider_address(address) for address in addresses)
     api_is_local = False
-    if is_loopback and api_origin is not None:
+    api_addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...] = ()
+    if is_local and api_origin is not None:
         api_addresses = (
             addresses
             if api_origin == origin
             else resolver(api_origin[1], api_origin[2])
         )
         api_is_local = bool(api_addresses) and all(
-            address.is_loopback for address in api_addresses
+            is_local_provider_address(address) for address in api_addresses
         )
-    if is_loopback:
+    if is_local:
         safe = bool(
             api_is_local
             and api_origin is not None
+            and scheme == api_origin[0]
             and effective_port == api_origin[2]
+            and bool(set(addresses).intersection(api_addresses))
         )
     else:
+        trusted_qwen_result_host = bool(_DASHSCOPE_RESULT_HOST_RE.fullmatch(host))
+        addresses_are_publicly_routable = all(
+            address.is_global
+            or (
+                trusted_qwen_result_host
+                and not address.is_private
+                and not address.is_loopback
+                and not address.is_link_local
+                and not address.is_multicast
+                and not address.is_unspecified
+                and not address.is_reserved
+            )
+            for address in addresses
+        )
         safe = bool(
             scheme == "https"
             and port in (None, 443)
-            and all(address.is_global for address in addresses)
+            and addresses_are_publicly_routable
         )
     if not safe:
         return None
@@ -1578,7 +1623,11 @@ def _is_safe_audio_download_url(url: str, *, api_base_url: str) -> bool:
     ) is not None
 
 
-def _is_safe_api_request_url(url: str) -> bool:
+def _is_safe_api_request_url(
+    url: str,
+    *,
+    allow_private_http: bool = False,
+) -> bool:
     candidate = str(url or "").strip()
     try:
         parsed = urlsplit(candidate)
@@ -1593,7 +1642,21 @@ def _is_safe_api_request_url(url: str) -> bool:
     if scheme != "http":
         return False
     addresses = _resolved_ip_addresses(host, port)
-    return bool(addresses) and all(address.is_loopback for address in addresses)
+    explicit_local_host = is_local_provider_host(host)
+    return bool(addresses) and all(
+        address.is_loopback
+        or (
+            allow_private_http
+            and (
+                is_local_provider_address(address)
+                or (
+                    explicit_local_host
+                    and is_local_provider_address(address, include_shared=True)
+                )
+            )
+        )
+        for address in addresses
+    )
 
 
 def _normalize_qwen_language_type_hint(value: object) -> str:

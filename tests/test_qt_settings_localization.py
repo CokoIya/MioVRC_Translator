@@ -177,3 +177,6 @@ def test_tabbed_settings_runtime_language_switch_preserves_unsaved_qwen_values(q
     assert collected["translation"]["backend"] == "qianwen"
     assert collected["translation"]["qianwen"]["api_key"] == "unsaved-qwen-key"
     assert collected["translation"]["qianwen"]["region"] == "china_mainland"
+    assert collected["translation"]["qianwen"]["base_url"] == (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )

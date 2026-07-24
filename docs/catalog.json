@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-07-16",
+  "updated": "2026-07-24",
   "translation_backends": {
     "openai": {
       "label": "GPT",
@@ -102,14 +102,14 @@
     },
     "qianwen": {
       "label": "Qwen",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "model": "qwen-mt-plus",
       "timeout_s": 20.0,
       "max_output_tokens": 192,
       "max_retries": 0,
       "model_input": "select",
       "base_url_input": "entry",
-      "api_key_hint": "Mainland China should use the mainland DashScope endpoint. Overseas users should prefer the international endpoint or a nearby proxy."
+      "api_key_hint": "Use the API key issued for the selected Qwen service region. Japan requires the workspace-specific Base URL issued by Model Studio."
     },
     "hunyuan": {
       "label": "Tencent Hunyuan",
@@ -341,7 +341,8 @@
   "translation_backend_region_base_urls": {
     "qianwen": {
       "china_mainland": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "singapore": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      "singapore": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "japan": ""
     },
     "deepseek": {
       "official": "https://api.deepseek.com"
@@ -364,7 +365,9 @@
       "china-mainland": "china_mainland",
       "intl": "singapore",
       "international": "singapore",
-      "sg": "singapore"
+      "sg": "singapore",
+      "jp": "japan",
+      "japan": "japan"
     },
     "deepseek": {
       "global": "official",
@@ -411,7 +414,7 @@
     }
   },
   "translation_backend_default_regions": {
-    "qianwen": "china_mainland",
+    "qianwen": "singapore",
     "deepseek": "official",
     "xiaomi": "global",
     "nvidia": "global"

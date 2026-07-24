@@ -39,6 +39,9 @@ anthropic>=0.28.0,<1.0.0
 google-genai>=1.0.0,<2.0.0
 # Qwen TTS DNS pinning subclasses the TLS-aware adapter hook added in 2.32.2.
 requests>=2.32.2,<3.0.0
+# Use the native Windows/macOS/Linux trust store for provider HTTPS. On
+# Windows this also enables secure intermediate-certificate chain building.
+truststore>=0.10.4,<1.0.0
 cryptography>=48.0.1,<49.0.0  # Ed25519 update-manifest signing and verification
 charset-normalizer>=3.4.0,<4.0.0  # bundled explicitly so requests has text detection in PyInstaller builds
 aiohttp>=3.14.1,<4.0.0        # secure async HTTP floor used by API transports

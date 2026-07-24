@@ -204,6 +204,41 @@ if ($null -eq $isccVersion) {
     }
 }
 if ($null -eq $isccVersion) {
+    # Some current per-user Inno Setup installations stamp ISCC.exe and the
+    # compiler binaries with 0.0.0.0 and omit an uninstall-registry entry.
+    # Their sibling uninstaller retains the real product version. Accept that
+    # fallback only when it is a regular file in the exact validated compiler
+    # directory, so an unrelated executable cannot satisfy the release gate.
+    $innoUninstaller = Join-Path $isccDirectory 'unins000.exe'
+    if (Test-Path -LiteralPath $innoUninstaller -PathType Leaf) {
+        $uninstallerItem = Get-Item -LiteralPath $innoUninstaller -Force
+        $uninstallerDirectory = [IO.Path]::GetFullPath(
+            (Split-Path -Parent $uninstallerItem.FullName)
+        ).TrimEnd('\')
+        if (
+            $uninstallerDirectory.Equals(
+                $isccDirectory,
+                [StringComparison]::OrdinalIgnoreCase
+            ) -and
+            ($uninstallerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0
+        ) {
+            $uninstallerVersionText = [Diagnostics.FileVersionInfo]::GetVersionInfo(
+                $uninstallerItem.FullName
+            ).ProductVersion
+            $uninstallerVersionMatch = [regex]::Match(
+                [string]$uninstallerVersionText,
+                '\d+\.\d+\.\d+(?:\.\d+)?'
+            )
+            if ($uninstallerVersionMatch.Success) {
+                $candidateVersion = [Version]$uninstallerVersionMatch.Value
+                if ($candidateVersion -ge [Version]'6.0.0') {
+                    $isccVersion = $candidateVersion
+                }
+            }
+        }
+    }
+}
+if ($null -eq $isccVersion) {
     throw "Unable to determine the Inno Setup compiler version: $iscc"
 }
 if ($isccVersion -lt [Version]'6.5.0') {

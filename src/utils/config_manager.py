@@ -1259,6 +1259,12 @@ def _ensure_translation_backend_region_config(
         if regional_base_url and base_url != regional_base_url:
             backend_cfg["base_url"] = regional_base_url
             changed = True
+        elif not regional_base_url:
+            known_base_urls = get_backend_known_base_urls(backend_code)
+            if "base_url" not in backend_cfg or base_url in known_base_urls:
+                if backend_cfg.get("base_url") != "":
+                    backend_cfg["base_url"] = ""
+                    changed = True
     elif "base_url" not in backend_cfg:
         backend_cfg["base_url"] = ""
         changed = True
@@ -1698,6 +1704,20 @@ def _ensure_translation_config(
         backend_cfg = trans_cfg.get(backend, {})
         if not isinstance(backend_cfg, dict):
             continue
+        if backend_has_service_regions(backend):
+            region = normalize_backend_region(backend, backend_cfg.get("region"))
+            base_url = str(backend_cfg.get("base_url", "") or "").strip().rstrip("/")
+            known_base_urls = {
+                str(value).strip().rstrip("/")
+                for value in get_backend_known_base_urls(backend)
+            }
+            # A self-hosted or relay endpoint controls its own model catalog.
+            # Do not rewrite an identifier merely because the hosted service
+            # retired the same name.
+            if region == "custom" or (
+                base_url and known_base_urls and base_url not in known_base_urls
+            ):
+                continue
         model = str(backend_cfg.get("model", "") or "").strip().lower()
         replacement = replacements.get(model)
         if replacement:
@@ -1881,10 +1901,18 @@ def _ensure_asr_config(config: dict) -> bool:
         changed = True
     qwen_base_url = str(qwen_cfg.get("base_url", "") or "").strip().rstrip("/")
     auto_base_url = get_qwen3_asr_base_url(qwen_region)
-    known_base_urls = frozenset(QWEN3_ASR_REGION_BASE_URLS.values())
+    known_base_urls = frozenset(
+        value for value in QWEN3_ASR_REGION_BASE_URLS.values() if value
+    )
     if auto_base_url and (not qwen_base_url or qwen_base_url in known_base_urls):
         if qwen_base_url != auto_base_url:
             qwen_cfg["base_url"] = auto_base_url
+            changed = True
+    elif qwen_region == "japan" and (
+        "base_url" not in qwen_cfg or qwen_base_url in known_base_urls
+    ):
+        if qwen_cfg.get("base_url") != "":
+            qwen_cfg["base_url"] = ""
             changed = True
     qwen_model = str(qwen_cfg.get("model", "") or "").strip()
     if not qwen_model or qwen_model in QWEN3_ASR_LEGACY_MODEL_IDS:

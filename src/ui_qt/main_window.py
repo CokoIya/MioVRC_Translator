@@ -2028,7 +2028,7 @@ class MainWindow(QMainWindow):
             selected_label = self._src_lang_combo.currentText()
         code = self._src_lang_codes.get(str(selected_label or ""), "auto")
         self._current_src_lang = None if code == "auto" else code
-        self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
+        self._current_asr_lang = code
         self._config.setdefault("translation", {})["source_language"] = code
         if not getattr(self, "_refreshing_language_combos", False):
             self._refresh_language_combos()
@@ -5127,7 +5127,7 @@ class MainWindow(QMainWindow):
                 return None
             self._reset_streaming_state(DESKTOP_SOURCE)
             selected_src_lang = self._listen_source_language()
-            asr_lang = selected_src_lang
+            asr_lang = selected_src_lang or "auto"
 
         scheduler = getattr(self, "_realtime_scheduler", None)
         if scheduler is None:
@@ -5182,7 +5182,7 @@ class MainWindow(QMainWindow):
         else:
             if self._listen_tts_echo_suppress_active():
                 return
-            asr_lang = self._listen_source_language()
+            asr_lang = self._listen_source_language() or "auto"
         if not self._should_process_partial_asr(source):
             return
 
@@ -8499,7 +8499,7 @@ class MainWindow(QMainWindow):
         self._current_tgt_lang_3 = str(trans_cfg.get("target_language_3", self._current_tgt_lang_3) or "")
         src_lang = str(trans_cfg.get("source_language", "auto") or "auto")
         self._current_src_lang = None if src_lang == "auto" else src_lang
-        self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
+        self._current_asr_lang = src_lang
         self._main_theme_preference = _main_theme_preference_from_config(self._config)
         self._main_theme = _resolve_main_theme(self._main_theme_preference)
         app = QApplication.instance()
@@ -9271,7 +9271,7 @@ class MainWindow(QMainWindow):
             src_reverse = {code: label for label, code in self._all_manual_lang_options}
             src_code = str(trans_cfg.get("source_language", "auto") or "auto")
             self._current_src_lang = None if src_code == "auto" else src_code
-            self._current_asr_lang = self._current_src_lang if self._current_src_lang in {"zh", "yue", "ja", "en", "ko"} else None
+            self._current_asr_lang = src_code
 
             if self._src_lang_combo:
                 blocked = self._src_lang_combo.blockSignals(True)

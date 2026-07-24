@@ -10,6 +10,7 @@ from src.asr.model_registry import (
 from src.tts.api_tts_config import TTS_API_ENGINE_IDS
 from src.translators.asr_rewriter import asr_rewrite_enabled
 from src.utils.i18n import tr
+from src.utils.provider_network import should_bypass_environment_proxies
 from src.utils.ui_config import (
     DEFAULT_ASR_ENGINE,
     backend_api_key_is_required,
@@ -88,9 +89,12 @@ def _translation_requirement(
             return None
 
     backend = normalize_backend(trans_cfg.get("backend"))
-    if not backend_api_key_is_required(backend):
-        return None
     backend_cfg = _mapping(trans_cfg.get(backend))
+    if not backend_api_key_is_required(backend) or (
+        backend in {"local_ai", "openai_compatible", "grok_compatible"}
+        and should_bypass_environment_proxies(backend_cfg.get("base_url"))
+    ):
+        return None
     if _has_credential(backend_cfg.get("api_key")):
         return None
 
@@ -117,6 +121,10 @@ def _asr_requirement(
         return None
     config_key, provider_label, focus_target = credential_spec
     provider_cfg = _mapping(asr_cfg.get(config_key))
+    if normalized_engine == "qwen3-asr" and should_bypass_environment_proxies(
+        provider_cfg.get("base_url")
+    ):
+        return None
     if _has_credential(provider_cfg.get("api_key")):
         return None
     return MissingCredential(
@@ -189,6 +197,8 @@ def _tts_requirement(
     if engine not in TTS_API_ENGINE_IDS:
         return None
     engine_cfg = _mapping(tts_cfg.get(engine))
+    if should_bypass_environment_proxies(engine_cfg.get("base_url")):
+        return None
     if _has_credential(engine_cfg.get("api_key")):
         return None
 

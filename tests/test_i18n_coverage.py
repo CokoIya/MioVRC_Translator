@@ -85,8 +85,12 @@ def test_output_format_options_are_localized():
 
 def test_qwen_translation_region_helpers():
     assert normalize_qwen_translation_region("intl") == "singapore"
+    assert normalize_qwen_translation_region("jp") == "japan"
     assert normalize_qwen_translation_region("china") == "china_mainland"
     assert get_qwen_translation_base_url("singapore").startswith("https://dashscope-intl.")
+    assert get_qwen_translation_base_url("japan") == ""
+    assert backend_region_for_ui_language("qianwen", "ja") == "singapore"
+    assert backend_region_for_ui_language("qianwen", "en") == "singapore"
     assert normalize_backend_region("deepseek", "china") == "official"
     assert get_backend_region_base_url("deepseek", "official") == DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL
     assert normalize_backend_region("xiaomi", "token-plan-sgp") == "singapore_cluster"

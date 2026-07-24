@@ -32,6 +32,14 @@ from src.asr.errors import (
     ASRTemporaryUnavailableError,
 )
 from src.asr.text_corrections import LayeredASRCorrector
+from src.utils.provider_network import (
+    direct_connection_ssl_context,
+    should_bypass_environment_proxies,
+)
+from src.utils.qwen_endpoints import (
+    QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+    require_qwen_tokyo_workspace_base_url,
+)
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
@@ -61,6 +69,21 @@ _LANGUAGE_ALIASES = {
     "en-gb": "en",
     "ko-kr": "ko",
     "kr": "ko",
+    "pt-br": "pt",
+    "pt-pt": "pt",
+}
+
+_QWEN_LANGUAGE_HINTS = {
+    "ja",
+    "zh",
+    "en",
+    "ko",
+    "ru",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "it",
 }
 
 
@@ -77,7 +100,18 @@ def _language_code(language: object) -> str:
     if not text or text == "auto":
         return ""
     text = _LANGUAGE_ALIASES.get(text, text.split("-", 1)[0])
-    return text if text in {"ja", "zh", "en", "ko", "ru", "fr", "de", "es"} else ""
+    return text if text in _QWEN_LANGUAGE_HINTS else ""
+
+
+def _request_language(language: object, configured_language: str) -> str:
+    """Resolve an explicit request hint without turning Auto into Japanese."""
+
+    text = str(language or "").strip().lower().replace("_", "-")
+    if text in {"auto", "automatic", "detect"}:
+        return ""
+    if text:
+        return _language_code(text)
+    return configured_language
 
 
 def _encode_wav_data_url(audio: np.ndarray, sample_rate: int) -> str:
@@ -206,6 +240,15 @@ class Qwen3ASRProvider(ASRProvider):
         self._timed_out_requests = 0
 
     def _resolved_base_url(self) -> str:
+        if self.region == "japan":
+            try:
+                return require_qwen_tokyo_workspace_base_url(
+                    self.base_url,
+                    endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+                    label="Qwen3-ASR Tokyo workspace API",
+                )
+            except ValueError as exc:
+                raise ASRConfigurationError(str(exc)) from exc
         if self.base_url:
             candidate = self.base_url
         elif self.region == "custom":
@@ -213,9 +256,26 @@ class Qwen3ASRProvider(ASRProvider):
         else:
             candidate = get_qwen3_asr_base_url(self.region)
         try:
-            return validate_api_base_url(candidate, label="Qwen3-ASR API")
+            return validate_api_base_url(
+                candidate,
+                label="Qwen3-ASR API",
+                allow_private_http=should_bypass_environment_proxies(candidate),
+            )
         except ValueError as exc:
             raise ASRConfigurationError(str(exc)) from exc
+
+    def _uses_local_endpoint(self) -> bool:
+        return should_bypass_environment_proxies(self._resolved_base_url())
+
+    @staticmethod
+    async def _remove_placeholder_authorization(request) -> None:
+        """Keep the SDK-only key out of requests to keyless local servers."""
+
+        authorization = str(
+            request.headers.get("authorization", "") or ""
+        ).strip()
+        if authorization.casefold() == "bearer local-no-key":
+            request.headers.pop("authorization", None)
 
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         with self._lock:
@@ -223,7 +283,7 @@ class Qwen3ASRProvider(ASRProvider):
                 raise ASRConfigurationError("Qwen3-ASR provider is closed")
             if self._client is not None:
                 return
-            if not self.api_key:
+            if not self.api_key and not self._uses_local_endpoint():
                 raise ASRMissingAPIKeyError("Qwen3-ASR API Key is not configured")
             try:
                 import httpx
@@ -281,24 +341,40 @@ class Qwen3ASRProvider(ASRProvider):
                 progress_callback({"stage": "ready", "message": "Qwen3-ASR ready"})
 
     async def _create_runtime(self, async_openai, httpx, *, generation: int):
+        resolved_base_url = self._resolved_base_url()
+        bypass_environment_proxies = should_bypass_environment_proxies(
+            resolved_base_url
+        )
         phase_timeout = httpx.Timeout(
             self.timeout_seconds,
             connect=min(self.timeout_seconds, QWEN_HTTP_CONNECT_TIMEOUT_SECONDS),
             pool=min(self.timeout_seconds, QWEN_HTTP_POOL_TIMEOUT_SECONDS),
         )
-        http_client = httpx.AsyncClient(
-            timeout=phase_timeout,
-            limits=httpx.Limits(
+        http_client_kwargs: dict[str, object] = {
+            "timeout": phase_timeout,
+            "trust_env": not bypass_environment_proxies,
+            "limits": httpx.Limits(
                 max_connections=self.max_concurrent_transcriptions,
                 max_keepalive_connections=self.max_concurrent_transcriptions,
                 keepalive_expiry=QWEN_HTTP_KEEPALIVE_EXPIRY_SECONDS,
             ),
-            event_hooks={"response": [self._on_http_response]},
-        )
+            "event_hooks": {
+                "request": [self._remove_placeholder_authorization]
+                if not self.api_key and bypass_environment_proxies
+                else [],
+                "response": [self._on_http_response],
+            },
+        }
+        direct_ssl_context = direct_connection_ssl_context(resolved_base_url)
+        if direct_ssl_context is not None:
+            http_client_kwargs["verify"] = direct_ssl_context
+        http_client = httpx.AsyncClient(**http_client_kwargs)
         try:
             client = async_openai(
-                api_key=self.api_key,
-                base_url=self._resolved_base_url(),
+                # The OpenAI client requires a non-empty value even when a
+                # loopback/private-LAN compatible server does not authenticate.
+                api_key=self.api_key or "local-no-key",
+                base_url=resolved_base_url,
                 timeout=phase_timeout,
                 max_retries=0,
                 http_client=http_client,
@@ -430,7 +506,7 @@ class Qwen3ASRProvider(ASRProvider):
             sequence = context.get("sequence", "unknown")
             session_id = context.get("session_id", "unknown")
             request_id = f"qwen-{generation}-{request_number}"
-        lang = _language_code(language) or self.language
+        lang = _request_language(language, self.language)
         extra_body: dict[str, object] = {"asr_options": {"enable_itn": False}}
         if lang:
             extra_body["asr_options"]["language"] = lang

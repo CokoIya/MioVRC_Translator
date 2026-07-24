@@ -42,11 +42,17 @@ from src.utils.provider_settings import (
     parse_optional_timeout,
     preserve_provider_id,
 )
+from src.utils.qwen_endpoints import (
+    QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+    require_qwen_tokyo_workspace_base_url,
+)
 from src.utils.secure_http import validate_api_base_url
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
+    get_backend_known_base_urls,
     get_backend_model_options,
     get_backend_value,
+    get_qwen_translation_base_url,
     normalize_qwen_translation_region,
     qwen_translation_region_for_ui_language,
 )
@@ -343,9 +349,22 @@ class APIModelsTab(LocalizedSettingsTab):
         self._qwen_region_combo.addItem(
             self._t("region_international"), "singapore"
         )
-        self._qwen_region_combo.currentIndexChanged.connect(self._on_field_changed)
+        self._qwen_region_combo.addItem(self._t("region_japan"), "japan")
+        self._qwen_region_combo.currentIndexChanged.connect(
+            self._on_qwen_region_changed
+        )
         region_layout.addWidget(self._qwen_region_combo, 1)
         group_layout.addLayout(region_layout)
+
+        base_url_layout = QHBoxLayout()
+        base_url_layout.addWidget(QLabel(self._t("base_url")))
+        self._qwen_base_url_input = QLineEdit()
+        self._qwen_base_url_input.setPlaceholderText(
+            "https://{WorkspaceId}.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1"
+        )
+        self._qwen_base_url_input.textChanged.connect(self._on_field_changed)
+        base_url_layout.addWidget(self._qwen_base_url_input, 1)
+        group_layout.addLayout(base_url_layout)
         layout.addWidget(self._qwen_group)
 
     def _install_legacy_widget_aliases(self) -> None:
@@ -376,6 +395,22 @@ class APIModelsTab(LocalizedSettingsTab):
     def _on_field_changed(self, *_args: object) -> None:
         if not self._loading_config:
             self.config_changed.emit()
+
+    def _on_qwen_region_changed(self, *_args: object) -> None:
+        region = normalize_qwen_translation_region(
+            self._qwen_region_combo.currentData()
+        )
+        regional_base_url = get_qwen_translation_base_url(region)
+        if regional_base_url:
+            self._qwen_base_url_input.setText(regional_base_url)
+        elif (
+            region == "japan"
+            and self._qwen_base_url_input.text().strip()
+            in get_backend_known_base_urls("qianwen")
+        ):
+            self._qwen_base_url_input.clear()
+        self._qwen_base_url_input.setReadOnly(bool(regional_base_url))
+        self._on_field_changed()
 
     def _on_model_text_changed(self, text: str) -> None:
         backend = preserve_provider_id(self._provider_combo.currentData())
@@ -455,11 +490,18 @@ class APIModelsTab(LocalizedSettingsTab):
         if backend not in _PROMPTABLE_PROVIDER_BACKENDS:
             return False
         key_input = self._key_input_for_provider(backend)
+        provider_fields = self._provider_fields.get(backend, {})
+        base_url_input = provider_fields.get("base_url")
         config = {
             "translation": {
                 "backend": backend,
                 backend: {
-                    "api_key": key_input.text().strip() if key_input is not None else ""
+                    "api_key": key_input.text().strip() if key_input is not None else "",
+                    "base_url": (
+                        base_url_input.text().strip()
+                        if isinstance(base_url_input, QLineEdit)
+                        else ""
+                    ),
                 },
             }
         }
@@ -613,7 +655,12 @@ class APIModelsTab(LocalizedSettingsTab):
         assert isinstance(entry, QLineEdit)
         candidate = entry.text().strip() or get_backend_value(backend, "base_url")
         try:
-            validate_api_base_url(candidate, label="API")
+            validate_api_base_url(
+                candidate,
+                label="API",
+                allow_private_http=backend
+                in {"local_ai", "openai_compatible", "grok_compatible"},
+            )
         except ValueError as exc:
             raise ValueError(
                 self._t("invalid_base_url", provider=self._provider_label(backend))
@@ -688,6 +735,16 @@ class APIModelsTab(LocalizedSettingsTab):
         qwen_cfg["region"] = normalize_qwen_translation_region(
             self._qwen_region_combo.currentData()
         )
+        qwen_cfg["base_url"] = (
+            get_qwen_translation_base_url(qwen_cfg["region"])
+            or self._qwen_base_url_input.text().strip().rstrip("/")
+        )
+        if qwen_cfg["region"] == "japan":
+            qwen_cfg["base_url"] = require_qwen_tokyo_workspace_base_url(
+                qwen_cfg["base_url"],
+                endpoint_path=QWEN_TOKYO_COMPATIBLE_MODE_PATH,
+                label="Qwen Tokyo workspace API",
+            )
         if self._provider_models.get("qianwen", "").strip():
             qwen_cfg["model"] = self._provider_models["qianwen"].strip()
         translation["qianwen"] = qwen_cfg
@@ -785,6 +842,17 @@ class APIModelsTab(LocalizedSettingsTab):
         )
         region_index = self._qwen_region_combo.findData(region)
         self._qwen_region_combo.setCurrentIndex(max(0, region_index))
+        configured_qwen_base_url = str(qwen_cfg.get("base_url", "") or "").strip()
+        regional_qwen_base_url = get_qwen_translation_base_url(region)
+        if (
+            region == "japan"
+            and configured_qwen_base_url in get_backend_known_base_urls("qianwen")
+        ):
+            configured_qwen_base_url = ""
+        self._qwen_base_url_input.setText(
+            regional_qwen_base_url or configured_qwen_base_url
+        )
+        self._qwen_base_url_input.setReadOnly(bool(regional_qwen_base_url))
 
         backend = preserve_provider_id(trans_cfg.get("backend", "openai"))
         provider_index = self._ensure_provider_choice(backend)

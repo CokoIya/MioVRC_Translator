@@ -451,10 +451,16 @@ QWEN_TRANSLATION_BASE_URL_MAINLAND = "https://dashscope.aliyuncs.com/compatible-
 QWEN_TRANSLATION_BASE_URL_INTERNATIONAL = (
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 )
-QWEN_TRANSLATION_DEFAULT_REGION = "china_mainland"
+# Use the international service as the neutral/global fallback. Mainland users
+# are still selected automatically by ``backend_region_for_ui_language`` and
+# existing saved regions are preserved during config migration.
+QWEN_TRANSLATION_DEFAULT_REGION = "singapore"
 QWEN_TRANSLATION_REGION_BASE_URLS = {
     "china_mainland": QWEN_TRANSLATION_BASE_URL_MAINLAND,
     "singapore": QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
+    # Tokyo is workspace-scoped. The player must provide the URL issued for
+    # their workspace; there is no shared Japan DashScope hostname.
+    "japan": "",
 }
 QWEN_TRANSLATION_REGION_ALIASES = {
     "china": "china_mainland",
@@ -464,8 +470,12 @@ QWEN_TRANSLATION_REGION_ALIASES = {
     "intl": "singapore",
     "international": "singapore",
     "sg": "singapore",
+    "jp": "japan",
+    "japan": "japan",
 }
-QWEN_TRANSLATION_KNOWN_BASE_URLS = frozenset(QWEN_TRANSLATION_REGION_BASE_URLS.values())
+QWEN_TRANSLATION_KNOWN_BASE_URLS = frozenset(
+    value for value in QWEN_TRANSLATION_REGION_BASE_URLS.values() if value
+)
 
 XIAOMI_TRANSLATION_BASE_URL_PAYG = "https://api.xiaomimimo.com/v1"
 XIAOMI_TRANSLATION_BASE_URL_TOKEN_PLAN_CN = "https://token-plan-cn.xiaomimimo.com/v1"
@@ -564,6 +574,7 @@ TRANSLATION_BACKEND_DEFAULT_REGIONS = {
 TRANSLATION_BACKEND_REGION_OPTION_KEYS = {
     "qianwen": (
         ("qwen_region_singapore", "singapore"),
+        ("qwen_region_japan", "japan"),
         ("qwen_region_china_mainland", "china_mainland"),
         ("qwen_region_custom", "custom"),
     ),
@@ -722,14 +733,14 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     },
     "qianwen": {
         "label": "Qwen",
-        "base_url": QWEN_TRANSLATION_BASE_URL_MAINLAND,
+        "base_url": QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
         "model": "qwen-mt-plus",
         "timeout_s": 20.0,
         "max_output_tokens": 192,
         "max_retries": 0,
         "model_input": "select",
         "base_url_input": "entry",
-        "api_key_hint": "Mainland China should use the mainland DashScope endpoint. Overseas users should prefer the international endpoint or a nearby proxy.",
+        "api_key_hint": "Use the API key issued for the selected Qwen service region. Japan requires the workspace-specific Base URL issued by Model Studio.",
     },
     "hunyuan": {
         "label": "Tencent Hunyuan",
@@ -1521,7 +1532,7 @@ def get_backend_region_options(backend: str | None) -> tuple[tuple[str, str], ..
 def get_backend_known_base_urls(backend: str | None) -> frozenset[str]:
     backend_code = _region_backend(backend)
     base_urls = _catalog_region_base_urls().get(backend_code, {})
-    return frozenset(base_urls.values())
+    return frozenset(value for value in base_urls.values() if value)
 
 
 def normalize_backend_region(
@@ -1572,7 +1583,9 @@ def backend_region_for_ui_language(backend: str | None, language: str | None) ->
         return ""
     resolved = _resolve_ui_language(language)
     if backend_code == "qianwen":
-        return "china_mainland" if resolved.startswith("zh") else "singapore"
+        if resolved.startswith("zh"):
+            return "china_mainland"
+        return "singapore"
     if backend_code == "xiaomi":
         return "china_cluster" if resolved.startswith("zh") else "global"
     return _catalog_default_regions().get(backend_code, "")

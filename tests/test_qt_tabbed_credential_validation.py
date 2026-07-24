@@ -104,6 +104,54 @@ def test_tabbed_connection_tests_validate_the_provider_without_network_calls(
     assert [item[0].provider_id for item in prompts] == ["openai", "anthropic"]
 
 
+def test_tabbed_keyless_local_compatible_endpoint_skips_credential_prompt(
+    qtbot,
+    monkeypatch,
+):
+    prompts = []
+    monkeypatch.setattr(
+        api_models_tab,
+        "show_missing_credential_prompt",
+        _recording_prompt(prompts),
+    )
+    config = _translation_config(backend="openai_compatible")
+    config["translation"]["openai_compatible"] = {
+        "api_key": "",
+        "base_url": "http://192.168.65.2:11434/v1",
+        "model": "local-model",
+    }
+    tab = APIModelsTab(config, "en")
+    qtbot.addWidget(tab)
+    tab.load_config(config)
+
+    assert tab._prompt_for_missing_credential("openai_compatible") is False
+    assert prompts == []
+    assert (
+        tab.get_config()["translation"]["openai_compatible"]["base_url"]
+        == "http://192.168.65.2:11434/v1"
+    )
+
+
+def test_tabbed_qwen_japan_region_preserves_workspace_endpoint(qtbot):
+    config = _translation_config(backend="qianwen")
+    config["translation"]["qianwen"] = {
+        "api_key": "tokyo-key",
+        "region": "japan",
+        "base_url": (
+            "https://ws-player.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1"
+        ),
+        "model": "workspace-enabled-model",
+    }
+    tab = APIModelsTab(config, "en")
+    qtbot.addWidget(tab)
+    tab.load_config(config)
+
+    assert tab._qwen_base_url_input.isReadOnly() is False
+    collected = tab.get_config()["translation"]["qianwen"]
+    assert collected["region"] == "japan"
+    assert collected["base_url"] == config["translation"]["qianwen"]["base_url"]
+
+
 def test_tabbed_save_blocks_missing_key_and_action_opens_api_provider(
     qtbot,
     monkeypatch,

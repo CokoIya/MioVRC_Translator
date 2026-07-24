@@ -118,3 +118,30 @@ def test_qwen_custom_model_id_and_timeout_controls_are_preserved_exactly():
     assert resolved["connect_timeout_seconds"] == 2.5
     assert resolved["read_timeout_seconds"] == 11.0
     assert resolved["wall_timeout_seconds"] == 19.0
+
+
+def test_qwen_japan_region_requires_and_preserves_workspace_endpoint():
+    workspace_url = (
+        "https://ws-player.ap-northeast-1.maas.aliyuncs.com/api/v1"
+    )
+    resolved = resolve_tts_api_config(
+        "qwen_tts",
+        {
+            "region": "japan",
+            "api_key": "jp-region-key",
+            "base_url": workspace_url,
+        },
+    )
+
+    assert resolved["region"] == "japan"
+    assert resolved["base_url"] == workspace_url
+
+
+def test_qwen_japan_region_does_not_inherit_international_endpoint():
+    resolved = resolve_tts_api_config(
+        "qwen_tts",
+        {"region": "japan", "api_key": "jp-region-key"},
+    )
+
+    assert resolved["region"] == "japan"
+    assert resolved["base_url"] == ""

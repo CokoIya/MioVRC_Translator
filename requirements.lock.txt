@@ -170,6 +170,7 @@ torch-complex==0.4.4
 torchaudio==2.8.0+cpu
 tqdm==4.67.3
 transformers==5.5.0
+truststore==0.10.4
 typeguard==4.5.1
 typer==0.26.8
 typer-slim==0.24.0
