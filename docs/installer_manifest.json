@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.8.8",
-  "installer_name": "MioTranslator-Setup-v1.3.8.8.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.8/MioTranslator-Setup-v1.3.8.8.exe",
-  "size_bytes": 464570843,
-  "sha256": "c3d27f5af9887eabfa74a5269a0d819f45d82090c06a09b3ab335b1e6380358b",
+  "version": "v1.3.8.9",
+  "installer_name": "MioTranslator-Setup-v1.3.8.9.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.9/MioTranslator-Setup-v1.3.8.9.exe",
+  "size_bytes": 464577018,
+  "sha256": "cba178e294dd52037b4a294684bc833c11bdade5ce166ea7e071e8d965a3e205",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "e3932c52ca054e65cbaffbf2cfcc4bf15fe73559a0110e45aaee5c3902304ef494bdf0a1c363518e7f21e642cfba6b4edfd1920a4f53ceb80b92153f7a1dcf0f",
-  "notes": "v1.3.8.8 improves the Original Text Only (Read Translation) workflow, retries temporary Qwen TTS audio lookup failures, and allows standalone !? / ！？ reactions in VRChat.",
+  "installer_signature": "198604ef6a17da566d0958f285401b66ddd973ea97d92f732bb6de36ce6780d0bccfb8f0f67b9e62a58f3cdd609eed153ed8a84f03653586d5c70ba444c2f704",
+  "notes": "v1.3.8.9 adds Qwen Japan workspace endpoint support, improves international defaults, fixes legitimate regional Qwen audio downloads, and improves keyless local endpoints.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.8 改进了“仅原文（朗读译文）”模式的发送时机，可在 Qwen TTS 音频地址临时解析失败时自动重试，并允许向 VRChat 发送单独的 !? / ！？ 反应。",
-    "en": "v1.3.8.8 improves the Original Text Only (Read Translation) workflow, retries temporary Qwen TTS audio lookup failures, and allows standalone !? / ！？ reactions in VRChat.",
-    "ja": "v1.3.8.8 では、「原文のみ（訳文を読み上げ）」の送信タイミングを改善し、Qwen TTS の一時的な音声 URL 名前解決エラーを再試行するようにしました。また、VRChat へ単独の !? / ！？ を送信できます。",
-    "ru": "v1.3.8.8 улучшает режим Original Text Only (Read Translation), повторяет загрузку аудио Qwen TTS при временных ошибках DNS и разрешает отправлять в VRChat отдельные реакции !? / ！？.",
-    "ko": "v1.3.8.8은 Original Text Only (Read Translation) 모드의 전송 타이밍을 개선하고, 일시적인 DNS 오류가 발생한 Qwen TTS 오디오 다운로드를 재시도하며, VRChat에 단독 !? / ！？ 반응을 보낼 수 있게 합니다."
+    "zh-CN": "v1.3.8.9 新增 Qwen 日本区域工作空间端点支持并改进国际服务默认设置，修复合法区域的 Qwen 音频下载，并改进无需密钥的本地端点。",
+    "en": "v1.3.8.9 adds Qwen Japan workspace endpoint support, improves international defaults, fixes legitimate regional Qwen audio downloads, and improves keyless local endpoints.",
+    "ja": "v1.3.8.9 では、Qwen 日本リージョンのワークスペースエンドポイントに対応し、国際サービスの既定値を改善しました。正規のリージョン別 Qwen 音声ダウンロードと、API キー不要のローカルエンドポイントも改善しています。",
+    "ru": "v1.3.8.9 добавляет поддержку адресов рабочих областей Qwen в регионе Япония, улучшает международные настройки по умолчанию, исправляет допустимые региональные загрузки аудио и улучшает локальные адреса без обязательного API-ключа.",
+    "ko": "v1.3.8.9은 Qwen 일본 리전 워크스페이스 엔드포인트 지원을 추가하고 국제 서비스 기본값을 개선하며, 정상적인 지역별 Qwen 오디오 다운로드와 API 키가 필요 없는 로컬 엔드포인트를 개선합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-22T16:12:53+09:00",
+  "published_at": "2026-07-24T12:38:44+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "90b084316c87a944c35264b6679533e3818fccb9566940580aea0a77799f4291352b3213a7d8eff5bd4674f7f877d357a627c4a07a681ef9d8c1a0b2fe8bf702"
+  "signature": "bca00f1a20bf5f54d183b82e6146a9a961af24f785ec181f439263ef9afaf7d1345307803aaa647dd64d1306f2fef57bfdf4551a53a61e15157065dfbdf6ea0c"
 }

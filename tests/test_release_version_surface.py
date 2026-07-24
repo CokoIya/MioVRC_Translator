@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_RELEASE_VERSION = "1.3.8.8"
+EXPECTED_RELEASE_VERSION = "1.3.8.9"
 
 
 def _read(relative_path: str) -> str:

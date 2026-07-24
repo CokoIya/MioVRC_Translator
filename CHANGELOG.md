@@ -2,6 +2,14 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.8.9] - 2026-07-24
+
+### Qwen regions and local AI
+
+- Added Qwen Japan workspace-endpoint configuration for translation, Qwen3-ASR, and Qwen TTS; Japan uses the URL and model enabled for the selected workspace.
+- Fixed secure downloads from legitimate Qwen regional audio hosts and enabled native system-certificate trust across AI, ASR, and TTS provider connections.
+- Made Local AI API keys optional and improved compatible localhost and private-LAN HTTP endpoints with direct, low-latency connections.
+
 ## [1.3.8.8] - 2026-07-22
 
 ### TTS and chatbox reliability
