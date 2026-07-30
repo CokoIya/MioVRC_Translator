@@ -318,6 +318,10 @@ class TTSManager:
         self._outstanding_requests: set[tuple[int, int]] = set()
         self._max_outstanding = max(1, min(int(max_outstanding), 64))
         self._prewarm_queued = False
+        self._prewarm_generation = 0
+        self._prewarm_voice = ""
+        self._prewarm_completed_workers: set[int] = set()
+        self._prewarm_target_workers = 0
         self._request_queue_high_watermark = 0
         self._synthesis_concurrency = self._resolve_synthesis_concurrency(
             synthesis_concurrency
@@ -1023,7 +1027,9 @@ class TTSManager:
                         tts_error_token("stopped"),
                     )
                 elif isinstance(dropped, _TTSPrewarmRequest):
-                    self._prewarm_queued = False
+                    # The token only wakes a worker. The broadcast generation
+                    # remains authoritative until every worker has attempted it.
+                    pass
 
     def _discard_worker_stop_signals_locked(self) -> int:
         """Remove stale worker sentinels while preserving real queued work."""
@@ -1185,7 +1191,7 @@ class TTSManager:
         }
 
     def prewarm(self, voice: str = "") -> bool:
-        """Queue heavy engine initialization before the first utterance."""
+        """Ask every synthesis worker to prepare its thread-local context."""
 
         with self._lifecycle_lock:
             engine = self._engine
@@ -1201,14 +1207,78 @@ class TTSManager:
                     return False
                 if self._prewarm_queued:
                     return True
+                self._prewarm_generation = int(
+                    getattr(self, "_prewarm_generation", 0)
+                ) + 1
+                self._prewarm_voice = str(voice or "").strip()
+                self._prewarm_completed_workers = set()
+                self._prewarm_target_workers = max(
+                    1,
+                    int(getattr(self, "_synthesis_concurrency", 1)),
+                )
+                self._prewarm_queued = True
                 try:
                     self._request_queue.put_nowait(
-                        _TTSPrewarmRequest(str(voice or "").strip())
+                        _TTSPrewarmRequest(self._prewarm_voice)
                     )
                 except queue.Full:
-                    return False
-                self._prewarm_queued = True
+                    # Workers also poll the generation before each real request,
+                    # so a full speech queue must not cancel the warm-up request.
+                    pass
                 return True
+
+    def _prewarm_synthesis_worker(
+        self,
+        worker_index: int,
+        seen_generation: int,
+    ) -> int:
+        """Run one pending warm-up generation on the current worker."""
+
+        with self._pipeline_lock:
+            generation = int(getattr(self, "_prewarm_generation", 0))
+            if (
+                not self._running
+                or not self._prewarm_queued
+                or generation <= seen_generation
+                or self._engine is None
+            ):
+                return seen_generation
+            voice = str(getattr(self, "_prewarm_voice", "") or "")
+
+        try:
+            started_at = time.monotonic()
+            self._engine.prewarm(voice)
+            logger.info(
+                "TTS engine worker prewarm finished "
+                "(engine=%s worker=%d generation=%d elapsed_ms=%.0f)",
+                self._engine_name,
+                worker_index,
+                generation,
+                (time.monotonic() - started_at) * 1000.0,
+            )
+        except Exception as exc:
+            logger.warning(
+                "TTS engine prewarm failed "
+                "(worker=%d generation=%d %s)",
+                worker_index,
+                generation,
+                safe_exception_summary(exc),
+            )
+        finally:
+            with self._pipeline_lock:
+                if generation == int(getattr(self, "_prewarm_generation", 0)):
+                    completed = set(
+                        getattr(self, "_prewarm_completed_workers", set())
+                    )
+                    completed.add(int(worker_index))
+                    self._prewarm_completed_workers = completed
+                    target = max(
+                        1,
+                        int(getattr(self, "_prewarm_target_workers", 1)),
+                    )
+                    if len(completed) >= target:
+                        self._prewarm_queued = False
+        return max(seen_generation, generation)
 
     def stop_playback(self) -> None:
         """Stop current playback."""
@@ -1630,6 +1700,9 @@ class TTSManager:
         with pipeline_lock:
             self._generation = int(getattr(self, "_generation", 0)) + 1
             self._next_playback_sequence = int(getattr(self, "_next_sequence", 0))
+            self._prewarm_queued = False
+            self._prewarm_completed_workers = set()
+            self._prewarm_target_workers = 0
             while True:
                 try:
                     pending = self._request_queue.get_nowait()
@@ -1639,7 +1712,6 @@ class TTSManager:
                     saw_stop_signal = True
                     continue
                 if isinstance(pending, _TTSPrewarmRequest):
-                    self._prewarm_queued = False
                     continue
                 cancelled.append(pending)
 
@@ -1699,8 +1771,13 @@ class TTSManager:
 
     def _synthesis_worker_loop(self, worker_index: int) -> None:
         current_worker = threading.current_thread()
+        prewarm_generation = 0
         try:
             while True:
+                prewarm_generation = self._prewarm_synthesis_worker(
+                    worker_index,
+                    prewarm_generation,
+                )
                 try:
                     request = self._request_queue.get(timeout=0.1)
                 except queue.Empty:
@@ -1712,24 +1789,12 @@ class TTSManager:
                     return
 
                 if isinstance(request, _TTSPrewarmRequest):
-                    try:
-                        if self._running and self._engine is not None:
-                            started_at = time.monotonic()
-                            self._engine.prewarm(request.voice)
-                            logger.info(
-                                "TTS engine prewarm finished (engine=%s elapsed_ms=%.0f)",
-                                self._engine_name,
-                                (time.monotonic() - started_at) * 1000.0,
-                            )
-                    except Exception as exc:
-                        logger.warning(
-                            "TTS engine prewarm failed (%s)",
-                            safe_exception_summary(exc),
-                        )
-                    finally:
-                        with self._pipeline_lock:
-                            self._prewarm_queued = False
                     continue
+
+                prewarm_generation = self._prewarm_synthesis_worker(
+                    worker_index,
+                    prewarm_generation,
+                )
 
                 result = self._synthesize_request(request)
                 if not self._publish_synthesis_result(result):

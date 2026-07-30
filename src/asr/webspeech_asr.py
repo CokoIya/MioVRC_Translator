@@ -480,6 +480,7 @@ class WebSpeechASRProvider(ASRProvider):
         self._browser_opener = None
         self._browser_handle = None
         self._warned_audio_ignored = False
+        self._bridge_prewarmed_paused = False
         self._lock = threading.RLock()
         self._closed = False
 
@@ -531,6 +532,9 @@ class WebSpeechASRProvider(ASRProvider):
                 raise ASRConfigurationError("WebSpeech provider is closed")
             if self._server is None:
                 self._start_server()
+            if self._bridge_prewarmed_paused:
+                self._state.set_capture_enabled(True)
+                self._bridge_prewarmed_paused = False
             if self.auto_open_browser and not self._browser_opened:
                 self._open_bridge_page()
             if progress_callback is not None:
@@ -544,6 +548,23 @@ class WebSpeechASRProvider(ASRProvider):
                         ),
                     }
                 )
+
+    def prewarm(self) -> bool:
+        """Prepare only the local bridge; never open a browser or microphone."""
+
+        with self._lock:
+            if self._closed:
+                return False
+            if self._server is None:
+                self._state.set_capture_enabled(False)
+                self._start_server()
+                self._bridge_prewarmed_paused = True
+            url = self._url
+        logger.info(
+            "WebSpeech bridge prewarm finished (browser_opened=false url=%s)",
+            url,
+        )
+        return True
 
     def transcribe(
         self,
@@ -593,6 +614,7 @@ class WebSpeechASRProvider(ASRProvider):
             self._browser_opened = False
             self._browser_handle = None
             self._browser_opener = None
+            self._bridge_prewarmed_paused = False
             self._corrector = None
         self._state.reset()
         if handle is not None:
@@ -629,7 +651,9 @@ class WebSpeechASRProvider(ASRProvider):
     def set_capture_enabled(self, enabled: bool) -> None:
         """Pause/resume browser-owned microphone capture and discard stale text."""
 
-        self._state.set_capture_enabled(enabled)
+        with self._lock:
+            self._bridge_prewarmed_paused = False
+            self._state.set_capture_enabled(enabled)
 
     def _start_server(self) -> None:
         state = self._state

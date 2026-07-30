@@ -46,6 +46,19 @@ class GlobalHotkeyTests(unittest.TestCase):
         hotkey.stop()
         self.assertFalse(observed["stop_was_set"])
 
+    def test_start_can_skip_readiness_wait(self):
+        hotkey = GlobalHotkey(DEFAULT_TEXT_INPUT_HOTKEY, lambda: None)
+        hotkey._run = lambda: None
+
+        with patch("src.utils.global_hotkey.sys.platform", "win32"), patch.object(
+            hotkey._ready_event,
+            "wait",
+            side_effect=AssertionError("nonblocking startup must not wait"),
+        ):
+            self.assertFalse(hotkey.start(wait_for_ready=False))
+
+        hotkey._thread.join(timeout=1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

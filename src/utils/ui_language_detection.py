@@ -6,7 +6,6 @@ import locale
 import os
 from collections.abc import Mapping
 
-from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 from src.utils.ui_config import DEFAULT_UI_LANGUAGE, UI_LANGUAGE_LABELS
 
 
@@ -17,6 +16,22 @@ _REQUEST_HEADERS = {
     "User-Agent": "MioTranslator/desktop",
     "Accept": "application/json",
 }
+
+
+def open_trusted_https_url(*args, **kwargs):
+    """Lazy secure-network entry point used only for opted-in IP detection."""
+
+    from src.utils.secure_http import open_trusted_https_url as _open
+
+    return _open(*args, **kwargs)
+
+
+def read_bounded_response(*args, **kwargs):
+    """Lazy bounded-response helper paired with :func:`open_trusted_https_url`."""
+
+    from src.utils.secure_http import read_bounded_response as _read
+
+    return _read(*args, **kwargs)
 
 
 def _language_from_tag(value: object) -> str:

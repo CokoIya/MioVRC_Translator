@@ -611,6 +611,36 @@ def test_missing_packaged_loopback_backends_fail_cleanly_with_diagnostics(monkey
     assert any("packaged runtime" in error for error in diagnostics["errors"])
 
 
+def test_empty_loopback_scan_is_negatively_cached_with_backoff(monkeypatch):
+    desktop_recorder._reset_loopback_device_cache_for_tests()
+    now = [100.0]
+    soundcard_calls: list[float] = []
+    pyaudio_calls: list[float] = []
+
+    def missing_soundcard():
+        soundcard_calls.append(now[0])
+        raise RuntimeError("soundcard unavailable")
+
+    def missing_pyaudio():
+        pyaudio_calls.append(now[0])
+        raise RuntimeError("pyaudio unavailable")
+
+    monkeypatch.setattr(desktop_recorder.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(desktop_recorder, "_import_soundcard", missing_soundcard)
+    monkeypatch.setattr(desktop_recorder, "_import_pyaudio", missing_pyaudio)
+
+    assert list_output_devices() == []
+    assert list_output_devices() == []
+    assert soundcard_calls == [100.0]
+    assert pyaudio_calls == [100.0]
+    assert desktop_recorder.loopback_device_diagnostics()["from_cache"] is True
+
+    now[0] += desktop_recorder._EMPTY_LOOPBACK_BACKOFF_BASE_S + 0.1
+    assert list_output_devices() == []
+    assert soundcard_calls == [100.0, now[0]]
+    assert pyaudio_calls == [100.0, now[0]]
+
+
 def test_hotplug_refresh_updates_cached_pyaudio_names_without_reopening_portaudio(monkeypatch):
     monkeypatch.setattr(
         desktop_recorder,

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.mode_manager import AppMode
@@ -12,8 +13,11 @@ from src.ui_qt.main_window import (
     CHATBOX_CHAR_LIMIT,
     FOOTER_BUTTON_SIZE,
     FOOTER_SPONSOR_BUTTON_WIDTH,
+    BackgroundWidget,
     MIC_SOURCE,
     MainWindow,
+    _asr_pair_config_signature,
+    _create_asr_pair,
     _freeze_snapshot_value,
 )
 from src.utils.i18n import tr
@@ -117,6 +121,48 @@ def test_pipeline_start_missing_asr_key_uses_actionable_prompt(monkeypatch):
     assert len(prompted) == 1
     assert prompted[0].scope == "asr"
     assert prompted[0].credential_id == "asr.qwen3_asr.api_key"
+
+
+def test_pipeline_start_keeps_qobject_sender_setup_on_calling_ui_thread():
+    window = MainWindow.__new__(MainWindow)
+    main_thread_id = threading.get_ident()
+    pipeline_started = threading.Event()
+    sender_threads: list[int] = []
+    pipeline_threads: list[int] = []
+
+    window._start_btn = SimpleNamespace(
+        setEnabled=lambda _enabled: None,
+        setText=lambda _text: None,
+    )
+    window._destroying = False
+    window._running = False
+    window._update_install_preparing = False
+    window._update_install_prepared = False
+    window._pipeline_cleanup_in_progress = lambda: False
+    window._prompt_for_missing_credential = lambda _scopes: False
+    window._t = lambda key: key
+    window._set_status = lambda *_args, **_kwargs: None
+    window._listen_session = 0
+    window._reset_streaming_state = lambda *_args, **_kwargs: None
+    window._reset_translation_failure_backoff = lambda *_args, **_kwargs: None
+    window._ensure_sender = lambda: sender_threads.append(threading.get_ident())
+    window._call_in_ui = lambda callback, *args, **kwargs: callback() or True
+
+    def init_pipeline(_session, _cancel_event):
+        pipeline_threads.append(threading.get_ident())
+        pipeline_started.set()
+
+    window._init_pipeline = init_pipeline
+
+    MainWindow._do_start(window)
+
+    assert pipeline_started.wait(timeout=1.0)
+    startup_thread = window._startup_thread
+    if startup_thread is not None:
+        startup_thread.join(timeout=1.0)
+    assert sender_threads == [main_thread_id]
+    assert len(pipeline_threads) == 1
+    assert pipeline_threads[0] != main_thread_id
 
 
 def test_manual_translation_checks_translation_credential_before_controller():
@@ -434,6 +480,460 @@ def test_window_constructs_with_minimal_config(qtbot, monkeypatch):
     assert not window._tweaks_btn.icon().isNull()
     assert window._tweaks_btn.iconSize().width() >= 18
     window.destroy()
+
+
+def test_window_construction_defers_device_hotkey_virtual_output_and_background_work(
+    qtbot,
+    monkeypatch,
+):
+    background_paths: list[str] = []
+    original_set_background_path = BackgroundWidget.set_background_path
+
+    def record_background_path(self, path):
+        background_paths.append(path)
+        return original_set_background_path(self, path)
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window._list_microphone_devices",
+        lambda: (_ for _ in ()).throw(AssertionError("device scan ran during construction")),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.find_best_virtual_output_device",
+        lambda: (_ for _ in ()).throw(AssertionError("virtual output resolution ran during construction")),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.MainWindow._register_hotkeys",
+        lambda self: (_ for _ in ()).throw(AssertionError("hotkeys ran during construction")),
+    )
+    monkeypatch.setattr(BackgroundWidget, "set_background_path", record_background_path)
+
+    window = MainWindow(
+        {
+            "app_mode": "simultaneous",
+            "tts": {"output_to_vrchat": True},
+            "ui": {
+                "background_image_path": "C:/configured-background.png",
+                "mode_wizard_seen": True,
+                "osc_guide_seen": True,
+            },
+        }
+    )
+    qtbot.addWidget(window)
+
+    assert background_paths == [""]
+    assert window._post_show_initialization_started is False
+    assert window._devices == {}
+    window.destroy()
+
+
+def test_background_image_decode_runs_off_ui_thread_and_ignores_stale_results(
+    qtbot,
+    monkeypatch,
+):
+    main_thread_id = threading.get_ident()
+    first_started = threading.Event()
+    first_release = threading.Event()
+    first_finished = threading.Event()
+    decoder_threads: list[int] = []
+    apply_threads: list[int] = []
+
+    original_apply = BackgroundWidget._apply_decoded_background_image
+
+    def record_apply(self, *args):
+        apply_threads.append(threading.get_ident())
+        return original_apply(self, *args)
+
+    def fake_decode(path):
+        decoder_threads.append(threading.get_ident())
+        image = QImage(1, 1, QImage.Format.Format_ARGB32)
+        if path.name == "first.png":
+            first_started.set()
+            assert first_release.wait(2.0)
+            image.fill(QColor("red"))
+            first_finished.set()
+        else:
+            image.fill(QColor("blue"))
+        return image
+
+    monkeypatch.setattr(
+        "src.ui_qt.main_window._decode_background_image",
+        fake_decode,
+    )
+    monkeypatch.setattr(
+        BackgroundWidget,
+        "_apply_decoded_background_image",
+        record_apply,
+    )
+    widget = BackgroundWidget()
+    qtbot.addWidget(widget)
+
+    widget.set_background_path("first.png")
+    assert first_started.wait(2.0)
+    widget.set_background_path("second.png")
+
+    qtbot.waitUntil(lambda: not widget._pixmap.isNull(), timeout=2000)
+    assert widget._pixmap.toImage().pixelColor(0, 0) == QColor("blue")
+
+    first_release.set()
+    assert first_finished.wait(2.0)
+    qtbot.wait(20)
+
+    assert decoder_threads
+    assert all(thread_id != main_thread_id for thread_id in decoder_threads)
+    assert apply_threads
+    assert all(thread_id == main_thread_id for thread_id in apply_threads)
+    assert widget._pixmap.toImage().pixelColor(0, 0) == QColor("blue")
+
+
+def test_empty_background_path_clears_pixmap_immediately(qtbot):
+    widget = BackgroundWidget()
+    qtbot.addWidget(widget)
+    image = QImage(1, 1, QImage.Format.Format_ARGB32)
+    image.fill(QColor("red"))
+    widget._pixmap = QPixmap.fromImage(image)
+
+    widget.set_background_path("")
+
+    assert widget._pixmap.isNull()
+
+
+def test_cache_only_microphone_resolution_never_scans(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._config = {"audio": {"input_device_mode": "auto", "input_device": ""}}
+    window._devices = {}
+    window._default_mic_device_name = None
+    monkeypatch.setattr(
+        "src.ui_qt.main_window._list_microphone_devices",
+        lambda: (_ for _ in ()).throw(AssertionError("cache-only resolution scanned devices")),
+    )
+
+    assert MainWindow._resolve_mic_input_device_name(window, refresh=False) is None
+
+
+def test_post_show_initialization_is_one_shot(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._post_show_initialization_started = False
+    window._startup_constructed_at = 0.0
+    window._initial_mode_change = SimpleNamespace(changed=False)
+    calls: list[str] = []
+    scheduled: list[tuple[int, object]] = []
+
+    window._load_devices_async = lambda: calls.append("devices")
+    window._resolve_virtual_output_async = lambda: calls.append("virtual-output")
+    window._register_hotkeys = lambda: calls.append("hotkeys")
+    window._schedule_desktop_audio_watch = lambda delay: calls.append(f"desktop-watch:{delay}")
+    window._schedule_mic_audio_watch = lambda delay: calls.append(f"mic-watch:{delay}")
+    window._startup_update_check_enabled = lambda: False
+    window._schedule_settings_preload = lambda delay: calls.append(f"settings:{delay}")
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
+
+    MainWindow._run_post_show_initialization(window)
+    MainWindow._run_post_show_initialization(window)
+
+    assert calls == [
+        "devices",
+        "virtual-output",
+        "hotkeys",
+        "desktop-watch:2500",
+        "mic-watch:2500",
+        "settings:2500",
+    ]
+    assert [delay for delay, _callback in scheduled] == [100, 1200, 2000, 0]
+
+
+def test_background_provider_initialization_is_one_shot(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._background_initialization_started = False
+    window._config = {
+        "translation": {"output_format": "original_only"},
+        "asr": {"engine": "sensevoice-small"},
+        "tts": {"enabled": False, "engine": "edge"},
+    }
+    calls: list[object] = []
+    window._start_asr_background_prewarm = lambda: calls.append("asr") or False
+    window._start_tts_background_prewarm = (
+        lambda retry=0: calls.append(("tts", retry)) or False
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.QTimer.singleShot",
+        lambda _delay, callback: callback(),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.record_startup_stage",
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert MainWindow.start_background_initialization(window) is True
+    assert MainWindow.start_background_initialization(window) is False
+    assert calls == ["asr", ("tts", 0)]
+
+
+def test_generic_asr_background_warmup_never_calls_load():
+    calls: list[str] = []
+
+    class Provider:
+        def prewarm(self):
+            calls.append("prewarm")
+            return True
+
+        def load(self):
+            calls.append("load")
+            raise AssertionError("background warm-up must not open a live session")
+
+    assert MainWindow._warm_asr_provider(Provider(), "gemini-live") is True
+    assert calls == ["prewarm"]
+
+
+def test_retained_asr_provider_is_consumed_without_recreation(monkeypatch):
+    config = {
+        "ui": {"language": "en"},
+        "translation": {"output_format": "original_only"},
+        "asr": {
+            "engine": "qwen3-asr",
+            "auto_fallback": False,
+            "qwen3_asr": {"api_key": "configured"},
+        },
+        "vrc_listen": {"enabled": False},
+    }
+    provider = SimpleNamespace(close=lambda: None)
+    window = MainWindow.__new__(MainWindow)
+    window._asr_prewarm_lock = threading.RLock()
+    window._asr_prewarm_cancel_event = threading.Event()
+    window._prewarmed_asr_signature = _asr_pair_config_signature(config)
+    window._prewarmed_main_asr = provider
+    window._prewarmed_listen_asr = provider
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.create_asr",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retained ASR provider should be reused")
+        ),
+    )
+
+    main_provider, listen_provider = MainWindow._take_prewarmed_asr_pair(
+        window,
+        config,
+    )
+    pair = _create_asr_pair(
+        config,
+        prewarmed_main=main_provider,
+        prewarmed_listen=listen_provider,
+    )
+
+    assert pair == (provider, provider)
+    assert window._prewarmed_main_asr is None
+    assert window._prewarmed_listen_asr is None
+
+
+def test_cancelling_background_asr_prewarm_closes_retained_provider_once():
+    closed: list[bool] = []
+
+    class Provider:
+        def close(self):
+            closed.append(True)
+
+    provider = Provider()
+    window = MainWindow.__new__(MainWindow)
+    window._asr_prewarm_lock = threading.RLock()
+    window._asr_prewarm_cancel_event = threading.Event()
+    window._prewarmed_asr_signature = "signature"
+    window._prewarmed_main_asr = provider
+    window._prewarmed_listen_asr = provider
+
+    MainWindow._cancel_asr_background_prewarm(window)
+
+    assert window._asr_prewarm_cancel_event.is_set()
+    assert closed == [True]
+    assert window._prewarmed_main_asr is None
+    assert window._prewarmed_listen_asr is None
+
+
+def test_background_warmup_never_constructs_local_asr_or_tts(monkeypatch):
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._virtual_output_resolution_in_progress = False
+    window._config = {
+        "translation": {"output_format": "original_only"},
+        "asr": {"engine": "whisper-large-v3-turbo"},
+        "vrc_listen": {"enabled": False},
+        "tts": {"enabled": True, "engine": "xtts"},
+    }
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.create_asr",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("local ASR must stay lazy")
+        ),
+    )
+
+    assert MainWindow._start_asr_background_prewarm(window) is False
+    assert MainWindow._start_tts_background_prewarm(window) is False
+
+
+def test_background_warmup_skips_missing_credentials_without_prompt(monkeypatch):
+    completed = threading.Event()
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._virtual_output_resolution_in_progress = False
+    window._background_initialization_started = False
+    window._ui_lang = "en"
+    window._config = {
+        "translation": {
+            "backend": "qianwen",
+            "output_format": "translated_only",
+            "qianwen": {"api_key": ""},
+        },
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {"api_key": ""},
+        },
+        "vrc_listen": {"enabled": False},
+        "tts": {
+            "enabled": True,
+            "engine": "qwen_tts",
+            "qwen_tts": {"api_key": ""},
+        },
+    }
+    window._prompt_for_missing_credential = lambda _scopes: (_ for _ in ()).throw(
+        AssertionError("background warm-up must never prompt")
+    )
+    window._ensure_manual_translation_controller = lambda: (
+        _ for _ in ()
+    ).throw(AssertionError("missing translation key must skip controller creation"))
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.create_asr",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("missing ASR key must skip provider creation")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.record_startup_stage",
+        lambda stage, **_kwargs: (
+            completed.set()
+            if stage == "background.asr_provider_prewarm"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        "src.ui_qt.main_window.QTimer.singleShot",
+        lambda _delay, _callback: None,
+    )
+
+    assert MainWindow.start_background_initialization(window) is True
+    assert completed.wait(2.0)
+    assert MainWindow._start_tts_background_prewarm(window) is False
+
+
+def test_realtime_translation_prewarm_runs_on_retained_worker_thread():
+    window = MainWindow.__new__(MainWindow)
+    config = {
+        "ui": {"language": "en"},
+        "translation": {
+            "backend": "google_web",
+            "output_format": "translated_only",
+        },
+        "vrc_listen": {"enabled": False},
+    }
+    window._config = config
+    window._ui_lang = "en"
+    window._realtime_config_snapshot = _freeze_snapshot_value(config)
+    calls: list[tuple[str, int]] = []
+
+    class Translator:
+        def prewarm(self):
+            calls.append(("prewarm", threading.get_ident()))
+            return True
+
+        def close(self):
+            pass
+
+    translator = Translator()
+    window._create_realtime_translator = (
+        lambda _config, *, source=MIC_SOURCE: translator
+    )
+    result: list[object] = []
+
+    def run():
+        calls.append(("factory", threading.get_ident()))
+        result.append(
+            MainWindow._create_realtime_translation_worker_state(window, 0)
+        )
+
+    thread = threading.Thread(target=run, name="test-realtime-worker")
+    thread.start()
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert result[0].translator is translator
+    assert result[0].runtime_signature
+    assert calls[0][1] == calls[1][1] == thread.ident
+
+
+def test_online_tts_background_manager_is_retained_for_first_use(monkeypatch):
+    ready = threading.Event()
+    created: list[object] = []
+
+    class FakeManager:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.started = False
+            self.closed = False
+            created.append(self)
+
+        def is_available(self):
+            return True
+
+        def start(self):
+            self.started = True
+
+        def prewarm(self, voice):
+            self.voice = voice
+            ready.set()
+            return True
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("src.tts.manager.TTSManager", FakeManager)
+    window = MainWindow.__new__(MainWindow)
+    window._destroying = False
+    window._virtual_output_resolution_in_progress = False
+    window._ui_lang = "en"
+    window._config = {
+        "translation": {"output_format": "translated_only"},
+        "tts": {
+            "enabled": True,
+            "engine": "edge",
+            "allow_fallback": True,
+            "output_device": None,
+            "output_device_name": "",
+            "output_to_vrchat": False,
+            "monitor_enabled": False,
+            "edge": {"voice": "en-US-AriaNeural"},
+        },
+        "performance": {
+            "tts_cache_max_mb": 24,
+            "tts_cache_max_items": 60,
+        },
+    }
+    window._tts_manager = None
+    window._tts_manager_signature = None
+    window._prompt_for_missing_credential = lambda _scopes: False
+
+    assert MainWindow._start_tts_background_prewarm(window) is True
+    assert ready.wait(2.0)
+    thread = getattr(window, "_tts_prewarm_thread", None)
+    if thread is not None:
+        thread.join(timeout=2.0)
+
+    assert len(created) == 1
+    assert created[0].kwargs["allow_fallback"] is False
+    assert created[0].started is True
+    assert window._tts_manager is created[0]
+    assert MainWindow._ensure_tts_manager(window) is created[0]
 
 
 def test_reopened_transient_dialogs_are_deleted_instead_of_accumulating(

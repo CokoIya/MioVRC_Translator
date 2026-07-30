@@ -64,7 +64,7 @@ def test_thread_local_session_pool_close_is_idempotent_and_blocks_reopen():
         pool.get()
 
 
-def test_thread_local_session_pool_reaps_sessions_from_finished_workers():
+def test_thread_local_session_pool_hands_finished_worker_session_to_next_worker():
     created: list[_Session] = []
     pool = ThreadLocalSessionPool(
         lambda: created.append(_Session(len(created))) or created[-1]
@@ -77,13 +77,15 @@ def test_thread_local_session_pool_reaps_sessions_from_finished_workers():
     assert len(created) == 1
     assert created[0].closed is False
 
-    # A later caller prunes sessions whose owning worker has exited.
-    pool.get()
+    # A later caller adopts the now-unowned preconnected session instead of
+    # discarding its reusable TCP/TLS pool.
+    adopted = pool.get()
 
-    assert created[0].closed is True
-    assert len(created) == 2
+    assert adopted is created[0]
+    assert created[0].closed is False
+    assert len(created) == 1
     pool.close()
-    assert created[1].closed is True
+    assert created[0].closed is True
 
 
 def test_get_does_not_return_existing_session_closed_during_stale_cleanup():
@@ -143,3 +145,62 @@ def test_get_does_not_return_existing_session_closed_during_stale_cleanup():
     assert "closed" in str(owner_error[0])
     assert created[0].closed is True
     assert created[1].closed is True
+
+
+def test_adopted_session_is_not_closed_twice_during_concurrent_pool_close():
+    stale_close_started = threading.Event()
+    release_stale_close = threading.Event()
+    owners_ready = threading.Barrier(3)
+    created = []
+
+    class Session(_Session):
+        def __init__(self, identity: int) -> None:
+            super().__init__(identity)
+            self.close_count = 0
+            self.block_on_close = False
+
+        def close(self) -> None:
+            self.close_count += 1
+            if self.block_on_close:
+                stale_close_started.set()
+                release_stale_close.wait(timeout=3)
+            super().close()
+
+    pool = ThreadLocalSessionPool(
+        lambda: created.append(Session(len(created))) or created[-1]
+    )
+
+    def owner() -> None:
+        pool.get()
+        owners_ready.wait(timeout=3)
+
+    owners = [threading.Thread(target=owner) for _ in range(2)]
+    for thread in owners:
+        thread.start()
+    owners_ready.wait(timeout=3)
+    for thread in owners:
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+
+    dead_sessions = list(pool._sessions.values())
+    assert len(dead_sessions) == 2
+    dead_sessions[1].block_on_close = True
+    errors = []
+
+    def adopt() -> None:
+        try:
+            pool.get()
+        except Exception as exc:
+            errors.append(exc)
+
+    adopter = threading.Thread(target=adopt)
+    adopter.start()
+    assert stale_close_started.wait(timeout=1)
+    pool.close()
+    release_stale_close.set()
+    adopter.join(timeout=1)
+
+    assert not adopter.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert all(session.close_count == 1 for session in created)

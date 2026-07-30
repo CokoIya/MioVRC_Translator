@@ -40,6 +40,7 @@ from src.utils.qwen_endpoints import (
     QWEN_TOKYO_COMPATIBLE_MODE_PATH,
     require_qwen_tokyo_workspace_base_url,
 )
+from src.utils.provider_warmup import warmup_async_httpx_client
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
@@ -339,6 +340,71 @@ class Qwen3ASRProvider(ASRProvider):
             )
             if progress_callback is not None:
                 progress_callback({"stage": "ready", "message": "Qwen3-ASR ready"})
+
+    def prewarm(self) -> bool:
+        """Warm Qwen's exact async transport without uploading audio."""
+
+        try:
+            self.load()
+        except Exception as exc:
+            logger.warning(
+                "Qwen3-ASR prewarm could not initialize the runtime "
+                "(error_type=%s)",
+                exc.__class__.__name__,
+            )
+            return False
+
+        with self._lock:
+            if self._closed:
+                return False
+            http_client = self._http_client
+            runner = self._runner
+            generation = self._runtime_generation
+        if http_client is None or runner is None:
+            return False
+
+        try:
+            base_url = self._resolved_base_url()
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self.api_key or 'local-no-key'}",
+            }
+            result = runner.run(
+                warmup_async_httpx_client(
+                    http_client,
+                    f"{base_url.rstrip('/')}/models",
+                    method="HEAD",
+                    headers=headers,
+                    timeout_s=min(self.timeout_seconds, 3.0),
+                ),
+                timeout=min(self.timeout_seconds, 3.0) + 0.5,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Qwen3-ASR prewarm failed "
+                "(generation=%d error_type=%s)",
+                generation,
+                exc.__class__.__name__,
+            )
+            return False
+
+        if result.succeeded:
+            logger.info(
+                "Qwen3-ASR prewarm finished "
+                "(generation=%d status=%s elapsed_ms=%.0f)",
+                generation,
+                result.status_code if result.status_code is not None else "unknown",
+                result.elapsed_s * 1000.0,
+            )
+        else:
+            logger.warning(
+                "Qwen3-ASR prewarm failed "
+                "(generation=%d elapsed_ms=%.0f error_type=%s)",
+                generation,
+                result.elapsed_s * 1000.0,
+                result.error_type or "unknown",
+            )
+        return result.succeeded
 
     async def _create_runtime(self, async_openai, httpx, *, generation: int):
         resolved_base_url = self._resolved_base_url()

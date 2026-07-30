@@ -511,7 +511,14 @@ def _path_is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-def _cleanup_obsolete_runtime_models() -> None:
+def cleanup_obsolete_runtime_models() -> None:
+    """Remove managed model directories that no longer map to an ASR engine.
+
+    This can traverse and recursively delete large runtime-model trees, so it
+    must be invoked by post-window background maintenance rather than from
+    :func:`load_config` on the UI startup path.
+    """
+
     try:
         runtime_models_dir = require_real_directory(
             writable_app_dir() / "runtime_models"
@@ -553,6 +560,12 @@ def _cleanup_obsolete_runtime_models() -> None:
             logger.warning(
                 "Failed to remove obsolete runtime model %s: %s", target, exc
             )
+
+
+def _cleanup_obsolete_runtime_models() -> None:
+    """Backward-compatible wrapper for older plugin and test callers."""
+
+    cleanup_obsolete_runtime_models()
 
 
 def _merge_defaults(defaults, current):
@@ -2413,7 +2426,6 @@ def _ensure_performance_config(config: dict) -> bool:
 def load_config() -> dict:
     config_path = _config_path()
     logger.info("Loading configuration from %s", config_path)
-    _cleanup_obsolete_runtime_models()
     created_new = False
     recovered_invalid = False
     if not config_path.exists():

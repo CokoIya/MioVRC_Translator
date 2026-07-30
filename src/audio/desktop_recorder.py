@@ -40,6 +40,10 @@ _loopback_cache_lock = threading.RLock()
 _last_loopback_devices: list[dict[str, object]] = []
 _last_loopback_diagnostics: dict[str, object] = {}
 _consecutive_empty_loopback_scans = 0
+_next_empty_loopback_scan_at = 0.0
+
+_EMPTY_LOOPBACK_BACKOFF_BASE_S = 5.0
+_EMPTY_LOOPBACK_BACKOFF_MAX_S = 60.0
 
 _MAX_DESKTOP_CAPTURE_CHANNELS = 2
 _COMMON_DESKTOP_CAPTURE_RATES = (
@@ -102,7 +106,7 @@ def _cache_loopback_devices(
     errors: list[str] | None = None,
 ) -> list[dict[str, object]]:
     global _last_loopback_devices, _last_loopback_diagnostics
-    global _consecutive_empty_loopback_scans
+    global _consecutive_empty_loopback_scans, _next_empty_loopback_scan_at
     snapshot = _copy_loopback_devices(devices)
     diagnostics = {
         "backend": backend,
@@ -125,7 +129,35 @@ def _cache_loopback_devices(
         _last_loopback_diagnostics = diagnostics
         if snapshot:
             _consecutive_empty_loopback_scans = 0
+            _next_empty_loopback_scan_at = 0.0
     return _copy_loopback_devices(snapshot)
+
+
+def _negative_loopback_cache() -> list[dict[str, object]] | None:
+    """Return a silent cached miss while the hot-plug retry backoff is active."""
+
+    global _last_loopback_diagnostics
+    now = time.monotonic()
+    with _loopback_cache_lock:
+        if (
+            _last_loopback_devices
+            or _next_empty_loopback_scan_at <= 0.0
+            or now >= _next_empty_loopback_scan_at
+        ):
+            return None
+        diagnostics = dict(_last_loopback_diagnostics)
+        diagnostics.update(
+            {
+                "from_cache": True,
+                "cache_reason": "empty loopback scan backoff",
+                "retry_in_s": round(
+                    max(0.0, _next_empty_loopback_scan_at - now),
+                    3,
+                ),
+            }
+        )
+        _last_loopback_diagnostics = diagnostics
+    return []
 
 
 def _cached_loopback_devices(*, reason: str) -> list[dict[str, object]]:
@@ -209,11 +241,12 @@ def loopback_device_diagnostics() -> dict[str, object]:
 
 def _reset_loopback_device_cache_for_tests() -> None:
     global _last_loopback_devices, _last_loopback_diagnostics
-    global _consecutive_empty_loopback_scans
+    global _consecutive_empty_loopback_scans, _next_empty_loopback_scan_at
     with _loopback_cache_lock:
         _last_loopback_devices = []
         _last_loopback_diagnostics = {}
         _consecutive_empty_loopback_scans = 0
+        _next_empty_loopback_scan_at = 0.0
 
 
 def _windows_render_endpoints() -> list[dict[str, object]]:
@@ -408,7 +441,7 @@ def _enumerate_soundcard_loopback_devices(sc) -> list[dict[str, object]]:
     return result
 
 
-def list_output_devices() -> list[dict[str, object]]:
+def list_output_devices(*, force_refresh: bool = False) -> list[dict[str, object]]:
     """Return WASAPI loopback output devices.
 
     SoundCard is the preferred backend. PyAudioWPatch is kept only as a
@@ -416,6 +449,11 @@ def list_output_devices() -> list[dict[str, object]]:
     driver stacks crash inside PyAudioWPatch/PortAudio while opening loopback
     streams.
     """
+    if not force_refresh:
+        cached_miss = _negative_loopback_cache()
+        if cached_miss is not None:
+            return cached_miss
+
     errors: list[str] = []
     try:
         sc = _import_soundcard()
@@ -482,7 +520,7 @@ def list_output_devices() -> list[dict[str, object]]:
             errors=errors,
         )
 
-    global _consecutive_empty_loopback_scans
+    global _consecutive_empty_loopback_scans, _next_empty_loopback_scan_at
     with _loopback_cache_lock:
         _consecutive_empty_loopback_scans += 1
         empty_scan_count = _consecutive_empty_loopback_scans
@@ -495,7 +533,21 @@ def list_output_devices() -> list[dict[str, object]]:
         )
         if cached:
             return cached
+    backoff_s = min(
+        _EMPTY_LOOPBACK_BACKOFF_BASE_S
+        * (2 ** min(max(empty_scan_count - 1, 0), 4)),
+        _EMPTY_LOOPBACK_BACKOFF_MAX_S,
+    )
     _cache_loopback_devices([], backend="unavailable", errors=errors)
+    with _loopback_cache_lock:
+        _next_empty_loopback_scan_at = time.monotonic() + backoff_s
+        _last_loopback_diagnostics.update(
+            {
+                "empty_scan_count": empty_scan_count,
+                "retry_backoff_s": backoff_s,
+                "next_scan_at": _next_empty_loopback_scan_at,
+            }
+        )
     logger.error("No desktop output device detected; diagnostics=%s", loopback_device_diagnostics())
     return []
 

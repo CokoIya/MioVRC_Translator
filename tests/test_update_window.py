@@ -414,6 +414,13 @@ def test_qt_app_restores_deferred_update_from_disk_without_network_or_memory(
         def show(self):
             pass
 
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
     monkeypatch.setattr(qt_app, "QApplication", FakeApplication)
     monkeypatch.setattr(qt_app, "MainWindow", FakeMainWindow)
     monkeypatch.setattr(qt_app, "_configure_rendering", lambda: None)
@@ -421,10 +428,12 @@ def test_qt_app_restores_deferred_update_from_disk_without_network_or_memory(
     monkeypatch.setattr(qt_app, "_apply_style", lambda *_args: None)
     monkeypatch.setattr(qt_app, "install_qt_translations", lambda *_args: None)
     monkeypatch.setattr(qt_app, "apply_application_font", lambda *_args: None)
+    monkeypatch.setattr(qt_app.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(qt_app.QTimer, "singleShot", lambda _delay, callback: callback())
     monkeypatch.setattr(
         update_window,
         "consume_update_install_result",
-        lambda: None,
+        lambda argv=None: None,
     )
 
     assert qt_app.run_qt_app({"ui": {"language": "en"}}) == 0

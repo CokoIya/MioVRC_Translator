@@ -820,7 +820,7 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["user_selected_engine"] is True
 
     def test_cleanup_obsolete_runtime_models_removes_deleted_local_asr_models(self):
-        """Startup cleanup should remove deleted local ASR runtime models."""
+        """Deferred cleanup should remove deleted local ASR runtime models."""
         original_writable_app_dir = config_manager.writable_app_dir
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -833,7 +833,7 @@ class TestConfigValidation(unittest.TestCase):
 
             config_manager.writable_app_dir = lambda: root
             try:
-                config_manager._cleanup_obsolete_runtime_models()
+                config_manager.cleanup_obsolete_runtime_models()
             finally:
                 config_manager.writable_app_dir = original_writable_app_dir
 
@@ -1772,7 +1772,11 @@ class TestConfigSave(unittest.TestCase):
 
             with patch.object(config_manager, "_config_path", return_value=config_path), \
                  patch.object(config_manager, "_example_path", return_value=example_path), \
-                 patch.object(config_manager, "_cleanup_obsolete_runtime_models"), \
+                 patch.object(
+                     config_manager,
+                     "_cleanup_obsolete_runtime_models",
+                     side_effect=AssertionError("model cleanup blocked config load"),
+                 ), \
                  patch.object(config_manager, "_ensure_ui_config", return_value=True), \
                  patch.object(
                      config_manager,

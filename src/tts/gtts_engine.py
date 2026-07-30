@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 from .base import BaseTTS, TTSVoice
+from src.utils.provider_warmup import warmup_dns_origin
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,24 @@ class GoogleTTS(BaseTTS):
     def is_available(self) -> bool:
         """Check if gTTS is available."""
         return self._gtts is not None
+
+    def prewarm(self, voice: str = "") -> None:
+        """Prime bounded Google DNS state without synthesizing speech."""
+
+        del voice
+        if not self.is_available():
+            return
+        result = warmup_dns_origin(
+            "https://translate.google.com",
+            timeout_s=2.0,
+        )
+        logger.log(
+            logging.INFO if result.succeeded else logging.WARNING,
+            "gTTS DNS prewarm %s (elapsed_ms=%.0f error_type=%s)",
+            "finished" if result.succeeded else "failed",
+            result.elapsed_s * 1000.0,
+            result.error_type or "none",
+        )
 
     def get_available_voices(self) -> list[TTSVoice]:
         """Get list of available voices from gTTS.

@@ -11,12 +11,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
-from src.translators.factory import create_translator
 from src.translators.base import translation_context_scope
 from src.utils.latency_metrics import (
     merge_translation_metrics,
     translation_metrics_snapshot,
 )
+
+
+def _create_translator(config: dict):
+    """Lazy provider factory so importing the UI does not import every SDK."""
+
+    from src.translators.factory import create_translator
+
+    return create_translator(config)
 
 
 def _close_translator(translator: Any) -> None:
@@ -96,7 +103,7 @@ class MicPipeline:
         config: Mapping[str, Any] | Callable[[], Mapping[str, Any]],
         output_dispatcher: OutputDispatcher,
         *,
-        translator_factory: Callable[[dict], Any] = create_translator,
+        translator_factory: Callable[[dict], Any] = _create_translator,
     ) -> None:
         self._config = config
         self._output_dispatcher = output_dispatcher
@@ -293,7 +300,7 @@ class ListenPipeline:
         config: Mapping[str, Any] | Callable[[], Mapping[str, Any]],
         output_dispatcher: OutputDispatcher,
         *,
-        translator_factory: Callable[[dict], Any] = create_translator,
+        translator_factory: Callable[[dict], Any] = _create_translator,
     ) -> None:
         self._config = config
         self._output_dispatcher = output_dispatcher

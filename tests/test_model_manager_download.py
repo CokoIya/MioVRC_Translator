@@ -411,26 +411,31 @@ def test_pinned_sensevoice_update_check_does_not_query_mutable_network_state(
     assert status["update_available"] is False
 
 
-def test_pinned_sensevoice_downloads_each_hashed_file_without_snapshot(
+def test_pinned_sensevoice_prefers_https_for_each_hashed_file_without_snapshot(
     monkeypatch, tmp_path
 ):
     contents = _sensevoice_test_contents()
     spec = _pinned_sensevoice_spec(contents)
-    source_dir = tmp_path / "modelscope-files"
-    source_dir.mkdir()
-    calls: list[tuple[str, str, str]] = []
+    calls: list[str] = []
 
-    def fake_model_file_download(model_id, filename, *, revision, cache_dir):
-        calls.append((model_id, filename, revision))
-        assert cache_dir == str(tmp_path / "cache")
-        source = source_dir / filename
-        source.write_bytes(contents[filename])
-        return str(source)
+    def fake_https_download(
+        _spec,
+        filename,
+        *,
+        target_path,
+        root,
+        expected_sha256,
+        tracker,
+    ):
+        calls.append(filename)
+        model_manager._write_verified_stream(
+            (contents[filename],),
+            target_path=target_path,
+            root=root,
+            expected_sha256=expected_sha256,
+            tracker=tracker,
+        )
 
-    file_mod = types.ModuleType("modelscope.hub.file_download")
-    file_mod.model_file_download = fake_model_file_download
-    monkeypatch.setitem(sys.modules, "modelscope.hub.file_download", file_mod)
-    monkeypatch.setattr(model_manager, "cache_dir", lambda: tmp_path / "cache")
     monkeypatch.setattr(
         model_manager,
         "_fetch_required_snapshot_info",
@@ -440,18 +445,81 @@ def test_pinned_sensevoice_downloads_each_hashed_file_without_snapshot(
     )
     monkeypatch.setattr(
         model_manager,
+        "cache_dir",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("ModelScope cache should stay lazy when HTTPS succeeds")
+        ),
+    )
+    monkeypatch.setattr(
+        model_manager,
         "_download_verified_http_file",
+        fake_https_download,
+    )
+    monkeypatch.setattr(
+        model_manager,
+        "_download_verified_modelscope_file",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("HTTPS fallback should not be needed")
+            AssertionError("ModelScope fallback should not be needed")
         ),
     )
 
     target = model_manager.download_model_to(spec, tmp_path / "downloaded")
 
-    assert [filename for _, filename, _ in calls] == list(contents)
-    assert all(model_id == SENSEVOICE_DEFAULT_MODEL for model_id, _, _ in calls)
-    assert all(revision == SENSEVOICE_DEFAULT_REVISION for _, _, revision in calls)
+    assert calls == list(contents)
     assert not list(target.glob("*.part"))
+    assert model_manager.verify_model_integrity(target, spec)
+
+
+def test_pinned_sensevoice_uses_modelscope_after_https_failure(
+    monkeypatch, tmp_path
+):
+    contents = {
+        "configuration.json": b"{}",
+        "model.pt": b"verified weights",
+    }
+    spec = _pinned_sensevoice_spec(contents)
+    order: list[tuple[str, str]] = []
+
+    def fail_https(_spec, filename, **_kwargs):
+        order.append(("https", filename))
+        raise ConnectionError("direct endpoint unavailable")
+
+    def fake_modelscope(
+        _spec,
+        filename,
+        *,
+        target_path,
+        root,
+        expected_sha256,
+        tracker,
+        modelscope_cache,
+    ):
+        order.append(("modelscope", filename))
+        assert modelscope_cache == tmp_path / "cache"
+        model_manager._write_verified_stream(
+            (contents[filename],),
+            target_path=target_path,
+            root=root,
+            expected_sha256=expected_sha256,
+            tracker=tracker,
+        )
+
+    monkeypatch.setattr(model_manager, "cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(model_manager, "_download_verified_http_file", fail_https)
+    monkeypatch.setattr(
+        model_manager,
+        "_download_verified_modelscope_file",
+        fake_modelscope,
+    )
+
+    target = model_manager.download_model_to(spec, tmp_path / "downloaded")
+
+    assert order == [
+        ("https", "configuration.json"),
+        ("modelscope", "configuration.json"),
+        ("https", "model.pt"),
+        ("modelscope", "model.pt"),
+    ]
     assert model_manager.verify_model_integrity(target, spec)
 
 
@@ -487,7 +555,7 @@ def test_pinned_download_hash_mismatch_never_replaces_existing_file(
     assert not (target / "am.mvn.part").exists()
 
 
-def test_https_fallback_uses_pinned_revision_and_verifies_before_replace(
+def test_pinned_https_uses_pinned_revision_and_verifies_before_replace(
     monkeypatch, tmp_path
 ):
     content = b"verified content"

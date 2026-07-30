@@ -803,6 +803,52 @@ def test_tts_manager_prewarm_runs_on_synthesis_worker(monkeypatch):
         manager.stop()
 
 
+def test_tts_manager_prewarm_reaches_every_synthesis_worker(monkeypatch):
+    class PrewarmTTS(FakeTTS):
+        max_concurrent_synthesis = 2
+
+        def __init__(self):
+            super().__init__()
+            self.prewarm_calls = []
+            self.lock = threading.Lock()
+            self.all_prewarmed = threading.Event()
+
+        def prewarm(self, voice=""):
+            with self.lock:
+                self.prewarm_calls.append(
+                    (voice, threading.current_thread().name)
+                )
+                if len(self.prewarm_calls) >= 2:
+                    self.all_prewarmed.set()
+
+    engine = PrewarmTTS()
+    monkeypatch.setattr(
+        "src.tts.manager.create_tts_engine",
+        lambda _engine_name, **_kwargs: engine,
+    )
+    manager = TTSManager(
+        engine_name="fake",
+        cache_enabled=False,
+        allow_fallback=False,
+        synthesis_concurrency=2,
+    )
+
+    manager.start()
+    try:
+        assert manager.prewarm("voice") is True
+        assert engine.all_prewarmed.wait(timeout=1)
+        deadline = time.monotonic() + 1
+        while manager._prewarm_queued and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert manager._prewarm_queued is False
+        assert sorted(engine.prewarm_calls) == [
+            ("voice", "tts-synthesis-1"),
+            ("voice", "tts-synthesis-2"),
+        ]
+    finally:
+        manager.stop()
+
+
 def test_tts_manager_prewarm_log_hides_raw_exception_prose(monkeypatch, caplog):
     secret = "raw-prewarm-secret and player text"
 

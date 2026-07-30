@@ -9,17 +9,18 @@ from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
-import shutil
 import stat
 import sys
 import tempfile
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 _WINDOWS_APP_DIR_NAME = "Mio RealTime Translator"
 _POSIX_APP_DIR_NAME = "mio-realtime-translator"
 _MIGRATION_MARKER_NAME = ".legacy-data-migration-v1.done"
+_MIGRATION_FILES_MARKER_NAME = ".legacy-data-migration-v1-files.done"
 _MIGRATION_LOCK_NAME = ".legacy-data-migration-v1.lock"
 _MIGRATION_FILES = (
     "config.json",
@@ -27,6 +28,12 @@ _MIGRATION_FILES = (
     "catalog_cache.json",
     "sponsors_cache.json",
 )
+_MIGRATION_FILE_MAX_BYTES = {
+    "config.json": 4 * 1024 * 1024,
+    "seren.json": 1024 * 1024,
+    "catalog_cache.json": 4 * 1024 * 1024,
+    "sponsors_cache.json": 4 * 1024 * 1024,
+}
 _MIGRATION_DIRS = (
     "backgrounds",
     "dictionaries",
@@ -38,9 +45,13 @@ _MIGRATION_DIRS = (
 )
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _COPY_CHUNK_SIZE = 1024 * 1024
+_UNOWNED_COPY_TEMP_STALE_S = 24 * 60 * 60
 _MIGRATION_LOCK = threading.Lock()
+_MIGRATION_FILES_LOCK = threading.Lock()
 _MIGRATED_DESTINATIONS: set[str] = set()
 _MIGRATION_ATTEMPTED_DESTINATIONS: set[str] = set()
+_MIGRATION_FILES_MIGRATED_DESTINATIONS: set[str] = set()
+_MIGRATION_FILES_ATTEMPTED_DESTINATIONS: set[str] = set()
 _MIGRATION_SKIPPED_DIRECTORY_NAMES = frozenset({"__pycache__", "pycache"})
 _MIGRATION_SKIPPED_FILE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
@@ -217,80 +228,168 @@ def _ensure_real_directory(path: Path) -> bool:
     return True
 
 
-def _secure_copy_missing_file(source: Path, destination: Path) -> bool:
-    """Copy one regular file without following links or replacing a destination."""
-    if _lexists(destination):
+def _copy_temp_owner_pid(destination: Path, candidate: Path) -> int | None:
+    prefix = f".{destination.name}."
+    suffix = ".copy.tmp"
+    name = candidate.name
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    owner_text = name[len(prefix) : -len(suffix)].split(".", 1)[0]
+    if not owner_text.isdecimal():
+        return None
+    try:
+        owner_pid = int(owner_text)
+    except ValueError:
+        return None
+    return owner_pid if owner_pid > 0 else None
+
+
+def _process_is_running(pid: int) -> bool:
+    """Conservatively report whether a staging-file owner may still exist."""
+
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
         return True
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            process_query_limited_information = 0x1000
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(
+                process_query_limited_information,
+                False,
+                pid,
+            )
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            # ERROR_INVALID_PARAMETER means the PID does not identify a
+            # process. Access-denied and other failures are treated as alive so
+            # cleanup never races a process we cannot inspect.
+            return ctypes.get_last_error() != 87
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def _cleanup_stale_copy_temps(destination: Path) -> None:
+    """Remove abandoned atomic-copy staging files for one migration target."""
+
+    try:
+        candidates = tuple(
+            destination.parent.glob(f".{destination.name}.*.copy.tmp")
+        )
+    except (OSError, RuntimeError, ValueError):
+        return
+    now = time.time()
+    for candidate in candidates:
+        candidate_stat = _safe_lstat(candidate)
+        if (
+            candidate_stat is None
+            or not stat.S_ISREG(candidate_stat.st_mode)
+            or _is_link_or_reparse(candidate_stat)
+        ):
+            continue
+        owner_pid = _copy_temp_owner_pid(destination, candidate)
+        if owner_pid is not None:
+            if _process_is_running(owner_pid):
+                continue
+        elif max(0.0, now - float(candidate_stat.st_mtime)) < _UNOWNED_COPY_TEMP_STALE_S:
+            # Older releases did not include a PID in the staging filename.
+            # Preserve recent unowned files because another live process may
+            # still be copying them; age them out conservatively instead.
+            continue
+        try:
+            if _is_regular_private_file(candidate_stat):
+                secure_unlink(
+                    candidate,
+                    missing_ok=True,
+                    expected_stat=candidate_stat,
+                )
+                continue
+
+            # POSIX no-replace publication uses link(2) followed by unlink(2).
+            # A crash between those calls leaves the staging and destination
+            # names pointing at the same two-link inode. Remove only the stale
+            # staging name after proving that exact relationship; the final
+            # destination then becomes a normal one-link private file.
+            destination_stat = _safe_lstat(destination)
+            current_stat = _safe_lstat(candidate)
+            if (
+                int(getattr(candidate_stat, "st_nlink", 1) or 1) == 2
+                and destination_stat is not None
+                and current_stat is not None
+                and _same_file_snapshot(candidate_stat, current_stat)
+                and _same_file_object(candidate_stat, destination_stat)
+            ):
+                candidate.unlink()
+                _fsync_directory(candidate.parent)
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Could not remove stale migration staging file: %s", candidate)
+
+
+def _secure_copy_missing_file(
+    source: Path,
+    destination: Path,
+    *,
+    max_bytes: int | None = None,
+) -> bool:
+    """Atomically copy one regular file without replacing a destination."""
+    _cleanup_stale_copy_temps(destination)
+    if _lexists(destination):
+        destination_stat = _safe_lstat(destination)
+        return bool(
+            destination_stat is not None
+            and _is_regular_private_file(destination_stat)
+        )
     source_stat = _safe_lstat(source)
     if source_stat is None:
         return True
-    if not stat.S_ISREG(source_stat.st_mode) or _is_link_or_reparse(source_stat):
+    if not _is_regular_private_file(source_stat):
+        return True
+    if max_bytes is not None and int(source_stat.st_size) > int(max_bytes):
+        logger.warning(
+            "Skipping oversized legacy startup file name=%s size=%d max_bytes=%d",
+            source.name,
+            int(source_stat.st_size),
+            int(max_bytes),
+        )
         return True
     if not _ensure_real_directory(destination.parent):
         return False
-
-    read_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    write_flags = (
-        os.O_WRONLY
-        | os.O_CREAT
-        | os.O_EXCL
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    created = False
-    copied = False
     try:
-        source_fd = os.open(source, read_flags)
-        try:
-            opened_source_stat = os.fstat(source_fd)
-            if (
-                not stat.S_ISREG(opened_source_stat.st_mode)
-                or opened_source_stat.st_size != source_stat.st_size
-                or (
-                    getattr(source_stat, "st_ino", 0)
-                    and getattr(opened_source_stat, "st_ino", 0)
-                    and (source_stat.st_dev, source_stat.st_ino)
-                    != (opened_source_stat.st_dev, opened_source_stat.st_ino)
-                )
-            ):
-                return False
-            destination_fd = os.open(destination, write_flags, 0o600)
-            created = True
-            try:
-                with os.fdopen(source_fd, "rb", closefd=False) as source_handle, os.fdopen(
-                    destination_fd, "wb", closefd=False
-                ) as destination_handle:
-                    shutil.copyfileobj(source_handle, destination_handle, length=_COPY_CHUNK_SIZE)
-                    destination_handle.flush()
-                    os.fsync(destination_handle.fileno())
-                final_source_stat = os.fstat(source_fd)
-                copied = (
-                    final_source_stat.st_size == opened_source_stat.st_size
-                    and getattr(final_source_stat, "st_mtime_ns", None)
-                    == getattr(opened_source_stat, "st_mtime_ns", None)
-                )
-            finally:
-                os.close(destination_fd)
-        finally:
-            os.close(source_fd)
+        atomic_copy_secure_file(
+            source,
+            destination,
+            max_bytes=max_bytes,
+            overwrite=False,
+            mode=0o600,
+        )
     except FileExistsError:
-        return True
-    except OSError:
-        copied = False
-    finally:
-        if created and not copied:
-            try:
-                destination.unlink()
-            except OSError:
-                pass
-
-    if not copied:
+        destination_stat = _safe_lstat(destination)
+        return bool(
+            destination_stat is not None
+            and _is_regular_private_file(destination_stat)
+        )
+    except (OSError, RuntimeError, ValueError):
         return False
     destination_stat = _safe_lstat(destination)
     return bool(
         destination_stat
-        and stat.S_ISREG(destination_stat.st_mode)
-        and not _is_link_or_reparse(destination_stat)
+        and _is_regular_private_file(destination_stat)
     )
 
 
@@ -392,7 +491,11 @@ def _cross_process_lock(lock_path: Path):
         handle.close()
 
 
-def _write_migration_marker(marker_path: Path) -> bool:
+def _write_migration_marker(
+    marker_path: Path,
+    *,
+    message: str = "legacy writable data migrated without overwriting destination files",
+) -> bool:
     if _marker_exists(marker_path):
         return True
     if _lexists(marker_path):
@@ -401,7 +504,7 @@ def _write_migration_marker(marker_path: Path) -> bool:
     try:
         fd = os.open(marker_path, flags, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write("legacy writable data migrated without overwriting destination files\n")
+            handle.write(str(message).strip() + "\n")
             handle.flush()
             os.fsync(handle.fileno())
     except FileExistsError:
@@ -409,6 +512,73 @@ def _write_migration_marker(marker_path: Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def _migrate_legacy_files(destination: Path) -> None:
+    """Copy only the small launch-critical legacy files.
+
+    Large model, cache, background, and log trees are intentionally excluded
+    from the synchronous writable-path lookup.  They are migrated by
+    :func:`run_deferred_legacy_data_migration` after the first UI render.
+    """
+
+    source = _legacy_writable_app_dir()
+    try:
+        if source.resolve(strict=False) == destination.resolve(strict=False):
+            return
+    except OSError:
+        return
+
+    destination_key = os.path.normcase(os.path.abspath(os.fspath(destination)))
+    if (
+        destination_key in _MIGRATION_FILES_MIGRATED_DESTINATIONS
+        or destination_key in _MIGRATION_FILES_ATTEMPTED_DESTINATIONS
+    ):
+        return
+    # A lookup on the UI/config hot path must never queue behind another
+    # migration attempt.  The active attempt owns the cross-process lock and
+    # will either publish complete files atomically or leave no destination.
+    if not _MIGRATION_FILES_LOCK.acquire(blocking=False):
+        return
+    try:
+        if (
+            destination_key in _MIGRATION_FILES_MIGRATED_DESTINATIONS
+            or destination_key in _MIGRATION_FILES_ATTEMPTED_DESTINATIONS
+        ):
+            return
+        _MIGRATION_FILES_ATTEMPTED_DESTINATIONS.add(destination_key)
+        if not _ensure_real_directory(destination):
+            logger.warning("Writable application directory is not a safe directory: %s", destination)
+            return
+        lock_path = destination / _MIGRATION_LOCK_NAME
+        marker_path = destination / _MIGRATION_FILES_MARKER_NAME
+        complete_marker_path = destination / _MIGRATION_MARKER_NAME
+        try:
+            with _cross_process_lock(lock_path):
+                if _marker_exists(complete_marker_path) or _marker_exists(marker_path):
+                    _MIGRATION_FILES_MIGRATED_DESTINATIONS.add(destination_key)
+                    return
+                success = True
+                for name in _MIGRATION_FILES:
+                    if not _secure_copy_missing_file(
+                        source / name,
+                        destination / name,
+                        max_bytes=_MIGRATION_FILE_MAX_BYTES.get(name),
+                    ):
+                        success = False
+                if success and _write_migration_marker(
+                    marker_path,
+                    message="legacy launch-critical files migrated without overwriting destination files",
+                ):
+                    _MIGRATION_FILES_MIGRATED_DESTINATIONS.add(destination_key)
+                elif not success:
+                    logger.warning(
+                        "Legacy launch-critical file migration was incomplete; it will be retried"
+                    )
+        except (BlockingIOError, OSError) as exc:
+            logger.debug("Legacy writable-data migration lock unavailable: %s", exc)
+    finally:
+        _MIGRATION_FILES_LOCK.release()
 
 
 def _migrate_legacy_data(destination: Path) -> None:
@@ -420,7 +590,16 @@ def _migrate_legacy_data(destination: Path) -> None:
         return
 
     destination_key = os.path.normcase(os.path.abspath(os.fspath(destination)))
-    with _MIGRATION_LOCK:
+    if (
+        destination_key in _MIGRATED_DESTINATIONS
+        or destination_key in _MIGRATION_ATTEMPTED_DESTINATIONS
+    ):
+        return
+    # Deferred maintenance must not serialize unrelated writable-path users.
+    # If another in-process attempt is already active, it is authoritative.
+    if not _MIGRATION_LOCK.acquire(blocking=False):
+        return
+    try:
         if (
             destination_key in _MIGRATED_DESTINATIONS
             or destination_key in _MIGRATION_ATTEMPTED_DESTINATIONS
@@ -442,7 +621,11 @@ def _migrate_legacy_data(destination: Path) -> None:
                     return
                 success = True
                 for name in _MIGRATION_FILES:
-                    if not _secure_copy_missing_file(source / name, destination / name):
+                    if not _secure_copy_missing_file(
+                        source / name,
+                        destination / name,
+                        max_bytes=_MIGRATION_FILE_MAX_BYTES.get(name),
+                    ):
                         success = False
                 for name in _MIGRATION_DIRS:
                     if not _merge_missing_directory(source / name, destination / name):
@@ -455,6 +638,17 @@ def _migrate_legacy_data(destination: Path) -> None:
             # Another process may already be migrating the same legacy tree.
             # This is not an application error and must not block startup.
             logger.debug("Legacy writable-data migration lock unavailable: %s", exc)
+    finally:
+        _MIGRATION_LOCK.release()
+
+
+def run_deferred_legacy_data_migration() -> None:
+    """Finish legacy directory migration outside the startup-critical path."""
+
+    if os.environ.get("MIO_TRANSLATOR_HOME", "").strip():
+        return
+    destination = _require_real_directory(_default_writable_app_dir())
+    _migrate_legacy_data(destination)
 
 
 def writable_app_dir() -> Path:
@@ -462,7 +656,7 @@ def writable_app_dir() -> Path:
     destination = Path(override).expanduser() if override else _default_writable_app_dir()
     destination = _require_real_directory(destination)
     if not override:
-        _migrate_legacy_data(destination)
+        _migrate_legacy_files(destination)
     return destination
 
 
@@ -749,6 +943,7 @@ def _publish_staged_secure_file(
     *,
     initial_destination_stat: os.stat_result | None,
     expected_size: int | None,
+    overwrite: bool = True,
 ) -> Path:
     staged_stat = _safe_lstat(staged)
     if staged_stat is None or not _is_regular_private_file(staged_stat):
@@ -795,7 +990,12 @@ def _publish_staged_secure_file(
     ):
         raise RuntimeError(f"Staged file changed during publication: {staged}")
 
-    os.replace(staged, candidate)
+    if overwrite:
+        os.replace(staged, candidate)
+    else:
+        if initial_destination_stat is not None:
+            raise FileExistsError(candidate)
+        _publish_staged_no_replace(staged, candidate)
     published_stat = _safe_lstat(candidate)
     if (
         published_stat is None
@@ -809,6 +1009,38 @@ def _publish_staged_secure_file(
         raise RuntimeError(f"Published file failed post-publication checks: {candidate}")
     _fsync_directory(candidate.parent)
     return candidate
+
+
+def _publish_staged_no_replace(staged: Path, candidate: Path) -> None:
+    """Atomically move ``staged`` into place without replacing ``candidate``."""
+
+    if os.name == "nt":
+        # Windows rename is atomic on one volume and fails when the destination
+        # already exists.  Unlike a hard-link-then-unlink sequence, it cannot
+        # leave both names behind after an interrupted migration.
+        os.rename(staged, candidate)
+        return
+
+    # POSIX os.rename replaces an existing destination, so use link(2)'s
+    # atomic create-if-absent semantics.  Roll back the published name if the
+    # source unlink fails, avoiding a persistent two-link file during ordinary
+    # errors; stale migration staging names are also cleaned on the next run.
+    os.link(staged, candidate, follow_symlinks=False)
+    try:
+        staged.unlink()
+    except BaseException:
+        staged_stat = _safe_lstat(staged)
+        candidate_stat = _safe_lstat(candidate)
+        if (
+            staged_stat is not None
+            and candidate_stat is not None
+            and _same_file_object(staged_stat, candidate_stat)
+        ):
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def atomic_replace_secure_file(
@@ -876,7 +1108,7 @@ def atomic_copy_secure_file(
     published = False
     try:
         fd, temp_name = tempfile.mkstemp(
-            prefix=f".{candidate.name}.",
+            prefix=f".{candidate.name}.{os.getpid()}.",
             suffix=".copy.tmp",
             dir=candidate.parent,
         )
@@ -910,6 +1142,7 @@ def atomic_copy_secure_file(
             candidate,
             initial_destination_stat=initial_destination_stat,
             expected_size=copied,
+            overwrite=overwrite,
         )
         published = True
         return candidate

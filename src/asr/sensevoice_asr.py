@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
+import os
 import re
 import sys
 import threading
-import logging
-import os
+import time
+from contextlib import contextmanager
 from importlib import import_module
 from typing import Optional
 
@@ -15,9 +17,7 @@ from src.asr.base import ASRProvider, close_runtime_resource, release_runtime_me
 from src.asr.funasr_runtime_compat import patch_sentencepiece_unicode_path_support
 from src.asr.model_manager import (
     download_model,
-    model_exists,
-    resolve_model_path,
-    verify_model_integrity,
+    existing_model_path,
 )
 from src.asr.model_registry import get_asr_engine_spec
 from src.asr.text_corrections import LayeredASRCorrector
@@ -56,6 +56,25 @@ _HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _KO_RE = re.compile(r"[\uac00-\ud7af]")
 _RU_RE = re.compile(r"[\u0400-\u04ff]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+@contextmanager
+def _timed_load_stage(stage: str):
+    started_at = time.perf_counter()
+    outcome = "ok"
+    try:
+        yield
+    except BaseException:
+        outcome = "error"
+        raise
+    finally:
+        logger.info(
+            "Local ASR load timing provider=%s stage=%s elapsed_ms=%.1f outcome=%s",
+            SenseVoiceASR.provider_id,
+            stage,
+            max(0.0, (time.perf_counter() - started_at) * 1000.0),
+            outcome,
+        )
 
 
 def _emit_progress(progress_callback, *, stage: str, message: str) -> None:
@@ -197,35 +216,36 @@ class SenseVoiceASR(ASRProvider):
                 self.device,
             )
             _emit_progress(progress_callback, stage="loading", message="loading")
-            try:
-                AutoModel, rich_transcription_postprocess = _load_runtime_symbols()
-            except (ImportError, OSError) as exc:
-                logger.exception("SenseVoice runtime dependency load failed")
-                raise RuntimeError(_dependency_error_message(exc)) from exc
+            with _timed_load_stage("runtime_import"):
+                try:
+                    AutoModel, rich_transcription_postprocess = _load_runtime_symbols()
+                except (ImportError, OSError) as exc:
+                    logger.exception("SenseVoice runtime dependency load failed")
+                    raise RuntimeError(_dependency_error_message(exc)) from exc
 
             spec = self._runtime_spec()
-            if not model_exists(spec):
-                download_model(
-                    spec,
-                    progress_callback=progress_callback,
-                )
+            with _timed_load_stage("model_resolution_integrity"):
+                model_path = existing_model_path(spec)
+            if model_path is None:
+                with _timed_load_stage("model_download"):
+                    model_path = download_model(
+                        spec,
+                        known_missing=True,
+                        progress_callback=progress_callback,
+                    )
             _emit_progress(progress_callback, stage="loading", message="loading")
 
-            model_path = resolve_model_path(spec)
-            if not verify_model_integrity(model_path, spec):
-                raise RuntimeError(
-                    "SenseVoice model integrity verification failed. Please delete the runtime model folder and download it again."
+            with _timed_load_stage("model_construction"):
+                self._model = AutoModel(
+                    model=str(model_path),
+                    device=self.device,
+                    disable_update=True,
+                    check_latest=False,
+                    trust_remote_code=False,
+                    disable_pbar=True,
+                    log_level="ERROR",
+                    ncpu=self.ncpu,
                 )
-            self._model = AutoModel(
-                model=model_path,
-                device=self.device,
-                disable_update=True,
-                check_latest=False,
-                trust_remote_code=False,
-                disable_pbar=True,
-                log_level="ERROR",
-                ncpu=self.ncpu,
-            )
             self._postprocess = rich_transcription_postprocess
             _emit_progress(progress_callback, stage="ready", message="ready")
             logger.info("SenseVoice ASR loaded successfully from %s", model_path)

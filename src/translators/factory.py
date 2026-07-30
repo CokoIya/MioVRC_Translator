@@ -72,6 +72,11 @@ class FallbackTranslator(BaseTranslator):
         self._last_metrics_translator: BaseTranslator = primary
         self._wall_timeout_s = getattr(primary, "_wall_timeout_s", None)
 
+    def prewarm(self) -> bool:
+        """Warm only the configured primary; fallbacks remain lazy."""
+
+        return bool(self._primary.prewarm())
+
     def translate(
         self,
         text: str,

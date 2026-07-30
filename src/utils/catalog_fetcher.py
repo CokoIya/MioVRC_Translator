@@ -20,7 +20,6 @@ from src.utils.app_paths import (
     secure_file_path,
     writable_app_dir,
 )
-from src.utils.secure_http import open_trusted_https_url, read_bounded_response
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +89,12 @@ def _load_cache() -> dict | None:
         return None
 
 
+def load_cached_catalog() -> dict | None:
+    """Load and validate the cached catalog without starting a remote fetch."""
+
+    return _load_cache()
+
+
 def _save_cache(data: dict) -> None:
     try:
         path = _cache_path()
@@ -121,6 +126,11 @@ def _validate_catalog_payload(data: object) -> dict:
 
 
 def _fetch_remote_from_url(url: str) -> dict:
+    # Keep requests/truststore/certificate initialization off the cached
+    # catalog startup path.  The post-window refresh worker pays this import
+    # cost only when it is about to make a network request.
+    from src.utils.secure_http import open_trusted_https_url, read_bounded_response
+
     with open_trusted_https_url(
         _catalog_request_url(url),
         trusted_hosts=_TRUSTED_SOURCE_HOSTS,
@@ -147,70 +157,53 @@ def _fetch_remote() -> tuple[dict, str]:
     raise RuntimeError("; ".join(errors) or "no catalog sources available")
 
 
-def get_catalog(
-    on_result: CatalogCallback,
-    *,
-    force_refresh: bool = False,
-) -> None:
-    """Return catalog data via callback, fetching in background.
-
-    Default mode serves cached data (or the empty template) immediately, then
-    refreshes in the background.
-
-    Force-refresh mode prefers a fresh remote result first; on failure, it falls
-    back to the cached payload (or the empty template).
-    """
-    cached = _load_cache()
-    fallback_payload = cached if cached is not None else _EMPTY_CATALOG
-
-    if not force_refresh:
-        on_result(fallback_payload)
-        if cached is not None:
-            logger.info(
-                "Catalog served from cache (version=%s updated=%s)",
-                cached.get("version", ""),
-                cached.get("updated", ""),
-            )
-
-    subscriber = _CatalogSubscriber(
-        callback=on_result,
-        fallback_on_error=bool(force_refresh),
-        fallback_payload=fallback_payload,
-    )
-
-    def _run() -> None:
-        global _fetch_thread
-
-        fresh: dict | None = None
-        source_url = ""
+def _run_catalog_refresh() -> None:
+    global _fetch_thread
+    started_at = time.perf_counter()
+    outcome = "ok"
+    fresh: dict | None = None
+    source_url = ""
+    try:
+        fresh, source_url = _fetch_remote()
+        _save_cache(fresh)
+        logger.info(
+            "Catalog refreshed from remote (source=%s version=%s updated=%s)",
+            source_url,
+            fresh.get("version", ""),
+            fresh.get("updated", ""),
+        )
+    except Exception as exc:
+        outcome = "error"
+        logger.warning("Failed to fetch catalog from remote: %s", exc)
+    finally:
+        with _fetch_lock:
+            subscribers = tuple(_fetch_subscribers)
+            _fetch_subscribers.clear()
+            _fetch_thread = None
         try:
-            fresh, source_url = _fetch_remote()
-            _save_cache(fresh)
-            logger.info(
-                "Catalog refreshed from remote (source=%s version=%s updated=%s)",
-                source_url,
-                fresh.get("version", ""),
-                fresh.get("updated", ""),
-            )
-        except Exception as exc:
-            logger.warning("Failed to fetch catalog from remote: %s", exc)
-        finally:
-            with _fetch_lock:
-                subscribers = tuple(_fetch_subscribers)
-                _fetch_subscribers.clear()
-                _fetch_thread = None
+            from src.utils.startup_timing import record_startup_stage
 
-        for current in subscribers:
-            payload = fresh if fresh is not None else (
-                current.fallback_payload if current.fallback_on_error else None
+            record_startup_stage(
+                "background.catalog_refresh",
+                started_at=started_at,
+                outcome=outcome,
             )
-            if payload is None:
-                continue
-            try:
-                current.callback(payload)
-            except Exception:
-                logger.exception("Catalog result callback failed")
+        except Exception:
+            logger.debug("Failed to record catalog refresh timing", exc_info=True)
 
+    for current in subscribers:
+        payload = fresh if fresh is not None else (
+            current.fallback_payload if current.fallback_on_error else None
+        )
+        if payload is None:
+            continue
+        try:
+            current.callback(payload)
+        except Exception:
+            logger.exception("Catalog result callback failed")
+
+
+def _subscribe_for_refresh(subscriber: _CatalogSubscriber) -> None:
     global _fetch_thread
     overflow = False
     with _fetch_lock:
@@ -221,7 +214,7 @@ def get_catalog(
             if _fetch_thread is not None:
                 return
             active_thread = threading.Thread(
-                target=_run,
+                target=_run_catalog_refresh,
                 daemon=True,
                 name="catalog-fetch",
             )
@@ -240,5 +233,56 @@ def get_catalog(
         "Catalog refresh subscriber limit reached (%d); dropping remote callback",
         _MAX_FETCH_SUBSCRIBERS,
     )
-    if overflow and force_refresh:
+    if overflow and subscriber.fallback_on_error:
+        subscriber.callback(subscriber.fallback_payload)
+
+
+def refresh_catalog(on_result: CatalogCallback) -> None:
+    """Fetch only the remote catalog without rereading or replaying the cache.
+
+    This is intended for post-window startup refreshes where the cached catalog
+    was already applied before configuration loading.  A network failure keeps
+    that active cached catalog unchanged.
+    """
+
+    _subscribe_for_refresh(
+        _CatalogSubscriber(
+            callback=on_result,
+            fallback_on_error=False,
+            fallback_payload=_EMPTY_CATALOG,
+        )
+    )
+
+
+def get_catalog(
+    on_result: CatalogCallback,
+    *,
+    force_refresh: bool = False,
+) -> None:
+    """Return catalog data via callback, fetching in background.
+
+    Default mode serves cached data (or the empty template) immediately, then
+    refreshes in the background.
+
+    Force-refresh mode prefers a fresh remote result first; on failure, it falls
+    back to the cached payload (or the empty template).
+    """
+    cached = load_cached_catalog()
+    fallback_payload = cached if cached is not None else _EMPTY_CATALOG
+
+    if not force_refresh:
         on_result(fallback_payload)
+        if cached is not None:
+            logger.info(
+                "Catalog served from cache (version=%s updated=%s)",
+                cached.get("version", ""),
+                cached.get("updated", ""),
+            )
+
+    _subscribe_for_refresh(
+        _CatalogSubscriber(
+            callback=on_result,
+            fallback_on_error=bool(force_refresh),
+            fallback_payload=fallback_payload,
+        )
+    )

@@ -223,6 +223,17 @@ class GeminiLiveASRProvider(ASRProvider):
             if self._closed:
                 raise ASRConfigurationError("Gemini Live provider is closed")
             if self._client is not None:
+                if progress_callback is not None:
+                    progress_callback(
+                        {"stage": "ready", "message": "Gemini Live ASR ready"}
+                    )
+                if prewarm and self.use_live_api and self._async_runner is not None:
+                    # A provider retained from generic application warm-up has
+                    # an SDK client/event loop but intentionally no Live
+                    # websocket. Once the user explicitly starts the pipeline,
+                    # preserve the normal load() contract and prepare the Live
+                    # session for the first utterance.
+                    self._start_live_prewarm(self._async_runner)
                 return
             if not self.api_key:
                 raise ASRMissingAPIKeyError("Gemini Live API Key is not configured")
@@ -251,6 +262,27 @@ class GeminiLiveASRProvider(ASRProvider):
                 progress_callback({"stage": "ready", "message": "Gemini Live ASR ready"})
             if prewarm and self.use_live_api and self._async_runner is not None:
                 self._start_live_prewarm(self._async_runner)
+
+    def prewarm(self) -> bool:
+        """Prepare the Gemini SDK runtime without opening a Live session.
+
+        A Live websocket may become billable while it remains open, even when
+        no audio has been sent.  Generic application warm-up therefore stops
+        after constructing the authenticated SDK client and its reusable
+        event-loop runtime.  Explicit ``load()`` calls retain the historical
+        behavior of preparing a pooled Live session for the active pipeline.
+        """
+
+        try:
+            self.load(prewarm=False)
+        except Exception as exc:
+            logger.warning(
+                "Gemini Live ASR prewarm could not initialize the runtime "
+                "(error_type=%s)",
+                exc.__class__.__name__,
+            )
+            return False
+        return self.is_loaded
 
     def _start_live_prewarm(self, runner: _AsyncLoopRunner) -> None:
         if self._prewarm_thread is not None and self._prewarm_thread.is_alive():

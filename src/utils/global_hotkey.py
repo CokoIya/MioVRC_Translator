@@ -142,7 +142,7 @@ class GlobalHotkey:
     def registered(self) -> bool:
         return self._registered
 
-    def start(self) -> bool:
+    def start(self, *, wait_for_ready: bool = True) -> bool:
         if sys.platform != "win32" or not self.hotkey:
             return False
         if self._thread is not None:
@@ -156,7 +156,8 @@ class GlobalHotkey:
             daemon=True,
         )
         self._thread.start()
-        self._ready_event.wait(timeout=1.5)
+        if wait_for_ready:
+            self._ready_event.wait(timeout=1.5)
         return self._registered
 
     def stop(self) -> None:

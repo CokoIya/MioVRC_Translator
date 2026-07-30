@@ -926,6 +926,34 @@ def test_stop_workers_cancels_pending_ui_delivery_before_joining_scheduler():
     assert window._ui_priority_callback_queue.empty()
 
 
+def test_stop_workers_from_background_does_not_run_queued_ui_callbacks():
+    from queue import Queue
+
+    callback_threads: list[int] = []
+    window = MainWindow.__new__(MainWindow)
+    window._ui_thread_id = threading.get_ident()
+    window._realtime_delivery_cancel_event = threading.Event()
+    window._ui_priority_callback_queue = Queue(maxsize=1)
+    window._ui_priority_callback_queue.put_nowait(
+        (0, lambda: callback_threads.append(threading.get_ident()))
+    )
+    window._realtime_scheduler = None
+    window._asr = None
+    window._listen_asr = None
+    window._partial_task_queues = {}
+    window._partial_workers = {}
+    window._final_task_queues = {}
+    window._final_workers = {}
+
+    worker = threading.Thread(target=window._stop_workers)
+    worker.start()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert callback_threads == []
+    assert window._ui_priority_callback_queue.qsize() == 1
+
+
 def test_reverse_latency_log_separates_provider_queue_reorder_ui_and_tts(caplog):
     now = time.monotonic()
     diagnostics = {
@@ -1083,6 +1111,8 @@ def test_prepare_for_update_install_quiesces_without_destroying_window():
     window._update_install_prepared = False
     window._update_install_was_running = False
     window._rewrite_coordinator = coordinator
+    window._cancel_asr_background_prewarm = lambda: events.append("cancel-asr-prewarm")
+    window._cancel_tts_background_prewarm = lambda: events.append("cancel-tts-prewarm")
     def stop_runtime():
         events.append("stop-runtime")
         window._running = False
@@ -1102,6 +1132,8 @@ def test_prepare_for_update_install_quiesces_without_destroying_window():
     assert window._prepare_for_update_install() is True
 
     assert events == [
+        "cancel-asr-prewarm",
+        "cancel-tts-prewarm",
         "stop-runtime",
         "wait-runtime",
         "close-translator",
@@ -1243,6 +1275,49 @@ def test_runtime_cleanup_tracks_deferred_tts_and_manual_workers():
     assert window._runtime_cleanup_in_progress() is False
     assert window._deferred_tts_managers == []
     assert window._deferred_manual_translation_controllers == []
+
+
+def test_runtime_cleanup_tracks_provider_prewarm_threads_and_retained_asr(
+    monkeypatch,
+):
+    class ThreadState:
+        ident = 1
+
+        def __init__(self, alive: bool) -> None:
+            self.alive = alive
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+    asr_thread = ThreadState(True)
+    tts_thread = ThreadState(True)
+    retained_asr = object()
+    window = MainWindow.__new__(MainWindow)
+    window._asr_prewarm_lock = threading.RLock()
+    window._tts_prewarm_lock = threading.RLock()
+    window._asr_prewarm_thread = asr_thread
+    window._tts_prewarm_thread = tts_thread
+    window._prewarmed_main_asr = retained_asr
+    window._prewarmed_listen_asr = None
+    window._pipeline_cleanup_in_progress = lambda: False
+    window._deferred_tts_cleanup_in_progress = lambda: False
+    window._deferred_manual_cleanup_in_progress = lambda: False
+    monkeypatch.setattr(
+        main_window,
+        "provider_background_work_in_progress",
+        lambda: False,
+    )
+
+    assert window._runtime_cleanup_in_progress() is True
+
+    asr_thread.alive = False
+    tts_thread.alive = False
+    assert window._runtime_cleanup_in_progress() is True
+    assert window._asr_prewarm_thread is None
+    assert window._tts_prewarm_thread is None
+
+    window._prewarmed_main_asr = None
+    assert window._runtime_cleanup_in_progress() is False
 
 
 def test_settings_window_registers_tts_test_manager_with_main_lifecycle(

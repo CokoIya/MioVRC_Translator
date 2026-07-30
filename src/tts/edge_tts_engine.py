@@ -188,6 +188,15 @@ class EdgeTTS(BaseTTS):
         """Check if Edge TTS is available."""
         return self._edge_tts is not None
 
+    def prewarm(self, voice: str = "") -> None:
+        """Prepare worker event-loop state and fetch non-billable voice metadata."""
+
+        del voice
+        if not self.is_available():
+            return
+        self._thread_event_loop()
+        self.get_available_voices()
+
     def get_available_voices(self) -> list[TTSVoice]:
         """Get list of available voices from Edge TTS."""
         global _EDGE_VOICES_CACHE

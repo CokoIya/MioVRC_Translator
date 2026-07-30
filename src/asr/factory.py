@@ -40,6 +40,30 @@ def _create_sensevoice(config: dict, corrector: LayeredASRCorrector):
     )
 
 
+def _create_ready_sensevoice_fallback(
+    config: dict,
+    corrector: LayeredASRCorrector,
+):
+    """Create a local fallback only when its verified model already exists.
+
+    Provider failures occur on realtime ASR worker threads. Starting a large
+    model download there makes Stop unable to quiesce and can hold the pipeline
+    for minutes. Explicitly selecting SenseVoice still preserves its managed
+    download flow; automatic online-provider fallback now fails fast instead.
+    """
+
+    from src.asr.errors import ASRUnsupportedRuntimeError
+    from src.asr.model_manager import existing_model_path
+
+    spec = get_asr_runtime_spec(config, "sensevoice-small")
+    if existing_model_path(spec) is None:
+        raise ASRUnsupportedRuntimeError(
+            "SenseVoice fallback is not installed. Download the local ASR model "
+            "from Settings before enabling automatic fallback."
+        )
+    return _create_sensevoice(config, corrector)
+
+
 def _create_whisper(config: dict, corrector: LayeredASRCorrector):
     asr_cfg = config.get("asr", {})
     spec = get_asr_runtime_spec(config, "whisper-large-v3-turbo")
@@ -91,7 +115,10 @@ def create_asr(config: dict, engine: str | None = None):
         if _auto_fallback_enabled(config):
             return FallbackASR(
                 primary,
-                fallback_factory=lambda: _create_sensevoice(config, corrector),
+                fallback_factory=lambda: _create_ready_sensevoice_fallback(
+                    config,
+                    corrector,
+                ),
                 auto_fallback=True,
             )
         return primary
@@ -102,7 +129,10 @@ def create_asr(config: dict, engine: str | None = None):
         if _auto_fallback_enabled(config):
             return FallbackASR(
                 primary,
-                fallback_factory=lambda: _create_sensevoice(config, corrector),
+                fallback_factory=lambda: _create_ready_sensevoice_fallback(
+                    config,
+                    corrector,
+                ),
                 auto_fallback=True,
             )
         return primary
@@ -113,7 +143,10 @@ def create_asr(config: dict, engine: str | None = None):
         if _provider_auto_fallback_enabled(config, "webspeech", default=False):
             return FallbackASR(
                 primary,
-                fallback_factory=lambda: _create_sensevoice(config, corrector),
+                fallback_factory=lambda: _create_ready_sensevoice_fallback(
+                    config,
+                    corrector,
+                ),
                 auto_fallback=True,
             )
         return primary

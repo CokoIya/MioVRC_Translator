@@ -78,6 +78,13 @@ class VoicevoxCompatibleTTS(BaseTTS):
             logger.debug("%s unavailable at %s: %s", self.ENGINE_LABEL, self._base_url, exc)
             return False
 
+    def prewarm(self, voice: str = "") -> None:
+        """Warm this synthesis worker's session through the version endpoint."""
+
+        del voice
+        if self.is_available():
+            logger.info("%s prewarm finished", self.ENGINE_LABEL)
+
     def get_available_voices(self) -> list[TTSVoice]:
         """Load speaker/style pairs exposed by the local engine."""
         if self._voices_cache is not None:

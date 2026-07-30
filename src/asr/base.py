@@ -68,6 +68,11 @@ class ASRProvider(ABC):
     def load(self, progress_callback: Optional[ProgressCallback] = None) -> None:
         del progress_callback
 
+    def prewarm(self) -> bool:
+        """Prepare an online provider without sending recognition audio."""
+
+        return False
+
     @abstractmethod
     def transcribe(
         self,

@@ -4,6 +4,7 @@ from src.ui_qt import app as qt_app
 from src.ui_qt import font_config
 from src.ui_qt import update_window
 from src.ui_qt.app import _app_font, _cjk_latin_font_paths
+from src.utils import startup_tasks
 
 
 def test_app_font_uses_positive_point_size():
@@ -67,17 +68,30 @@ def test_run_qt_app_presents_consumed_update_result_after_window_is_shown(
         def show(self):
             events.append("shown")
 
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self._target = target
+
+        def start(self):
+            self._target()
+
     monkeypatch.setattr(qt_app, "QApplication", FakeApplication)
     monkeypatch.setattr(qt_app, "MainWindow", FakeWindow)
     monkeypatch.setattr(qt_app, "_configure_rendering", lambda: None)
     monkeypatch.setattr(qt_app, "_app_icon", lambda: object())
     monkeypatch.setattr(qt_app, "_apply_style", lambda *_args: None)
     monkeypatch.setattr(qt_app, "install_qt_translations", lambda *_args: None)
-    monkeypatch.setattr(qt_app, "apply_application_font", lambda *_args: None)
+    monkeypatch.setattr(qt_app, "apply_application_font", lambda *_args: events.append("font"))
+    monkeypatch.setattr(qt_app.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        startup_tasks,
+        "schedule_post_ui_startup_tasks",
+        lambda: events.append("maintenance"),
+    )
     monkeypatch.setattr(
         update_window,
         "consume_update_install_result",
-        lambda: result,
+        lambda argv=None: events.append(("update-consumed", list(argv or []))) or result,
     )
     monkeypatch.setattr(update_window, "load_deferred_update_info", lambda: None)
     monkeypatch.setattr(
@@ -97,7 +111,19 @@ def test_run_qt_app_presents_consumed_update_result_after_window_is_shown(
 
     assert exit_code == 17
     assert events[:3] == ["app-created", "window-created", "shown"]
-    result_event = events[3]
+    result_event = next(event for event in events if isinstance(event, tuple) and event[0] == "result")
     assert result_event[0] == "result"
     assert result_event[2:] == (result, "ja")
-    assert events[4] == "exec"
+    shown_index = events.index("shown")
+    assert events.index("maintenance") > shown_index
+    assert events.index("font") > shown_index
+    assert events.index("exec") > events.index("font")
+
+
+def test_update_result_arguments_are_removed_before_qt_parses_them():
+    argv = ["mio.exe", "--style=fusion", "--mio-update-result=C:/temp/result.json"]
+
+    detached = qt_app._detach_update_result_arguments(argv)
+
+    assert argv == ["mio.exe", "--style=fusion"]
+    assert detached == ["--mio-update-result=C:/temp/result.json"]

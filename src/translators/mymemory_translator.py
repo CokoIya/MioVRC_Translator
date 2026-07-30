@@ -12,6 +12,7 @@ from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.input_validation import ValidationError, validate_translation_text
 from src.utils.lang_detect import detect_language
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.provider_warmup import warmup_requests_session
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,26 @@ class MyMemoryTranslator(BaseTranslator):
 
         self._session_pool = ThreadLocalSessionPool(session_factory)
         self.model = "mymemory"
+
+    def prewarm(self) -> bool:
+        """Warm this translation worker's MyMemory session."""
+
+        result = warmup_requests_session(
+            self._session_pool.get(),
+            self._base_url,
+            method="HEAD",
+            timeout_s=min(self._timeout_s, 3.0),
+        )
+        logger.log(
+            logging.INFO if result.succeeded else logging.WARNING,
+            "MyMemory translation prewarm %s "
+            "(status=%s elapsed_ms=%.0f error_type=%s)",
+            "finished" if result.succeeded else "failed",
+            result.status_code if result.status_code is not None else "unknown",
+            result.elapsed_s * 1000.0,
+            result.error_type or "none",
+        )
+        return result.succeeded
 
     def translate(
         self,

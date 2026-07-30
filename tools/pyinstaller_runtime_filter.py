@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from pathlib import PurePosixPath
 from typing import Iterable, Sequence, TypeAlias
 
@@ -88,6 +89,21 @@ _SOUNDCARD_CFFI_DECLARATION_FILES = {
     "mediafoundation.py.h",
     "pulseaudio.py.h",
 }
+
+_BUNDLED_CUDA_DLL_PATTERNS = (
+    "torch_cuda*.dll",
+    "c10_cuda*.dll",
+    "caffe2_nvrtc*.dll",
+    "cudart*.dll",
+    "cublas*.dll",
+    "cudnn*.dll",
+    "cufft*.dll",
+    "curand*.dll",
+    "cusolver*.dll",
+    "cusparse*.dll",
+    "nvrtc*.dll",
+    "nvtoolsext*.dll",
+)
 
 
 def _normalize_path(path: object) -> str:
@@ -178,6 +194,24 @@ def _is_torch_build_tool_path(parts: Sequence[str]) -> bool:
     return len(parts) >= 2 and parts[0] == "torch" and parts[1] == "bin"
 
 
+def _is_bundled_cuda_runtime_dll(parts: Sequence[str]) -> bool:
+    """Drop GPU DLLs from the CPU bundle at build time.
+
+    Mio's optional CUDA runtime lives in the managed per-user runtime folder.
+    Filtering these entries while building avoids an expensive mutation and
+    multi-pattern directory scan in the PyInstaller runtime hook on every
+    launch.
+    """
+
+    if len(parts) != 3 or parts[0] != "torch" or parts[1] != "lib":
+        return False
+    filename = parts[2]
+    return any(
+        fnmatch.fnmatchcase(filename, pattern)
+        for pattern in _BUNDLED_CUDA_DLL_PATTERNS
+    )
+
+
 def should_keep_runtime_entry(dest_name: str, source_name: str = "") -> bool:
     """Return whether a PyInstaller TOC entry is needed at runtime.
 
@@ -195,6 +229,8 @@ def should_keep_runtime_entry(dest_name: str, source_name: str = "") -> bool:
     if _is_unused_packaged_asset(dest):
         return False
     if _is_torch_build_tool_path(parts):
+        return False
+    if _is_bundled_cuda_runtime_dll(parts):
         return False
     if _is_torch_header_path(parts):
         return False

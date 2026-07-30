@@ -105,6 +105,7 @@ class ManualTranslationController(QObject):
         self._cleanup_translator_ids: set[int] = set()
         self._pending_cleanup_retries: dict[int, tuple[Any, bool, str]] = {}
         self._cleanup_sequence = 0
+        self._prewarm_thread: threading.Thread | None = None
         self._state_changed = threading.Condition(self._lock)
         self._cancelled_through_generation = 0
         self._closed = False
@@ -252,20 +253,12 @@ class ManualTranslationController(QObject):
                     _MAX_ACTIVE_WORKERS,
                 )
                 return generation
-            try:
-                translator = self._acquire_translator()
-            except Exception as exc:
-                with self._lock:
-                    if self._closed:
-                        return None
-                generation = self._next_generation()
-                self._emit_if_open(
-                    self.failed,
-                    ManualTranslationError(generation, exc, self._format_error(exc)),
-                )
-                self._emit_if_open(self.worker_finished, generation)
-                return generation
-            translator_leased = True
+            # Provider imports/client construction can take seconds on a cold
+            # process.  Acquire the translator inside the worker so the Qt
+            # caller never blocks on SDK import, DNS/TLS prewarm, or another
+            # provider lease finishing.
+            translator = None
+            translator_leased = False
         else:
             translator = self.translator
             translator_leased = False
@@ -315,6 +308,9 @@ class ManualTranslationController(QObject):
                     )
 
             try:
+                if needs_provider and active_translator is None:
+                    active_translator = self._acquire_translator()
+                    active_translator_leased = True
                 processed_text = src_text
                 if needs_rewrite:
                     rewrite_started_at = time.monotonic()
@@ -648,6 +644,78 @@ class ManualTranslationController(QObject):
             len(translators),
         )
         return generation
+
+    def prewarm_async(self) -> bool:
+        """Create and preconnect the retained manual translator off the UI thread."""
+
+        with self._lock:
+            if self._closed:
+                return False
+            existing = self._prewarm_thread
+            if existing is not None and (existing.ident is None or existing.is_alive()):
+                return True
+            if len(self._threads) >= _MAX_ACTIVE_WORKERS:
+                return False
+
+        def run() -> None:
+            translator = None
+            leased = False
+            started_at = time.monotonic()
+            outcome = "skipped"
+            try:
+                translator = self._acquire_translator()
+                leased = True
+                prewarm = getattr(translator, "prewarm", None)
+                if callable(prewarm):
+                    prewarm()
+                    outcome = "ready"
+            except Exception as exc:
+                outcome = "failed"
+                logger.info(
+                    "Manual translation provider prewarm skipped/failed (%s)",
+                    safe_exception_summary(exc),
+                )
+            finally:
+                if leased and translator is not None:
+                    self._release_translator(translator)
+                logger.info(
+                    "Manual translation provider prewarm finished outcome=%s elapsed_ms=%.1f",
+                    outcome,
+                    max(0.0, time.monotonic() - started_at) * 1000.0,
+                )
+                current = threading.current_thread()
+                with self._lock:
+                    self._threads.discard(current)
+                    if self._prewarm_thread is current:
+                        self._prewarm_thread = None
+                    self._state_changed.notify_all()
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="manual-translation-prewarm",
+        )
+        with self._lock:
+            if self._closed:
+                return False
+            existing = self._prewarm_thread
+            if existing is not None and (existing.ident is None or existing.is_alive()):
+                return True
+            if len(self._threads) >= _MAX_ACTIVE_WORKERS:
+                return False
+            self._prewarm_thread = thread
+            self._threads.add(thread)
+            self._state_changed.notify_all()
+        try:
+            thread.start()
+        except BaseException:
+            with self._lock:
+                self._threads.discard(thread)
+                if self._prewarm_thread is thread:
+                    self._prewarm_thread = None
+                self._state_changed.notify_all()
+            raise
+        return True
 
     def _next_generation(self) -> int:
         with self._lock:

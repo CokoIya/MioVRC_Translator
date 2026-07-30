@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -40,11 +40,6 @@ from PySide6.QtWidgets import (
 
 from src.asr.errors import ASRMissingAPIKeyError, ASRTemporaryUnavailableError
 from src.asr.model_registry import ASR_ENGINE_FOLLOW_MAIN, LISTEN_SELECTABLE_ASR_ENGINES, get_asr_runtime_spec, normalize_asr_engine
-from src.audio.device_inventory import (
-    default_input_device_name as inventory_default_input_device_name,
-    device_names_match as audio_device_names_match,
-    unique_device_name_match,
-)
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
 from src.core.mode_manager import AppMode, ModeManager
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
@@ -96,6 +91,7 @@ from src.utils.localization import (
     translate_key_catalog,
 )
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.startup_timing import record_startup_stage
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     UI_LANGUAGE_OPTIONS,
@@ -173,6 +169,31 @@ UI_CALLBACK_QUEUE_MAXSIZE = 256
 UI_PRIORITY_CALLBACK_QUEUE_MAXSIZE = 4
 UI_DELIVERY_ACK_POLL_S = 0.05
 _TTS_REQUEST_SCOPED_CONFIG_KEYS = frozenset({"voice", "rate", "volume"})
+_ONLINE_TTS_PREWARM_ENGINES = frozenset(
+    {
+        "edge",
+        "gtts",
+        "google",
+        "voicevox",
+        "aivis",
+        "aivis_speech",
+        "mimo",
+        "mimo_tts",
+        "xiaomi_tts",
+        "qwen_tts",
+        "qwen3_tts",
+        "qwen-tts",
+    }
+)
+_ONLINE_ASR_PREWARM_ENGINES = frozenset(
+    {
+        "gemini-live",
+        "qwen3-asr",
+        "webspeech",
+    }
+)
+_TTS_BACKGROUND_PREWARM_DELAY_MS = 750
+_TTS_VIRTUAL_OUTPUT_WAIT_RETRIES = 12
 GITHUB_REPO_URL = "https://github.com/CokoIya/MioVRC_Translator"
 QQ_GROUP_URL = "https://qm.qq.com/q/1PThd3QBTS"
 LINE_GROUP_URL = "https://line.me/ti/g2/uLhASjhfQcsd5tYsEpFr8GWsCcuYVIq1I6iGwA?utm_source=invitation&utm_medium=link_copy&utm_campaign=default"
@@ -640,9 +661,9 @@ def default_output_device_name() -> str | None:
     return _default_output_device_name()
 
 
-def _list_desktop_output_devices() -> list[dict]:
+def _list_desktop_output_devices(*, force_refresh: bool = False) -> list[dict]:
     from src.audio.desktop_recorder import list_output_devices as _list_out
-    return _list_out()
+    return _list_out(force_refresh=force_refresh)
 
 
 def find_best_virtual_output_device():
@@ -663,9 +684,27 @@ def check_for_update(
 
 
 def _list_microphone_devices() -> list[dict]:
-    from src.audio.recorder import AudioRecorder
+    from src.audio.device_inventory import list_input_devices
 
-    return AudioRecorder.list_devices()
+    return list_input_devices(force_refresh=True)
+
+
+def inventory_default_input_device_name(*, force_refresh: bool = False) -> str | None:
+    from src.audio.device_inventory import default_input_device_name
+
+    return default_input_device_name(force_refresh=force_refresh)
+
+
+def audio_device_names_match(left: object, right: object) -> bool:
+    from src.audio.device_inventory import device_names_match
+
+    return device_names_match(left, right)
+
+
+def unique_device_name_match(target: object, candidates: object) -> str | None:
+    from src.audio.device_inventory import unique_device_name_match as _unique_device_name_match
+
+    return _unique_device_name_match(target, candidates)
 
 
 def _normalize_chatbox_text(text: str) -> str:
@@ -717,15 +756,110 @@ def _asr_runtime_signature(config: dict, engine: str) -> tuple[str, str, str, bo
     return spec.engine, spec.model_id, spec.model_revision, spec.requires_local_model
 
 
-def _create_asr_pair(config: dict):
+def _asr_pair_config_signature(config: Mapping[str, Any] | object) -> str:
+    """Return a credential-safe digest for retained ASR provider ownership."""
+
+    asr_cfg: object = {}
+    listen_cfg: object = {}
+    ui_language = ""
+    if isinstance(config, Mapping):
+        candidate = config.get("asr", {})
+        asr_cfg = candidate if isinstance(candidate, Mapping) else {}
+        candidate = config.get("vrc_listen", {})
+        listen_cfg = candidate if isinstance(candidate, Mapping) else {}
+        try:
+            ui_language = get_ui_language(dict(config))
+        except Exception:
+            ui_language = ""
+    payload = {
+        "asr": asr_cfg,
+        "vrc_listen": listen_cfg,
+        "ui_language": ui_language,
+    }
+    try:
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=repr,
+        ).encode("utf-8", errors="backslashreplace")
+    except Exception:
+        serialized = repr(payload).encode("utf-8", errors="backslashreplace")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _listen_asr_provider_config(config: dict, listen_engine: str) -> dict:
+    if listen_engine != "qwen3-asr":
+        return config
+    listen_config = copy.deepcopy(config)
+    listen_cfg = listen_config.get("vrc_listen", {})
+    if not isinstance(listen_cfg, Mapping):
+        listen_cfg = {}
+    try:
+        reverse_timeout = float(
+            listen_cfg.get(
+                "asr_timeout_s",
+                DEFAULT_REVERSE_ASR_TIMEOUT_S,
+            )
+        )
+    except (TypeError, ValueError):
+        reverse_timeout = DEFAULT_REVERSE_ASR_TIMEOUT_S
+    reverse_timeout = max(2.0, min(reverse_timeout, 12.0))
+    qwen_cfg = listen_config.setdefault("asr", {}).setdefault(
+        "qwen3_asr", {}
+    )
+    if isinstance(qwen_cfg, dict):
+        qwen_cfg["hard_timeout_seconds"] = reverse_timeout
+        qwen_cfg["max_retries"] = 0
+    return listen_config
+
+
+def _close_provider_quietly(provider: Any, *, label: str) -> None:
+    close = getattr(provider, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception as exc:
+        logger.debug(
+            "Failed to close %s: %s",
+            label,
+            safe_exception_summary(exc),
+        )
+
+
+def _create_asr_pair(
+    config: dict,
+    *,
+    prewarmed_main: Any = None,
+    prewarmed_listen: Any = None,
+):
     main_engine = _main_asr_engine(config)
     listen_engine = _listen_asr_engine(config)
-    main_asr = create_asr(config, engine=main_engine)
+    try:
+        main_asr = (
+            prewarmed_main
+            if prewarmed_main is not None
+            else create_asr(config, engine=main_engine)
+        )
+    except Exception:
+        if prewarmed_listen is not prewarmed_main:
+            _close_provider_quietly(
+                prewarmed_listen,
+                label="orphaned prewarmed listen ASR provider",
+            )
+        raise
     vrc_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
     if not isinstance(vrc_cfg, dict) or not bool(vrc_cfg.get("enabled", False)):
         # Do not load a second heavyweight model merely to keep a disabled
         # desktop-listen feature ready. Enabling a distinct listen engine while
         # running performs a controlled pipeline restart below.
+        if prewarmed_listen is not None and prewarmed_listen is not main_asr:
+            _close_provider_quietly(
+                prewarmed_listen,
+                label="unused prewarmed listen ASR provider",
+            )
         return main_asr, main_asr
     matching_runtime = (
         _listen_asr_reuses_main(config)
@@ -737,39 +871,27 @@ def _create_asr_pair(config: dict):
     # directions and let a slow mic request block every reverse sentence.
     isolate_qwen_listen = bool(matching_runtime and listen_engine == "qwen3-asr")
     if matching_runtime and not isolate_qwen_listen:
+        if prewarmed_listen is not None and prewarmed_listen is not main_asr:
+            _close_provider_quietly(
+                prewarmed_listen,
+                label="redundant prewarmed listen ASR provider",
+            )
         return main_asr, main_asr
-    listen_config = config
-    if listen_engine == "qwen3-asr":
-        listen_config = copy.deepcopy(config)
-        listen_cfg = listen_config.get("vrc_listen", {})
-        if not isinstance(listen_cfg, Mapping):
-            listen_cfg = {}
-        try:
-            reverse_timeout = float(
-                listen_cfg.get(
-                    "asr_timeout_s",
-                    DEFAULT_REVERSE_ASR_TIMEOUT_S,
-                )
-            )
-        except (TypeError, ValueError):
-            reverse_timeout = DEFAULT_REVERSE_ASR_TIMEOUT_S
-        reverse_timeout = max(2.0, min(reverse_timeout, 12.0))
-        qwen_cfg = listen_config.setdefault("asr", {}).setdefault(
-            "qwen3_asr", {}
-        )
-        if isinstance(qwen_cfg, dict):
-            qwen_cfg["hard_timeout_seconds"] = reverse_timeout
-            qwen_cfg["max_retries"] = 0
+    listen_config = _listen_asr_provider_config(config, listen_engine)
     try:
-        listen_asr = create_asr(listen_config, engine=listen_engine)
-    except Exception:
-        try:
-            main_asr.close()
-        except Exception as close_exc:
-            logger.debug(
-                "Failed to close partially constructed main ASR provider: %s",
-                safe_exception_summary(close_exc),
+        listen_asr = (
+            prewarmed_listen
+            if prewarmed_listen is not None
+            else create_asr(
+                listen_config,
+                engine=listen_engine,
             )
+        )
+    except Exception:
+        _close_provider_quietly(
+            main_asr,
+            label="partially constructed main ASR provider",
+        )
         raise
     return main_asr, listen_asr
 
@@ -777,12 +899,28 @@ def _create_asr_pair(config: dict):
 # ----------------------------------------------------------------
 # BackgroundWidget
 # ----------------------------------------------------------------
+def _decode_background_image(path: Path) -> QImage:
+    """Read and decode a configured background away from the Qt UI thread."""
+
+    try:
+        if not path.is_file():
+            return QImage()
+        return QImage(str(path))
+    except (OSError, RuntimeError):
+        return QImage()
+
+
 class BackgroundWidget(QWidget):
+    _background_image_decoded = Signal(int, str, object)
+
     def __init__(self, background_path: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._pixmap = QPixmap()
         self._resize_timer: QTimer | None = None
         self._theme = "dark"
+        self._background_decode_generation = 0
+        self._requested_background_path = ""
+        self._background_image_decoded.connect(self._apply_decoded_background_image)
         self.setAutoFillBackground(False)
         self.set_background_path(background_path)
 
@@ -792,8 +930,52 @@ class BackgroundWidget(QWidget):
 
     def set_background_path(self, background_path: str) -> None:
         path = Path(background_path).expanduser() if background_path else None
-        if path and path.is_file():
-            self._pixmap = QPixmap(str(path))
+        self._background_decode_generation += 1
+        generation = self._background_decode_generation
+        requested_path = str(path) if path is not None else ""
+        self._requested_background_path = requested_path
+
+        if path is None:
+            self._pixmap = QPixmap()
+            self.update()
+            return
+
+        widget_ref = weakref.ref(self)
+
+        def decode() -> None:
+            image = _decode_background_image(path)
+            widget = widget_ref()
+            if widget is None:
+                return
+            try:
+                widget._background_image_decoded.emit(
+                    generation,
+                    requested_path,
+                    image,
+                )
+            except RuntimeError:
+                # The QWidget may have been destroyed while file I/O was in flight.
+                return
+
+        threading.Thread(
+            target=decode,
+            daemon=True,
+            name=f"qt-background-decode-{generation}",
+        ).start()
+
+    def _apply_decoded_background_image(
+        self,
+        generation: int,
+        requested_path: str,
+        image: object,
+    ) -> None:
+        if (
+            generation != self._background_decode_generation
+            or requested_path != self._requested_background_path
+        ):
+            return
+        if isinstance(image, QImage) and not image.isNull():
+            self._pixmap = QPixmap.fromImage(image)
         else:
             self._pixmap = QPixmap()
         self.update()
@@ -1002,8 +1184,25 @@ class MainWindow(QMainWindow):
 
     def __init__(self, config: dict) -> None:
         super().__init__()
+        self._startup_constructed_at = time.perf_counter()
         self._config = config
         self._destroying = False
+        self._post_show_initialization_scheduled = False
+        self._post_show_initialization_started = False
+        self._first_paint_logged = False
+        self._virtual_output_resolution_in_progress = False
+        self._background_initialization_started = False
+        self._asr_prewarm_lock = threading.RLock()
+        self._asr_prewarm_cancel_event = threading.Event()
+        self._asr_prewarm_thread: threading.Thread | None = None
+        self._prewarmed_asr_signature: str | None = None
+        self._prewarmed_main_asr = None
+        self._prewarmed_listen_asr = None
+        self._tts_prewarm_lock = threading.RLock()
+        self._tts_prewarm_cancel_event = threading.Event()
+        self._tts_prewarm_thread: threading.Thread | None = None
+        self._tts_prewarm_signature: tuple | None = None
+        self._tts_manager_lock = threading.RLock()
         self._ui_thread_id = threading.get_ident()
         self._ui_callback_queue: queue.Queue[tuple[int, object]] = queue.Queue(
             maxsize=UI_CALLBACK_QUEUE_MAXSIZE
@@ -1065,6 +1264,7 @@ class MainWindow(QMainWindow):
         self._last_tts_at = 0.0
         self._tts_dedup_s = 0.5  # Skip TTS if same text within this window
         self._devices: dict[str, int] = {}
+        self._default_mic_device_name: str | None = None
         self._desktop_devices: dict[str, int] = {}
         self._devices_loading = False
         self._active_mic_input_device_name: str | None = None
@@ -1114,10 +1314,7 @@ class MainWindow(QMainWindow):
         self._manual_done_callback = None
 
         # --- Mode ---
-        self._mode_manager = ModeManager(
-            config,
-            virtual_device_resolver=find_best_virtual_output_device,
-        )
+        self._mode_manager = ModeManager(config)
         self._initial_mode_change = self._mode_manager.apply_current_mode()
         self._sync_tts_enabled_from_config()
 
@@ -1252,7 +1449,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._disable_native_status_bar()
         self._apply_adaptive_layout(force=True)
-        self._register_hotkeys()
         self._start_ui_callback_drain()
         self._refresh_static_texts()
         self._refresh_start_button()
@@ -1263,22 +1459,599 @@ class MainWindow(QMainWindow):
         self._set_status(self._t("status_ready"), "success", key="status_ready")
         self._set_bottom(self._t("status_ready"), "success", key="status_ready")
 
+        self._subscribe_realtime_tweaks_state()
+
+        record_startup_stage(
+            "ui.main_window_construct",
+            started_at=self._startup_constructed_at,
+        )
+        logger.info("Qt MainWindow initialized")
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._post_show_initialization_scheduled:
+            return
+        self._post_show_initialization_scheduled = True
+        record_startup_stage("ui.window_visible")
+        QTimer.singleShot(0, self._queue_post_show_initialization)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._first_paint_logged:
+            return
+        self._first_paint_logged = True
+        record_startup_stage("ui.first_paint")
+
+    def _queue_post_show_initialization(self) -> None:
+        if self._destroying or self._post_show_initialization_started:
+            return
+        QTimer.singleShot(0, self._run_post_show_initialization)
+
+    def _run_post_show_initialization(self) -> None:
+        if self._destroying or self._post_show_initialization_started:
+            return
+        self._post_show_initialization_started = True
+        started_at = time.perf_counter()
+        record_startup_stage("ui.post_show_initialization_started")
+
         if self._initial_mode_change.changed:
-            QTimer.singleShot(500, lambda: self._schedule_config_save())
-        # Defer device loading to give the UI a chance to stabilize first
-        QTimer.singleShot(40, self._load_devices_async)
+            QTimer.singleShot(500, self._schedule_config_save)
+        self._load_devices_async()
+        self._resolve_virtual_output_async()
+        self._register_hotkeys()
         self._schedule_desktop_audio_watch(2500)
         self._schedule_mic_audio_watch(2500)
+        QTimer.singleShot(100, self._apply_deferred_background_image)
         QTimer.singleShot(1200, self._maybe_show_mode_wizard)
         QTimer.singleShot(2000, self._maybe_show_osc_guide)
         if self._startup_update_check_enabled():
             QTimer.singleShot(self._startup_update_check_delay_ms(), self._check_for_update)
-        self._schedule_settings_preload(450)
+        self._schedule_settings_preload(2500)
         QTimer.singleShot(0, self._apply_osc_listener_config)
 
-        self._subscribe_realtime_tweaks_state()
+        record_startup_stage(
+            "ui.post_show_initialization_schedule",
+            started_at=started_at,
+        )
 
-        logger.info("Qt MainWindow initialized")
+    def _apply_deferred_background_image(self) -> None:
+        if self._destroying:
+            return
+        central = self.centralWidget()
+        if isinstance(central, BackgroundWidget):
+            central.set_background_path(self._background_image_path())
+
+    def start_background_initialization(self) -> bool:
+        """Schedule optional provider preparation after the first UI render."""
+
+        if self._destroying or self._background_initialization_started:
+            return False
+        self._background_initialization_started = True
+        started_at = time.perf_counter()
+
+        if (
+            self._translation_background_warmup_enabled()
+            and first_missing_required_credential(
+                self._config,
+                scopes=("translation",),
+                ui_language=getattr(self, "_ui_lang", None),
+                active_only=True,
+            )
+            is None
+        ):
+            try:
+                self._ensure_manual_translation_controller().prewarm_async()
+            except Exception:
+                logger.exception(
+                    "Could not schedule manual translation provider prewarm"
+                )
+
+        self._start_asr_background_prewarm()
+        QTimer.singleShot(
+            _TTS_BACKGROUND_PREWARM_DELAY_MS,
+            lambda: self._start_tts_background_prewarm(0),
+        )
+        record_startup_stage(
+            "background.provider_initialization_schedule",
+            started_at=started_at,
+        )
+        logger.info("Provider background initialization scheduled")
+        return True
+
+    def _translation_background_warmup_enabled(
+        self,
+        config: Mapping[str, Any] | None = None,
+    ) -> bool:
+        active_config = config if isinstance(config, Mapping) else self._config
+        translation_cfg = active_config.get("translation", {})
+        if not isinstance(translation_cfg, Mapping):
+            return False
+        output_needs_translation = (
+            normalize_output_format(translation_cfg.get("output_format"))
+            != "original_only"
+        )
+        rewrite_needs_translation = (
+            normalize_asr_rewrite_style(
+                translation_cfg.get("asr_rewrite_style", ASR_REWRITE_DISABLED)
+            )
+            != ASR_REWRITE_DISABLED
+        )
+        listen_cfg = active_config.get("vrc_listen", {})
+        listen_needs_translation = bool(
+            isinstance(listen_cfg, Mapping)
+            and listen_cfg.get("enabled", False)
+        )
+        return bool(
+            output_needs_translation
+            or rewrite_needs_translation
+            or listen_needs_translation
+        )
+
+    @staticmethod
+    def _asr_engine_credentials_available(config: dict, engine: str) -> bool:
+        probe = copy.deepcopy(config)
+        asr_cfg = probe.setdefault("asr", {})
+        if not isinstance(asr_cfg, dict):
+            asr_cfg = {}
+            probe["asr"] = asr_cfg
+        asr_cfg["engine"] = engine
+        listen_cfg = probe.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            probe["vrc_listen"] = listen_cfg
+        listen_cfg["enabled"] = False
+        return (
+            first_missing_required_credential(
+                probe,
+                scopes=("asr",),
+                active_only=True,
+            )
+            is None
+        )
+
+    @staticmethod
+    def _warm_asr_provider(provider: Any, engine: str) -> bool:
+        del engine
+        prewarm = getattr(provider, "prewarm", None)
+        if not callable(prewarm):
+            return False
+        return bool(prewarm())
+
+    def _asr_prewarm_lifecycle_lock(self) -> threading.RLock:
+        lock = self.__dict__.get("_asr_prewarm_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self._asr_prewarm_lock = lock
+        return lock
+
+    @staticmethod
+    def _close_unique_asr_providers(*providers: Any, label: str) -> None:
+        closed: list[Any] = []
+        for provider in providers:
+            if provider is None or any(provider is item for item in closed):
+                continue
+            closed.append(provider)
+            _close_provider_quietly(provider, label=label)
+
+    def _start_asr_background_prewarm(self) -> bool:
+        if self._destroying:
+            return False
+        config_snapshot = copy.deepcopy(self._config)
+        main_engine = _main_asr_engine(config_snapshot)
+        listen_engine = _listen_asr_engine(config_snapshot)
+        listen_cfg = config_snapshot.get("vrc_listen", {})
+        listen_enabled = bool(
+            isinstance(listen_cfg, Mapping)
+            and listen_cfg.get("enabled", False)
+        )
+        candidates = {main_engine}
+        if listen_enabled:
+            candidates.add(listen_engine)
+        if not candidates.intersection(_ONLINE_ASR_PREWARM_ENGINES):
+            return False
+
+        signature = _asr_pair_config_signature(config_snapshot)
+        lock = self._asr_prewarm_lifecycle_lock()
+        with lock:
+            existing = getattr(self, "_asr_prewarm_thread", None)
+            if existing is not None and (
+                existing.ident is None or existing.is_alive()
+            ):
+                return True
+            cancel_event = threading.Event()
+            self._asr_prewarm_cancel_event = cancel_event
+
+        def run() -> None:
+            started_at = time.perf_counter()
+            main_provider = None
+            listen_provider = None
+            outcome = "skipped"
+            try:
+                if (
+                    main_engine in _ONLINE_ASR_PREWARM_ENGINES
+                    and self._asr_engine_credentials_available(
+                        config_snapshot,
+                        main_engine,
+                    )
+                ):
+                    try:
+                        main_provider = create_asr(
+                            config_snapshot,
+                            engine=main_engine,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "ASR background provider construction failed "
+                            "role=main engine=%s error=%s",
+                            main_engine,
+                            safe_exception_summary(exc),
+                        )
+
+                matching_runtime = bool(
+                    listen_enabled
+                    and _listen_asr_reuses_main(config_snapshot)
+                    and _asr_runtime_signature(config_snapshot, listen_engine)
+                    == _asr_runtime_signature(config_snapshot, main_engine)
+                )
+                isolate_qwen_listen = bool(
+                    matching_runtime and listen_engine == "qwen3-asr"
+                )
+                if (
+                    listen_enabled
+                    and matching_runtime
+                    and not isolate_qwen_listen
+                ):
+                    listen_provider = main_provider
+                elif (
+                    listen_enabled
+                    and listen_engine in _ONLINE_ASR_PREWARM_ENGINES
+                    and self._asr_engine_credentials_available(
+                        config_snapshot,
+                        listen_engine,
+                    )
+                ):
+                    try:
+                        listen_provider = create_asr(
+                            _listen_asr_provider_config(
+                                config_snapshot,
+                                listen_engine,
+                            ),
+                            engine=listen_engine,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "ASR background provider construction failed "
+                            "role=listen engine=%s error=%s",
+                            listen_engine,
+                            safe_exception_summary(exc),
+                        )
+
+                if cancel_event.is_set():
+                    return
+
+                warmed: list[Any] = []
+                for role, provider, engine in (
+                    ("main", main_provider, main_engine),
+                    ("listen", listen_provider, listen_engine),
+                ):
+                    if provider is None or any(provider is item for item in warmed):
+                        continue
+                    warmed.append(provider)
+                    try:
+                        succeeded = self._warm_asr_provider(provider, engine)
+                        logger.info(
+                            "ASR provider background prewarm finished "
+                            "role=%s engine=%s succeeded=%s",
+                            role,
+                            engine,
+                            succeeded,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "ASR provider background prewarm failed "
+                            "role=%s engine=%s error=%s",
+                            role,
+                            engine,
+                            safe_exception_summary(exc),
+                        )
+
+                if not warmed or cancel_event.is_set():
+                    return
+                stale_main = None
+                stale_listen = None
+                with lock:
+                    if (
+                        cancel_event.is_set()
+                        or self._destroying
+                        or getattr(self, "_asr_prewarm_cancel_event", None)
+                        is not cancel_event
+                    ):
+                        return
+                    stale_main = getattr(self, "_prewarmed_main_asr", None)
+                    stale_listen = getattr(self, "_prewarmed_listen_asr", None)
+                    self._prewarmed_asr_signature = signature
+                    self._prewarmed_main_asr = main_provider
+                    self._prewarmed_listen_asr = listen_provider
+                    main_provider = None
+                    listen_provider = None
+                    outcome = "ok"
+                self._close_unique_asr_providers(
+                    stale_main,
+                    stale_listen,
+                    label="replaced prewarmed ASR provider",
+                )
+            finally:
+                self._close_unique_asr_providers(
+                    main_provider,
+                    listen_provider,
+                    label="unretained ASR prewarm provider",
+                )
+                current = threading.current_thread()
+                with lock:
+                    if getattr(self, "_asr_prewarm_thread", None) is current:
+                        self._asr_prewarm_thread = None
+                record_startup_stage(
+                    "background.asr_provider_prewarm",
+                    started_at=started_at,
+                    outcome=outcome,
+                )
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="asr-provider-prewarm",
+        )
+        with lock:
+            if self._destroying:
+                cancel_event.set()
+                return False
+            self._asr_prewarm_thread = thread
+        try:
+            thread.start()
+        except BaseException:
+            with lock:
+                if self._asr_prewarm_thread is thread:
+                    self._asr_prewarm_thread = None
+            cancel_event.set()
+            raise
+        return True
+
+    def _take_prewarmed_asr_pair(self, config: dict) -> tuple[Any, Any]:
+        expected_signature = _asr_pair_config_signature(config)
+        lock = self._asr_prewarm_lifecycle_lock()
+        stale_main = None
+        stale_listen = None
+        with lock:
+            cancel_event = getattr(self, "_asr_prewarm_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+            cached_signature = getattr(self, "_prewarmed_asr_signature", None)
+            main_provider = getattr(self, "_prewarmed_main_asr", None)
+            listen_provider = getattr(self, "_prewarmed_listen_asr", None)
+            self._prewarmed_asr_signature = None
+            self._prewarmed_main_asr = None
+            self._prewarmed_listen_asr = None
+            if cached_signature != expected_signature:
+                stale_main = main_provider
+                stale_listen = listen_provider
+                main_provider = None
+                listen_provider = None
+        self._close_unique_asr_providers(
+            stale_main,
+            stale_listen,
+            label="stale prewarmed ASR provider",
+        )
+        if main_provider is not None or listen_provider is not None:
+            logger.info(
+                "Retained ASR provider prewarm consumed main=%s listen=%s",
+                main_provider is not None,
+                listen_provider is not None,
+            )
+        return main_provider, listen_provider
+
+    def _cancel_asr_background_prewarm(self) -> None:
+        lock = self._asr_prewarm_lifecycle_lock()
+        with lock:
+            cancel_event = getattr(self, "_asr_prewarm_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+            main_provider = getattr(self, "_prewarmed_main_asr", None)
+            listen_provider = getattr(self, "_prewarmed_listen_asr", None)
+            self._prewarmed_asr_signature = None
+            self._prewarmed_main_asr = None
+            self._prewarmed_listen_asr = None
+        self._close_unique_asr_providers(
+            main_provider,
+            listen_provider,
+            label="cancelled prewarmed ASR provider",
+        )
+
+    def _tts_prewarm_lifecycle_lock(self) -> threading.RLock:
+        lock = self.__dict__.get("_tts_prewarm_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self._tts_prewarm_lock = lock
+        return lock
+
+    def _tts_manager_lifecycle_lock(self) -> threading.RLock:
+        lock = self.__dict__.get("_tts_manager_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self._tts_manager_lock = lock
+        return lock
+
+    def _start_tts_background_prewarm(self, retry: int = 0) -> bool:
+        if self._destroying:
+            return False
+        if bool(getattr(self, "_virtual_output_resolution_in_progress", False)):
+            if retry < _TTS_VIRTUAL_OUTPUT_WAIT_RETRIES:
+                QTimer.singleShot(
+                    250,
+                    lambda attempt=retry + 1: self._start_tts_background_prewarm(
+                        attempt
+                    ),
+                )
+            return False
+
+        tts_cfg = self._config.get("tts", {})
+        if not isinstance(tts_cfg, Mapping) or not bool(
+            tts_cfg.get("enabled", False)
+        ):
+            return False
+        engine = self._current_tts_engine().strip().lower()
+        if engine not in _ONLINE_TTS_PREWARM_ENGINES:
+            return False
+        if (
+            first_missing_required_credential(
+                self._config,
+                scopes=("tts",),
+                ui_language=getattr(self, "_ui_lang", None),
+                active_only=True,
+            )
+            is not None
+        ):
+            return False
+
+        signature = self._tts_runtime_signature()
+        engine_config = self._current_tts_engine_config()
+        perf_cfg = self._performance_config()
+        build_kwargs = {
+            "engine_name": self._current_tts_engine(),
+            "cache_enabled": True,
+            # Do not initialize a local fallback during background startup.
+            # If the selected online engine is unavailable, first real use can
+            # still construct the normal fallback-enabled manager.
+            "allow_fallback": False,
+            "output_device": tts_cfg.get("output_device"),
+            "output_device_name": str(tts_cfg.get("output_device_name") or ""),
+            "prefer_virtual_output": bool(tts_cfg.get("output_to_vrchat", False)),
+            "monitor_output": bool(tts_cfg.get("monitor_enabled", False)),
+            "sbv2_device": "cpu",
+            "sbv2_bert_language": "jp",
+            "engine_config": engine_config,
+            "max_cache_size_mb": int(perf_cfg.get("tts_cache_max_mb", 24)),
+            "max_cache_items": int(perf_cfg.get("tts_cache_max_items", 60)),
+        }
+        voice = str(engine_config.get("voice") or "").strip()
+        prewarm_lock = self._tts_prewarm_lifecycle_lock()
+        with prewarm_lock:
+            existing = getattr(self, "_tts_prewarm_thread", None)
+            if existing is not None and (
+                existing.ident is None or existing.is_alive()
+            ):
+                return True
+            cancel_event = threading.Event()
+            self._tts_prewarm_cancel_event = cancel_event
+            self._tts_prewarm_signature = signature
+
+        def run() -> None:
+            started_at = time.perf_counter()
+            manager = None
+            outcome = "skipped"
+            try:
+                from src.tts.manager import TTSManager
+
+                manager = TTSManager(**build_kwargs)
+                if not manager.is_available() or cancel_event.is_set():
+                    return
+                manager.start()
+                if cancel_event.is_set():
+                    return
+                prewarm = getattr(manager, "prewarm", None)
+                if callable(prewarm):
+                    prewarm(voice)
+
+                manager_lock = self._tts_manager_lifecycle_lock()
+                with manager_lock:
+                    current_signature = self._tts_runtime_signature()
+                    existing_manager = getattr(self, "_tts_manager", None)
+                    if (
+                        cancel_event.is_set()
+                        or self._destroying
+                        or current_signature != signature
+                        or existing_manager is not None
+                    ):
+                        return
+                    self._tts_manager = manager
+                    self._tts_manager_signature = signature
+                    manager = None
+                    outcome = "ok"
+                logger.info(
+                    "Retained online TTS manager prewarm ready engine=%s",
+                    engine,
+                )
+            except Exception as exc:
+                outcome = "error"
+                logger.warning(
+                    "Online TTS background prewarm failed engine=%s error=%s",
+                    engine,
+                    safe_exception_summary(exc),
+                )
+            finally:
+                if manager is not None:
+                    self._close_tts_manager_instance(manager)
+                current = threading.current_thread()
+                with prewarm_lock:
+                    if getattr(self, "_tts_prewarm_thread", None) is current:
+                        self._tts_prewarm_thread = None
+                        self._tts_prewarm_signature = None
+                record_startup_stage(
+                    "background.tts_provider_prewarm",
+                    started_at=started_at,
+                    outcome=outcome,
+                )
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="tts-provider-prewarm",
+        )
+        with prewarm_lock:
+            if self._destroying:
+                cancel_event.set()
+                return False
+            self._tts_prewarm_thread = thread
+        try:
+            thread.start()
+        except BaseException:
+            with prewarm_lock:
+                if self._tts_prewarm_thread is thread:
+                    self._tts_prewarm_thread = None
+                    self._tts_prewarm_signature = None
+            cancel_event.set()
+            raise
+        return True
+
+    @staticmethod
+    def _close_tts_manager_instance(manager: Any) -> None:
+        try:
+            close = getattr(manager, "close", None)
+            if callable(close):
+                close()
+                return
+            stop = getattr(manager, "stop", None)
+            if callable(stop):
+                stop()
+        except Exception as exc:
+            logger.debug(
+                "Failed to close unretained TTS manager: %s",
+                safe_exception_summary(exc),
+            )
+
+    def _cancel_tts_background_prewarm(self) -> None:
+        lock = self._tts_prewarm_lifecycle_lock()
+        with lock:
+            cancel_event = getattr(self, "_tts_prewarm_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+            self._tts_prewarm_signature = None
+
+    def _restart_background_provider_initialization(self) -> None:
+        self._cancel_asr_background_prewarm()
+        self._cancel_tts_background_prewarm()
+        self._background_initialization_started = False
+        if not self._destroying:
+            QTimer.singleShot(0, self.start_background_initialization)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -1457,6 +2230,13 @@ class MainWindow(QMainWindow):
         self._update_install_was_running = bool(getattr(self, "_running", False))
         deadline = time.monotonic() + UPDATE_INSTALL_QUIESCE_TIMEOUT_S
         try:
+            # Startup prewarm owns provider clients outside the realtime and
+            # manual-translation lifecycles. Cancel it before the first
+            # quiescence wait so the updater cannot race a retained ASR client
+            # or an in-flight ASR/TTS connection setup.
+            self._cancel_asr_background_prewarm()
+            self._cancel_tts_background_prewarm()
+
             # _do_stop invalidates the session before capture can admit more
             # work, cancels provider calls, drains TTS/OSC queues, and closes
             # ASR providers only after scheduler workers have stopped.
@@ -1567,6 +2347,8 @@ class MainWindow(QMainWindow):
             return
         shutdown_started_at = time.monotonic()
         self._destroying = True
+        self._cancel_asr_background_prewarm()
+        self._cancel_tts_background_prewarm()
         with self._asr_lifecycle_lock():
             startup_cancel_event = getattr(self, "_startup_cancel_event", None)
             if startup_cancel_event is not None:
@@ -2222,6 +3004,65 @@ class MainWindow(QMainWindow):
             self._set_bottom(
                 self._copy("mode_switched_simultaneous" if mode is AppMode.SIMULTANEOUS else "mode_switched_translation")
             )
+        if mode is AppMode.SIMULTANEOUS:
+            self._resolve_virtual_output_async()
+
+    def _resolve_virtual_output_async(self) -> None:
+        if self._destroying or bool(
+            getattr(self, "_virtual_output_resolution_in_progress", False)
+        ):
+            return
+        mode = getattr(self._mode_manager, "mode", AppMode.TRANSLATION)
+        tts_cfg = self._config.get("tts", {})
+        if (
+            mode is not AppMode.SIMULTANEOUS
+            or not isinstance(tts_cfg, dict)
+            or not bool(tts_cfg.get("output_to_vrchat", False))
+        ):
+            return
+
+        self._virtual_output_resolution_in_progress = True
+
+        def run() -> None:
+            try:
+                resolved = find_best_virtual_output_device()
+            except Exception:
+                logger.debug("Failed to resolve virtual output device", exc_info=True)
+                resolved = None
+            self._call_in_ui(
+                lambda value=resolved: self._apply_resolved_virtual_output(value)
+            )
+
+        threading.Thread(
+            target=run,
+            daemon=True,
+            name="qt-virtual-output-resolver",
+        ).start()
+
+    def _apply_resolved_virtual_output(self, resolved: object) -> None:
+        self._virtual_output_resolution_in_progress = False
+        if self._destroying or resolved is None:
+            return
+        if getattr(self._mode_manager, "mode", AppMode.TRANSLATION) is not AppMode.SIMULTANEOUS:
+            return
+        tts_cfg = self._config.get("tts", {})
+        if not isinstance(tts_cfg, dict) or not bool(tts_cfg.get("output_to_vrchat", False)):
+            return
+        try:
+            device_id, device_name = resolved
+        except (TypeError, ValueError):
+            return
+        changed = False
+        if tts_cfg.get("output_device") != device_id:
+            tts_cfg["output_device"] = device_id
+            changed = True
+        if tts_cfg.get("output_device_name") != device_name:
+            tts_cfg["output_device_name"] = device_name
+            changed = True
+        if changed:
+            self._reset_tts_manager()
+            self._schedule_config_save()
+            logger.info("Resolved virtual TTS output device after first render: %s", device_name)
 
     def _refresh_mode_buttons(self) -> None:
         mode = getattr(self._mode_manager, "mode", AppMode.TRANSLATION)
@@ -2318,6 +3159,7 @@ class MainWindow(QMainWindow):
                 self._schedule_pipeline_start_retry(100)
                 return
             try:
+                self._desktop_force_device_refresh = True
                 self._start_listen()
             except Exception as exc:
                 logger.warning("Desktop listen failed to start: %s", exc)
@@ -3178,6 +4020,19 @@ class MainWindow(QMainWindow):
         cancel_event = threading.Event()
         self._startup_cancel_event = cancel_event
         session = self._listen_session
+        try:
+            # OscService is a QObject parented to MainWindow. Keep its
+            # construction/signal wiring on the Qt thread; the socket setup is
+            # lightweight and must not be moved into the pipeline worker.
+            self._ensure_sender()
+        except Exception as exc:
+            self._cleanup_startup_failure(
+                str(exc),
+                show_error=True,
+                session_id=session,
+                cancel_event=cancel_event,
+            )
+            return
 
         def run() -> None:
             try:
@@ -3249,10 +4104,44 @@ class MainWindow(QMainWindow):
 
         return bool(
             self._pipeline_cleanup_in_progress()
+            or self._provider_prewarm_cleanup_in_progress()
             or self._deferred_tts_cleanup_in_progress()
             or self._deferred_manual_cleanup_in_progress()
             or provider_background_work_in_progress()
         )
+
+    def _provider_prewarm_cleanup_in_progress(self) -> bool:
+        """Track startup prewarm threads and retained ASR provider ownership."""
+
+        asr_pending = False
+        asr_lock = self._asr_prewarm_lifecycle_lock()
+        with asr_lock:
+            asr_thread = getattr(self, "_asr_prewarm_thread", None)
+            if asr_thread is not None:
+                try:
+                    asr_pending = asr_thread.ident is None or asr_thread.is_alive()
+                except Exception:
+                    asr_pending = True
+                if not asr_pending and self._asr_prewarm_thread is asr_thread:
+                    self._asr_prewarm_thread = None
+            retained_asr = bool(
+                getattr(self, "_prewarmed_main_asr", None) is not None
+                or getattr(self, "_prewarmed_listen_asr", None) is not None
+            )
+
+        tts_pending = False
+        tts_lock = self._tts_prewarm_lifecycle_lock()
+        with tts_lock:
+            tts_thread = getattr(self, "_tts_prewarm_thread", None)
+            if tts_thread is not None:
+                try:
+                    tts_pending = tts_thread.ident is None or tts_thread.is_alive()
+                except Exception:
+                    tts_pending = True
+                if not tts_pending and self._tts_prewarm_thread is tts_thread:
+                    self._tts_prewarm_thread = None
+
+        return bool(asr_pending or retained_asr or tts_pending)
 
     def _deferred_tts_cleanup_in_progress(self) -> bool:
         lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
@@ -3362,7 +4251,14 @@ class MainWindow(QMainWindow):
         listen_asr = None
         installed = False
         try:
-            mic_asr, listen_asr = _create_asr_pair(self._config)
+            prewarmed_main, prewarmed_listen = self._take_prewarmed_asr_pair(
+                self._config
+            )
+            mic_asr, listen_asr = _create_asr_pair(
+                self._config,
+                prewarmed_main=prewarmed_main,
+                prewarmed_listen=prewarmed_listen,
+            )
             self._set_asr_provider_capture_enabled(
                 mic_asr,
                 not bool(getattr(self, "_mic_muted", False)),
@@ -3402,7 +4298,6 @@ class MainWindow(QMainWindow):
                 # by stop/shutdown.  This prevents a cancelled startup from
                 # creating capture or worker resources after shutdown has already
                 # attempted to tear them down.
-                self._sender = self._create_sender()
                 self._raise_if_cancelled(session_id, cancel_event)
                 self._start_workers()
                 self._start_microphone_capture()
@@ -3410,6 +4305,7 @@ class MainWindow(QMainWindow):
                 self._running = True
                 if self._desktop_capture_enabled:
                     try:
+                        self._desktop_force_device_refresh = True
                         self._start_listen()
                     except Exception as exc:
                         logger.warning("Desktop listen did not start: %s", exc)
@@ -3450,7 +4346,6 @@ class MainWindow(QMainWindow):
                 self._stop_listen()
                 self._stop_microphone_capture()
                 shutdown_barrier = self._stop_workers()
-                self._close_osc_sender()
                 self._close_asr_providers(wait_for=shutdown_barrier)
             else:
                 self._close_asr_providers(mic_asr, listen_asr)
@@ -3693,9 +4588,9 @@ class MainWindow(QMainWindow):
             rewrite_required=self._scheduler_rewrite_required,
             translation_handler=self._scheduler_translation_stage,
             delivery_handler=self._scheduler_delivery_stage,
-            rewrite_state_factory=lambda _index: _RealtimeRewriteWorkerState(),
+            rewrite_state_factory=self._create_realtime_rewrite_worker_state,
             rewrite_state_finalizer=lambda state: state.close(),
-            translation_state_factory=lambda _index: _RealtimeTranslationWorkerState(),
+            translation_state_factory=self._create_realtime_translation_worker_state,
             translation_state_finalizer=lambda state: state.close(),
             ingress_limits={
                 MIC_SOURCE: FINAL_TASK_QUEUE_MAXSIZE,
@@ -3770,7 +4665,11 @@ class MainWindow(QMainWindow):
                 logger.debug("Failed to cancel stale OSC session work", exc_info=True)
 
         priority_queue = getattr(self, "_ui_priority_callback_queue", None)
-        if priority_queue is not None:
+        ui_thread_id = getattr(self, "_ui_thread_id", threading.get_ident())
+        if (
+            priority_queue is not None
+            and threading.get_ident() == ui_thread_id
+        ):
             while True:
                 try:
                     _delay_ms, callback = priority_queue.get_nowait()
@@ -4065,7 +4964,11 @@ class MainWindow(QMainWindow):
         try:
             self._log_listen_environment("before_start")
             if not self._desktop_devices:
-                self._load_desktop_devices()
+                force_refresh = bool(
+                    getattr(self, "_desktop_force_device_refresh", False)
+                )
+                self._desktop_force_device_refresh = False
+                self._load_desktop_devices(force_refresh=force_refresh)
             device_name = self._desktop_output_device_name()
             if not device_name:
                 raise RuntimeError(self._copy("vrc_listen_device_missing"))
@@ -4138,7 +5041,9 @@ class MainWindow(QMainWindow):
             self._listen_recorder.start()
             self._active_listen_output_device_name = device_name
             self._listen_in_speech = False
-            self._refresh_floating_window_status(False)
+            self._call_in_ui(
+                lambda: self._refresh_floating_window_status(False)
+            )
             self._last_listen_started_at = time.monotonic()
             self._last_listen_result_at = self._last_listen_started_at
             self._last_listen_diagnostic_log_at = 0.0
@@ -4146,7 +5051,9 @@ class MainWindow(QMainWindow):
             self._desktop_recovery_attempt = 0
             recovery_timer = getattr(self, "_desktop_recovery_timer", None)
             if recovery_timer is not None:
-                recovery_timer.stop()
+                self._call_in_ui(
+                    lambda timer=recovery_timer: timer.stop()
+                )
             self._log_listen_environment("after_start")
             logger.info("Desktop listen started successfully on output device: %s", device_name)
         except Exception:
@@ -4160,7 +5067,9 @@ class MainWindow(QMainWindow):
             logger.info("Cancelled %s stale reverse-translation task(s)", cancelled)
         self._reset_streaming_state(DESKTOP_SOURCE)
         self._listen_in_speech = False
-        self._refresh_floating_window_status(False)
+        self._call_in_ui(
+            lambda: self._refresh_floating_window_status(False)
+        )
         self._active_listen_output_device_name = None
         if self._listen_recorder is not None:
             try:
@@ -4523,6 +5432,9 @@ class MainWindow(QMainWindow):
     def _poll_desktop_audio_watch(self) -> None:
         if self._destroying:
             return
+        if not self._running or not self._desktop_capture_enabled:
+            self._last_desktop_device_signature = None
+            return
 
         try:
             was_available = self._listen_available
@@ -4673,9 +5585,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _microphone_device_signature(self) -> tuple[tuple[str, ...], str | None, str, str | None, str | None]:
-        from src.audio.recorder import AudioRecorder
-        devices = AudioRecorder.list_devices()
-        self._devices = {str(d.get("name", "")).strip(): int(d.get("index", -1)) for d in devices}
+        devices = _list_microphone_devices()
+        self._cache_microphone_devices(devices)
         if getattr(self, "_device_combo", None) is not None:
             self._refresh_device_combo()
         default_name = self._current_default_input_device_name(devices)
@@ -4700,21 +5611,22 @@ class MainWindow(QMainWindow):
     def _poll_mic_audio_watch(self) -> None:
         if self._destroying:
             return
+        if not self._running:
+            self._last_mic_device_signature = None
+            return
+        if bool(getattr(self, "_mic_muted", False)) or bool(
+            getattr(self, "_mic_capture_paused_for_mute", False)
+        ):
+            if self._recorder is not None:
+                logger.info("Stopping microphone capture left active while muted")
+                self._stop_microphone_capture()
+            return
         try:
             previous = self._last_mic_device_signature
             signature = self._microphone_device_signature()
             self._last_mic_device_signature = signature
             _, default_name, mode, configured_name, resolved_name = signature
-            if not self._running:
-                return
             recorder = self._recorder
-            if bool(getattr(self, "_mic_muted", False)) or bool(
-                getattr(self, "_mic_capture_paused_for_mute", False)
-            ):
-                if recorder is not None:
-                    logger.info("Stopping microphone capture left active while muted")
-                    self._stop_microphone_capture()
-                return
             if recorder is None and not self._mic_recovery_in_progress:
                 self._restart_microphone_capture("microphone recorder missing while running")
                 return
@@ -5326,6 +6238,129 @@ class MainWindow(QMainWindow):
             if "context_store" not in str(exc):
                 raise
             return create_translator(runtime_config)
+
+    @staticmethod
+    def _prewarm_realtime_translator(translator: Any) -> bool:
+        prewarm = getattr(translator, "prewarm", None)
+        if not callable(prewarm):
+            return False
+        return bool(prewarm())
+
+    def _realtime_translation_prewarm_config(self) -> dict:
+        snapshot = getattr(self, "_realtime_config_snapshot", None)
+        config = _thaw_snapshot_value(snapshot)
+        if not isinstance(config, dict):
+            config = copy.deepcopy(self._config)
+        return config
+
+    def _realtime_translation_credentials_available(self, config: dict) -> bool:
+        return (
+            first_missing_required_credential(
+                config,
+                scopes=("translation",),
+                ui_language=getattr(self, "_ui_lang", None),
+                active_only=True,
+            )
+            is None
+        )
+
+    def _create_realtime_translation_worker_state(
+        self,
+        worker_index: int,
+    ) -> _RealtimeTranslationWorkerState:
+        """Prepare worker-confined provider pools on their eventual owner thread."""
+
+        state = _RealtimeTranslationWorkerState()
+        config = self._realtime_translation_prewarm_config()
+        if (
+            not self._translation_background_warmup_enabled(config)
+            or not self._realtime_translation_credentials_available(config)
+        ):
+            return state
+        signature = provider_runtime_config_signature(config)
+        try:
+            state.translator = self._create_realtime_translator(
+                config,
+                source=MIC_SOURCE,
+            )
+            mic_succeeded = self._prewarm_realtime_translator(state.translator)
+            listen_cfg = config.get("vrc_listen", {})
+            listen_enabled = bool(
+                isinstance(listen_cfg, Mapping)
+                and listen_cfg.get("enabled", False)
+            )
+            listen_succeeded = False
+            if listen_enabled:
+                state.listen_translator = self._create_realtime_translator(
+                    config,
+                    source=DESKTOP_SOURCE,
+                )
+                listen_succeeded = self._prewarm_realtime_translator(
+                    state.listen_translator
+                )
+            state.runtime_signature = signature
+            logger.info(
+                "Realtime translation worker prewarm finished "
+                "worker=%d mic=%s listen=%s thread=%s",
+                worker_index,
+                mic_succeeded,
+                listen_succeeded,
+                threading.current_thread().name,
+            )
+        except Exception as exc:
+            state.close()
+            logger.warning(
+                "Realtime translation worker prewarm failed "
+                "worker=%d error=%s",
+                worker_index,
+                safe_exception_summary(exc),
+            )
+        return state
+
+    def _create_realtime_rewrite_worker_state(
+        self,
+        worker_index: int,
+    ) -> _RealtimeRewriteWorkerState:
+        state = _RealtimeRewriteWorkerState()
+        config = self._realtime_translation_prewarm_config()
+        translation_cfg = config.get("translation", {})
+        if not isinstance(translation_cfg, Mapping):
+            return state
+        if (
+            normalize_asr_rewrite_style(
+                translation_cfg.get(
+                    "asr_rewrite_style",
+                    ASR_REWRITE_DISABLED,
+                )
+            )
+            == ASR_REWRITE_DISABLED
+            or not self._realtime_translation_credentials_available(config)
+        ):
+            return state
+        signature = provider_runtime_config_signature(config)
+        try:
+            state.translator = self._create_realtime_translator(
+                config,
+                source=MIC_SOURCE,
+            )
+            succeeded = self._prewarm_realtime_translator(state.translator)
+            state.runtime_signature = signature
+            logger.info(
+                "Realtime rewrite worker prewarm finished "
+                "worker=%d succeeded=%s thread=%s",
+                worker_index,
+                succeeded,
+                threading.current_thread().name,
+            )
+        except Exception as exc:
+            state.close()
+            logger.warning(
+                "Realtime rewrite worker prewarm failed "
+                "worker=%d error=%s",
+                worker_index,
+                safe_exception_summary(exc),
+            )
+        return state
 
     def _scheduler_rewrite_stage(
         self,
@@ -8310,24 +9345,24 @@ class MainWindow(QMainWindow):
         if not mode:
             mode = "fixed" if str(audio_cfg.get("input_device") or "").strip() else "auto"
         devices = []
-        if refresh or not self._devices:
+        if refresh:
             try:
                 devices = _list_microphone_devices()
             except Exception:
                 logger.debug("Failed to enumerate microphone devices", exc_info=True)
                 devices = []
-            self._devices = {
-                str(d.get("name", "")).strip(): int(d.get("index", -1))
-                for d in devices
-                if str(d.get("name", "")).strip()
-            }
+            self._cache_microphone_devices(devices)
         if not devices and self._devices:
             devices = [
                 {"name": name, "index": index}
                 for name, index in self._devices.items()
             ]
         if mode == "auto":
-            default_name = self._current_default_input_device_name(devices)
+            default_name = (
+                self._current_default_input_device_name(devices)
+                if refresh
+                else getattr(self, "_default_mic_device_name", None)
+            )
             if default_name:
                 return self._match_mic_input_device_name(default_name) or default_name
             for name in self._devices:
@@ -8360,10 +9395,26 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=run, daemon=True, name="qt-device-scan").start()
 
-    def _load_desktop_devices(self) -> None:
+    def _cache_microphone_devices(self, devices: list[dict]) -> None:
+        self._devices = {
+            str(device.get("name", "")).strip(): int(device.get("index", -1))
+            for device in devices
+            if str(device.get("name", "")).strip()
+        }
+        marked_defaults = [
+            str(device.get("name", "")).strip()
+            for device in devices
+            if bool(device.get("is_default"))
+            and str(device.get("name", "")).strip()
+        ]
+        self._default_mic_device_name = marked_defaults[0] if len(marked_defaults) == 1 else None
+
+    def _load_desktop_devices(self, *, force_refresh: bool = False) -> None:
         devices: dict[str, int] = {}
         try:
-            enumerated = _list_desktop_output_devices()
+            enumerated = _list_desktop_output_devices(
+                force_refresh=force_refresh
+            )
         except Exception:
             logger.exception("Desktop output device enumeration failed")
             enumerated = []
@@ -8388,11 +9439,7 @@ class MainWindow(QMainWindow):
 
     def _apply_loaded_devices(self, devices: list[dict]) -> None:
         self._devices_loading = False
-        self._devices = {
-            str(d.get("name", "")).strip(): int(d.get("index", -1))
-            for d in devices
-            if str(d.get("name", "")).strip()
-        }
+        self._cache_microphone_devices(devices)
         self._refresh_device_combo()
 
     def _avatar_sync_config(self) -> dict:
@@ -8465,7 +9512,7 @@ class MainWindow(QMainWindow):
                 name="mic-mute",
                 hotkey_id=1,
             )
-            self._mic_mute_hotkey.start()
+            self._mic_mute_hotkey.start(wait_for_ready=False)
         except Exception as e:
             logger.warning("Failed to register mic mute hotkey: %s", e)
 
@@ -8476,7 +9523,7 @@ class MainWindow(QMainWindow):
                 name="text-input",
                 hotkey_id=2,
             )
-            self._text_input_hotkey.start()
+            self._text_input_hotkey.start(wait_for_ready=False)
         except Exception as e:
             logger.warning("Failed to register text input hotkey: %s", e)
 
@@ -8514,12 +9561,10 @@ class MainWindow(QMainWindow):
         overlay_service = getattr(self, "_overlay_service", None)
         if overlay_service is not None:
             overlay_service.set_enabled(self._listen_overlay_enabled, reveal=False)
-        self._mode_manager = ModeManager(
-            self._config,
-            virtual_device_resolver=find_best_virtual_output_device,
-        )
+        self._mode_manager = ModeManager(self._config)
         mode_change = self._mode_manager.apply_current_mode()
         self._sync_tts_enabled_from_config()
+        self._resolve_virtual_output_async()
         central = self.centralWidget()
         if isinstance(central, BackgroundWidget):
             central.set_theme(self._main_theme)
@@ -8557,6 +9602,7 @@ class MainWindow(QMainWindow):
             )
         self._stop_hotkeys()
         self._register_hotkeys()
+        self._restart_background_provider_initialization()
         if was_running or was_starting:
             self._schedule_pipeline_start_retry(100)
 
@@ -8806,7 +9852,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(build_main_window_styles(self._main_theme))
         apply_window_chrome_theme(self, self._main_theme)
 
-        background = BackgroundWidget(self._background_image_path(), self)
+        background = BackgroundWidget("", self)
         background.set_theme(self._main_theme)
         self.setCentralWidget(background)
 
@@ -9562,11 +10608,14 @@ class MainWindow(QMainWindow):
         if self._prompt_for_missing_credential(("tts",)):
             return None
         signature = self._tts_runtime_signature()
-        if self._tts_manager is not None:
-            if getattr(self, "_tts_manager_signature", None) != signature:
-                self._reset_tts_manager()
-            else:
-                return self._tts_manager
+        manager_lock = self._tts_manager_lifecycle_lock()
+        with manager_lock:
+            existing = getattr(self, "_tts_manager", None)
+            existing_signature = getattr(self, "_tts_manager_signature", None)
+        if existing is not None:
+            if existing_signature == signature:
+                return existing
+            self._reset_tts_manager()
         from src.tts.manager import TTSManager
 
         tts_cfg = self._tts_config()
@@ -9595,18 +10644,31 @@ class MainWindow(QMainWindow):
                     stop()
             return None
         manager.start()
-        self._tts_manager = manager
-        self._tts_manager_signature = signature
-        return manager
+        retained = manager
+        with manager_lock:
+            current = getattr(self, "_tts_manager", None)
+            current_signature = getattr(self, "_tts_manager_signature", None)
+            if current is not None and current_signature == signature:
+                retained = current
+            elif current is None and self._tts_runtime_signature() == signature:
+                self._tts_manager = manager
+                self._tts_manager_signature = signature
+                manager = None
+        if manager is not None:
+            self._close_tts_manager_instance(manager)
+        return retained if retained is not manager else None
 
     def _reset_tts_manager(
         self,
         *,
         timeout_seconds: float | None = None,
     ) -> bool:
-        manager = getattr(self, "_tts_manager", None)
-        self._tts_manager = None
-        self._tts_manager_signature = None
+        self._cancel_tts_background_prewarm()
+        manager_lock = self._tts_manager_lifecycle_lock()
+        with manager_lock:
+            manager = getattr(self, "_tts_manager", None)
+            self._tts_manager = None
+            self._tts_manager_signature = None
         if manager is None:
             return True
         try:
@@ -9657,9 +10719,11 @@ class MainWindow(QMainWindow):
                 deferred.append(manager)
 
     def _reset_tts_manager_if_runtime_changed(self) -> None:
-        if getattr(self, "_tts_manager", None) is None:
-            return
-        if getattr(self, "_tts_manager_signature", None) != self._tts_runtime_signature():
+        manager_lock = self._tts_manager_lifecycle_lock()
+        with manager_lock:
+            manager = getattr(self, "_tts_manager", None)
+            signature = getattr(self, "_tts_manager_signature", None)
+        if manager is not None and signature != self._tts_runtime_signature():
             self._reset_tts_manager()
 
     def _settings_preload_enabled(self) -> bool:

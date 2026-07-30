@@ -7,6 +7,7 @@ import logging
 import math
 import time
 import urllib.parse
+from collections.abc import Mapping
 
 from .base import (
     BaseTranslator,
@@ -21,6 +22,7 @@ from src.utils.provider_diagnostics import (
     safe_exception_summary,
 )
 from src.utils.provider_http_timing import ProviderHttpTimingHooks
+from src.utils.provider_warmup import warmup_httpx_client
 from src.utils.secure_http import validate_api_base_url
 
 
@@ -172,6 +174,40 @@ class AnthropicTranslator(BaseTranslator):
 
     def _sdk_timeout(self) -> object:
         return getattr(self, "_request_timeout", getattr(self, "_timeout_s", None))
+
+    def prewarm(self) -> bool:
+        """Open the exact HTTP pool used by the Anthropic SDK."""
+
+        default_headers = getattr(self._client, "default_headers", {})
+        headers = (
+            dict(default_headers)
+            if isinstance(default_headers, Mapping)
+            else dict(getattr(self, "_custom_headers", {}) or {})
+        )
+        result = warmup_httpx_client(
+            self._http_client,
+            f"{self._base_url.rstrip('/')}/v1/messages",
+            method="HEAD",
+            headers=headers,
+            timeout_s=min(float(getattr(self, "_connect_timeout_s", 2.0)), 3.0),
+        )
+        if result.succeeded:
+            logger.info(
+                "Anthropic translation prewarm finished "
+                "(endpoint=%s status=%s elapsed_ms=%.0f)",
+                self._log_endpoint,
+                result.status_code if result.status_code is not None else "unknown",
+                result.elapsed_s * 1000.0,
+            )
+        else:
+            logger.warning(
+                "Anthropic translation prewarm failed "
+                "(endpoint=%s elapsed_ms=%.0f error_type=%s)",
+                self._log_endpoint,
+                result.elapsed_s * 1000.0,
+                result.error_type or "unknown",
+            )
+        return result.succeeded
 
     def _raise_if_wall_timeout(self, started_at: float) -> None:
         wall_timeout = getattr(

@@ -50,3 +50,34 @@ def test_concurrent_catalog_refreshes_share_one_worker_and_release_callbacks(
     assert second_results == [fresh]
     assert catalog_fetcher._fetch_thread is None
     assert catalog_fetcher._fetch_subscribers == []
+
+
+def test_remote_only_catalog_refresh_does_not_reload_or_replay_cache(monkeypatch):
+    fresh = {"version": 3, "translation_backends": {"openai": {}}}
+    results: list[dict] = []
+    callback_done = threading.Event()
+
+    def on_result(data: dict) -> None:
+        results.append(data)
+        callback_done.set()
+
+    monkeypatch.setattr(
+        catalog_fetcher,
+        "_load_cache",
+        lambda: (_ for _ in ()).throw(AssertionError("cache reread")),
+    )
+    monkeypatch.setattr(
+        catalog_fetcher,
+        "_fetch_remote",
+        lambda: (fresh, "https://example.com/catalog.json"),
+    )
+    monkeypatch.setattr(catalog_fetcher, "_save_cache", lambda _data: None)
+
+    catalog_fetcher.refresh_catalog(on_result)
+    worker = catalog_fetcher._fetch_thread
+    if worker is not None:
+        worker.join(timeout=2)
+
+    assert callback_done.wait(timeout=1)
+    assert results == [fresh]
+    assert catalog_fetcher._fetch_thread is None

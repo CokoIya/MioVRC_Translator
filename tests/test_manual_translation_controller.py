@@ -41,6 +41,68 @@ def _wait_until(predicate, *, timeout=2.0):
     return bool(predicate())
 
 
+def test_manual_start_does_not_construct_provider_on_calling_thread():
+    factory_started = threading.Event()
+    release_factory = threading.Event()
+    translator = _Translator()
+
+    def factory(_config):
+        factory_started.set()
+        release_factory.wait(timeout=2.0)
+        return translator
+
+    config = {"translation": {"output_format": "translated_only"}}
+    controller = ManualTranslationController(
+        config,
+        OutputDispatcher(config),
+        translator_factory=factory,
+        language_detector=lambda _text: "en",
+    )
+
+    started_at = time.monotonic()
+    generation = controller.start(ManualTranslationRequest("hello", "en", "ja"))
+    elapsed = time.monotonic() - started_at
+
+    assert generation == 1
+    assert elapsed < 0.25
+    assert factory_started.wait(timeout=1.0)
+    release_factory.set()
+    assert _wait_until(lambda: bool(translator.calls))
+    assert controller.close(wait_timeout_s=1.0) is True
+
+
+def test_manual_prewarm_retains_exact_translator_for_first_request():
+    class Translator(_Translator):
+        def __init__(self):
+            super().__init__()
+            self.prewarm_calls = 0
+
+        def prewarm(self):
+            self.prewarm_calls += 1
+
+        def close(self):
+            return None
+
+    translator = Translator()
+    created: list[Translator] = []
+    config = {"translation": {"output_format": "translated_only"}}
+    controller = ManualTranslationController(
+        config,
+        OutputDispatcher(config),
+        translator_factory=lambda _config: created.append(translator) or translator,
+        language_detector=lambda _text: "en",
+    )
+
+    assert controller.prewarm_async() is True
+    assert _wait_until(lambda: translator.prewarm_calls == 1 and not controller._threads)
+    assert controller.translator is translator
+
+    assert controller.start(ManualTranslationRequest("hello", "en", "ja")) == 1
+    assert _wait_until(lambda: bool(translator.calls))
+    assert created == [translator]
+    assert controller.close(wait_timeout_s=1.0) is True
+
+
 def test_manual_latency_aggregates_all_target_provider_phases(caplog):
     class Translator:
         def __init__(self):

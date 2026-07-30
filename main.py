@@ -10,8 +10,11 @@ import warnings
 import subprocess
 import shutil
 import stat
+import time as _startup_clock
 import uuid
 from pathlib import Path
+
+_STARTUP_MAIN_ORIGIN = _startup_clock.perf_counter()
 
 # pydub emits a RuntimeWarning at import time when ffmpeg is not on PATH.
 # The app uses torchaudio/av for audio processing and does not need ffmpeg,
@@ -29,6 +32,83 @@ _APP_MUTEX_HANDLE = None
 _ERROR_ALREADY_EXISTS = 183
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _VENV_RELAUNCH_ENV = "MIO_TRANSLATOR_RELAUNCHED_VENV"
+_VENV_RUNTIME_MODULES = ("funasr", "torch", "torchaudio")
+_CUDA_PIP_CHECK_ARG = "--mio-cuda-pip-check"
+_CUDA_PIP_INSTALL_ARG = "--mio-install-cuda-pytorch"
+_CUDA_PIP_VERIFY_ARG = "--mio-verify-cuda-pytorch"
+_RUNTIME_HOOK_TIMING_ENV = "MIO_TRANSLATOR_RUNTIME_HOOK_MS"
+_WINDOWS_EPOCH_OFFSET_SECONDS = 11_644_473_600.0
+
+
+def _runtime_hook_duration_ms() -> float:
+    try:
+        duration_ms = float(os.environ.get(_RUNTIME_HOOK_TIMING_ENV, "") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not 0.0 <= duration_ms <= 60.0 * 60.0 * 1000.0:
+        return 0.0
+    return duration_ms
+
+
+def _windows_process_age_seconds() -> float | None:
+    """Return elapsed wall time since OS process creation on Windows."""
+
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        if not kernel32.GetProcessTimes(
+            kernel32.GetCurrentProcess(),
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return None
+        created_ticks = (int(creation.dwHighDateTime) << 32) | int(
+            creation.dwLowDateTime
+        )
+        created_at = (
+            created_ticks / 10_000_000.0 - _WINDOWS_EPOCH_OFFSET_SECONDS
+        )
+        age_s = _startup_clock.time() - created_at
+    except Exception:
+        return None
+    if not 0.0 <= age_s <= 60.0 * 60.0:
+        return None
+    return age_s
+
+
+def _estimated_process_origin(runtime_hook_ms: float) -> float:
+    """Estimate a monotonic origin that includes bootloader/interpreter work."""
+
+    process_age_s = _windows_process_age_seconds()
+    # Pair the wall-clock age with a monotonic sample taken immediately after
+    # the native probe; sampling before the ctypes import/API call would count
+    # the probe's own latency twice and shift the process origin too early.
+    observed_at = _startup_clock.perf_counter()
+    if process_age_s is not None:
+        candidate = observed_at - process_age_s
+        if candidate <= _STARTUP_MAIN_ORIGIN:
+            return candidate
+    return _STARTUP_MAIN_ORIGIN - max(0.0, float(runtime_hook_ms)) / 1000.0
 
 
 def _create_app_mutex() -> bool:
@@ -78,6 +158,33 @@ def _local_source_python_candidates() -> list[Path]:
     ]
 
 
+def _candidate_python_has_runtime_layout(candidate: Path) -> bool:
+    """Cheaply reject local venvs that cannot contain the required runtime.
+
+    These candidates are conventional Windows ``venv`` environments.  A
+    missing top-level package in their own site-packages means launching the
+    interpreter merely to run ``find_spec`` cannot make the candidate a valid
+    self-contained runtime.  Positive results are still verified in the
+    candidate interpreter below.
+    """
+
+    site_packages = candidate.parent.parent / "Lib" / "site-packages"
+    try:
+        if not site_packages.is_dir():
+            return False
+        for module_name in _VENV_RUNTIME_MODULES:
+            if (site_packages / module_name).exists():
+                continue
+            if any(site_packages.glob(f"{module_name}.*")):
+                continue
+            return False
+    except OSError:
+        # Preserve the subprocess fallback when the filesystem cannot be
+        # inspected reliably (permissions, transient device errors, etc.).
+        return True
+    return True
+
+
 def _candidate_python_has_runtime(candidate: Path) -> bool:
     try:
         completed = subprocess.run(
@@ -86,7 +193,7 @@ def _candidate_python_has_runtime(candidate: Path) -> bool:
                 "-c",
                 (
                     "import importlib.util, sys; "
-                    "mods=('funasr','torch','torchaudio'); "
+                    f"mods={_VENV_RUNTIME_MODULES!r}; "
                     "sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)"
                 ),
             ],
@@ -108,14 +215,25 @@ def _maybe_relaunch_local_source_venv() -> None:
     if sys.argv and sys.argv[0] == "-c":
         return
     current = Path(sys.executable).resolve()
+    candidates: list[tuple[Path, Path | None]] = []
     for candidate in _local_source_python_candidates():
-        if not candidate.exists():
+        if not candidate.is_file():
             continue
         try:
-            if candidate.resolve() == current:
-                return
+            resolved = candidate.resolve()
         except OSError:
-            pass
+            resolved = None
+        candidates.append((candidate, resolved))
+
+    # Respect an explicitly selected project-local interpreter.  Previously a
+    # lower-priority local venv could synchronously probe (and even relaunch
+    # into) every higher-priority sibling before its own match was reached.
+    if any(resolved == current for _, resolved in candidates):
+        return
+
+    for candidate, _resolved in candidates:
+        if not _candidate_python_has_runtime_layout(candidate):
+            continue
         if not _candidate_python_has_runtime(candidate):
             continue
         os.environ[_VENV_RELAUNCH_ENV] = "1"
@@ -321,21 +439,49 @@ def _run_cuda_pytorch_verify() -> int:
 
 
 def main() -> int:
-    from src.utils.gpu_support import (
-        CUDA_PIP_CHECK_ARG,
-        CUDA_PIP_INSTALL_ARG,
-        CUDA_PIP_VERIFY_ARG,
+    from src.utils.startup_timing import (
+        enable_startup_timing_logging,
+        initialize_startup_timing,
+        record_startup_stage,
+        startup_stage,
     )
 
-    if CUDA_PIP_CHECK_ARG in sys.argv:
+    runtime_hook_ms = _runtime_hook_duration_ms()
+    process_origin = _estimated_process_origin(runtime_hook_ms)
+    initialize_startup_timing(process_origin)
+    if process_origin < _STARTUP_MAIN_ORIGIN:
+        record_startup_stage(
+            "process.bootstrap_before_main",
+            started_at=process_origin,
+            finished_at=_STARTUP_MAIN_ORIGIN,
+        )
+    if runtime_hook_ms:
+        record_startup_stage(
+            "runtime_hook",
+            started_at=max(
+                process_origin,
+                _STARTUP_MAIN_ORIGIN - (runtime_hook_ms / 1000.0),
+            ),
+            finished_at=_STARTUP_MAIN_ORIGIN,
+        )
+    record_startup_stage(
+        "entrypoint.module_imports",
+        started_at=_STARTUP_MAIN_ORIGIN,
+    )
+
+    # Keep gpu_support (and its writable-path/runtime dependencies) entirely
+    # off normal launches.  These literal flags are a private subprocess
+    # protocol and gpu_support itself is imported only inside the matching
+    # special-mode helper.
+    if _CUDA_PIP_CHECK_ARG in sys.argv:
         return _run_cuda_pip_check()
 
-    if CUDA_PIP_INSTALL_ARG in sys.argv:
-        idx = sys.argv.index(CUDA_PIP_INSTALL_ARG)
+    if _CUDA_PIP_INSTALL_ARG in sys.argv:
+        idx = sys.argv.index(_CUDA_PIP_INSTALL_ARG)
         target_arg = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else None
         return _run_cuda_pytorch_install(target_arg)
 
-    if CUDA_PIP_VERIFY_ARG in sys.argv:
+    if _CUDA_PIP_VERIFY_ARG in sys.argv:
         return _run_cuda_pytorch_verify()
 
     if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1" or "--mio-selftest" in sys.argv:
@@ -344,9 +490,12 @@ def main() -> int:
     if "--setup" in sys.argv:
         return _run_setup_mode()
 
-    _maybe_relaunch_local_source_venv()
+    with startup_stage("startup.source_venv"):
+        _maybe_relaunch_local_source_venv()
 
-    if not _create_app_mutex():
+    with startup_stage("startup.single_instance_mutex"):
+        sole_instance = _create_app_mutex()
+    if not sole_instance:
         # Another instance is running. Don't fight it for the audio devices —
         # that path produced silent C-level crashes in the field.
         print(
@@ -356,32 +505,41 @@ def main() -> int:
         )
         return 0
 
-    from src.utils.logger import setup_logging
-    log_file = setup_logging()
+    # Attribute legacy-file/path preparation separately from logger creation;
+    # this was previously hidden inside the logging_setup stage.
+    with startup_stage("startup.writable_path_prepare"):
+        from src.utils.app_paths import writable_app_dir
+
+        writable_app_dir()
+
+    with startup_stage("startup.logging_setup"):
+        from src.utils.logger import setup_logging
+
+        log_file = setup_logging()
+    enable_startup_timing_logging()
     logger = logging.getLogger(__name__)
     logger.info("Application startup requested")
     logger.info("Log file ready at %s", log_file)
 
-    from src.utils import config_manager
-    from src.utils import catalog_fetcher, catalog_loader
-
-    # Load catalog from cache synchronously so config_manager uses the right defaults
-    cached = catalog_fetcher._load_cache()
-    if cached:
+    with startup_stage("startup.catalog_imports"):
+        from src.utils import catalog_fetcher, catalog_loader
         from src.utils.ui_config import set_catalog
-        merged = catalog_loader.load_catalog_from_data(cached)
-        set_catalog(merged)
-        logger.info("Translation catalog loaded from cache")
 
-    def _on_catalog_loaded(data: dict) -> None:
-        from src.utils.ui_config import set_catalog as _sc
-        merged = catalog_loader.load_catalog_from_data(data)
-        _sc(merged)
+    # Apply the cache exactly once, before config_manager captures provider
+    # defaults.  The remote refresh is scheduled from the first Qt event-loop
+    # turn by src.utils.startup_tasks, after the window is visible.
+    with startup_stage("startup.catalog_cache_load"):
+        cached = catalog_fetcher.load_cached_catalog()
+        if cached:
+            set_catalog(catalog_loader.load_catalog_from_data(cached))
+            logger.info("Translation catalog loaded from cache")
 
-    catalog_fetcher.get_catalog(_on_catalog_loaded)
+    with startup_stage("startup.config_manager_import"):
+        from src.utils import config_manager
 
     try:
-        config = config_manager.load_config()
+        with startup_stage("startup.configuration_load"):
+            config = config_manager.load_config()
         logger.info("Configuration loaded successfully")
 
         # First-run: auto-select ASR engine based on system locale
@@ -390,15 +548,20 @@ def main() -> int:
             not asr_cfg.get("user_selected_engine")
             and (not asr_cfg.get("engine") or not asr_cfg.get("engine_source"))
         ):
-            from src.utils.locale_detect import select_default_asr_engine
-            engine = asr_cfg.get("engine") or select_default_asr_engine()
-            asr_cfg["engine"] = engine
-            asr_cfg.setdefault("engine_source", "auto")
-            config_manager.save_config(config)
-            logger.info("Auto-selected ASR engine: %s", engine)
+            with startup_stage("startup.asr_locale_default"):
+                from src.utils.locale_detect import select_default_asr_engine
 
-        from src.ui_qt.app import run_qt_app
+                engine = asr_cfg.get("engine") or select_default_asr_engine()
+                asr_cfg["engine"] = engine
+                asr_cfg.setdefault("engine_source", "auto")
+                config_manager.save_config(config)
+                logger.info("Auto-selected ASR engine: %s", engine)
+
+        with startup_stage("startup.qt_app_import"):
+            from src.ui_qt.app import run_qt_app
+
         logger.info("Launching Qt UI")
+        record_startup_stage("startup.qt_handoff")
         exit_code = run_qt_app(config)
         logger.info("Qt UI closed normally")
         return int(exit_code or 0)

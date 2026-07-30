@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 
 from src.asr.base import ASRProvider
-from src.asr.errors import ASRMissingAPIKeyError, ASRTemporaryUnavailableError
+from src.asr.errors import (
+    ASRMissingAPIKeyError,
+    ASRTemporaryUnavailableError,
+    ASRUnsupportedRuntimeError,
+)
 from src.asr.fallback_asr import FallbackASR
 
 
@@ -52,6 +56,26 @@ def test_fallback_asr_uses_fallback_for_transcribe_failure():
 
     assert text == "fallback text"
     assert fallback.loaded is True
+
+
+def test_unavailable_lazy_fallback_preserves_primary_provider_error():
+    created: list[bool] = []
+
+    def unavailable_fallback():
+        created.append(True)
+        raise ASRUnsupportedRuntimeError("local model is not installed")
+
+    asr = FallbackASR(
+        _MissingKeyASR(),
+        fallback_factory=unavailable_fallback,
+        auto_fallback=True,
+    )
+
+    with pytest.raises(ASRMissingAPIKeyError, match="missing key"):
+        asr.transcribe(np.zeros(1600, dtype=np.float32))
+
+    assert created == [True]
+    assert asr._using_fallback is False
 
 
 def test_fallback_asr_forwards_browser_capture_control():

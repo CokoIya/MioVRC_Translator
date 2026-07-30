@@ -5,8 +5,10 @@
 
 ``requests.Session`` keeps TCP/TLS connections warm, but the mutable Session
 object is not a safe unit to share between independent worker threads.  This
-pool gives every long-lived worker its own reusable session and still lets an
-engine close all remaining sessions deterministically during shutdown.
+pool gives every long-lived worker its own reusable session.  A session whose
+owner has exited may be handed to one later worker, which preserves a completed
+startup preconnection without ever sharing the mutable object concurrently.
+The pool still closes all remaining sessions deterministically during shutdown.
 """
 
 from __future__ import annotations
@@ -31,17 +33,51 @@ class ThreadLocalSessionPool:
     def get(self) -> Any:
         current_thread = threading.current_thread()
         stale_sessions: list[Any] = []
+        adopted_session = None
         with self._lock:
             if self._closed:
                 raise RuntimeError("HTTP session pool is closed")
+            session = getattr(self._local, "session", None)
             for owner, owned_session in tuple(self._sessions.items()):
                 if owner is current_thread or owner.is_alive():
                     continue
                 self._sessions.pop(owner, None)
-                stale_sessions.append(owned_session)
-            session = getattr(self._local, "session", None)
+                if session is None and adopted_session is None:
+                    # requests.Session is not safe for simultaneous use, but a
+                    # completed warm-up worker no longer owns or can touch it.
+                    # Sequential ownership transfer keeps its DNS/TCP/TLS pool
+                    # available to the first real request worker.
+                    adopted_session = owned_session
+                else:
+                    stale_sessions.append(owned_session)
+            if adopted_session is not None:
+                self._sessions[current_thread] = adopted_session
+                self._local.session = adopted_session
         for stale_session in stale_sessions:
             self._close_session(stale_session)
+
+        if adopted_session is not None:
+            with self._lock:
+                if self._closed:
+                    pool_closed = True
+                    owned = self._sessions.pop(current_thread, None)
+                    try:
+                        del self._local.session
+                    except AttributeError:
+                        pass
+                    # close() clears the ownership map before closing its
+                    # snapshot outside the lock.  Only close here when this
+                    # caller actually removed the adopted session; otherwise
+                    # the concurrent close() already owns that cleanup.
+                    should_close_adopted = owned is adopted_session
+                else:
+                    pool_closed = False
+                    should_close_adopted = False
+            if should_close_adopted:
+                self._close_session(adopted_session)
+            if pool_closed:
+                raise RuntimeError("HTTP session pool is closed")
+            return adopted_session
 
         if session is not None:
             # Closing stale sessions may invoke arbitrary native/client cleanup.

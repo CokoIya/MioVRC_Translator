@@ -604,6 +604,11 @@ class BaseTranslator(ABC):
             "The selected translation provider does not support ASR style rewriting"
         )
 
+    def prewarm(self) -> bool:
+        """Prepare reusable online-provider state without performing inference."""
+
+        return False
+
     def close(self) -> None:
         """Close reusable HTTP/API clients owned by this translator."""
 

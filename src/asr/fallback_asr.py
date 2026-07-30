@@ -130,15 +130,23 @@ class FallbackASR(ASRProvider):
     ) -> None:
         if not self._fallback_allowed(exc):
             raise exc
+        try:
+            fallback = self._ensure_fallback()
+        except Exception as fallback_exc:
+            logger.warning(
+                "ASR provider %s failed and the local fallback is unavailable: %s",
+                getattr(self.primary, "provider_id", "primary"),
+                fallback_exc,
+            )
+            raise exc from fallback_exc
         if not self._using_fallback:
             logger.warning(
                 "ASR provider %s failed; falling back to %s: %s",
                 getattr(self.primary, "provider_id", "primary"),
-                getattr(self._ensure_fallback(), "provider_id", "fallback"),
+                getattr(fallback, "provider_id", "fallback"),
                 exc,
             )
         self._using_fallback = True
-        fallback = self._ensure_fallback()
         if progress_callback is not None:
             progress_callback(
                 {
@@ -164,6 +172,15 @@ class FallbackASR(ASRProvider):
                 self.primary.load(progress_callback=progress_callback)
             except _FALLBACK_ERRORS as exc:
                 self._activate_fallback(exc, progress_callback)
+
+    def prewarm(self) -> bool:
+        """Warm only the primary provider and keep the fallback lazy."""
+
+        with self._lock:
+            if self._closed:
+                return False
+            primary = self.primary
+        return bool(primary.prewarm())
 
     def transcribe(
         self,

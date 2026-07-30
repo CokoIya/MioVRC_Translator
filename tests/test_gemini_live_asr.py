@@ -190,3 +190,39 @@ def test_explicit_load_prewarms_live_session_for_first_utterance(monkeypatch):
     assert _FakeClient.live_connect_count == 1
 
     provider.close()
+
+
+def test_generic_prewarm_initializes_runtime_without_opening_live_session(monkeypatch):
+    _install_fake_genai(monkeypatch)
+    provider = GeminiLiveASRProvider(
+        {"asr": {"gemini_live": {"api_key": "test-key", "use_live_api": True}}}
+    )
+
+    assert provider.prewarm() is True
+    assert provider.is_loaded is True
+    assert _FakeClient.last_init_kwargs == {"api_key": "test-key"}
+    assert _FakeClient.live_connect_count == 0
+    assert provider._prewarm_thread is None
+
+
+def test_explicit_load_after_generic_prewarm_prepares_live_session(monkeypatch):
+    _install_fake_genai(monkeypatch)
+    provider = GeminiLiveASRProvider(
+        {"asr": {"gemini_live": {"api_key": "test-key", "use_live_api": True}}}
+    )
+    opened: list[bool] = []
+
+    monkeypatch.setattr(
+        provider,
+        "_start_live_prewarm",
+        lambda runner: opened.append(runner is provider._async_runner),
+    )
+
+    assert provider.prewarm() is True
+    assert opened == []
+
+    provider.load()
+
+    assert opened == [True]
+
+    provider.close()

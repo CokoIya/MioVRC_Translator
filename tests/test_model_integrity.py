@@ -167,10 +167,8 @@ def test_sensevoice_disables_remote_code_before_automodel(monkeypatch, tmp_path)
         "_load_runtime_symbols",
         lambda: (fake_auto_model, lambda text: text),
     )
-    monkeypatch.setattr(sensevoice_asr, "model_exists", lambda _spec: True)
-    monkeypatch.setattr(sensevoice_asr, "resolve_model_path", lambda _spec: str(tmp_path))
     monkeypatch.setattr(
-        sensevoice_asr, "verify_model_integrity", lambda _path, _spec: True
+        sensevoice_asr, "existing_model_path", lambda _spec: tmp_path
     )
 
     sensevoice_asr.SenseVoiceASR().load()

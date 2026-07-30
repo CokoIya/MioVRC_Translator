@@ -1,5 +1,6 @@
 import os
 import subprocess
+import threading
 
 import pytest
 
@@ -11,9 +12,13 @@ from src.utils import app_paths
 def _reset_migration_state():
     app_paths._MIGRATED_DESTINATIONS.clear()
     app_paths._MIGRATION_ATTEMPTED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_MIGRATED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_ATTEMPTED_DESTINATIONS.clear()
     yield
     app_paths._MIGRATED_DESTINATIONS.clear()
     app_paths._MIGRATION_ATTEMPTED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_MIGRATED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_ATTEMPTED_DESTINATIONS.clear()
 
 
 def _configure_default(monkeypatch, tmp_path):
@@ -58,7 +63,8 @@ def test_writable_app_dir_defaults_to_per_user_local_app_data(monkeypatch, tmp_p
 
     assert app_paths.writable_app_dir() == destination
     assert destination.is_dir()
-    assert (destination / app_paths._MIGRATION_MARKER_NAME).is_file()
+    assert (destination / app_paths._MIGRATION_FILES_MARKER_NAME).is_file()
+    assert not (destination / app_paths._MIGRATION_MARKER_NAME).exists()
 
 
 def test_runtime_hook_uses_identical_per_user_default(monkeypatch, tmp_path):
@@ -67,6 +73,18 @@ def test_runtime_hook_uses_identical_per_user_default(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
 
     assert pyi_rth_bundle_paths._writable_app_dir() == local_app_data / "Mio RealTime Translator"
+
+
+def test_runtime_hook_loads_distlib_only_for_cuda_pip_commands(monkeypatch):
+    monkeypatch.setattr(pyi_rth_bundle_paths.sys, "argv", ["MioTranslator.exe"])
+    assert pyi_rth_bundle_paths._needs_distlib_finder() is False
+
+    monkeypatch.setattr(
+        pyi_rth_bundle_paths.sys,
+        "argv",
+        ["MioTranslator.exe", "--mio-install-cuda-pytorch"],
+    )
+    assert pyi_rth_bundle_paths._needs_distlib_finder() is True
 
 
 def test_runtime_hook_activates_only_real_cuda_directory_chains(monkeypatch, tmp_path):
@@ -143,7 +161,7 @@ def test_writable_app_dir_honors_override_and_skips_migration(monkeypatch, tmp_p
     override_root = tmp_path / "override"
     migrations = []
     monkeypatch.setenv("MIO_TRANSLATOR_HOME", str(override_root))
-    monkeypatch.setattr(app_paths, "_migrate_legacy_data", migrations.append)
+    monkeypatch.setattr(app_paths, "_migrate_legacy_files", migrations.append)
 
     assert app_paths.writable_app_dir() == override_root
     assert migrations == []
@@ -167,6 +185,10 @@ def test_legacy_migration_merges_allowlisted_data_without_overwrite(monkeypatch,
 
     assert (destination / "config.json").read_text(encoding="utf-8") == "current-config"
     assert (destination / "seren.json").read_text(encoding="utf-8") == "legacy-seren"
+    assert not (destination / "dictionaries" / "nested" / "new.txt").exists()
+
+    app_paths.run_deferred_legacy_data_migration()
+
     assert (destination / "dictionaries" / "existing.txt").read_text(encoding="utf-8") == "current"
     assert (destination / "dictionaries" / "nested" / "new.txt").read_text(encoding="utf-8") == "new"
     assert not (destination / "not-allowlisted.txt").exists()
@@ -178,7 +200,8 @@ def test_migration_done_marker_makes_migration_idempotent(monkeypatch, tmp_path)
 
     app_paths.writable_app_dir()
     (legacy / "catalog_cache.json").write_text("late", encoding="utf-8")
-    app_paths._MIGRATED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_MIGRATED_DESTINATIONS.clear()
+    app_paths._MIGRATION_FILES_ATTEMPTED_DESTINATIONS.clear()
     app_paths.writable_app_dir()
 
     assert (destination / "seren.json").read_text(encoding="utf-8") == "first"
@@ -201,9 +224,152 @@ def test_incomplete_migration_is_not_retried_on_every_path_lookup(
 
     assert app_paths.writable_app_dir() == destination
     assert app_paths.writable_app_dir() == destination
+    assert attempts == []
+
+    app_paths.run_deferred_legacy_data_migration()
+    app_paths.run_deferred_legacy_data_migration()
 
     assert len(attempts) == len(app_paths._MIGRATION_DIRS)
     assert not (destination / app_paths._MIGRATION_MARKER_NAME).exists()
+
+
+def test_writable_lookup_does_not_wait_for_deferred_migration_lock(
+    monkeypatch,
+    tmp_path,
+):
+    destination, _legacy = _configure_default(monkeypatch, tmp_path)
+    finished = threading.Event()
+    result: list[object] = []
+
+    app_paths._MIGRATION_LOCK.acquire()
+    try:
+        worker = threading.Thread(
+            target=lambda: (result.append(app_paths.writable_app_dir()), finished.set()),
+            daemon=True,
+        )
+        worker.start()
+        assert finished.wait(timeout=0.5)
+    finally:
+        app_paths._MIGRATION_LOCK.release()
+    worker.join(timeout=1.0)
+
+    assert result == [destination]
+
+
+def test_migration_copy_failure_never_exposes_partial_destination(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "legacy" / "runtime.bin"
+    destination = tmp_path / "current" / "runtime.bin"
+    source.parent.mkdir()
+    source.write_bytes(b"complete legacy payload")
+
+    def fail_atomic_copy(*_args, **_kwargs):
+        raise OSError("simulated interrupted copy")
+
+    monkeypatch.setattr(app_paths, "atomic_copy_secure_file", fail_atomic_copy)
+
+    assert app_paths._secure_copy_missing_file(source, destination) is False
+    assert not destination.exists()
+
+
+def test_migration_copy_never_overwrites_destination_created_during_publish(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "legacy" / "config.json"
+    destination = tmp_path / "current" / "config.json"
+    source.parent.mkdir()
+    destination.parent.mkdir()
+    source.write_bytes(b"legacy-data")
+    real_publish = app_paths._publish_staged_no_replace
+
+    def create_competing_destination_then_publish(staged, candidate):
+        destination.write_bytes(b"new-user-data")
+        return real_publish(staged, candidate)
+
+    monkeypatch.setattr(
+        app_paths,
+        "_publish_staged_no_replace",
+        create_competing_destination_then_publish,
+    )
+
+    assert app_paths._secure_copy_missing_file(source, destination) is True
+    assert destination.read_bytes() == b"new-user-data"
+
+
+def test_migration_removes_abandoned_atomic_copy_staging_file(tmp_path):
+    source = tmp_path / "legacy" / "config.json"
+    destination = tmp_path / "current" / "config.json"
+    source.parent.mkdir()
+    destination.parent.mkdir()
+    source.write_bytes(b"legacy-data")
+    stale = destination.parent / f".{destination.name}.abandoned.copy.tmp"
+    stale.write_bytes(b"partial-data")
+    stale_time = (
+        app_paths.time.time()
+        - app_paths._UNOWNED_COPY_TEMP_STALE_S
+        - 60.0
+    )
+    os.utime(stale, (stale_time, stale_time))
+
+    assert app_paths._secure_copy_missing_file(source, destination) is True
+    assert destination.read_bytes() == b"legacy-data"
+    assert not stale.exists()
+
+
+def test_migration_preserves_atomic_copy_staging_owned_by_live_process(
+    monkeypatch,
+    tmp_path,
+):
+    destination = tmp_path / "current" / "config.json"
+    destination.parent.mkdir()
+    active = destination.parent / f".{destination.name}.4242.active.copy.tmp"
+    active.write_bytes(b"in-progress")
+    monkeypatch.setattr(app_paths, "_process_is_running", lambda pid: pid == 4242)
+
+    app_paths._cleanup_stale_copy_temps(destination)
+
+    assert active.read_bytes() == b"in-progress"
+
+
+def test_migration_recovers_two_link_publish_left_by_crashed_process(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "legacy" / "config.json"
+    destination = tmp_path / "current" / "config.json"
+    source.parent.mkdir()
+    destination.parent.mkdir()
+    source.write_bytes(b"legacy-data")
+    stale = destination.parent / f".{destination.name}.4242.crashed.copy.tmp"
+    stale.write_bytes(b"published-data")
+    try:
+        os.link(stale, destination)
+    except (OSError, NotImplementedError):
+        pytest.skip("hard links are unavailable")
+    monkeypatch.setattr(app_paths, "_process_is_running", lambda _pid: False)
+
+    assert app_paths._secure_copy_missing_file(source, destination) is True
+
+    assert not stale.exists()
+    assert destination.read_bytes() == b"published-data"
+    assert destination.stat().st_nlink == 1
+
+
+def test_launch_critical_migration_skips_oversized_legacy_config(
+    monkeypatch,
+    tmp_path,
+):
+    destination, legacy = _configure_default(monkeypatch, tmp_path)
+    limit = app_paths._MIGRATION_FILE_MAX_BYTES["config.json"]
+    (legacy / "config.json").write_bytes(b"x" * (limit + 1))
+
+    assert app_paths.writable_app_dir() == destination
+
+    assert not (destination / "config.json").exists()
+    assert (destination / app_paths._MIGRATION_FILES_MARKER_NAME).is_file()
 
 
 def test_migration_skips_disposable_bytecode_cache_trees(monkeypatch, tmp_path):
@@ -218,6 +384,7 @@ def test_migration_skips_disposable_bytecode_cache_trees(monkeypatch, tmp_path):
     (cache_root / "kept" / "ignored.pyo").write_bytes(b"bytecode")
 
     assert app_paths.writable_app_dir() == destination
+    app_paths.run_deferred_legacy_data_migration()
 
     migrated_cache = destination / "runtime_cache"
     assert (migrated_cache / "kept" / "runtime.bin").read_bytes() == b"runtime"
@@ -240,6 +407,7 @@ def test_migration_never_follows_source_symlinks(monkeypatch, tmp_path):
         pytest.skip("symlink creation is unavailable")
 
     app_paths.writable_app_dir()
+    app_paths.run_deferred_legacy_data_migration()
 
     assert not (destination / "config.json").exists()
     assert not (destination / "dictionaries" / "secret.txt").exists()
@@ -275,6 +443,7 @@ def test_migration_does_not_traverse_destination_symlink(monkeypatch, tmp_path):
         pytest.skip("symlink creation is unavailable")
 
     app_paths.writable_app_dir()
+    app_paths.run_deferred_legacy_data_migration()
 
     assert not (outside / "new.txt").exists()
     assert not (destination / app_paths._MIGRATION_MARKER_NAME).exists()

@@ -1155,7 +1155,7 @@ def _download_pinned_sensevoice_to(
         raise RuntimeError("SenseVoice trusted hashes do not cover every required file")
 
     target_dir = _prepare_secure_target_directory(target_dir)
-    modelscope_cache = _prepare_secure_directory(cache_dir())
+    modelscope_cache: pathlib.Path | None = None
     tracker = _AggregateDownloadProgress(None, progress_callback)
     _emit_progress(
         progress_callback,
@@ -1178,6 +1178,28 @@ def _download_pinned_sensevoice_to(
         last_error: Exception | None = None
         for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
             try:
+                _download_verified_http_file(
+                    spec,
+                    filename,
+                    target_path=target_path,
+                    root=target_dir,
+                    expected_sha256=expected_sha256,
+                    tracker=tracker,
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Pinned HTTPS download failed for %s (attempt %d/%d)",
+                    filename,
+                    attempt,
+                    _DOWNLOAD_ATTEMPTS,
+                    exc_info=True,
+                )
+            try:
+                if modelscope_cache is None:
+                    modelscope_cache = _prepare_secure_directory(cache_dir())
                 _download_verified_modelscope_file(
                     spec,
                     filename,
@@ -1192,27 +1214,7 @@ def _download_pinned_sensevoice_to(
             except Exception as exc:
                 last_error = exc
                 logger.warning(
-                    "Pinned ModelScope download failed for %s (attempt %d/%d)",
-                    filename,
-                    attempt,
-                    _DOWNLOAD_ATTEMPTS,
-                    exc_info=True,
-                )
-            try:
-                _download_verified_http_file(
-                    spec,
-                    filename,
-                    target_path=target_path,
-                    root=target_dir,
-                    expected_sha256=expected_sha256,
-                    tracker=tracker,
-                )
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-                logger.warning(
-                    "Pinned HTTPS fallback failed for %s (attempt %d/%d)",
+                    "Pinned ModelScope fallback failed for %s (attempt %d/%d)",
                     filename,
                     attempt,
                     _DOWNLOAD_ATTEMPTS,
@@ -1389,10 +1391,11 @@ def download_model(
     spec: ASRRuntimeSpec,
     *,
     force: bool = False,
+    known_missing: bool = False,
     model_revision: str | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> pathlib.Path:
-    if not force:
+    if not force and not known_missing:
         existing = existing_model_path(spec)
         if existing is not None:
             return existing

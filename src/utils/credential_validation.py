@@ -10,7 +10,6 @@ from src.asr.model_registry import (
 from src.tts.api_tts_config import TTS_API_ENGINE_IDS
 from src.translators.asr_rewriter import asr_rewrite_enabled
 from src.utils.i18n import tr
-from src.utils.provider_network import should_bypass_environment_proxies
 from src.utils.ui_config import (
     DEFAULT_ASR_ENGINE,
     backend_api_key_is_required,
@@ -18,6 +17,16 @@ from src.utils.ui_config import (
     normalize_backend,
     normalize_output_format,
 )
+
+
+def should_bypass_environment_proxies(url: object) -> bool:
+    """Load provider networking only when credential validation needs it."""
+
+    from src.utils.provider_network import (
+        should_bypass_environment_proxies as _should_bypass,
+    )
+
+    return _should_bypass(url)
 
 
 @dataclass(frozen=True)

@@ -3,27 +3,15 @@ from __future__ import annotations
 import os
 import stat
 import sys
+import time
 from importlib.machinery import ModuleSpec
 from pathlib import Path
+
+_RUNTIME_HOOK_STARTED_AT = time.perf_counter()
 
 
 _STDIO_SINKS = []
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
-_STALE_CUDA_DLL_PATTERNS = (
-    "torch_cuda*.dll",
-    "c10_cuda*.dll",
-    "caffe2_nvrtc*.dll",
-    "cudart*.dll",
-    "cublas*.dll",
-    "cublasLt*.dll",
-    "cudnn*.dll",
-    "cufft*.dll",
-    "curand*.dll",
-    "cusolver*.dll",
-    "cusparse*.dll",
-    "nvrtc*.dll",
-    "nvToolsExt*.dll",
-)
 
 
 def _ensure_stdio_streams() -> None:
@@ -36,21 +24,6 @@ def _ensure_stdio_streams() -> None:
         sink = open(os.devnull, "w", encoding="utf-8")
         _STDIO_SINKS.append(sink)
         setattr(sys, attr, sink)
-
-
-def _remove_stale_cuda_dlls(bundle_root: Path) -> None:
-    torch_lib = bundle_root / "torch" / "lib"
-    if not torch_lib.is_dir():
-        return
-
-    for pattern in _STALE_CUDA_DLL_PATTERNS:
-        for candidate in torch_lib.glob(pattern):
-            if not candidate.is_file():
-                continue
-            try:
-                candidate.unlink()
-            except OSError:
-                pass
 
 
 def _add_runtime_dir(path: Path) -> None:
@@ -159,9 +132,17 @@ def _register_distlib_finder() -> None:
     distlib_resources._finder_registry[pyimod02_importers.PyiFrozenLoader] = distlib_resources.ResourceFinder
 
 
+def _needs_distlib_finder() -> bool:
+    return any(
+        argument in {"--mio-cuda-pip-check", "--mio-install-cuda-pytorch"}
+        for argument in sys.argv[1:]
+    )
+
+
 if getattr(sys, "frozen", False):
     _ensure_stdio_streams()
-    _register_distlib_finder()
+    if _needs_distlib_finder():
+        _register_distlib_finder()
 
     # Load only Mio's managed CUDA runtime. Importing a torch package from an
     # arbitrary system Python/Conda installation makes frozen behavior depend
@@ -169,7 +150,9 @@ if getattr(sys, "frozen", False):
     _activate_external_cuda_runtime()
 
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
-    _remove_stale_cuda_dlls(bundle_root)
+    # CUDA DLLs that belong to the optional managed runtime are removed from
+    # the CPU application bundle by tools/pyinstaller_runtime_filter.py.  Do
+    # not rescan and mutate torch/lib on every process launch.
     for candidate in (
         bundle_root,
         bundle_root / "torch" / "lib",
@@ -180,3 +163,7 @@ if getattr(sys, "frozen", False):
     _g2p_en_mod = sys.modules.get("g2p_en")
     if _g2p_en_mod is not None:
         _ensure_module_spec("g2p_en", _g2p_en_mod)
+
+    os.environ["MIO_TRANSLATOR_RUNTIME_HOOK_MS"] = (
+        f"{(time.perf_counter() - _RUNTIME_HOOK_STARTED_AT) * 1000.0:.3f}"
+    )

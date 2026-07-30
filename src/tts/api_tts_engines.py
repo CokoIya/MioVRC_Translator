@@ -35,6 +35,7 @@ from src.utils.provider_network import (
     should_bypass_environment_proxies,
 )
 from src.utils.provider_diagnostics import safe_exception_summary
+from src.utils.provider_warmup import warmup_requests_session
 from src.utils.qwen_endpoints import (
     QWEN_TOKYO_DASHSCOPE_PATH,
     require_qwen_tokyo_workspace_base_url,
@@ -420,7 +421,36 @@ class _APITTSBase(BaseTTS):
     def prewarm(self, voice: str = "") -> None:
         del voice
         self._check_request_active(require_request=False)
-        self._session_pool.get()
+        if not self.is_available():
+            return
+        try:
+            headers = self._auth_headers()
+            result = warmup_requests_session(
+                self._session_pool.get(),
+                self._prewarm_url(),
+                method="HEAD",
+                headers=headers,
+                timeout_s=min(self.connect_timeout_seconds, 3.0),
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s prewarm failed (error_type=%s)",
+                self.ENGINE_LABEL,
+                exc.__class__.__name__,
+            )
+            return
+        logger.log(
+            logging.INFO if result.succeeded else logging.WARNING,
+            "%s prewarm %s (status=%s elapsed_ms=%.0f error_type=%s)",
+            self.ENGINE_LABEL,
+            "finished" if result.succeeded else "failed",
+            result.status_code if result.status_code is not None else "unknown",
+            result.elapsed_s * 1000.0,
+            result.error_type or "none",
+        )
+
+    def _prewarm_url(self) -> str:
+        return self.base_url
 
     def consume_last_synthesis_diagnostics(self) -> Mapping[str, object]:
         diagnostics = getattr(self._diagnostics_local, "last", None)
@@ -1116,6 +1146,9 @@ class MimoTTS(_APITTSBase):
     AUTH_HEADER_NAME = "api-key"
     AUTH_HEADER_PREFIX = ""
 
+    def _prewarm_url(self) -> str:
+        return f"{self.base_url}/chat/completions"
+
     def synthesize(
         self,
         text: str,
@@ -1155,6 +1188,12 @@ class MimoTTS(_APITTSBase):
 class QwenTTS(_APITTSBase):
     ENGINE_ID = "qwen_tts"
     ENGINE_LABEL = "Qwen TTS"
+
+    def _prewarm_url(self) -> str:
+        return (
+            f"{self.base_url}/services/aigc/"
+            "multimodal-generation/generation"
+        )
 
     def _with_transient_transport_retry(
         self,
