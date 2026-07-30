@@ -7,7 +7,7 @@ disk or included in command output.
 Usage::
 
     python tools/release/generate_release_checksums.py \
-        dist/MioTranslator-Setup-v1.3.8.9.exe \
+        dist/MioTranslator-Setup-v1.3.9.exe \
         mio_update.json \
         docs/installer_manifest.json \
         docs/release_signing_keys.json

@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_RELEASE_VERSION = "1.3.8.9"
+EXPECTED_RELEASE_VERSION = "1.3.9"
+EXPECTED_WINDOWS_NUMERIC_VERSION = "1.3.9.0"
 
 
 def _read(relative_path: str) -> str:
@@ -52,12 +53,12 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
             installer,
             label="Inno AppNumericVersion",
         ).group(1)
-        == app_version
+        == EXPECTED_WINDOWS_NUMERIC_VERSION
     )
 
     resource = _read("windows_version_info.txt")
-    assert _resource_tuple_version(resource, "filevers") == app_version
-    assert _resource_tuple_version(resource, "prodvers") == app_version
+    assert _resource_tuple_version(resource, "filevers") == EXPECTED_WINDOWS_NUMERIC_VERSION
+    assert _resource_tuple_version(resource, "prodvers") == EXPECTED_WINDOWS_NUMERIC_VERSION
     for field in ("FileVersion", "ProductVersion"):
         assert (
             _required_match(
@@ -99,7 +100,7 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
         assert version_token in page
         assert "v1.3.8.5" in page
         assert all(token not in page for token in hidden_verification_tokens)
-        for previous_patch in range(6):
+        for previous_patch in range(10):
             previous_version = f"v1.3.8.{previous_patch}"
             assert f"MioTranslator-Setup-{previous_version}.exe" not in page
             assert f"/releases/download/{previous_version}/" not in page

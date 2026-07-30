@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "active_release": "v1.3.8.9",
+  "active_release": "v1.3.9",
   "active_manifest_key_id": "mio-update-ed25519-v2",
   "active_installer_key_id": "mio-installer-ed25519-v2",
   "keys": [

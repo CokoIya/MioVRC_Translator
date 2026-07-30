@@ -1,24 +1,24 @@
 {
-  "version": "v1.3.8.9",
-  "installer_name": "MioTranslator-Setup-v1.3.8.9.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.9/MioTranslator-Setup-v1.3.8.9.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.8.9/MioTranslator-Setup-v1.3.8.9.exe",
-  "size_bytes": 464577018,
-  "sha256": "cba178e294dd52037b4a294684bc833c11bdade5ce166ea7e071e8d965a3e205",
+  "version": "v1.3.9",
+  "installer_name": "MioTranslator-Setup-v1.3.9.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9/MioTranslator-Setup-v1.3.9.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9/MioTranslator-Setup-v1.3.9.exe",
+  "size_bytes": 464713799,
+  "sha256": "df68adb7791af1d650db45dbe9394ce7ac82d6f41d6e8b9c77eaa09ee7a8af32",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "198604ef6a17da566d0958f285401b66ddd973ea97d92f732bb6de36ce6780d0bccfb8f0f67b9e62a58f3cdd609eed153ed8a84f03653586d5c70ba444c2f704",
-  "notes": "v1.3.8.9 adds Qwen Japan workspace endpoint support, improves international defaults, fixes legitimate regional Qwen audio downloads, and improves keyless local endpoints.",
+  "installer_signature": "17d8842acadeb7593b33ca09779f430dbf91b4ac44891d25e66d843546caf8109eac4401d12a1e6611213a7daf10161d33d41529bece8be65f2629ddf8165309",
+  "notes": "v1.3.9 significantly improves startup responsiveness, moves nonessential device and maintenance work to the background, and safely prepares online translation, ASR, and TTS connections to reduce first-use delay.",
   "notes_i18n": {
-    "zh-CN": "v1.3.8.9 新增 Qwen 日本区域工作空间端点支持并改进国际服务默认设置，修复合法区域的 Qwen 音频下载，并改进无需密钥的本地端点。",
-    "en": "v1.3.8.9 adds Qwen Japan workspace endpoint support, improves international defaults, fixes legitimate regional Qwen audio downloads, and improves keyless local endpoints.",
-    "ja": "v1.3.8.9 では、Qwen 日本リージョンのワークスペースエンドポイントに対応し、国際サービスの既定値を改善しました。正規のリージョン別 Qwen 音声ダウンロードと、API キー不要のローカルエンドポイントも改善しています。",
-    "ru": "v1.3.8.9 добавляет поддержку адресов рабочих областей Qwen в регионе Япония, улучшает международные настройки по умолчанию, исправляет допустимые региональные загрузки аудио и улучшает локальные адреса без обязательного API-ключа.",
-    "ko": "v1.3.8.9은 Qwen 일본 리전 워크스페이스 엔드포인트 지원을 추가하고 국제 서비스 기본값을 개선하며, 정상적인 지역별 Qwen 오디오 다운로드와 API 키가 필요 없는 로컬 엔드포인트를 개선합니다."
+    "zh-CN": "v1.3.9 显著提升启动响应速度，将非必要的设备扫描和维护任务移至后台，并安全预热在线翻译、ASR 与 TTS 连接，减少首次使用延迟。",
+    "en": "v1.3.9 significantly improves startup responsiveness, moves nonessential device and maintenance work to the background, and safely prepares online translation, ASR, and TTS connections to reduce first-use delay.",
+    "ja": "v1.3.9 では起動時の応答性を大幅に改善し、不要不急のデバイス検索とメンテナンスをバックグラウンドへ移し、オンライン翻訳・ASR・TTS の接続を安全に事前準備して初回利用時の待ち時間を短縮しました。",
+    "ru": "v1.3.9 значительно ускоряет запуск, переносит необязательный поиск устройств и обслуживание в фоновый режим и безопасно подготавливает соединения онлайн-перевода, ASR и TTS, сокращая задержку при первом использовании.",
+    "ko": "v1.3.9은 시작 응답성을 크게 개선하고, 필수적이지 않은 장치 검색과 유지 관리 작업을 백그라운드로 옮기며, 온라인 번역·ASR·TTS 연결을 안전하게 미리 준비해 첫 사용 지연을 줄입니다."
   },
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-24T12:38:44+09:00",
+  "published_at": "2026-07-30T20:36:01+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "6750761a57851c6f5307194c568d56972894d11628546891af8d8f1b26917ee99ddb99279ed4a290a0783e39db5ab3ea865078a1786a1bcbcf5c626ea372b009"
+  "signature": "ec4f5c0ff1853f39f01099c6df5b6c1a6c6900f41378757454ca7e166e9670810b737a7632cc43c0e2c8ca8a28eed85af2b3cb551f4737b49b938f0a187c8c04"
 }

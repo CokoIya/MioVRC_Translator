@@ -786,6 +786,14 @@ class TestVersionComparison(unittest.TestCase):
         """Same version should not be newer."""
         self.assertFalse(_is_newer("1.2.3", "1.2.3"))
 
+    def test_three_component_release_supersedes_four_component_previous_release(self):
+        self.assertTrue(_is_newer("1.3.9", "1.3.8.9"))
+        self.assertFalse(_is_newer("1.3.8.9", "1.3.9"))
+
+    def test_trailing_zero_component_is_equivalent(self):
+        self.assertFalse(_is_newer("1.3.9", "1.3.9.0"))
+        self.assertFalse(_is_newer("1.3.9.0", "1.3.9"))
+
     def test_is_newer_stable_vs_beta(self):
         """Stable should be newer than beta of same release."""
         self.assertTrue(_is_newer("1.2.3", "1.2.3-beta1"))

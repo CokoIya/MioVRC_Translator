@@ -2,6 +2,14 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.9] - 2026-07-30
+
+### Startup and first-use performance
+
+- Improved startup responsiveness by moving nonessential catalog, device, migration, cleanup, and background-image work out of the launch-critical path.
+- Added safe background connection preparation for online translation, ASR, and TTS providers to reduce the delay before the first request without triggering inference or local-model downloads.
+- Improved local ASR model loading and download integrity, provider reuse, and shutdown cleanup.
+
 ## [1.3.8.9] - 2026-07-24
 
 ### Qwen regions and local AI
