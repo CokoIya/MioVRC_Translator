@@ -11,6 +11,7 @@ from .base import BaseTranslator, TranslationContextStore
 from .deepl_translator import DeepLTranslator
 from .google_web_translator import GoogleWebTranslator
 from .libretranslate_translator import LibreTranslateTranslator
+from .microsoft_edge_translator import MicrosoftEdgeTranslator
 from .mymemory_translator import MyMemoryTranslator
 from .openai_translator import OpenAITranslator
 from src.utils.config_manager import is_protected_secret_blob
@@ -584,6 +585,25 @@ def _create_translator_for_backend(
             ),
         )
 
+    if backend == "microsoft_edge_web":
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        return MicrosoftEdgeTranslator(
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=_float_setting(
+                backend_cfg.get("timeout_s"),
+                spec.get("timeout_s", 8.0),
+                minimum=2.0,
+                maximum=60.0,
+            ),
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 1),
+                minimum=0,
+                maximum=3,
+            ),
+        )
+
     if backend == "mymemory":
         spec = get_backend_spec(backend)
         backend_cfg = _backend_cfg(trans_cfg, backend)
@@ -622,6 +642,7 @@ def _create_translator_for_backend(
             f"{get_backend_label(backend)} Model",
             max_chars=512,
         )
+
         timeout_s = _float_setting(
             backend_cfg.get("timeout_s"),
             spec.get("timeout_s", 15.0),

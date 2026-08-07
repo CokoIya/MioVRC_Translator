@@ -827,7 +827,7 @@ def test_background_warmup_skips_missing_credentials_without_prompt(monkeypatch)
     assert MainWindow._start_tts_background_prewarm(window) is False
 
 
-def test_realtime_translation_prewarm_runs_on_retained_worker_thread():
+def test_realtime_translation_worker_start_never_runs_network_prewarm():
     window = MainWindow.__new__(MainWindow)
     config = {
         "ui": {"language": "en"},
@@ -840,6 +840,9 @@ def test_realtime_translation_prewarm_runs_on_retained_worker_thread():
     window._config = config
     window._ui_lang = "en"
     window._realtime_config_snapshot = _freeze_snapshot_value(config)
+    window._translation_prewarm_lock = threading.RLock()
+    window._translation_prewarm_signature = None
+    window._prewarmed_realtime_translators = {MIC_SOURCE: [], "desktop": []}
     calls: list[tuple[str, int]] = []
 
     class Translator:
@@ -857,7 +860,6 @@ def test_realtime_translation_prewarm_runs_on_retained_worker_thread():
     result: list[object] = []
 
     def run():
-        calls.append(("factory", threading.get_ident()))
         result.append(
             MainWindow._create_realtime_translation_worker_state(window, 0)
         )
@@ -867,9 +869,63 @@ def test_realtime_translation_prewarm_runs_on_retained_worker_thread():
     thread.join(timeout=2.0)
 
     assert not thread.is_alive()
-    assert result[0].translator is translator
+    assert result[0].translator is None
     assert result[0].runtime_signature
-    assert calls[0][1] == calls[1][1] == thread.ident
+    assert calls == []
+
+
+def test_background_translation_clients_are_retained_and_consumed_without_rewarm():
+    window = MainWindow.__new__(MainWindow)
+    config = {
+        "ui": {"language": "en"},
+        "translation": {
+            "backend": "google_web",
+            "output_format": "translated_only",
+        },
+        "vrc_listen": {"enabled": False},
+    }
+    window._config = config
+    window._ui_lang = "en"
+    window._destroying = False
+    window._realtime_config_snapshot = _freeze_snapshot_value(config)
+    window._translation_prewarm_lock = threading.RLock()
+    window._translation_prewarm_cancel_event = threading.Event()
+    window._translation_prewarm_thread = None
+    window._translation_prewarm_signature = None
+    window._prewarmed_realtime_translators = {MIC_SOURCE: [], "desktop": []}
+    window._realtime_translation_worker_concurrency = lambda: 2
+    created = []
+    prewarm_calls = []
+
+    class Translator:
+        def prewarm(self):
+            prewarm_calls.append(threading.current_thread().name)
+            return True
+
+        def close(self):
+            return None
+
+    def create(_config, *, source=MIC_SOURCE):
+        assert source == MIC_SOURCE
+        translator = Translator()
+        created.append(translator)
+        return translator
+
+    window._create_realtime_translator = create
+
+    assert MainWindow._start_translation_background_prewarm(window) is True
+    coordinator = window._translation_prewarm_thread
+    coordinator.join(timeout=2.0)
+
+    assert not coordinator.is_alive()
+    assert len(created) == 2
+    assert len(prewarm_calls) == 2
+    state = MainWindow._create_realtime_translation_worker_state(window, 0)
+    assert state.translator in created
+    assert len(prewarm_calls) == 2
+    assert len(window._prewarmed_realtime_translators[MIC_SOURCE]) == 1
+    state.close()
+    MainWindow._cancel_translation_background_prewarm(window)
 
 
 def test_online_tts_background_manager_is_retained_for_first_use(monkeypatch):

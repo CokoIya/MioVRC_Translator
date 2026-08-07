@@ -324,6 +324,53 @@ def test_anthropic_never_returns_a_second_conversational_reply(
         translator.close()
 
 
+@pytest.mark.parametrize("provider", tuple(_OPENAI_PROVIDER_CONFIGS))
+def test_openai_family_retries_rhetorical_reply_as_same_speaker_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+):
+    expected = "难道就没有傲娇一点的吗？"
+    translator, calls = _install_openai_provider(
+        monkeypatch,
+        provider,
+        ["哼，谁说没有的？", f'{{"result":"{expected}"}}'],
+    )
+    try:
+        result = translator.rewrite_asr(
+            "没有傲娇吗？",
+            "anime_tsundere_classmate",
+            language_hint="zh",
+            context_source="manual",
+        )
+
+        assert result == expected
+        _assert_structured_retry(calls)
+    finally:
+        translator.close()
+
+
+def test_anthropic_retries_rhetorical_reply_as_same_speaker_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    expected = "难道就没有傲娇一点的吗？"
+    translator, calls = _install_anthropic_provider(
+        monkeypatch,
+        ["哼，谁说没有的？", f'{{"result":"{expected}"}}'],
+    )
+    try:
+        result = translator.rewrite_asr(
+            "没有傲娇吗？",
+            "anime_tsundere_classmate",
+            language_hint="zh",
+            context_source="manual",
+        )
+
+        assert result == expected
+        _assert_structured_retry(calls)
+    finally:
+        translator.close()
+
+
 @pytest.mark.parametrize(
     ("source", "candidate", "reason"),
     (
@@ -357,6 +404,11 @@ def test_anthropic_never_returns_a_second_conversational_reply(
             "我觉得这个主意很好。",
             "conversational_reply",
         ),
+        (
+            "没有傲娇吗？",
+            "哼，谁说没有的？",
+            "reactive_rhetorical_reply",
+        ),
     ),
 )
 def test_validator_rejects_non_transformational_output_shapes(
@@ -388,6 +440,15 @@ def test_validator_preserves_player_authored_reply_like_phrases(
         translator._validated_translation_output(candidate, source_text=source)
         == candidate
     )
+
+
+def test_validator_accepts_same_speaker_tsundere_question_replacement():
+    translator = _DummyTranslator()
+
+    assert translator._validated_asr_rewrite_output(
+        "难道就没有傲娇一点的吗？",
+        source_text="没有傲娇吗？",
+    ) == "难道就没有傲娇一点的吗？"
 
 
 def test_structured_retry_requires_exact_single_result_field():

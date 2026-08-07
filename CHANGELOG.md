@@ -2,6 +2,24 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.9.1] - 2026-08-07
+
+### Translation responsiveness
+
+- Added no-key Microsoft Edge Web translation and improved Google Web compatibility while clearly identifying both as public web services without an availability SLA.
+- Prepared manual and realtime translation clients in the background so startup and typed input do not wait for provider initialization.
+- Replaced synthetic Edge translation POST warm-ups with bounded transport-only probes after real-world logs showed concurrent probes delaying requests for more than 40 seconds.
+
+### Realtime and reverse translation
+
+- Added provider-aware translation concurrency and permanently reserved one worker plus one queue slot for reverse translation when desktop listening is enabled.
+- Kept local and low-power backends conservatively serialized while allowing cloud providers to use additional independent clients.
+
+### AI rewrite safety
+
+- Rebuilt transformation prompts and provider-independent output validation so rewrite modes transform only the supplied text and reject answers, explanations, or conversational continuations.
+- Added the optimistic, gentle honor-student Japanese high-school persona and expanded regression coverage for rewrite output safety.
+
 ## [1.3.9] - 2026-07-30
 
 ### Startup and first-use performance

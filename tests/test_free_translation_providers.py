@@ -106,6 +106,7 @@ def test_google_web_translator_gets_public_endpoint(monkeypatch):
     result = translator.translate("Hello", "auto", "fr")
 
     assert result == "Bonjour"
+    assert session.trust_env is True
     assert session.calls == [
         {
             "url": "https://translate.googleapis.com/translate_a/single",
@@ -114,6 +115,7 @@ def test_google_web_translator_gets_public_endpoint(monkeypatch):
                 "sl": "auto",
                 "tl": "fr",
                 "dt": "t",
+                "dj": "1",
                 "q": "Hello",
             },
             "timeout": 8.0,
@@ -266,7 +268,7 @@ def test_deepl_requires_api_key():
 
 
 def test_no_key_translation_backends_do_not_require_api_keys():
-    for backend in ("google_web", "mymemory"):
+    for backend in ("google_web", "microsoft_edge_web", "mymemory"):
         missing, label = missing_required_translation_api_key(
             {"translation": {"backend": backend, backend: {}}}
         )

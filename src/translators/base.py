@@ -34,6 +34,8 @@ _TRANSLATION_SYSTEM_PROMPT = (
 _STRUCTURED_RETRY_CONTRACT = (
     "The previous candidate was rejected by deterministic transformation-output validation. "
     "Retry the exact same current_input operation without answering or reacting to the player. "
+    "The result must be a replacement utterance spoken by the same original speaker in the same "
+    "turn, never a listener's next-turn reply, rebuttal, or rhetorical counter-question. "
     "For this internal retry only, return exactly one JSON object with exactly one key named "
     '"result" whose value is the transformed current_input string. Do not use markdown or code '
     "fences and do not add any other keys. The result string itself must contain only the rewritten "
@@ -114,6 +116,17 @@ _CONTEXT_COMMENTARY_RE = re.compile(
     r"前の会話|文脈から|先ほど(?:あなたが)?|あなたが(?:前に|先ほど)言った|"
     r"이전\s*(?:대화|문맥)|앞서\s*말한|당신이\s*말한|"
     r"исходя\s+из\s+(?:предыдущего|контекста)|как\s+вы\s+сказали|ранее\s+вы"
+    r")",
+    re.IGNORECASE,
+)
+_REACTIVE_RHETORICAL_REPLY_RE = re.compile(
+    r"(?:"
+    r"\bwho\s+(?:said|says|told\s+you)\b|"
+    r"\bwhat\s+makes\s+you\s+(?:think|say)\b|"
+    r"谁(?:说|告诉你)|哪有(?:这回事)?|才(?:不|没)(?:是|有)?|怎么可能|你才|"
+    r"誰が.*(?:言った|言って|言う)|そんなわけ(?:ない|がない)|"
+    r"누가.*(?:말했|그랬)|그럴\s*리가\s*없|"
+    r"кто\s+(?:сказал|говорит)|с\s+чего\s+ты\s+(?:взял|решил)"
     r")",
     re.IGNORECASE,
 )
@@ -1175,6 +1188,16 @@ class BaseTranslator(ABC):
         source_mentions_context = bool(_CONTEXT_COMMENTARY_RE.search(source))
         if not source_mentions_context and _CONTEXT_COMMENTARY_RE.search(normalized):
             raise TransformationOutputRejected("history_commentary")
+
+        source_has_reactive_rhetorical = bool(
+            _REACTIVE_RHETORICAL_REPLY_RE.search(source)
+        )
+        if (
+            source.rstrip().endswith(("?", "？"))
+            and not source_has_reactive_rhetorical
+            and _REACTIVE_RHETORICAL_REPLY_RE.search(normalized)
+        ):
+            raise TransformationOutputRejected("reactive_rhetorical_reply")
 
         if source.rstrip().endswith(("?", "？")) and not normalized.rstrip().endswith(
             ("?", "？")

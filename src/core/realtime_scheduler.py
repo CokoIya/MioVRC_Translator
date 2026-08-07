@@ -222,6 +222,7 @@ class RealtimeScheduler:
         translation_concurrency: int = 2,
         priority_source: str | None = None,
         priority_burst: int = 3,
+        reserve_priority_translation_capacity: bool = False,
         thread_name_prefix: str = "realtime",
         clock: Callable[[], float] = time.monotonic,
         stale_task_age_s: float = 30.0,
@@ -324,6 +325,11 @@ class RealtimeScheduler:
         self._translation_concurrency = int(translation_concurrency)
         self._priority_source = priority_source if priority_source in self._sources else None
         self._priority_burst = int(priority_burst)
+        self._reserve_priority_translation_capacity = bool(
+            reserve_priority_translation_capacity
+            and self._priority_source is not None
+            and self._translation_concurrency > 1
+        )
         self._thread_name_prefix = str(thread_name_prefix or "realtime")
         self._clock = clock
         self._stale_task_age_s = float(stale_task_age_s)
@@ -1505,7 +1511,10 @@ class RealtimeScheduler:
                 if (
                     self._priority_source is not None
                     and source != self._priority_source
-                    and self._translation_queues[self._priority_source]
+                    and (
+                        self._reserve_priority_translation_capacity
+                        or self._translation_queues[self._priority_source]
+                    )
                 ):
                     capacity -= self._translation_reserved_priority_slots
                 if pending < max(capacity, 1):
@@ -1830,12 +1839,18 @@ class RealtimeScheduler:
             for source, count in self._translation_running_by_source.items()
             if source != self._priority_source
         )
+        nonpriority_limit = self._translation_concurrency
         priority_waiting = bool(
             self._priority_source is not None
             and self._translation_queues[self._priority_source]
         )
-        nonpriority_limit = self._translation_concurrency
-        if priority_waiting and self._translation_concurrency > 1:
+        if (
+            self._translation_concurrency > 1
+            and (
+                self._reserve_priority_translation_capacity
+                or priority_waiting
+            )
+        ):
             nonpriority_limit -= 1
         dispatchable = [
             source

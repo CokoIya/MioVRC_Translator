@@ -1198,6 +1198,20 @@ class MainWindow(QMainWindow):
         self._prewarmed_asr_signature: str | None = None
         self._prewarmed_main_asr = None
         self._prewarmed_listen_asr = None
+        # Translation clients are prepared before a realtime session starts.
+        # Requests-based providers keep their warmed session associated with the
+        # preparation thread; the finished thread can safely hand that client to
+        # its eventual realtime worker through the provider's session pool.
+        self._translation_prewarm_lock = threading.RLock()
+        self._translation_prewarm_cancel_event = threading.Event()
+        self._translation_prewarm_thread: threading.Thread | None = None
+        self._translation_prewarm_threads: set[threading.Thread] = set()
+        self._translation_prewarm_cancel_events: set[threading.Event] = set()
+        self._translation_prewarm_signature: str | None = None
+        self._prewarmed_realtime_translators: dict[str, list[Any]] = {
+            MIC_SOURCE: [],
+            DESKTOP_SOURCE: [],
+        }
         self._tts_prewarm_lock = threading.RLock()
         self._tts_prewarm_cancel_event = threading.Event()
         self._tts_prewarm_thread: threading.Thread | None = None
@@ -1233,6 +1247,7 @@ class MainWindow(QMainWindow):
         self._output_dispatcher = OutputDispatcher(lambda: getattr(self, "_config", {}))
         self._mic_pipeline: MicPipeline | None = None
         self._listen_pipeline: ListenPipeline | None = None
+        self._translation_context_store = TranslationContextStore()
         self._manual_translation_controller: ManualTranslationController | None = None
         self._rewrite_coordinator = self._create_rewrite_coordinator()
         self._update_install_preparing = False
@@ -1545,6 +1560,12 @@ class MainWindow(QMainWindow):
                 logger.exception(
                     "Could not schedule manual translation provider prewarm"
                 )
+            try:
+                self._start_translation_background_prewarm()
+            except Exception:
+                logger.exception(
+                    "Could not schedule realtime translation provider prewarm"
+                )
 
         self._start_asr_background_prewarm()
         QTimer.singleShot(
@@ -1585,6 +1606,332 @@ class MainWindow(QMainWindow):
             output_needs_translation
             or rewrite_needs_translation
             or listen_needs_translation
+        )
+
+    def _translation_prewarm_lifecycle_lock(self) -> threading.RLock:
+        lock = self.__dict__.get("_translation_prewarm_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self._translation_prewarm_lock = lock
+        return lock
+
+    @staticmethod
+    def _close_translation_providers(*providers: Any, label: str) -> None:
+        closed: list[Any] = []
+        for provider in providers:
+            if provider is None or any(provider is item for item in closed):
+                continue
+            closed.append(provider)
+            _close_provider_quietly(provider, label=label)
+
+    def _translation_prewarm_sources(self, config: Mapping[str, Any]) -> tuple[str, ...]:
+        listen_cfg = config.get("vrc_listen", {})
+        listen_enabled = bool(
+            isinstance(listen_cfg, Mapping) and listen_cfg.get("enabled", False)
+        )
+        return (MIC_SOURCE, DESKTOP_SOURCE) if listen_enabled else (MIC_SOURCE,)
+
+    def _start_translation_background_prewarm(self) -> bool:
+        """Prepare selected realtime translation clients before listening starts.
+
+        The preparation is deliberately detached from ``RealtimeScheduler.start``.
+        A slow public endpoint therefore cannot leave the start button in a
+        network-dependent state; workers consume a completed client when one is
+        available and otherwise start with a cold client on their first request.
+        """
+
+        if self._destroying:
+            return False
+        config_snapshot = copy.deepcopy(self._config)
+        if (
+            not self._translation_background_warmup_enabled(config_snapshot)
+            or not self._realtime_translation_credentials_available(config_snapshot)
+        ):
+            return False
+        signature = provider_runtime_config_signature(config_snapshot)
+        try:
+            worker_count = max(1, min(self._realtime_translation_worker_concurrency(), 4))
+        except Exception:
+            worker_count = 2
+        sources = self._translation_prewarm_sources(config_snapshot)
+        lock = self._translation_prewarm_lifecycle_lock()
+        with lock:
+            existing = getattr(self, "_translation_prewarm_thread", None)
+            existing_signature = getattr(self, "_translation_prewarm_signature", None)
+            if (
+                existing_signature == signature
+                and existing is not None
+                and (existing.ident is None or existing.is_alive())
+            ):
+                return True
+            cancel_event = threading.Event()
+            previous_cancel = getattr(
+                self, "_translation_prewarm_cancel_event", None
+            )
+            if previous_cancel is not None:
+                previous_cancel.set()
+            for event in getattr(self, "_translation_prewarm_cancel_events", set()):
+                event.set()
+            existing_pools = getattr(
+                self,
+                "_prewarmed_realtime_translators",
+                {},
+            )
+            if not isinstance(existing_pools, Mapping):
+                existing_pools = {}
+            stale = [
+                provider
+                for values in existing_pools.values()
+                for provider in values
+            ]
+            self._prewarmed_realtime_translators = {
+                MIC_SOURCE: [],
+                DESKTOP_SOURCE: [],
+            }
+            self._translation_prewarm_cancel_event = cancel_event
+            self._translation_prewarm_signature = signature
+        self._close_translation_providers(
+            *stale,
+            label="replaced realtime translation prewarm provider",
+        )
+
+        results: dict[str, list[Any]] = {source: [] for source in sources}
+        results_lock = threading.Lock()
+
+        def prepare(source: str) -> None:
+            provider = None
+            try:
+                provider = self._create_realtime_translator(
+                    config_snapshot,
+                    source=source,
+                )
+                self._prewarm_realtime_translator(provider)
+                if cancel_event.is_set() or self._destroying:
+                    return
+                with results_lock:
+                    results[source].append(provider)
+                    provider = None
+            except Exception as exc:
+                logger.warning(
+                    "Realtime translation background provider prewarm failed "
+                    "source=%s error=%s",
+                    source,
+                    safe_exception_summary(exc),
+                )
+            finally:
+                if provider is not None:
+                    self._close_translation_providers(
+                        provider,
+                        label="unretained realtime translation prewarm provider",
+                    )
+
+        def run() -> None:
+            started_at = time.perf_counter()
+            retained: list[Any] = []
+            # Each provider gets its own short-lived owner thread. This keeps
+            # thread-local requests sessions transferable to the eventual worker
+            # without sharing a mutable Session concurrently.
+            jobs: list[threading.Thread] = []
+            try:
+                for source in sources:
+                    for index in range(worker_count):
+                        job = threading.Thread(
+                            target=prepare,
+                            args=(source,),
+                            daemon=True,
+                            name=f"translation-provider-prewarm-{source}-{index + 1}",
+                        )
+                        jobs.append(job)
+                        job.start()
+                for job in jobs:
+                    job.join()
+                with lock:
+                    if (
+                        not cancel_event.is_set()
+                        and not self._destroying
+                        and getattr(self, "_translation_prewarm_cancel_event", None)
+                        is cancel_event
+                    ):
+                        self._prewarmed_realtime_translators = {
+                            MIC_SOURCE: list(results.get(MIC_SOURCE, [])),
+                            DESKTOP_SOURCE: list(
+                                results.get(DESKTOP_SOURCE, [])
+                            ),
+                        }
+                        retained = [
+                            provider
+                            for values in self._prewarmed_realtime_translators.values()
+                            for provider in values
+                        ]
+                if not retained:
+                    self._close_translation_providers(
+                        *[
+                            provider
+                            for values in results.values()
+                            for provider in values
+                        ],
+                        label="unretained realtime translation prewarm provider",
+                    )
+                logger.info(
+                    "Realtime translation background prewarm finished "
+                    "sources=%s workers=%d retained=%d",
+                    ",".join(sources),
+                    worker_count,
+                    len(retained),
+                )
+            finally:
+                current = threading.current_thread()
+                with lock:
+                    if getattr(self, "_translation_prewarm_thread", None) is current:
+                        self._translation_prewarm_thread = None
+                    self.__dict__.setdefault(
+                        "_translation_prewarm_threads",
+                        set(),
+                    ).discard(current)
+                    self.__dict__.setdefault(
+                        "_translation_prewarm_cancel_events",
+                        set(),
+                    ).discard(cancel_event)
+                record_startup_stage(
+                    "background.translation_provider_prewarm",
+                    started_at=started_at,
+                    outcome="ok" if retained else "skipped",
+                )
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="translation-provider-prewarm",
+        )
+        with lock:
+            if self._destroying:
+                cancel_event.set()
+                return False
+            self._translation_prewarm_thread = thread
+            self.__dict__.setdefault("_translation_prewarm_threads", set()).add(thread)
+            self.__dict__.setdefault(
+                "_translation_prewarm_cancel_events",
+                set(),
+            ).add(cancel_event)
+        try:
+            thread.start()
+        except BaseException:
+            with lock:
+                if self._translation_prewarm_thread is thread:
+                    self._translation_prewarm_thread = None
+                self.__dict__.setdefault("_translation_prewarm_threads", set()).discard(
+                    thread
+                )
+                self.__dict__.setdefault(
+                    "_translation_prewarm_cancel_events",
+                    set(),
+                ).discard(cancel_event)
+            cancel_event.set()
+            raise
+        return True
+
+    def _take_realtime_prewarmed_translator(
+        self,
+        config: Mapping[str, Any],
+        *,
+        source: str,
+    ) -> Any:
+        signature = provider_runtime_config_signature(config)
+        lock = self._translation_prewarm_lifecycle_lock()
+        stale: list[Any] = []
+        provider = None
+        with lock:
+            if getattr(self, "_translation_prewarm_signature", None) != signature:
+                existing_pools = getattr(
+                    self,
+                    "_prewarmed_realtime_translators",
+                    {},
+                )
+                if not isinstance(existing_pools, Mapping):
+                    existing_pools = {}
+                stale = [
+                    item
+                    for values in existing_pools.values()
+                    for item in values
+                ]
+                self._prewarmed_realtime_translators = {
+                    MIC_SOURCE: [],
+                    DESKTOP_SOURCE: [],
+                }
+            else:
+                pools = getattr(self, "_prewarmed_realtime_translators", None)
+                if not isinstance(pools, dict):
+                    pools = {
+                        MIC_SOURCE: [],
+                        DESKTOP_SOURCE: [],
+                    }
+                    self._prewarmed_realtime_translators = pools
+                values = pools.setdefault(source, [])
+                if values:
+                    provider = values.pop(0)
+        self._close_translation_providers(
+            *stale,
+            label="stale realtime translation prewarm provider",
+        )
+        if provider is not None:
+            self._bind_realtime_translation_context_store(provider)
+            logger.info(
+                "Retained realtime translation prewarm consumed source=%s",
+                source,
+            )
+        return provider
+
+    def _bind_realtime_translation_context_store(self, translator: Any) -> None:
+        """Attach a retained client to the session store created for this run."""
+
+        store = getattr(self, "_translation_context_store", None)
+        if not isinstance(store, TranslationContextStore):
+            return
+        pending = [translator]
+        seen: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            if hasattr(current, "_context_store"):
+                current._context_store = store
+                current._owns_context_store = False
+            primary = getattr(current, "_primary", None)
+            if primary is not None:
+                pending.append(primary)
+            fallbacks = getattr(current, "_fallbacks", None)
+            if isinstance(fallbacks, Mapping):
+                pending.extend(fallbacks.values())
+
+    def _cancel_translation_background_prewarm(self) -> None:
+        lock = self._translation_prewarm_lifecycle_lock()
+        with lock:
+            cancel_event = getattr(self, "_translation_prewarm_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+            for event in getattr(self, "_translation_prewarm_cancel_events", set()):
+                event.set()
+            existing_pools = getattr(
+                self,
+                "_prewarmed_realtime_translators",
+                {},
+            )
+            if not isinstance(existing_pools, Mapping):
+                existing_pools = {}
+            providers = [
+                provider
+                for values in existing_pools.values()
+                for provider in values
+            ]
+            self._prewarmed_realtime_translators = {
+                MIC_SOURCE: [],
+                DESKTOP_SOURCE: [],
+            }
+            self._translation_prewarm_signature = None
+        self._close_translation_providers(
+            *providers,
+            label="cancelled realtime translation prewarm provider",
         )
 
     @staticmethod
@@ -2047,6 +2394,7 @@ class MainWindow(QMainWindow):
             self._tts_prewarm_signature = None
 
     def _restart_background_provider_initialization(self) -> None:
+        self._cancel_translation_background_prewarm()
         self._cancel_asr_background_prewarm()
         self._cancel_tts_background_prewarm()
         self._background_initialization_started = False
@@ -2234,6 +2582,7 @@ class MainWindow(QMainWindow):
             # manual-translation lifecycles. Cancel it before the first
             # quiescence wait so the updater cannot race a retained ASR client
             # or an in-flight ASR/TTS connection setup.
+            self._cancel_translation_background_prewarm()
             self._cancel_asr_background_prewarm()
             self._cancel_tts_background_prewarm()
 
@@ -2347,6 +2696,7 @@ class MainWindow(QMainWindow):
             return
         shutdown_started_at = time.monotonic()
         self._destroying = True
+        self._cancel_translation_background_prewarm()
         self._cancel_asr_background_prewarm()
         self._cancel_tts_background_prewarm()
         with self._asr_lifecycle_lock():
@@ -4111,7 +4461,7 @@ class MainWindow(QMainWindow):
         )
 
     def _provider_prewarm_cleanup_in_progress(self) -> bool:
-        """Track startup prewarm threads and retained ASR provider ownership."""
+        """Track startup prewarm threads and retained provider ownership."""
 
         asr_pending = False
         asr_lock = self._asr_prewarm_lifecycle_lock()
@@ -4141,7 +4491,56 @@ class MainWindow(QMainWindow):
                 if not tts_pending and self._tts_prewarm_thread is tts_thread:
                     self._tts_prewarm_thread = None
 
-        return bool(asr_pending or retained_asr or tts_pending)
+        translation_pending = False
+        translation_lock = self._translation_prewarm_lifecycle_lock()
+        with translation_lock:
+            tracked_translation_threads = getattr(
+                self,
+                "_translation_prewarm_threads",
+                set(),
+            )
+            alive_translation_threads: set[threading.Thread] = set()
+            for tracked_thread in tracked_translation_threads:
+                try:
+                    if tracked_thread.ident is None or tracked_thread.is_alive():
+                        alive_translation_threads.add(tracked_thread)
+                except Exception:
+                    alive_translation_threads.add(tracked_thread)
+            self._translation_prewarm_threads = alive_translation_threads
+            translation_thread = getattr(self, "_translation_prewarm_thread", None)
+            if translation_thread is not None:
+                try:
+                    translation_pending = (
+                        translation_thread.ident is None
+                        or translation_thread.is_alive()
+                    )
+                except Exception:
+                    translation_pending = True
+                if (
+                    not translation_pending
+                    and self._translation_prewarm_thread is translation_thread
+                ):
+                    self._translation_prewarm_thread = None
+            translation_pending = bool(
+                translation_pending or alive_translation_threads
+            )
+            translation_pools = getattr(
+                self,
+                "_prewarmed_realtime_translators",
+                {},
+            )
+            retained_translation = bool(
+                isinstance(translation_pools, Mapping)
+                and any(values for values in translation_pools.values())
+            )
+
+        return bool(
+            asr_pending
+            or retained_asr
+            or tts_pending
+            or translation_pending
+            or retained_translation
+        )
 
     def _deferred_tts_cleanup_in_progress(self) -> bool:
         lock = self.__dict__.setdefault("_deferred_cleanup_lock", threading.RLock())
@@ -4551,7 +4950,11 @@ class MainWindow(QMainWindow):
 
     def _start_workers(self) -> None:
         self._realtime_delivery_cancel_event = threading.Event()
-        self._translation_context_store = TranslationContextStore()
+        context_store = getattr(self, "_translation_context_store", None)
+        if isinstance(context_store, TranslationContextStore):
+            context_store.clear()
+        else:
+            self._translation_context_store = TranslationContextStore()
         self._partial_task_queues = {}
         self._partial_workers = {}
         self._final_task_queues = {}
@@ -4581,6 +4984,17 @@ class MainWindow(QMainWindow):
             worker.start()
             self._partial_workers[source] = worker
 
+        translation_concurrency = self._realtime_translation_worker_concurrency()
+        reserve_reverse_translation = (
+            self._reverse_translation_capacity_enabled()
+            and translation_concurrency > 1
+        )
+        logger.info(
+            "Realtime translation scheduling configured workers=%d "
+            "reverse_reserved=%s",
+            translation_concurrency,
+            reserve_reverse_translation,
+        )
         scheduler = RealtimeScheduler(
             sources=(MIC_SOURCE, DESKTOP_SOURCE),
             asr_handler=self._scheduler_asr_stage,
@@ -4604,9 +5018,10 @@ class MainWindow(QMainWindow):
             translation_queue_size=TRANSLATION_TASK_QUEUE_MAXSIZE,
             asr_concurrency=self._realtime_asr_worker_concurrency(),
             rewrite_concurrency=self._realtime_rewrite_worker_concurrency(),
-            translation_concurrency=self._realtime_translation_worker_concurrency(),
+            translation_concurrency=translation_concurrency,
             priority_source=DESKTOP_SOURCE,
             priority_burst=MIC_PRIORITY_BURST,
+            reserve_priority_translation_capacity=reserve_reverse_translation,
             max_asr_queue_age_s={
                 MIC_SOURCE: MAX_REALTIME_ASR_QUEUE_AGE_S,
                 DESKTOP_SOURCE: MAX_REVERSE_ASR_QUEUE_AGE_S,
@@ -5902,11 +6317,46 @@ class MainWindow(QMainWindow):
             for marker in ("127.0.0.1", "localhost", "[::1]")
         ):
             return 1
-        if backend in {"google_web", "mymemory", "deepl", "libretranslate"}:
-            return 2
-        if backend in {"openai", "openai_compatible", "qianwen", "gemini"}:
-            return 3
-        return 2
+        if backend in {
+            "google_web",
+            "microsoft_edge_web",
+            "mymemory",
+            "deepl",
+            "libretranslate",
+        }:
+            base_concurrency = 2
+        elif backend in {
+            "openai",
+            "openai_compatible",
+            "grok_compatible",
+            "deepseek",
+            "zhipu",
+            "qianwen",
+            "xiaomi",
+            "gemini",
+            "kimi",
+            "hunyuan",
+            "xai",
+            "mistral",
+            "doubao",
+            "nvidia",
+            "anthropic",
+            "anthropic_compatible",
+            "custom",
+        }:
+            base_concurrency = 3
+        else:
+            base_concurrency = 2
+        if self._reverse_translation_capacity_enabled():
+            base_concurrency += 1
+        return min(base_concurrency, 4)
+
+    def _reverse_translation_capacity_enabled(self) -> bool:
+        listen_cfg = self._config.get("vrc_listen", {})
+        return bool(
+            isinstance(listen_cfg, Mapping)
+            and listen_cfg.get("enabled", False)
+        )
 
     def _realtime_rewrite_worker_concurrency(self) -> int:
         if self._performance_profile() == "low_power":
@@ -6268,7 +6718,7 @@ class MainWindow(QMainWindow):
         self,
         worker_index: int,
     ) -> _RealtimeTranslationWorkerState:
-        """Prepare worker-confined provider pools on their eventual owner thread."""
+        """Attach completed prewarm clients without delaying worker startup."""
 
         state = _RealtimeTranslationWorkerState()
         config = self._realtime_translation_prewarm_config()
@@ -6279,11 +6729,11 @@ class MainWindow(QMainWindow):
             return state
         signature = provider_runtime_config_signature(config)
         try:
-            state.translator = self._create_realtime_translator(
+            state.translator = self._take_realtime_prewarmed_translator(
                 config,
                 source=MIC_SOURCE,
             )
-            mic_succeeded = self._prewarm_realtime_translator(state.translator)
+            mic_succeeded = state.translator is not None
             listen_cfg = config.get("vrc_listen", {})
             listen_enabled = bool(
                 isinstance(listen_cfg, Mapping)
@@ -6291,16 +6741,14 @@ class MainWindow(QMainWindow):
             )
             listen_succeeded = False
             if listen_enabled:
-                state.listen_translator = self._create_realtime_translator(
+                state.listen_translator = self._take_realtime_prewarmed_translator(
                     config,
                     source=DESKTOP_SOURCE,
                 )
-                listen_succeeded = self._prewarm_realtime_translator(
-                    state.listen_translator
-                )
+                listen_succeeded = state.listen_translator is not None
             state.runtime_signature = signature
             logger.info(
-                "Realtime translation worker prewarm finished "
+                "Realtime translation worker startup finished "
                 "worker=%d mic=%s listen=%s thread=%s",
                 worker_index,
                 mic_succeeded,
@@ -6310,7 +6758,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             state.close()
             logger.warning(
-                "Realtime translation worker prewarm failed "
+                "Realtime translation worker startup failed "
                 "worker=%d error=%s",
                 worker_index,
                 safe_exception_summary(exc),
@@ -6629,6 +7077,15 @@ class MainWindow(QMainWindow):
                 if task.source == DESKTOP_SOURCE
                 else worker_state.translator
             )
+            if plan.needs_api_translation and active_translator is None:
+                # A background prewarm may have finished after this worker was
+                # started. Claim it at first use; if it is still unavailable,
+                # translate_plan creates a cold client without waiting for the
+                # background job or performing a separate startup probe.
+                active_translator = self._take_realtime_prewarmed_translator(
+                    worker_state.config or {},
+                    source=task.source,
+                )
             try:
                 result, translator = pipeline.translate_plan(
                     plan,
@@ -10540,6 +10997,24 @@ class MainWindow(QMainWindow):
             "asr_rewrite_style",
         }:
             self._refresh_realtime_config_snapshot()
+        if key in {"translation_provider", "translation_model"}:
+            if (
+                self._translation_background_warmup_enabled()
+                and first_missing_required_credential(
+                    self._config,
+                    scopes=("translation",),
+                    ui_language=getattr(self, "_ui_lang", None),
+                    active_only=True,
+                )
+                is None
+            ):
+                try:
+                    self._ensure_manual_translation_controller().prewarm_async()
+                    self._start_translation_background_prewarm()
+                except Exception:
+                    logger.exception(
+                        "Could not restart selected translation provider prewarm"
+                    )
         self._schedule_config_save()
         self._set_bottom(self._t("quick_switch_updated"))
 

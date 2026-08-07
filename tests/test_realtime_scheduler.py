@@ -43,6 +43,7 @@ def _scheduler(
     translation_queue_size=8,
     priority_source=MIC,
     priority_burst=3,
+    reserve_priority_translation_capacity=False,
     stale_task_age_s=30.0,
     max_asr_queue_age_s=None,
     max_translation_queue_age_s=None,
@@ -69,6 +70,9 @@ def _scheduler(
         translation_concurrency=translation_concurrency,
         priority_source=priority_source,
         priority_burst=priority_burst,
+        reserve_priority_translation_capacity=(
+            reserve_priority_translation_capacity
+        ),
         thread_name_prefix="test-realtime",
         stale_task_age_s=stale_task_age_s,
         max_asr_queue_age_s=max_asr_queue_age_s,
@@ -1755,6 +1759,116 @@ def test_idle_priority_lane_does_not_permanently_reserve_a_translation_worker():
         assert microphone_started.is_set()
     finally:
         release_reverse.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_active_priority_reservation_keeps_late_reverse_request_unblocked():
+    mic_started = [threading.Event() for _ in range(4)]
+    reverse_started = threading.Event()
+    release = threading.Event()
+
+    def translate(task, text, _state, _cancel):
+        if task.source == DESKTOP:
+            reverse_started.set()
+        else:
+            mic_started[task.sequence].set()
+        release.wait(timeout=3)
+        return text
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=translate,
+        deliver=lambda _completion: None,
+        asr_concurrency=5,
+        translation_concurrency=3,
+        translation_queue_size=2,
+        priority_source=DESKTOP,
+        reserve_priority_translation_capacity=True,
+    )
+    try:
+        for index in range(4):
+            assert _submit(
+                scheduler,
+                f"mic-{index}",
+                source=MIC,
+                provider=f"mic-{index}",
+            ).accepted
+
+        assert mic_started[0].wait(timeout=1)
+        assert mic_started[1].wait(timeout=1)
+        assert _wait_for(lambda: scheduler._translation_pending_count() == 1)
+        assert not mic_started[2].is_set()
+        assert not mic_started[3].is_set()
+
+        assert _submit(
+            scheduler,
+            "reverse",
+            source=DESKTOP,
+            provider="reverse",
+        ).accepted
+        assert reverse_started.wait(timeout=1)
+        assert not mic_started[2].is_set()
+        assert not mic_started[3].is_set()
+
+        release.set()
+        assert scheduler.wait_until_idle(timeout=2)
+        assert mic_started[2].is_set()
+        assert mic_started[3].is_set()
+    finally:
+        release.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_disabled_priority_reservation_preserves_full_normal_throughput():
+    mic_started = [threading.Event() for _ in range(3)]
+    release = threading.Event()
+
+    def translate(task, text, _state, _cancel):
+        mic_started[task.sequence].set()
+        release.wait(timeout=3)
+        return text
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=translate,
+        deliver=lambda _completion: None,
+        asr_concurrency=3,
+        translation_concurrency=3,
+        priority_source=DESKTOP,
+        reserve_priority_translation_capacity=False,
+    )
+    try:
+        for index in range(3):
+            assert _submit(
+                scheduler,
+                f"mic-{index}",
+                source=MIC,
+                provider=f"mic-{index}",
+            ).accepted
+        assert all(event.wait(timeout=1) for event in mic_started)
+    finally:
+        release.set()
+        assert scheduler.stop(timeout=2)
+
+
+def test_priority_reservation_safely_degrades_with_one_translation_worker():
+    mic_started = threading.Event()
+
+    scheduler = _scheduler(
+        asr=lambda task, _cancel: task.payload,
+        translate=lambda _task, text, _state, _cancel: (
+            mic_started.set() or text
+        ),
+        deliver=lambda _completion: None,
+        translation_concurrency=1,
+        priority_source=DESKTOP,
+        reserve_priority_translation_capacity=True,
+    )
+    try:
+        assert _submit(scheduler, "mic", source=MIC).accepted
+        assert mic_started.wait(timeout=1)
+        assert scheduler.wait_until_idle(timeout=2)
+    finally:
         assert scheduler.stop(timeout=2)
 
 

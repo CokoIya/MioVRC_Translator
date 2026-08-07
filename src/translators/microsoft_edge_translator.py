@@ -14,24 +14,23 @@ from src.utils.provider_warmup import warmup_requests_session
 
 logger = logging.getLogger(__name__)
 
+class MicrosoftEdgeTranslator(BaseTranslator):
+    """No-key translator backed by Microsoft Edge's web translation endpoint.
 
-class GoogleWebTranslator(BaseTranslator):
-    """No-key Google Translate web endpoint translator.
-
-    This uses the public web endpoint rather than Google Cloud Translation API.
-    It is useful for simple setup where Google services are reachable, but it
-    should not be presented as an official SLA-backed Google Cloud API.
+    The endpoint is an undocumented Edge browser service, not the supported
+    Azure AI Translator API. It is intentionally presented as a web provider
+    without an availability guarantee.
     """
 
     def __init__(
         self,
-        base_url: str = "https://translate.googleapis.com/translate_a/single",
+        base_url: str = "https://edge.microsoft.com/translate/translatetext",
         timeout_s: float = 8.0,
         max_retries: int = 1,
     ) -> None:
         super().__init__()
         self._base_url = str(base_url or "").strip() or (
-            "https://translate.googleapis.com/translate_a/single"
+            "https://edge.microsoft.com/translate/translatetext"
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
@@ -42,10 +41,16 @@ class GoogleWebTranslator(BaseTranslator):
             return configure_requests_session_for_url(session, self._base_url)
 
         self._session_pool = ThreadLocalSessionPool(session_factory)
-        self.model = "google-web"
+        self.model = "microsoft-edge-web"
 
     def prewarm(self) -> bool:
-        """Warm this translation worker's Google Web session."""
+        """Warm DNS/TCP/TLS without occupying Edge's translation route.
+
+        A real translation POST can remain in flight for tens of seconds and
+        competes with the player's first request when several realtime clients
+        start together.  A short, non-redirecting HEAD keeps startup bounded
+        and retains the transport session without sending synthetic text.
+        """
 
         result = warmup_requests_session(
             self._session_pool.get(),
@@ -55,8 +60,8 @@ class GoogleWebTranslator(BaseTranslator):
         )
         logger.log(
             logging.INFO if result.succeeded else logging.WARNING,
-            "Google Web translation prewarm %s "
-            "(status=%s elapsed_ms=%.0f error_type=%s)",
+            "Microsoft Edge Web translation prewarm %s "
+            "(status=%s elapsed_ms=%.0f error_type=%s method=HEAD)",
             "finished" if result.succeeded else "failed",
             result.status_code if result.status_code is not None else "unknown",
             result.elapsed_s * 1000.0,
@@ -81,23 +86,21 @@ class GoogleWebTranslator(BaseTranslator):
 
         source = self._language(src_lang, allow_auto=True)
         target = self._language(tgt_lang, allow_auto=False)
-        cache_model = f"{self.model}:{source}:{target}"
+        cache_model = f"{self.model}:{source or 'auto'}:{target}"
         cached = self._get_cached_translation(text, src_lang, tgt_lang, cache_model)
         if cached is not None:
             return cached
 
-        payload = {
-            "client": "gtx",
-            "sl": source,
-            "tl": target,
-            "dt": "t",
-            "dj": "1",
-            "q": text,
+        params = {
+            "to": target,
+            "isEnterpriseClient": "false",
         }
-        translated = self._request_translation(payload)
+        if source:
+            params["from"] = source
+        translated = self._request_translation(params, text)
         translated = self._finalize_translation_output(translated, source_text=text)
         if not translated:
-            raise RuntimeError("Google Web returned an empty translation")
+            raise RuntimeError("Microsoft Edge Web returned an empty translation")
         translated = self._store_cached_translation(
             text,
             src_lang,
@@ -108,71 +111,70 @@ class GoogleWebTranslator(BaseTranslator):
         self._remember_context_turn(text, translated, src_lang, tgt_lang)
         return translated
 
-    def _request_translation(self, payload: dict[str, str]) -> str:
+    def _request_translation(self, params: dict[str, str], text: str) -> str:
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
             started = time.perf_counter()
             try:
-                response = self._session_pool.get().get(
+                response = self._session_pool.get().post(
                     self._base_url,
-                    params=payload,
+                    params=params,
+                    json=[text],
                     timeout=self._timeout_s,
                 )
                 if response.status_code == 429:
-                    raise RuntimeError("Google Web rate limit reached")
+                    raise RuntimeError("Microsoft Edge Web rate limit reached")
                 response.raise_for_status()
                 translated = self._parse_response(response.json())
                 logger.info(
-                    "Google Web translation finished (elapsed=%.2fs)",
+                    "Microsoft Edge Web translation finished (elapsed=%.2fs)",
                     time.perf_counter() - started,
                 )
                 return translated
             except Exception as exc:
                 last_exc = exc
                 logger.warning(
-                    "Google Web translation attempt failed: %s",
+                    "Microsoft Edge Web translation attempt failed: %s",
                     safe_exception_summary(exc),
                 )
                 if attempt < self._max_retries:
                     time.sleep(min(0.2 * (attempt + 1), 0.8))
-        raise RuntimeError(f"Google Web translation failed: {last_exc}") from last_exc
+        raise RuntimeError(
+            f"Microsoft Edge Web translation failed: {last_exc}"
+        ) from last_exc
 
     @staticmethod
     def _parse_response(data: object) -> str:
-        if isinstance(data, dict):
-            sentences = data.get("sentences")
-            if not isinstance(sentences, list):
-                raise RuntimeError("Google Web response did not include sentences")
-            translated_parts = [
-                str(sentence.get("trans") or "")
-                for sentence in sentences
-                if isinstance(sentence, dict)
-            ]
-            return "".join(translated_parts).strip()
-        if not isinstance(data, list) or not data:
-            raise RuntimeError("Google Web response was not a translation payload")
-        segments = data[0]
-        if not isinstance(segments, list):
-            raise RuntimeError("Google Web response did not include text segments")
-        translated_parts: list[str] = []
-        for segment in segments:
-            if isinstance(segment, list) and segment:
-                translated_parts.append(str(segment[0] or ""))
-        return "".join(translated_parts).strip()
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise RuntimeError(
+                "Microsoft Edge Web response was not a translation array"
+            )
+        translations = data[0].get("translations")
+        if not isinstance(translations, list) or not translations:
+            raise RuntimeError(
+                "Microsoft Edge Web response did not include translations"
+            )
+        first = translations[0]
+        if not isinstance(first, dict) or not isinstance(first.get("text"), str):
+            raise RuntimeError(
+                "Microsoft Edge Web response did not include translated text"
+            )
+        return str(first["text"]).strip()
 
     def _language(self, code: str, *, allow_auto: bool) -> str:
         raw = str(code or "").strip().lower().replace("_", "-")
         if not raw or raw == "auto":
             if allow_auto:
-                return "auto"
-            raise ValueError("Google Web target language must be configured")
+                # Omitting `from` enables Edge endpoint language detection.
+                return ""
+            raise ValueError("Microsoft Edge Web target language must be configured")
         if raw in {"zh", "zh-cn", "zh-hans", "cn"}:
-            return "zh-CN"
-        if raw in {"zh-tw", "zh-hant", "yue"}:
-            return "zh-TW"
+            return "zh-Hans"
+        if raw in {"zh-tw", "zh-hant"}:
+            return "zh-Hant"
         normalized = self._normalize_language_code(raw)
         if not normalized or normalized == "auto":
             if allow_auto:
-                return "auto"
-            raise ValueError("Google Web target language must be configured")
+                return ""
+            raise ValueError("Microsoft Edge Web target language must be configured")
         return normalized

@@ -80,6 +80,10 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
     ].isHidden() is True
     assert "frieren" in panel._combo_reverse["asr_rewrite_style"]
     assert "language_exchange" in panel._combo_reverse["asr_rewrite_style"]
+    assert (
+        "sunny_popular_honor_student"
+        in panel._combo_reverse["asr_rewrite_style"]
+    )
     assert not hasattr(panel, "mic_gain_slider")
     assert not hasattr(panel, "manual_close_toggle")
     assert panel._noise_slider is not None

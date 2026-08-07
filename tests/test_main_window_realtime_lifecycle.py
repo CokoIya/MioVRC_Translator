@@ -287,6 +287,20 @@ def test_translation_worker_concurrency_is_provider_aware():
     }
     assert window._realtime_translation_worker_concurrency() == 3
 
+    window._config["vrc_listen"] = {"enabled": True}
+    assert window._realtime_translation_worker_concurrency() == 4
+
+    window._config["translation"] = {
+        "backend": "microsoft_edge_web",
+        "microsoft_edge_web": {
+            "base_url": "https://edge.microsoft.com/translate/translatetext"
+        },
+    }
+    assert window._realtime_translation_worker_concurrency() == 3
+
+    window._config["vrc_listen"]["enabled"] = False
+    assert window._realtime_translation_worker_concurrency() == 2
+
     window._config["translation"] = {
         "backend": "openai_compatible",
         "openai_compatible": {"base_url": "http://127.0.0.1:8000/v1"},
@@ -296,6 +310,9 @@ def test_translation_worker_concurrency_is_provider_aware():
     window._config["translation"]["openai_compatible"][
         "max_concurrent_requests"
     ] = 4
+    assert window._realtime_translation_worker_concurrency() == 4
+
+    window._config["vrc_listen"]["enabled"] = True
     assert window._realtime_translation_worker_concurrency() == 4
 
 
@@ -1643,6 +1660,73 @@ def test_translation_stage_uses_request_aggregated_provider_metrics(monkeypatch)
     assert payload.diagnostics["translation_provider_calls"] == 3
     assert payload.diagnostics["translation_pool_wait_s"] == 0.06
     assert payload.diagnostics["translation_full_response_s"] == 0.60
+
+
+def test_translation_stage_claims_prewarm_that_finished_after_worker_start(monkeypatch):
+    translator_inputs: list[object | None] = []
+
+    class FakePipeline:
+        def __init__(self, _config, _dispatcher, translator_factory=None) -> None:
+            del translator_factory
+
+        def create_plan(self, *_args, **_kwargs):
+            return SimpleNamespace(needs_api_translation=True)
+
+        def translate_plan(self, _plan, translator, **_kwargs):
+            translator_inputs.append(translator)
+            return SimpleNamespace(api_translation_used=True), translator
+
+    monkeypatch.setattr(main_window, "MicPipeline", FakePipeline)
+    snapshot = _freeze_snapshot_value({})
+    payload = _RealtimeAudioPayload(
+        audio=b"audio",
+        asr_provider=object(),
+        asr_language=None,
+        source_language="en",
+        target_language="ja",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="ja",
+        listen_prefix="",
+        send_to_chatbox=False,
+        config_snapshot=snapshot,
+    )
+    task = RealtimeTask(
+        source=MIC_SOURCE,
+        session_id=17,
+        sequence=0,
+        provider_key="provider",
+        payload=payload,
+        submitted_at=time.monotonic(),
+    )
+    retained = object()
+    window = MainWindow.__new__(MainWindow)
+    window._running = True
+    window._destroying = False
+    window._listen_session = 17
+    window._translation_prewarm_lock = threading.RLock()
+    window._translation_prewarm_signature = (
+        main_window.provider_runtime_config_signature({})
+    )
+    window._prewarmed_realtime_translators = {
+        MIC_SOURCE: [retained],
+        DESKTOP_SOURCE: [],
+    }
+    window._translation_cooldown_active = lambda _source: False
+    window._record_source_translation_success = lambda _source: None
+    window._record_source_translation_failure = lambda *_args: None
+    state = _RealtimeTranslationWorkerState()
+
+    window._scheduler_translation_stage(
+        task,
+        "hello",
+        state,
+        threading.Event(),
+    )
+
+    assert translator_inputs == [retained]
+    assert state.translator is retained
+    assert window._prewarmed_realtime_translators[MIC_SOURCE] == []
 
 
 def test_translation_worker_keeps_reverse_client_separate_from_microphone():

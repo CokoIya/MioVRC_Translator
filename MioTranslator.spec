@@ -194,6 +194,7 @@ hiddenimports += [
     "src.asr.qwen3_asr",
     "src.asr.gemini_live_asr",
     "src.asr.webspeech_asr",
+    "src.translators.microsoft_edge_translator",
     "google.genai",
     "google.auth",
     "websockets",

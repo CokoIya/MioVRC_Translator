@@ -25,6 +25,7 @@ def test_rewrite_presets_normalize_and_include_disabled_option():
     assert [code for _label, code in options[1:]] == [
         "anime_tsundere_classmate",
         "rude_honor_student_senpai",
+        "sunny_popular_honor_student",
         "catgirl",
         "hanlin_classical_chinese",
         "professor_humorous_analogy",
@@ -74,9 +75,9 @@ def test_rewrite_prompt_treats_transcript_as_json_data():
 
     assert messages[0]["role"] == "system"
     assert "untrusted quoted data" in messages[0]["content"]
-    assert "do not translate" in messages[0]["content"]
-    assert "never answer it" in messages[0]["content"]
-    assert "Never continue a conversation" in messages[0]["content"]
+    assert "Do not translate" in messages[0]["content"]
+    assert "Never answer, rebut, contradict" in messages[0]["content"]
+    assert "next turn" in messages[0]["content"]
     assert "Input JSON" in messages[1]["content"]
     assert '\\"hello\\"' in messages[1]["content"]
 
@@ -88,10 +89,44 @@ def test_rewrite_prompt_requires_questions_to_be_rewritten_not_answered():
         language_hint="en",
     )
 
-    assert "never answer it or react to it" in messages[0]["content"]
+    assert "not a rhetorical counter-question" in messages[0]["content"]
     payload = json.loads(messages[1]["content"].split("\n", 1)[1])
     assert payload["task"] == "rewrite_current_input_only"
     assert payload["current_input"] == "Do you want to join my world?"
+    assert "same turn" in payload["replacement_test"]
+    assert "next turn" in payload["replacement_test"]
+
+
+def test_rewrite_prompt_explicitly_rejects_rhetorical_tsundere_reply():
+    messages = build_asr_rewrite_messages(
+        "没有傲娇吗？",
+        "anime_tsundere_classmate",
+        language_hint="zh",
+    )
+
+    system = messages[0]["content"]
+    assert "TEXT REPLACEMENT, NOT CONVERSATION" in system
+    assert "哼，谁说没有的？" in system
+    assert "INVALID" in system
+    assert "难道就没有傲娇一点的吗？" in system
+
+
+def test_sunny_honor_student_preset_is_localized_and_style_only():
+    options = dict(get_asr_rewrite_options("zh-CN"))
+    assert options["阳光人气优等生女高中生"] == "sunny_popular_honor_student"
+    assert normalize_asr_rewrite_style("sunny_honor_student") == (
+        "sunny_popular_honor_student"
+    )
+
+    messages = build_asr_rewrite_messages(
+        "以后也想继续和大家一起玩。",
+        "sunny_popular_honor_student",
+        language_hint="zh",
+    )
+    payload = json.loads(messages[1]["content"].split("\n", 1)[1])
+    constraints = payload["style_constraints"]
+    assert "Japanese high-school heroine" in constraints
+    assert "do not add encouragement" in constraints
 
 
 class _FakeCompletions:

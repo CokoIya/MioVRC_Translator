@@ -682,6 +682,21 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
             "China access may be unreliable."
         ),
     },
+    "microsoft_edge_web": {
+        "label": "Microsoft Edge Web",
+        "base_url": "https://edge.microsoft.com/translate/translatetext",
+        "model": "microsoft-edge-web",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "api_key_required": False,
+        "api_key_input": "hidden",
+        "model_hint": (
+            "No API key required. Uses Microsoft Edge's web translation service; "
+            "it is not the supported Azure Translator API and has no availability SLA."
+        ),
+    },
     "mymemory": {
         "label": "MyMemory",
         "base_url": "https://api.mymemory.translated.net/get",
@@ -925,6 +940,7 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     ),
     "grok_compatible": ("grok-4.5",),
     "google_web": ("google-web",),
+    "microsoft_edge_web": ("microsoft-edge-web",),
     "mymemory": ("mymemory",),
     "deepl": ("deepl-api",),
     "libretranslate": ("libretranslate",),
@@ -1027,6 +1043,14 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     },
     "google_web": {
         "google-web": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "no_key_simple",
+        },
+    },
+    "microsoft_edge_web": {
+        "microsoft-edge-web": {
             "speed": "very_fast",
             "quality": "high",
             "fit": "recommended",
@@ -1298,6 +1322,13 @@ TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
         "ru": "Google Веб-перевод",
         "ko": "Google 웹 번역",
     },
+    "microsoft_edge_web": {
+        "zh-CN": "Microsoft Edge 网页翻译",
+        "en": "Microsoft Edge Web",
+        "ja": "Microsoft Edge ウェブ翻訳",
+        "ru": "Microsoft Edge Веб-перевод",
+        "ko": "Microsoft Edge 웹 번역",
+    },
     "mymemory": {"zh-CN": "MyMemory", "en": "MyMemory", "ja": "MyMemory", "ru": "MyMemory", "ko": "MyMemory"},
     "deepl": {
         "zh-CN": "DeepL 免费版",
@@ -1355,6 +1386,9 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
     },
     "google_web": {
         "google-web": "8.6",
+    },
+    "microsoft_edge_web": {
+        "microsoft-edge-web": "8.5",
     },
     "mymemory": {
         "mymemory": "7.2",

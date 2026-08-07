@@ -318,6 +318,7 @@ def test_provider_logs_do_not_emit_full_relay_urls_or_raw_tracebacks() -> None:
         "src/translators/deepl_translator.py",
         "src/translators/google_web_translator.py",
         "src/translators/libretranslate_translator.py",
+        "src/translators/microsoft_edge_translator.py",
         "src/translators/mymemory_translator.py",
     ):
         source = _read(relative_path)

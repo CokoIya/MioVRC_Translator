@@ -1,24 +1,24 @@
 {
-  "version": "v1.3.9",
-  "installer_name": "MioTranslator-Setup-v1.3.9.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9/MioTranslator-Setup-v1.3.9.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9/MioTranslator-Setup-v1.3.9.exe",
-  "size_bytes": 464713799,
-  "sha256": "df68adb7791af1d650db45dbe9394ce7ac82d6f41d6e8b9c77eaa09ee7a8af32",
+  "version": "v1.3.9.1",
+  "installer_name": "MioTranslator-Setup-v1.3.9.1.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9.1/MioTranslator-Setup-v1.3.9.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9.1/MioTranslator-Setup-v1.3.9.1.exe",
+  "size_bytes": 464714037,
+  "sha256": "e758ef12d17455b6af4adefa3941c69ec46f2cf623c9e4e139557cae87c6eb81",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "17d8842acadeb7593b33ca09779f430dbf91b4ac44891d25e66d843546caf8109eac4401d12a1e6611213a7daf10161d33d41529bece8be65f2629ddf8165309",
-  "notes": "v1.3.9 significantly improves startup responsiveness, moves nonessential device and maintenance work to the background, and safely prepares online translation, ASR, and TTS connections to reduce first-use delay.",
+  "installer_signature": "a8e2a0464d595938fa90ab320c553c366ee7014bf753aa5dbba1e34c2c03b4a7f04194da2b0613b02b252f38cba50b80e91acc55c4e94d03155bc68387b6650e",
+  "notes": "v1.3.9.1 adds Google and Microsoft Edge web translation improvements, removes slow synthetic Edge POST warm-ups, reserves capacity for reverse translation, and strengthens transformation-only AI rewriting.",
   "notes_i18n": {
-    "zh-CN": "v1.3.9 显著提升启动响应速度，将非必要的设备扫描和维护任务移至后台，并安全预热在线翻译、ASR 与 TTS 连接，减少首次使用延迟。",
-    "en": "v1.3.9 significantly improves startup responsiveness, moves nonessential device and maintenance work to the background, and safely prepares online translation, ASR, and TTS connections to reduce first-use delay.",
-    "ja": "v1.3.9 では起動時の応答性を大幅に改善し、不要不急のデバイス検索とメンテナンスをバックグラウンドへ移し、オンライン翻訳・ASR・TTS の接続を安全に事前準備して初回利用時の待ち時間を短縮しました。",
-    "ru": "v1.3.9 значительно ускоряет запуск, переносит необязательный поиск устройств и обслуживание в фоновый режим и безопасно подготавливает соединения онлайн-перевода, ASR и TTS, сокращая задержку при первом использовании.",
-    "ko": "v1.3.9은 시작 응답성을 크게 개선하고, 필수적이지 않은 장치 검색과 유지 관리 작업을 백그라운드로 옮기며, 온라인 번역·ASR·TTS 연결을 안전하게 미리 준비해 첫 사용 지연을 줄입니다."
+    "zh-CN": "v1.3.9.1 改进 Google 与 Microsoft Edge 网页翻译，移除缓慢的 Edge 模拟 POST 预热，为反向翻译保留专用容量，并强化仅改写、不回复的 AI 输出约束。",
+    "en": "v1.3.9.1 adds Google and Microsoft Edge web translation improvements, removes slow synthetic Edge POST warm-ups, reserves capacity for reverse translation, and strengthens transformation-only AI rewriting.",
+    "ja": "v1.3.9.1 では Google と Microsoft Edge のウェブ翻訳を改善し、低速な Edge の模擬 POST 事前接続を廃止し、逆翻訳用の処理枠を確保して、AI リライトを入力文の変換だけに厳格化しました。",
+    "ru": "v1.3.9.1 улучшает веб-перевод Google и Microsoft Edge, удаляет медленный имитационный POST-прогрев Edge, резервирует ресурсы для обратного перевода и усиливает правило AI-перефразирования без ответов пользователю.",
+    "ko": "v1.3.9.1은 Google 및 Microsoft Edge 웹 번역을 개선하고, 느린 Edge 모의 POST 예열을 제거하며, 역번역 전용 처리 용량을 확보하고 AI가 답변하지 않고 입력문만 변환하도록 제한을 강화합니다."
   },
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-07-30T20:36:01+09:00",
+  "published_at": "2026-08-07T19:45:11+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "ec4f5c0ff1853f39f01099c6df5b6c1a6c6900f41378757454ca7e166e9670810b737a7632cc43c0e2c8ca8a28eed85af2b3cb551f4737b49b938f0a187c8c04"
+  "signature": "1806b64ed461240556cdb4bd09471373da3e1d1192f7f7e7d40b35b4fbcfe5bb1bb1f01786a684d56117ddd1d8012543c7dbefe9cea9b077a533e785536a740e"
 }

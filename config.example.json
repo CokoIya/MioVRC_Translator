@@ -163,6 +163,12 @@
       "timeout_s": 8.0,
       "max_retries": 1
     },
+    "microsoft_edge_web": {
+      "base_url": "https://edge.microsoft.com/translate/translatetext",
+      "model": "microsoft-edge-web",
+      "timeout_s": 8.0,
+      "max_retries": 1
+    },
     "mymemory": {
       "base_url": "https://api.mymemory.translated.net/get",
       "model": "mymemory",

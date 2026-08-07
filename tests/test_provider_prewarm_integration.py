@@ -16,6 +16,7 @@ from src.translators.deepl_translator import DeepLTranslator
 from src.translators.factory import FallbackTranslator
 from src.translators.google_web_translator import GoogleWebTranslator
 from src.translators.libretranslate_translator import LibreTranslateTranslator
+from src.translators.microsoft_edge_translator import MicrosoftEdgeTranslator
 from src.translators.mymemory_translator import MyMemoryTranslator
 from src.translators.openai_translator import OpenAITranslator
 from src.tts.api_tts_engines import MimoTTS, QwenTTS
@@ -132,6 +133,12 @@ def test_openai_and_anthropic_prewarm_use_exact_sdk_http_clients(monkeypatch):
             GoogleWebTranslator,
             "https://translate.googleapis.com/translate_a/single",
             "https://translate.googleapis.com/translate_a/single",
+        ),
+        (
+            "src.translators.microsoft_edge_translator",
+            MicrosoftEdgeTranslator,
+            "https://edge.microsoft.com/translate/translatetext",
+            "https://edge.microsoft.com/translate/translatetext",
         ),
         (
             "src.translators.libretranslate_translator",
