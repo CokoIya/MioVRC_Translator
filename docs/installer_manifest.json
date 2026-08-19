@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.9.1",
-  "installer_name": "MioTranslator-Setup-v1.3.9.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9.1/MioTranslator-Setup-v1.3.9.1.exe",
-  "size_bytes": 464714037,
-  "sha256": "e758ef12d17455b6af4adefa3941c69ec46f2cf623c9e4e139557cae87c6eb81",
+  "version": "v1.3.9.2",
+  "installer_name": "MioTranslator-Setup-v1.3.9.2.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9.2/MioTranslator-Setup-v1.3.9.2.exe",
+  "size_bytes": 464637544,
+  "sha256": "0c84704bfc5d2f641b863434f7120f596b0bc7db932bfd62de4bc85b414dfaf4",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "a8e2a0464d595938fa90ab320c553c366ee7014bf753aa5dbba1e34c2c03b4a7f04194da2b0613b02b252f38cba50b80e91acc55c4e94d03155bc68387b6650e",
-  "notes": "v1.3.9.1 adds Google and Microsoft Edge web translation improvements, removes slow synthetic Edge POST warm-ups, reserves capacity for reverse translation, and strengthens transformation-only AI rewriting.",
+  "installer_signature": "a45e5ec147a40a6bcec773d5ed593ec22cdd5b19fd5366017a9afbb4fa21f8ebcefa9764cc63cfb741938e0d29f243fc75315910212dc1d416f9e713cb54b20d",
+  "notes": "v1.3.9.2 fixes local AI credential validation, enforces the selected target language across every translation provider, improves localhost connectivity, and reduces sensitive diagnostic logging.",
   "notes_i18n": {
-    "zh-CN": "v1.3.9.1 改进 Google 与 Microsoft Edge 网页翻译，移除缓慢的 Edge 模拟 POST 预热，为反向翻译保留专用容量，并强化仅改写、不回复的 AI 输出约束。",
-    "en": "v1.3.9.1 adds Google and Microsoft Edge web translation improvements, removes slow synthetic Edge POST warm-ups, reserves capacity for reverse translation, and strengthens transformation-only AI rewriting.",
-    "ja": "v1.3.9.1 では Google と Microsoft Edge のウェブ翻訳を改善し、低速な Edge の模擬 POST 事前接続を廃止し、逆翻訳用の処理枠を確保して、AI リライトを入力文の変換だけに厳格化しました。",
-    "ru": "v1.3.9.1 улучшает веб-перевод Google и Microsoft Edge, удаляет медленный имитационный POST-прогрев Edge, резервирует ресурсы для обратного перевода и усиливает правило AI-перефразирования без ответов пользователю.",
-    "ko": "v1.3.9.1은 Google 및 Microsoft Edge 웹 번역을 개선하고, 느린 Edge 모의 POST 예열을 제거하며, 역번역 전용 처리 용량을 확보하고 AI가 답변하지 않고 입력문만 변환하도록 제한을 강화합니다."
+    "zh-CN": "v1.3.9.2 修复本机 Local AI 的凭据验证，确保所有翻译服务严格使用所选目标语言，改善 localhost 连接，并减少诊断日志中的敏感信息。",
+    "en": "v1.3.9.2 fixes local AI credential validation, enforces the selected target language across every translation provider, improves localhost connectivity, and reduces sensitive diagnostic logging.",
+    "ja": "v1.3.9.2 は Local AI の認証情報検証を修正し、すべての翻訳サービスで選択した目標言語を厳格に適用し、localhost 接続を改善して、診断ログ内の機密情報を削減しました。",
+    "ru": "v1.3.9.2 исправляет проверку учетных данных локального AI, строго применяет выбранный целевой язык во всех сервисах перевода, улучшает подключение к localhost и сокращает чувствительные данные в диагностических журналах.",
+    "ko": "v1.3.9.2는 로컬 AI 자격 증명 검사를 수정하고, 모든 번역 서비스에서 선택한 대상 언어를 엄격히 적용하며, localhost 연결을 개선하고 진단 로그의 민감한 정보를 줄였습니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-08-07T19:45:11+09:00",
+  "published_at": "2026-08-19T20:46:27+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "61651c2f582dc32036573ec4fe1575c2b3beebff7bff34437c6e9281452d5cb36f4e567a120af720be4f691f197fc9b64def3dbb5bfee82baa4e5dfc4917bf0c"
+  "signature": "69ef83bb1bcc8299f1934760cbd106df71d6a563353d112ae55800d2e346c178370012c02c570b2f2b2952e1c920a01f1551b4b95640f10c3f8e4c950192d709"
 }

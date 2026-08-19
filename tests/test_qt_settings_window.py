@@ -135,7 +135,7 @@ def _capture_credential_prompts(monkeypatch, *, open_settings: bool = False):
 
     # Keep the callback behavior explicit in each test without constructing a
     # modal QMessageBox.
-    def prompt(_parent, missing, *, ui_language, open_settings=None):
+    def prompt(_parent, missing, *, ui_language, open_settings=None, **_kwargs):
         prompts.append((missing, ui_language))
         if open_settings is not None and bool(open_settings_flag[0]):
             open_settings()

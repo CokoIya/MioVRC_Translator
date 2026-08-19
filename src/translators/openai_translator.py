@@ -26,7 +26,7 @@ from src.utils.provider_http_timing import ProviderHttpTimingHooks
 from src.utils.provider_network import (
     direct_connection_ssl_context,
     is_special_local_provider_host,
-    resolve_special_local_provider_addresses,
+    resolve_pinnable_local_provider_addresses,
     should_bypass_environment_proxies,
 )
 from src.utils.provider_warmup import warmup_httpx_client
@@ -98,25 +98,31 @@ class OpenAITranslator(BaseTranslator):
         self._pinned_local_http_host = ""
         self._pinned_local_http_address = ""
         self._pinned_local_http_authority = ""
+        resolved_addresses = (
+            resolve_pinnable_local_provider_addresses(base_hostname)
+            if parsed_base_url.scheme.casefold() == "http"
+            else ()
+        )
         if (
             parsed_base_url.scheme.casefold() == "http"
             and is_special_local_provider_host(base_hostname)
+            and not resolved_addresses
         ):
-            resolved_addresses = resolve_special_local_provider_addresses(
-                base_hostname
+            raise ValueError(
+                "Translation API base URL must use HTTPS or an explicit "
+                "loopback/private local HTTP host"
             )
-            if not resolved_addresses:
-                raise ValueError(
-                    "Translation API base URL must use HTTPS or an explicit "
-                    "loopback/private local HTTP host"
-                )
+        if resolved_addresses:
             self._pinned_local_http_host = base_hostname
             self._pinned_local_http_address = str(resolved_addresses[0])
             base_port = parsed_base_url.port
+            authority_host = (
+                f"[{base_hostname}]" if ":" in base_hostname else base_hostname
+            )
             self._pinned_local_http_authority = (
-                base_hostname
+                authority_host
                 if base_port in (None, 80)
-                else f"{base_hostname}:{base_port}"
+                else f"{authority_host}:{base_port}"
             )
         self._timeout_s = self._positive_timeout(timeout_s, 15.0, minimum=1.0)
         self._connect_timeout_s = self._positive_timeout(
@@ -275,7 +281,7 @@ class OpenAITranslator(BaseTranslator):
             request.headers.pop("authorization", None)
 
     def _pin_reserved_local_http_request(self, request: httpx.Request) -> None:
-        """Connect a validated Docker gateway name to its pinned local address."""
+        """Connect a validated local hostname to its pinned local address."""
 
         request_host = str(request.url.host or "").rstrip(".").casefold()
         allowed_hosts = {
@@ -322,12 +328,18 @@ class OpenAITranslator(BaseTranslator):
             timeout_s=min(float(getattr(self, "_connect_timeout_s", 2.0)), 3.0),
         )
         if result.succeeded:
+            probe_status = result.status_code
+            route_accepted = bool(
+                probe_status is not None and 200 <= probe_status < 400
+            )
             logger.info(
-                "Translation provider prewarm finished "
-                "(provider=%s endpoint=%s status=%s elapsed_ms=%.0f)",
+                "Translation provider transport reachable "
+                "(provider=%s endpoint=%s probe_status=%s "
+                "probe_route_accepted=%s elapsed_ms=%.0f)",
                 self._provider_id or "openai",
                 self._log_endpoint,
-                result.status_code if result.status_code is not None else "unknown",
+                probe_status if probe_status is not None else "unknown",
+                route_accepted,
                 result.elapsed_s * 1000.0,
             )
         else:
@@ -1181,6 +1193,7 @@ class OpenAITranslator(BaseTranslator):
             translated = self._validated_translation_output(
                 output,
                 source_text=text,
+                target_language=tgt_lang,
             )
         except TransformationOutputRejected as exc:
             self._record_translation_metrics(
@@ -1199,6 +1212,7 @@ class OpenAITranslator(BaseTranslator):
                 operation="translation",
                 reason=exc.reason,
                 output_tokens=output_tokens,
+                target_language=tgt_lang,
             )
         else:
             self._record_translation_metrics(
@@ -1308,6 +1322,7 @@ class OpenAITranslator(BaseTranslator):
         operation: str,
         reason: str,
         output_tokens: int,
+        target_language: str = "",
     ) -> str:
         logger.warning(
             "Rejected non-transformational provider output; retrying with "
@@ -1375,6 +1390,7 @@ class OpenAITranslator(BaseTranslator):
             output,
             source_text=source_text,
             structured=True,
+            target_language=target_language,
         )
 
     def _retry_responses_transformation(
@@ -1385,6 +1401,7 @@ class OpenAITranslator(BaseTranslator):
         operation: str,
         reason: str,
         output_tokens: int,
+        target_language: str = "",
     ) -> str:
         logger.warning(
             "Rejected non-transformational provider output; retrying Responses API "
@@ -1460,6 +1477,7 @@ class OpenAITranslator(BaseTranslator):
             output,
             source_text=source_text,
             structured=True,
+            target_language=target_language,
         )
 
     def _translate_with_responses(
@@ -1588,6 +1606,7 @@ class OpenAITranslator(BaseTranslator):
             translated = self._validated_translation_output(
                 output_text,
                 source_text=text,
+                target_language=tgt_lang,
             )
         except TransformationOutputRejected as exc:
             self._record_translation_metrics(
@@ -1599,6 +1618,7 @@ class OpenAITranslator(BaseTranslator):
                 operation="translation",
                 reason=exc.reason,
                 output_tokens=output_tokens,
+                target_language=tgt_lang,
             )
         else:
             self._record_translation_metrics(

@@ -25,7 +25,7 @@ def _translation_config(*, backend: str = "openai", openai: str = "", anthropic:
 
 
 def _recording_prompt(records: list):
-    def show(_parent, missing, *, ui_language, open_settings=None):
+    def show(_parent, missing, *, ui_language, open_settings=None, **_kwargs):
         records.append((missing, ui_language, open_settings))
         return False
 
@@ -167,7 +167,7 @@ def test_tabbed_save_blocks_missing_key_and_action_opens_api_provider(
         lambda _config: saved.append(True),
     )
 
-    def show(_parent, missing, *, ui_language, open_settings=None):
+    def show(_parent, missing, *, ui_language, open_settings=None, **_kwargs):
         assert ui_language == "en"
         assert missing.provider_id == "openai"
         assert open_settings is not None
@@ -203,7 +203,7 @@ def test_api_prompt_action_selects_and_focuses_matching_key_input(
     def open_api(missing):
         opened.append(missing.provider_id)
 
-    def show(_parent, missing, *, ui_language, open_settings=None):
+    def show(_parent, missing, *, ui_language, open_settings=None, **_kwargs):
         assert ui_language == "en"
         assert open_settings is not None
         open_settings()

@@ -192,11 +192,17 @@ class AnthropicTranslator(BaseTranslator):
             timeout_s=min(float(getattr(self, "_connect_timeout_s", 2.0)), 3.0),
         )
         if result.succeeded:
+            probe_status = result.status_code
+            route_accepted = bool(
+                probe_status is not None and 200 <= probe_status < 400
+            )
             logger.info(
-                "Anthropic translation prewarm finished "
-                "(endpoint=%s status=%s elapsed_ms=%.0f)",
+                "Anthropic translation transport reachable "
+                "(endpoint=%s probe_status=%s probe_route_accepted=%s "
+                "elapsed_ms=%.0f)",
                 self._log_endpoint,
-                result.status_code if result.status_code is not None else "unknown",
+                probe_status if probe_status is not None else "unknown",
+                route_accepted,
                 result.elapsed_s * 1000.0,
             )
         else:
@@ -362,6 +368,7 @@ class AnthropicTranslator(BaseTranslator):
         operation: str,
         reason: str,
         output_tokens: int,
+        target_language: str = "",
     ) -> str:
         logger.warning(
             "Rejected non-transformational Anthropic output; retrying with "
@@ -441,6 +448,7 @@ class AnthropicTranslator(BaseTranslator):
             output,
             source_text=source_text,
             structured=True,
+            target_language=target_language,
         )
 
     def translate(
@@ -593,6 +601,7 @@ class AnthropicTranslator(BaseTranslator):
             translated = self._validated_translation_output(
                 output,
                 source_text=text,
+                target_language=tgt_lang,
             )
         except TransformationOutputRejected as exc:
             self._record_translation_metrics(
@@ -604,6 +613,7 @@ class AnthropicTranslator(BaseTranslator):
                 operation="translation",
                 reason=exc.reason,
                 output_tokens=output_tokens,
+                target_language=tgt_lang,
             )
         else:
             self._record_translation_metrics(

@@ -2,6 +2,21 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.9.2] - 2026-08-19
+
+### Translation correctness and compatibility
+
+- Fixed credential validation so local OpenAI-compatible AI services are not incorrectly required to provide a cloud API key.
+- Enforced the selected target language across AI and web translation providers, including Spanish, French, Russian, Korean, and other non-Chinese/Japanese/English targets.
+- Added one strict conversion retry when a provider returns text in an obviously incorrect language while preserving the translation-only output contract.
+- Accepted single-field JSON translation responses from compatible local AI services.
+
+### Connectivity and diagnostics
+
+- Preferred IPv4 loopback for localhost-compatible AI endpoints to avoid slow Windows IPv6 fallback behavior.
+- Clarified provider prewarm logging so transport reachability is not reported as successful inference.
+- Reduced sensitive device, process, and audio inventory details in diagnostic logs.
+
 ## [1.3.9.1] - 2026-08-07
 
 ### Translation responsiveness

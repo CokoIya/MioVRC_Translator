@@ -110,9 +110,10 @@ class DeepLTranslator(BaseTranslator):
         level = logger.info if result.succeeded else logger.warning
         level(
             "DeepL translation prewarm %s "
-            "(status=%s elapsed_ms=%.0f error_type=%s)",
-            "finished" if result.succeeded else "failed",
+            "(probe_status=%s probe_route_accepted=%s elapsed_ms=%.0f error_type=%s)",
+            "transport reachable" if result.succeeded else "failed",
             result.status_code if result.status_code is not None else "unknown",
+            bool(result.status_code is not None and 200 <= result.status_code < 400),
             result.elapsed_s * 1000.0,
             result.error_type or "none",
         )
@@ -148,7 +149,11 @@ class DeepLTranslator(BaseTranslator):
             payload["source_lang"] = source
 
         translated = self._request_translation(payload)
-        translated = self._finalize_translation_output(translated, source_text=text)
+        translated = self._finalize_translation_output_for_target(
+            translated,
+            source_text=text,
+            target_language=tgt_lang,
+        )
         if not translated:
             raise RuntimeError("DeepL returned an empty translation")
         translated = self._store_cached_translation(

@@ -23,6 +23,31 @@ from src.ui_qt.main_window import (
 from src.utils.i18n import tr
 
 
+def test_main_window_target_language_selection_is_manual_and_realtime_visible():
+    window = MainWindow.__new__(MainWindow)
+    window._target_lang_codes = {"Español": "es"}
+    window._current_tgt_lang = "ja"
+    window._config = {"translation": {"language_pair_source": "auto"}}
+    window._tgt_lang_combo = None
+    refreshed: list[bool] = []
+    snapshots: list[bool] = []
+    saves: list[bool] = []
+    window._refresh_language_combos = lambda: refreshed.append(True)
+    window._refresh_realtime_config_snapshot = lambda: snapshots.append(True)
+    window._schedule_config_save = lambda: saves.append(True)
+
+    MainWindow._on_tgt_lang_change(window, "Español")
+
+    assert window._current_tgt_lang == "es"
+    assert window._config["translation"] == {
+        "language_pair_source": "manual",
+        "target_language": "es",
+    }
+    assert refreshed == [True]
+    assert snapshots == [True]
+    assert saves == [True]
+
+
 def test_missing_credential_prompt_opens_relevant_settings_field(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._config = {"translation": {"backend": "qianwen"}}

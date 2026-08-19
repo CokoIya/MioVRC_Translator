@@ -525,6 +525,8 @@ class APIModelsTab(LocalizedSettingsTab):
             missing,
             ui_language=self._ui_language,
             open_settings=open_api_settings,
+            trigger="api_models_provider_selection",
+            active_only=False,
         )
         return True
 
