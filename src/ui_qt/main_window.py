@@ -2535,6 +2535,8 @@ class MainWindow(QMainWindow):
                 page_id=item.settings_page,
                 focus_target=item.focus_target,
             ),
+            trigger="runtime_" + "_".join(scopes),
+            active_only=True,
         )
         return True
 
@@ -3151,8 +3153,14 @@ class MainWindow(QMainWindow):
             selected_label = self._tgt_lang_combo.currentText()
         code = self._target_lang_codes.get(str(selected_label or ""), self._current_tgt_lang or "ja")
         self._current_tgt_lang = code
-        self._config.setdefault("translation", {})["target_language"] = code
+        translation = self._config.setdefault("translation", {})
+        translation["target_language"] = code
+        # A main-window language choice is an explicit player preference. If
+        # this remains "auto", configuration normalization can replace it with
+        # the UI-language default on the next load.
+        translation["language_pair_source"] = "manual"
         self._refresh_language_combos()
+        self._refresh_realtime_config_snapshot()
         self._schedule_config_save()
 
     def _on_src_lang_change(self, selected_label: str | None = None) -> None:
@@ -3161,9 +3169,12 @@ class MainWindow(QMainWindow):
         code = self._src_lang_codes.get(str(selected_label or ""), "auto")
         self._current_src_lang = None if code == "auto" else code
         self._current_asr_lang = code
-        self._config.setdefault("translation", {})["source_language"] = code
+        translation = self._config.setdefault("translation", {})
+        translation["source_language"] = code
+        translation["language_pair_source"] = "manual"
         if not getattr(self, "_refreshing_language_combos", False):
             self._refresh_language_combos()
+            self._refresh_realtime_config_snapshot()
             self._schedule_config_save()
 
     def _swap_langs(self) -> None:
@@ -3177,9 +3188,15 @@ class MainWindow(QMainWindow):
         manual_all = list(get_manual_source_language_options({src_code}, ui_language=self._ui_lang))
         src_reverse = {code: label for label, code in manual_all}
         if tgt_code in src_reverse and src_code in target_reverse:
-            self._config.setdefault("translation", {})["source_language"] = tgt_code
-            self._config.setdefault("translation", {})["target_language"] = src_code
+            translation = self._config.setdefault("translation", {})
+            translation["source_language"] = tgt_code
+            translation["target_language"] = src_code
+            translation["language_pair_source"] = "manual"
+            self._current_src_lang = tgt_code
+            self._current_asr_lang = tgt_code
+            self._current_tgt_lang = src_code
             self._refresh_language_combos()
+            self._refresh_realtime_config_snapshot()
             self._set_source_text(self._last_tgt_text or self._src_text)
             self._show_tgt("")
             self._schedule_config_save()
@@ -5667,18 +5684,73 @@ class MainWindow(QMainWindow):
         snapshot["probe_enabled"] = self._listen_process_output_probe_enabled()
         return snapshot
 
+    @staticmethod
+    def _audio_diagnostic_stats_summary(stats: object) -> dict[str, object]:
+        """Keep support telemetry useful without logging device inventories."""
+
+        if not isinstance(stats, dict):
+            return {}
+        allowed = (
+            "running",
+            "worker_alive",
+            "worker_failure_count",
+            "stream_open",
+            "frame_queue_size",
+            "frame_queue_capacity",
+            "frame_queue_high_watermark",
+            "frame_queue_dropped",
+            "stale_frames_discarded",
+            "frames_processed",
+            "segments_emitted",
+            "last_frame_rms",
+            "peak_frame_rms",
+            "total_frames",
+            "non_silent_frames",
+            "capture_rate",
+            "target_rate",
+            "capture_channels",
+            "channels",
+            "vad_in_speech",
+            "vad_speech_ratio",
+            "vad_activation_ratio",
+        )
+        summary = {key: stats[key] for key in allowed if key in stats}
+        summary["has_worker_error"] = bool(stats.get("last_worker_error"))
+        summary["has_capture_error"] = bool(stats.get("last_error"))
+        return summary
+
+    @staticmethod
+    def _process_audio_diagnostic_summary(snapshot: object) -> dict[str, object]:
+        if not isinstance(snapshot, dict):
+            return {}
+        process_ids = snapshot.get("process_ids")
+        matches = snapshot.get("matches")
+        return {
+            "is_running": bool(snapshot.get("is_running")),
+            "process_count": len(process_ids) if isinstance(process_ids, list) else 0,
+            "has_active_audio_session": bool(
+                snapshot.get("has_active_audio_session")
+            ),
+            "matched_device_count": len(matches) if isinstance(matches, list) else 0,
+            "has_default_output": bool(snapshot.get("default_output_device")),
+            "has_active_output": bool(snapshot.get("active_device")),
+            "probe_enabled": bool(snapshot.get("probe_enabled")),
+        }
+
     def _log_listen_environment(self, stage: str) -> None:
         process_audio = self._listen_process_snapshot()
         logger.info(
-            "Desktop listen environment [%s] enabled=%s running=%s available=%s selected_output=%s active_output=%s default_output=%s process_audio=%s",
+            "Desktop listen environment [%s] enabled=%s running=%s available=%s "
+            "has_selected_output=%s has_active_output=%s has_default_output=%s "
+            "process_audio=%s",
             stage,
             self._desktop_capture_enabled,
             self._listen_recorder is not None,
             self._listen_available,
-            self._desktop_output_device_name(),
-            self._active_listen_output_device_name,
-            default_output_device_name(),
-            process_audio,
+            bool(self._desktop_output_device_name()),
+            bool(self._active_listen_output_device_name),
+            bool(default_output_device_name()),
+            self._process_audio_diagnostic_summary(process_audio),
         )
 
     def _listen_auto_should_avoid_output_device(self, device_name: str | None) -> bool:
@@ -5950,12 +6022,13 @@ class MainWindow(QMainWindow):
         if audio_state == "no_loopback_audio" and not bool(process_audio.get("has_active_audio_session", False)):
             log_fn = logger.info
         log_fn(
-            "Desktop listen diagnostics state=%s idle_for=%.1fs stats=%s process_audio=%s mic_active=%s output_format=%s self_suppress=%s",
+            "Desktop listen diagnostics state=%s idle_for=%.1fs stats=%s "
+            "process_audio=%s mic_active=%s output_format=%s self_suppress=%s",
             audio_state,
             now - idle_anchor if idle_anchor > 0 else 0.0,
-            stats,
-            process_audio,
-            self._active_mic_input_device_name,
+            self._audio_diagnostic_stats_summary(stats),
+            self._process_audio_diagnostic_summary(process_audio),
+            bool(self._active_mic_input_device_name),
             self._get_output_format(),
             bool(self._desktop_capture_config().get("self_suppress", False)),
         )
@@ -6195,12 +6268,13 @@ class MainWindow(QMainWindow):
             else logger.info
         )
         log_fn(
-            "Microphone diagnostics state=%s idle_for=%.1fs stats=%s active=%s resolved=%s muted=%s output_format=%s",
+            "Microphone diagnostics state=%s idle_for=%.1fs stats=%s "
+            "active=%s resolved=%s muted=%s output_format=%s",
             audio_state,
             now - idle_anchor if idle_anchor > 0 else 0.0,
-            stats,
-            self._active_mic_input_device_name,
-            self._resolve_mic_input_device_name(refresh=False),
+            self._audio_diagnostic_stats_summary(stats),
+            bool(self._active_mic_input_device_name),
+            bool(self._resolve_mic_input_device_name(refresh=False)),
             bool(getattr(self, "_mic_muted", False)),
             self._get_output_format(),
         )
@@ -10802,8 +10876,11 @@ class MainWindow(QMainWindow):
             selected_label = self._tgt_lang2_combo.currentText()
         code = self._target_lang_codes.get(str(selected_label or ""), self._current_tgt_lang_2 or "en")
         self._current_tgt_lang_2 = code
-        self._config.setdefault("translation", {})["target_language_2"] = code
+        translation = self._config.setdefault("translation", {})
+        translation["target_language_2"] = code
+        translation["language_pair_source"] = "manual"
         if not getattr(self, "_refreshing_language_combos", False):
+            self._refresh_realtime_config_snapshot()
             self._schedule_config_save()
 
     def _set_source_text(self, text: str, text_color: str | None = None) -> None:

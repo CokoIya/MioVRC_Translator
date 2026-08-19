@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 
 from PySide6.QtWidgets import QMessageBox, QWidget
 
 from src.utils.credential_validation import MissingCredential
 from src.utils.i18n import tr
+
+
+logger = logging.getLogger(__name__)
 
 
 def show_missing_credential_prompt(
@@ -14,11 +18,25 @@ def show_missing_credential_prompt(
     *,
     ui_language: str | None,
     open_settings: Callable[[], None] | None = None,
+    trigger: str = "unspecified",
+    active_only: bool | None = None,
 ) -> bool:
     """Show an actionable missing-credential prompt without exposing secrets.
 
     Returns ``True`` when the player chose the Settings action.
     """
+
+    # Log only stable identifiers. Never log the credential value, endpoint,
+    # model, player text, or the fully materialized configuration.
+    logger.warning(
+        "Missing credential prompt shown "
+        "(trigger=%s scope=%s provider=%s credential=%s active_only=%s)",
+        str(trigger or "unspecified").strip() or "unspecified",
+        missing.scope,
+        missing.provider_id,
+        missing.credential_id,
+        "unknown" if active_only is None else bool(active_only),
+    )
 
     dialog = QMessageBox(parent)
     dialog.setIcon(QMessageBox.Icon.Warning)

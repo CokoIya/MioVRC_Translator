@@ -17,6 +17,25 @@ from src.utils.provider_network import (
 )
 
 
+def test_localhost_is_pinnable_to_ipv4_loopback_without_dns(monkeypatch):
+    monkeypatch.setattr(
+        provider_network.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("localhost pinning must not wait on DNS")
+        ),
+    )
+    assert provider_network.resolve_pinnable_local_provider_addresses("localhost") == (
+        provider_network.ipaddress.ip_address("127.0.0.1"),
+    )
+
+
+def test_ipv6_loopback_is_pinnable_without_corrupting_literal():
+    assert provider_network.resolve_pinnable_local_provider_addresses("::1") == (
+        provider_network.ipaddress.ip_address("::1"),
+    )
+
+
 @pytest.mark.parametrize(
     "url",
     (

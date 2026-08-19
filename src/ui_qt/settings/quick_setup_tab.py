@@ -61,6 +61,7 @@ class QuickSetupTab(LocalizedSettingsTab):
             config.get("translation", {}) if isinstance(config, dict) else {}
         )
         self._provider_api_keys = {}
+        self._provider_base_urls = {}
         provider_ids = {backend for _label_key, backend in PROVIDER_CHOICES}
         provider_ids.add(preserve_provider_id(translation_cfg.get("backend")))
         for provider in provider_ids:
@@ -71,6 +72,11 @@ class QuickSetupTab(LocalizedSettingsTab):
                 provider_cfg = translation_cfg.get("qwen", {})
             self._provider_api_keys[provider] = str(
                 provider_cfg.get("api_key", "") if isinstance(provider_cfg, dict) else ""
+            )
+            self._provider_base_urls[provider] = str(
+                provider_cfg.get("base_url", "")
+                if isinstance(provider_cfg, dict)
+                else ""
             )
         self._current_provider = preserve_provider_id(
             translation_cfg.get("backend", "openai")
@@ -381,6 +387,7 @@ class QuickSetupTab(LocalizedSettingsTab):
             "qianwen": "sk-...",
             "xai": "xai-...",
             "grok_compatible": "xai-...",
+            "local_ai": "(not required)",
         }
         self._api_key_input.setPlaceholderText(placeholders.get(provider, ""))
         self._on_config_change()
@@ -394,7 +401,10 @@ class QuickSetupTab(LocalizedSettingsTab):
         config = {
             "translation": {
                 "backend": provider,
-                provider: {"api_key": self._api_key_input.text().strip()},
+                provider: {
+                    "api_key": self._api_key_input.text().strip(),
+                    "base_url": self._provider_base_urls.get(provider, ""),
+                },
             }
         }
         missing = first_missing_required_credential(
@@ -417,6 +427,8 @@ class QuickSetupTab(LocalizedSettingsTab):
             missing,
             ui_language=self._ui_language,
             open_settings=open_api_settings,
+            trigger="quick_setup_provider_selection",
+            active_only=False,
         )
         return True
 

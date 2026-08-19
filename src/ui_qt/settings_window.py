@@ -6170,7 +6170,13 @@ class SettingsWindow(QDialog):
                     )
         return cfg
 
-    def _show_missing_credential(self, missing: MissingCredential) -> None:
+    def _show_missing_credential(
+        self,
+        missing: MissingCredential,
+        *,
+        trigger: str = "settings_provider_selection",
+        active_only: bool = False,
+    ) -> None:
         show_missing_credential_prompt(
             self,
             missing,
@@ -6179,6 +6185,8 @@ class SettingsWindow(QDialog):
                 missing.settings_page,
                 focus_target=missing.focus_target,
             ),
+            trigger=trigger,
+            active_only=active_only,
         )
 
     def _prompt_for_missing_credential(
@@ -6207,7 +6215,11 @@ class SettingsWindow(QDialog):
         )
         if missing is None:
             return False
-        self._show_missing_credential(missing)
+        self._show_missing_credential(
+            missing,
+            trigger=f"settings_{scope}_selection",
+            active_only=False,
+        )
         return True
 
     def _optional_backend_timeout(
@@ -9549,10 +9561,16 @@ class SettingsWindow(QDialog):
             cfg,
             scopes=("translation", "asr", "tts"),
             ui_language=self._ui_lang,
-            active_only=False,
+            # Saving unrelated settings must not be blocked by a disabled TTS
+            # engine or an inactive reverse-listen ASR choice left in config.
+            active_only=True,
         )
         if missing is not None:
-            self._show_missing_credential(missing)
+            self._show_missing_credential(
+                missing,
+                trigger="settings_save",
+                active_only=True,
+            )
             return
 
         self._pending_save_rollback_config = copy.deepcopy(self._config)

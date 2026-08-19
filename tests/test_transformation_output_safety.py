@@ -460,3 +460,49 @@ def test_structured_retry_requires_exact_single_result_field():
             source_text="Where are you?",
             structured=True,
         )
+
+
+def test_plain_translation_accepts_single_field_local_mt_json_envelope():
+    translator = _DummyTranslator()
+
+    assert (
+        translator._validated_translation_output(
+            '{"translation":"Bonjour !"}',
+            source_text="Hello!",
+        )
+        == "Bonjour !"
+    )
+
+
+@pytest.mark.parametrize(
+    ("target", "candidate"),
+    (
+        ("es", "これは日本語の返答です。"),
+        ("fr", "The answer is still in English."),
+        ("ru", "The answer is still in English."),
+        ("ko", "これは日本語の返答です。"),
+    ),
+)
+def test_validator_rejects_obvious_target_language_fallbacks(target, candidate):
+    translator = _DummyTranslator()
+
+    with pytest.raises(TransformationOutputRejected, match="target_language_mismatch"):
+        translator._validated_translation_output(
+            candidate,
+            source_text="Please translate this sentence.",
+            target_language=target,
+        )
+
+
+def test_translation_prompt_declares_code_and_forbidden_default_languages():
+    translator = _DummyTranslator()
+
+    prompt = translator._build_prompt(
+        "没有傲娇吗？",
+        "zh",
+        "fr",
+    )
+
+    assert '"target_language_code":"fr"' in prompt
+    assert '"mandatory_target_language":"French"' in prompt
+    assert '"Japanese","English"' in prompt

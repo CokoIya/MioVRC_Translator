@@ -265,7 +265,7 @@ class SettingsWindowTabbed(QDialog):
                     new_config,
                     scopes=("translation",),
                     ui_language=self._ui_language,
-                    active_only=False,
+                    active_only=True,
                 )
                 if current_backend in get_backend_order()
                 else None
@@ -330,6 +330,8 @@ class SettingsWindowTabbed(QDialog):
             missing,
             ui_language=self._ui_language,
             open_settings=lambda: self._open_api_credential_settings(missing),
+            trigger="tabbed_settings_save",
+            active_only=True,
         )
 
     def _open_api_credential_settings(self, missing: MissingCredential) -> None:
@@ -359,6 +361,11 @@ class SettingsWindowTabbed(QDialog):
             quick_translation["source_language"] = quick_config["source_language"]
         if "target_language" in quick_config:
             quick_translation["target_language"] = quick_config["target_language"]
+        # Quick Setup's source/target selectors are explicit player choices.
+        # Preserve that authority so config normalization cannot restore the
+        # UI-language default after a restart.
+        if "source_language" in quick_config or "target_language" in quick_config:
+            quick_translation["language_pair_source"] = "manual"
         original_translation = self._config.get("translation", {})
         api_models_translation = api_models_config.get("translation", {})
         provider, api_key = resolve_tabbed_provider_authority(

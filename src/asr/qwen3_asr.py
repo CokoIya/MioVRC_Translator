@@ -389,11 +389,17 @@ class Qwen3ASRProvider(ASRProvider):
             return False
 
         if result.succeeded:
+            probe_status = result.status_code
+            route_accepted = bool(
+                probe_status is not None and 200 <= probe_status < 400
+            )
             logger.info(
-                "Qwen3-ASR prewarm finished "
-                "(generation=%d status=%s elapsed_ms=%.0f)",
+                "Qwen3-ASR transport reachable "
+                "(generation=%d probe_status=%s probe_route_accepted=%s "
+                "elapsed_ms=%.0f)",
                 generation,
-                result.status_code if result.status_code is not None else "unknown",
+                probe_status if probe_status is not None else "unknown",
+                route_accepted,
                 result.elapsed_s * 1000.0,
             )
         else:
@@ -872,7 +878,12 @@ class Qwen3ASRProvider(ASRProvider):
                     reason,
                     exc_info=True,
                 )
-        logger.warning(
+        log = (
+            logger.info
+            if reason == "pipeline-cancel" and not active
+            else logger.warning
+        )
+        log(
             "Qwen3-ASR runtime retired generation=%d reason=%s "
             "cancelled_requests=%d cleanup_ms=%.1f",
             generation,

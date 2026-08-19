@@ -31,6 +31,7 @@ _SPECIAL_LOCAL_HOSTS = frozenset(
         "gateway.docker.internal",
     }
 )
+_LOOPBACK_HOSTS = frozenset({"localhost"})
 
 
 class SystemTrustHTTPAdapter(requests.adapters.HTTPAdapter):
@@ -128,6 +129,29 @@ def is_special_local_provider_host(host: object) -> bool:
 
     normalized = str(host or "").strip().rstrip(".").casefold()
     return normalized in _SPECIAL_LOCAL_HOSTS
+
+
+def resolve_pinnable_local_provider_addresses(
+    host: object,
+) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]:
+    """Return safe addresses for local hostnames that can be request-pinned.
+
+    ``localhost`` has a standards-defined loopback meaning, so using the
+    IPv4 literal avoids repeated Windows resolver/IPv6 fallback delays without
+    trusting DNS. Docker gateway names retain the stricter all-results-local
+    resolution policy below. Arbitrary hostnames are never resolved here.
+    """
+
+    normalized = str(host or "").strip().rstrip(".").casefold()
+    if normalized in _LOOPBACK_HOSTS or normalized.endswith(".localhost"):
+        return (ipaddress.ip_address("127.0.0.1"),)
+    try:
+        literal = ipaddress.ip_address(normalized)
+    except ValueError:
+        literal = None
+    if literal is not None and literal.is_loopback:
+        return (literal,)
+    return resolve_special_local_provider_addresses(normalized)
 
 
 def resolve_special_local_provider_addresses(
