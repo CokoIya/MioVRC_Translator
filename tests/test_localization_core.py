@@ -84,4 +84,5 @@ def test_backend_labels_localize_qualifiers_without_changing_backend_codes():
     assert get_backend_label("local_ai", "ja") == "ローカル AI"
     assert get_backend_label("deepl", "ru") == "DeepL (бесплатный тариф)"
     assert get_backend_label("anthropic_compatible", "ko") == "Claude 호환 서비스"
+    assert get_backend_label("microsoft_edge_web", "zh-CN") == "无限高质免费翻译(强推)"
     assert get_backend_label("openai_compatible") == "GPT Compatible"

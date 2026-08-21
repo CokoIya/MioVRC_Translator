@@ -369,6 +369,9 @@ def _pinned_sensevoice_spec(contents: dict[str, bytes]) -> ASRRuntimeSpec:
             (name, hashlib.sha256(content).hexdigest())
             for name, content in contents.items()
         ),
+        required_file_sizes=tuple(
+            (name, len(content)) for name, content in contents.items()
+        ),
     )
 
 
@@ -463,11 +466,86 @@ def test_pinned_sensevoice_prefers_https_for_each_hashed_file_without_snapshot(
         ),
     )
 
-    target = model_manager.download_model_to(spec, tmp_path / "downloaded")
+    progress_events: list[dict[str, object]] = []
+    target = model_manager.download_model_to(
+        spec,
+        tmp_path / "downloaded",
+        progress_callback=progress_events.append,
+    )
 
     assert calls == list(contents)
     assert not list(target.glob("*.part"))
     assert model_manager.verify_model_integrity(target, spec)
+    download_events = [
+        event for event in progress_events if event.get("stage") == "download"
+    ]
+    assert download_events
+    assert all(event.get("total_bytes") == sum(map(len, contents.values())) for event in download_events)
+    assert any(float(event.get("progress", 0.0)) > 0 for event in download_events)
+    assert progress_events[-1]["stage"] == "download_complete"
+    assert progress_events[-1]["progress"] == 1.0
+
+
+def test_failed_pinned_download_attempt_rolls_back_progress_before_fallback(
+    monkeypatch, tmp_path
+):
+    contents = {"configuration.json": b"{}", "model.pt": b"verified weights"}
+    spec = _pinned_sensevoice_spec(contents)
+    events: list[dict[str, object]] = []
+
+    def fail_https(
+        _spec,
+        filename,
+        *,
+        target_path,
+        root,
+        expected_sha256,
+        tracker,
+    ):
+        model_manager._write_verified_stream(
+            (contents[filename] + b"corrupt",),
+            target_path=target_path,
+            root=root,
+            expected_sha256=expected_sha256,
+            tracker=tracker,
+        )
+
+    def fallback(
+        _spec,
+        filename,
+        *,
+        target_path,
+        root,
+        expected_sha256,
+        tracker,
+        modelscope_cache,
+    ):
+        model_manager._write_verified_stream(
+            (contents[filename],),
+            target_path=target_path,
+            root=root,
+            expected_sha256=expected_sha256,
+            tracker=tracker,
+        )
+
+    monkeypatch.setattr(model_manager, "cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(model_manager, "_download_verified_http_file", fail_https)
+    monkeypatch.setattr(model_manager, "_download_verified_modelscope_file", fallback)
+
+    model_manager.download_model_to(
+        spec,
+        tmp_path / "downloaded",
+        progress_callback=events.append,
+    )
+
+    total = sum(map(len, contents.values()))
+    download_events = [event for event in events if event.get("stage") == "download"]
+    assert download_events
+    assert all(
+        int(event.get("downloaded_bytes", 0)) <= total
+        for event in download_events
+    )
+    assert events[-1]["stage"] == "download_complete"
 
 
 def test_pinned_sensevoice_uses_modelscope_after_https_failure(

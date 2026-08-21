@@ -2,6 +2,19 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.3.9.3] - 2026-08-21
+
+### Translation defaults and compatibility
+
+- Made `无限高质免费翻译(强推)` (Microsoft Edge Web) the default no-key translation service for new installs and automatic provider selection.
+- Added the Grok-compatible `grok-4.6` model as the newest default while preserving custom relay model IDs.
+- Kept the Qwen TTS DashScope result download secure when a local proxy uses synthetic Fake-IP DNS ranges.
+
+### Local model download
+
+- Fixed the SenseVoice setup window progress bar by reporting the pinned five-file bundle's verified total size and counting already-present files.
+- Fixed percentage rendering and retry progress rollback so failed partial downloads cannot make the next attempt appear ahead of its true position.
+
 ## [1.3.9.2] - 2026-08-19
 
 ### Translation correctness and compatibility

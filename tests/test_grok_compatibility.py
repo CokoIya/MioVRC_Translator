@@ -107,8 +107,11 @@ def _grok_config(**overrides) -> dict:
 
 def test_grok_profile_is_distinct_editable_and_localized():
     assert "grok_compatible" in OPENAI_COMPATIBLE_BACKENDS
-    assert get_backend_value("grok_compatible", "model") == "grok-4.5"
-    assert get_backend_model_options("grok_compatible") == ("grok-4.5",)
+    assert get_backend_value("grok_compatible", "model") == "grok-4.6"
+    assert get_backend_model_options("grok_compatible") == (
+        "grok-4.6",
+        "grok-4.5",
+    )
     assert backend_base_url_is_editable("grok_compatible") is True
     assert backend_model_is_editable("grok_compatible") is True
     for language in ("zh-CN", "en", "ja", "ru", "ko"):

@@ -634,7 +634,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "grok_compatible": {
         "label": "Grok Compatible",
         "base_url": "https://api.x.ai/v1",
-        "model": "grok-4.5",
+        "model": "grok-4.6",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -649,7 +649,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
             "OpenAI relay. The Base URL is not restricted to official xAI endpoints."
         ),
         "model_hint": (
-            "grok-4.5 is the default. Relay-specific model names are preserved "
+            "grok-4.6 is the default. Relay-specific model names are preserved "
             "exactly as entered and are never rewritten to an official xAI id."
         ),
     },
@@ -683,7 +683,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         ),
     },
     "microsoft_edge_web": {
-        "label": "Microsoft Edge Web",
+        "label": "Unlimited High-Quality Free Translation (Highly Recommended)",
         "base_url": "https://edge.microsoft.com/translate/translatetext",
         "model": "microsoft-edge-web",
         "timeout_s": 8.0,
@@ -938,7 +938,7 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "gpt-5.6-luna",
         "gpt-5.5",
     ),
-    "grok_compatible": ("grok-4.5",),
+    "grok_compatible": ("grok-4.6", "grok-4.5"),
     "google_web": ("google-web",),
     "microsoft_edge_web": ("microsoft-edge-web",),
     "mymemory": ("mymemory",),
@@ -1034,6 +1034,12 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     },
     "openai_compatible": {},
     "grok_compatible": {
+        "grok-4.6": {
+            "speed": "fast",
+            "quality": "very_high",
+            "fit": "very_recommended",
+            "note": "latest_default",
+        },
         "grok-4.5": {
             "speed": "fast",
             "quality": "high",
@@ -1323,11 +1329,11 @@ TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
         "ko": "Google 웹 번역",
     },
     "microsoft_edge_web": {
-        "zh-CN": "Microsoft Edge 网页翻译",
-        "en": "Microsoft Edge Web",
-        "ja": "Microsoft Edge ウェブ翻訳",
-        "ru": "Microsoft Edge Веб-перевод",
-        "ko": "Microsoft Edge 웹 번역",
+        "zh-CN": "无限高质免费翻译(强推)",
+        "en": "Unlimited High-Quality Free Translation (Highly Recommended)",
+        "ja": "無制限・高品質の無料翻訳（強くおすすめ）",
+        "ru": "Безлимитный качественный бесплатный перевод (очень рекомендуется)",
+        "ko": "무제한 고품질 무료 번역(강력 추천)",
     },
     "mymemory": {"zh-CN": "MyMemory", "en": "MyMemory", "ja": "MyMemory", "ru": "MyMemory", "ko": "MyMemory"},
     "deepl": {
@@ -1382,6 +1388,7 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
     },
     "openai_compatible": {},
     "grok_compatible": {
+        "grok-4.6": "9.8",
         "grok-4.5": "9.0",
     },
     "google_web": {
@@ -1474,8 +1481,8 @@ def get_backend_order() -> tuple:
 
 
 BACKEND_ORDER = tuple(TRANSLATION_BACKENDS.keys())
-DEFAULT_CHINESE_BACKEND = "qianwen"
-DEFAULT_INTERNATIONAL_BACKEND = "qianwen"
+DEFAULT_CHINESE_BACKEND = "microsoft_edge_web"
+DEFAULT_INTERNATIONAL_BACKEND = "microsoft_edge_web"
 DEFAULT_BACKEND = DEFAULT_CHINESE_BACKEND
 DEFAULT_ASR_ENGINE = "sensevoice-small"
 UI_LANGUAGE_LABELS = {code: label for label, code in UI_LANGUAGE_OPTIONS}

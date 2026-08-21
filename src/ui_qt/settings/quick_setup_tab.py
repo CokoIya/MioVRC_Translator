@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from src.utils.ui_config import UI_LANGUAGE_OPTIONS
+from src.utils.ui_config import (
+    DEFAULT_BACKEND,
+    UI_LANGUAGE_OPTIONS,
+    backend_api_key_is_required,
+    get_backend_label,
+)
 from src.ui_qt.credential_prompt import show_missing_credential_prompt
 from src.utils.credential_validation import (
     MissingCredential,
@@ -79,7 +84,7 @@ class QuickSetupTab(LocalizedSettingsTab):
                 else ""
             )
         self._current_provider = preserve_provider_id(
-            translation_cfg.get("backend", "openai")
+            translation_cfg.get("backend", DEFAULT_BACKEND)
         )
 
         self._init_ui()
@@ -271,6 +276,10 @@ class QuickSetupTab(LocalizedSettingsTab):
         layout.addWidget(label)
 
         self._provider_combo = QComboBox()
+        self._provider_combo.addItem(
+            get_backend_label(DEFAULT_BACKEND, self._ui_language),
+            DEFAULT_BACKEND,
+        )
         for label_key, backend in PROVIDER_CHOICES:
             self._provider_combo.addItem(self._t(label_key), backend)
         self._provider_combo.currentIndexChanged.connect(self._on_provider_change)
@@ -388,8 +397,10 @@ class QuickSetupTab(LocalizedSettingsTab):
             "xai": "xai-...",
             "grok_compatible": "xai-...",
             "local_ai": "(not required)",
+            "microsoft_edge_web": "(not required)",
         }
         self._api_key_input.setPlaceholderText(placeholders.get(provider, ""))
+        self._api_key_input.setEnabled(backend_api_key_is_required(provider))
         self._on_config_change()
         if not self._loading_config:
             self._prompt_for_missing_credential()
@@ -508,7 +519,9 @@ class QuickSetupTab(LocalizedSettingsTab):
         target = config.get("target_language", "zh-CN")
         self._target_combo.setCurrentIndex(target_reverse.get(target, 1))
 
-        provider = preserve_provider_id(config.get("translation_provider", "openai"))
+        provider = preserve_provider_id(
+            config.get("translation_provider", DEFAULT_BACKEND)
+        )
         api_key = str(config.get("api_key", "") or "")
         self._provider_api_keys[provider] = api_key
         provider_index = self._provider_combo.findData(provider)

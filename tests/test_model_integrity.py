@@ -72,6 +72,7 @@ def test_sensevoice_registry_hashes_exactly_cover_required_files():
     spec = get_asr_engine_spec("sensevoice-small")
 
     assert set(dict(spec.required_file_sha256)) == set(spec.required_files)
+    assert set(dict(spec.required_file_sizes)) == set(spec.required_files)
     assert len(spec.required_files) == 5
     assert spec.model_revision == "70514a3da51f1160f51d18449dab6128bbd4928b"
     assert SenseVoiceASR()._runtime_spec().required_file_sha256

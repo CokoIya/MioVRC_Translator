@@ -124,3 +124,21 @@ def test_setup_retry_progress_uses_structured_localized_fields(qtbot, monkeypatc
     assert "다시 시도" in rendered
     assert "2/3" in rendered
     assert "must not be displayed" not in rendered
+
+
+def test_setup_sensevoice_progress_updates_bar_and_fraction_label(qtbot, monkeypatch):
+    monkeypatch.setattr(model_download_dialog, "model_exists", lambda _spec: True)
+    window = SetupWindow("sensevoice-small", ui_lang="en")
+    qtbot.addWidget(window)
+
+    window._apply_modelscope_progress(
+        {
+            "stage": "download",
+            "progress": 0.42,
+            "downloaded_bytes": 420,
+            "total_bytes": 1000,
+        }
+    )
+
+    assert window._progress_widget._bar.value() == 42
+    assert window._progress_widget._pct_label.text() == "42%"

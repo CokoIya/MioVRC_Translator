@@ -112,7 +112,7 @@
     }
   },
   "translation": {
-    "backend": "qianwen",
+    "backend": "microsoft_edge_web",
     "backend_source": "auto",
     "source_language": "auto",
     "language_pair_source": "auto",
@@ -144,7 +144,7 @@
     "grok_compatible": {
       "api_key": "",
       "base_url": "https://api.x.ai/v1",
-      "model": "grok-4.5",
+      "model": "grok-4.6",
       "timeout_s": 15.0,
       "max_retries": 0,
       "streaming": true,

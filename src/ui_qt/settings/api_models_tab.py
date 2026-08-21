@@ -856,7 +856,9 @@ class APIModelsTab(LocalizedSettingsTab):
         )
         self._qwen_base_url_input.setReadOnly(bool(regional_qwen_base_url))
 
-        backend = preserve_provider_id(trans_cfg.get("backend", "openai"))
+        backend = preserve_provider_id(
+            trans_cfg.get("backend", "microsoft_edge_web")
+        )
         provider_index = self._ensure_provider_choice(backend)
         self._current_backend = backend
         self._provider_combo.setCurrentIndex(provider_index)
