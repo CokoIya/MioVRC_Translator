@@ -58,6 +58,24 @@ _DASHSCOPE_RESULT_HOST_RE = re.compile(
     r"^dashscope-result-[a-z0-9-]+\.oss-[a-z0-9-]+\.aliyuncs\.com$",
     re.IGNORECASE,
 )
+# Mihomo/Clash and several desktop TUN clients synthesize answers for public
+# DNS names in these ranges.  They are not routable provider addresses, but
+# they are valid proxy interception targets.  Keep the exception scoped to
+# the exact DashScope result-host pattern and continue to pin the connection
+# and verify the original TLS hostname before downloading audio.
+_DASHSCOPE_FAKE_IPV4_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+_DASHSCOPE_FAKE_IPV6_NETWORK = ipaddress.ip_network("fdfe:dcba:9876::/48")
+
+
+def _is_dashscope_proxy_synthetic_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    return bool(
+        address in _DASHSCOPE_FAKE_IPV4_NETWORK
+        or address in _DASHSCOPE_FAKE_IPV6_NETWORK
+    )
+
+
 _QWEN_SYNTHESIS_RETRY_DELAYS = (0.2,)
 _QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS = (0.25, 1.0, 2.0)
 _AUDIO_DNS_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
@@ -1589,7 +1607,12 @@ def _validated_audio_download_target(
     if not addresses:
         return None
 
-    is_local = all(is_local_provider_address(address) for address in addresses)
+    trusted_qwen_result_host = bool(_DASHSCOPE_RESULT_HOST_RE.fullmatch(host))
+    is_local = all(
+        is_local_provider_address(address)
+        and not _is_dashscope_proxy_synthetic_address(address)
+        for address in addresses
+    )
     api_is_local = False
     api_addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...] = ()
     if is_local and api_origin is not None:
@@ -1610,9 +1633,11 @@ def _validated_audio_download_target(
             and bool(set(addresses).intersection(api_addresses))
         )
     else:
-        trusted_qwen_result_host = bool(_DASHSCOPE_RESULT_HOST_RE.fullmatch(host))
         addresses_are_publicly_routable = all(
-            address.is_global
+            (
+                address.is_global
+                and not _is_dashscope_proxy_synthetic_address(address)
+            )
             or (
                 trusted_qwen_result_host
                 and not address.is_private
@@ -1621,6 +1646,12 @@ def _validated_audio_download_target(
                 and not address.is_multicast
                 and not address.is_unspecified
                 and not address.is_reserved
+            )
+            or (
+                trusted_qwen_result_host
+                and (
+                    _is_dashscope_proxy_synthetic_address(address)
+                )
             )
             for address in addresses
         )

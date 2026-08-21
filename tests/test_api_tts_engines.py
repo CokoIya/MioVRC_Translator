@@ -1156,6 +1156,59 @@ def test_qwen_signed_result_host_accepts_non_private_edge_address():
     assert unrelated_target is None
 
 
+def test_qwen_signed_result_host_accepts_tun_fake_dns_addresses_only():
+    fake_dns_addresses = (
+        api_tts_engines.ipaddress.ip_address("198.18.0.81"),
+        api_tts_engines.ipaddress.ip_address("fdfe:dcba:9876::3e"),
+    )
+
+    qwen_target = api_tts_engines._validated_audio_download_target(
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/audio.wav",
+        api_base_url="https://dashscope.aliyuncs.com/api/v1",
+        resolver=lambda _host, _port: fake_dns_addresses,
+    )
+    unrelated_target = api_tts_engines._validated_audio_download_target(
+        "https://cdn.example/audio.wav",
+        api_base_url="https://api.example/v1",
+        resolver=lambda _host, _port: fake_dns_addresses,
+    )
+    lookalike_target = api_tts_engines._validated_audio_download_target(
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com.evil.test/audio.wav",
+        api_base_url="https://dashscope.aliyuncs.com/api/v1",
+        resolver=lambda _host, _port: fake_dns_addresses,
+    )
+
+    assert qwen_target is not None
+    assert qwen_target.address == "198.18.0.81"
+    assert unrelated_target is None
+    assert lookalike_target is None
+
+
+def test_qwen_signed_result_host_still_rejects_loopback_and_non_https():
+    assert api_tts_engines._validated_audio_download_target(
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/audio.wav",
+        api_base_url="https://dashscope.aliyuncs.com/api/v1",
+        resolver=lambda host, _port: (
+            api_tts_engines.ipaddress.ip_address(
+                "127.0.0.1"
+                if host.startswith("dashscope-result-")
+                else "8.8.8.8"
+            ),
+        ),
+    ) is None
+    assert api_tts_engines._validated_audio_download_target(
+        "http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/audio.wav",
+        api_base_url="https://dashscope.aliyuncs.com/api/v1",
+        resolver=lambda host, _port: (
+            api_tts_engines.ipaddress.ip_address(
+                "198.18.0.81"
+                if host.startswith("dashscope-result-")
+                else "8.8.8.8"
+            ),
+        ),
+    ) is None
+
+
 def test_local_qwen_tts_endpoint_allows_no_key_and_bypasses_environment_proxy():
     engine = QwenTTS(
         {

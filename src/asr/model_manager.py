@@ -910,14 +910,15 @@ class _AggregateDownloadProgress:
             downloaded_bytes = self.downloaded_bytes
 
         if total_bytes > 0:
-            progress = min(downloaded_bytes / total_bytes, 0.999)
+            reported_downloaded_bytes = min(downloaded_bytes, total_bytes)
+            progress = min(reported_downloaded_bytes / total_bytes, 0.999)
             _emit_progress(
                 self.progress_callback,
                 stage="download",
                 message="downloading",
                 progress=progress,
                 total_bytes=total_bytes,
-                downloaded_bytes=downloaded_bytes,
+                downloaded_bytes=reported_downloaded_bytes,
             )
             return
 
@@ -926,6 +927,29 @@ class _AggregateDownloadProgress:
             stage="download",
             message="downloading",
             indeterminate=True,
+            downloaded_bytes=downloaded_bytes,
+        )
+
+    def checkpoint(self) -> int:
+        with self._lock:
+            return self.downloaded_bytes
+
+    def rollback(self, checkpoint: int) -> None:
+        with self._lock:
+            self.downloaded_bytes = max(0, int(checkpoint))
+            total_bytes = self.total_bytes
+            downloaded_bytes = self.downloaded_bytes
+        _emit_progress(
+            self.progress_callback,
+            stage="download",
+            message="downloading",
+            progress=(
+                min(downloaded_bytes / total_bytes, 0.999)
+                if total_bytes > 0
+                else None
+            ),
+            indeterminate=total_bytes <= 0,
+            total_bytes=total_bytes or None,
             downloaded_bytes=downloaded_bytes,
         )
 
@@ -1007,6 +1031,7 @@ def _write_verified_stream(
     part_path = target_path.with_name(target_path.name + ".part")
     hasher = hashlib.sha256()
     written = 0
+    progress_checkpoint = tracker.checkpoint()
     try:
         with _open_part_file(part_path, root=root) as handle:
             for chunk in chunks:
@@ -1034,6 +1059,7 @@ def _write_verified_stream(
         if _sha256_file(target_path) != expected_sha256:
             raise RuntimeError(f"Downloaded model file changed after verification: {target_path.name}")
     except Exception:
+        tracker.rollback(progress_checkpoint)
         try:
             if part_path.exists() and not part_path.is_symlink():
                 part_path.unlink()
@@ -1153,15 +1179,26 @@ def _download_pinned_sensevoice_to(
     trusted_hashes = dict(spec.required_file_sha256)
     if set(trusted_hashes) != set(spec.required_files):
         raise RuntimeError("SenseVoice trusted hashes do not cover every required file")
+    trusted_sizes = dict(spec.required_file_sizes)
+    sizes_are_complete = (
+        set(trusted_sizes) == set(spec.required_files)
+        and all(
+            isinstance(size, int) and size > 0
+            for size in trusted_sizes.values()
+        )
+    )
 
     target_dir = _prepare_secure_target_directory(target_dir)
     modelscope_cache: pathlib.Path | None = None
-    tracker = _AggregateDownloadProgress(None, progress_callback)
+    total_bytes = sum(trusted_sizes.values()) if sizes_are_complete else None
+    tracker = _AggregateDownloadProgress(total_bytes, progress_callback)
     _emit_progress(
         progress_callback,
         stage="download_prepare",
         message="download_prepare",
-        indeterminate=True,
+        progress=0.0 if total_bytes else None,
+        indeterminate=not total_bytes,
+        total_bytes=total_bytes,
         downloaded_bytes=0,
     )
 
@@ -1173,6 +1210,8 @@ def _download_pinned_sensevoice_to(
             _is_regular_nonlink_file(target_path, root=target_dir)
             and _sha256_file(target_path) == expected_sha256
         ):
+            if sizes_are_complete:
+                tracker.update(trusted_sizes[filename])
             continue
 
         last_error: Exception | None = None

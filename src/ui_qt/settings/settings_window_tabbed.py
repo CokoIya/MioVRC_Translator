@@ -406,7 +406,7 @@ class SettingsWindowTabbed(QDialog):
             "source_language": translation_cfg.get("source_language", "auto"),
             "target_language": translation_cfg.get("target_language", "zh-CN"),
             "translation_provider": preserve_provider_id(
-                translation_cfg.get("backend", "openai")
+                translation_cfg.get("backend", "microsoft_edge_web")
             ),
         }
         provider = quick_config["translation_provider"]

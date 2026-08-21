@@ -52,6 +52,7 @@ class ASRRuntimeSpec:
     bundled_dir_names: tuple[str, ...] = ()
     required_files: tuple[str, ...] = ()
     required_file_sha256: tuple[tuple[str, str], ...] = ()
+    required_file_sizes: tuple[tuple[str, int], ...] = ()
 
 
 ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
@@ -91,6 +92,13 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
                 "model.pt",
                 "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
             ),
+        ),
+        required_file_sizes=(
+            ("am.mvn", 11_203),
+            ("chn_jpn_yue_eng_ko_spectok.bpe.model", 377_341),
+            ("config.yaml", 1_855),
+            ("configuration.json", 396),
+            ("model.pt", 936_291_369),
         ),
     ),
     "whisper-large-v3-turbo": ASRRuntimeSpec(

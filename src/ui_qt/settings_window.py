@@ -2449,7 +2449,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "托管端点使用 NVIDIA API Catalog 密钥；自建 NIM 或代理请选择自定义。",
         "backend_api_hint_anthropic_compatible": "用于兼容 Claude 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
         "backend_model_hint_openai_compatible": "选择代理公开的模型 ID；已保存的自定义模型会继续保留在列表中。",
-        "backend_model_hint_grok_compatible": "默认模型为 grok-4.5。中继服务的自定义模型名称会按输入内容原样保存，不会被改写。",
+        "backend_model_hint_grok_compatible": "默认模型为 grok-4.6，也可选择 grok-4.5。中继服务的自定义模型名称会按输入内容原样保存，不会被改写。",
         "backend_model_hint_local_ai": "填写本地 OpenAI 兼容服务器公开的模型名称。",
         "backend_model_hint_google_web": "无需 API Key。使用 Google 公共网页翻译；可访问地区质量较好，中国大陆连接可能不稳定。",
         "backend_model_hint_microsoft_edge_web": "无需 API Key。使用 Microsoft Edge 网页翻译服务；并非 Azure 官方 API，服务可用性不提供保证。",
@@ -2475,7 +2475,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "ホスト型は NVIDIA API Catalog キー、自前の NIM／プロキシはカスタムを使用します。",
         "backend_api_hint_anthropic_compatible": "Claude 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
         "backend_model_hint_openai_compatible": "プロキシが公開するモデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
-        "backend_model_hint_grok_compatible": "既定は grok-4.5 です。中継サービス固有のモデル名は入力どおり保存され、書き換えられません。",
+        "backend_model_hint_grok_compatible": "既定は grok-4.6 で、grok-4.5 も選択できます。中継サービス固有のモデル名は入力どおり保存され、書き換えられません。",
         "backend_model_hint_local_ai": "ローカルの OpenAI 互換サーバーが公開するモデル名を入力します。",
         "backend_model_hint_google_web": "API キー不要の Google 公開翻訳です。利用可能地域では高品質ですが、中国本土では接続が不安定な場合があります。",
         "backend_model_hint_microsoft_edge_web": "API キー不要の Microsoft Edge ウェブ翻訳です。Azure の公式 API ではなく、可用性保証はありません。",
@@ -2501,7 +2501,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "Для хостинга используйте ключ NVIDIA API Catalog; для своего NIM или прокси выберите пользовательский адрес.",
         "backend_api_hint_anthropic_compatible": "Для прокси и шлюзов, совместимых с Claude. Укажите Base URL и идентификатор модели от провайдера.",
         "backend_model_hint_openai_compatible": "Выберите ID модели, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
-        "backend_model_hint_grok_compatible": "Модель по умолчанию — grok-4.5. Пользовательские имена моделей шлюза сохраняются без изменений.",
+        "backend_model_hint_grok_compatible": "Модель по умолчанию — grok-4.6; также доступна grok-4.5. Пользовательские имена моделей шлюза сохраняются без изменений.",
         "backend_model_hint_local_ai": "Введите имя модели, которое предоставляет локальный OpenAI-совместимый сервер.",
         "backend_model_hint_google_web": "API-ключ не нужен. Используется публичный перевод Google; в Китае доступ может быть нестабильным.",
         "backend_model_hint_microsoft_edge_web": "API-ключ не нужен. Используется веб-служба Microsoft Edge, а не официальный Azure API; доступность не гарантируется.",
@@ -2527,7 +2527,7 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_nvidia": "호스팅은 NVIDIA API Catalog 키를, 자체 NIM 또는 프록시는 사용자 지정을 사용합니다.",
         "backend_api_hint_anthropic_compatible": "Claude 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
         "backend_model_hint_openai_compatible": "프록시가 제공하는 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
-        "backend_model_hint_grok_compatible": "기본 모델은 grok-4.5입니다. 중계 서비스의 사용자 지정 모델 이름은 입력한 그대로 저장되며 변경되지 않습니다.",
+        "backend_model_hint_grok_compatible": "기본 모델은 grok-4.6이며 grok-4.5도 선택할 수 있습니다. 중계 서비스의 사용자 지정 모델 이름은 입력한 그대로 저장되며 변경되지 않습니다.",
         "backend_model_hint_local_ai": "로컬 OpenAI 호환 서버가 제공하는 모델 이름을 입력합니다.",
         "backend_model_hint_google_web": "API 키가 필요 없는 Google 공개 번역입니다. 사용 가능한 지역에서는 품질이 좋지만 중국 본토에서는 불안정할 수 있습니다.",
         "backend_model_hint_microsoft_edge_web": "API 키가 필요 없는 Microsoft Edge 웹 번역입니다. 공식 Azure API가 아니며 가용성 보장은 없습니다.",
@@ -3441,7 +3441,9 @@ class SettingsWindow(QDialog):
             fallback_text = ""
         self._fallback_backends_var.set(fallback_text)
 
-        backend = normalize_backend(trans_cfg.get("backend", "openai"))
+        backend = normalize_backend(
+            trans_cfg.get("backend", "microsoft_edge_web")
+        )
         self._backend_var.set(get_backend_label(backend, self._ui_lang))
         self._backend_codes = {
             get_backend_label(b, self._ui_lang): b for b in get_backend_order()
@@ -3839,7 +3841,16 @@ class SettingsWindow(QDialog):
         denoise_key, _value = min(DENOISE_PRESETS, key=lambda item: abs(item[1] - denoise_value))
         self._denoise_var.set(denoise_labels[denoise_key])
 
-        backend = str(codes.get("backend", normalize_backend(self._config.get("translation", {}).get("backend", "openai"))))
+        backend = str(
+            codes.get(
+                "backend",
+                normalize_backend(
+                    self._config.get("translation", {}).get(
+                        "backend", "microsoft_edge_web"
+                    )
+                ),
+            )
+        )
         self._backend_codes = {
             get_backend_label(b, self._ui_lang): b for b in get_backend_order()
         }
@@ -5940,7 +5951,14 @@ class SettingsWindow(QDialog):
                 SettingsWindow._clear_layout(child_layout)
 
     def _backend_code(self) -> str:
-        return self._backend_codes.get(self._backend_var.value(), normalize_backend(self._config.get("translation", {}).get("backend", "openai")))
+        return self._backend_codes.get(
+            self._backend_var.value(),
+            normalize_backend(
+                self._config.get("translation", {}).get(
+                    "backend", "microsoft_edge_web"
+                )
+            ),
+        )
 
     def _render_backend_fields(self) -> None:
         backend = self._backend_code()

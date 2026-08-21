@@ -72,6 +72,7 @@ def test_sensevoice_spec_is_pinned_and_all_required_files_are_hashed():
         "model.pt",
     }
     assert set(dict(spec.required_file_sha256)) == set(spec.required_files)
+    assert set(dict(spec.required_file_sizes)) == set(spec.required_files)
 
 
 def test_whisper_asr_spec_remains_internal_but_is_not_user_selectable():
