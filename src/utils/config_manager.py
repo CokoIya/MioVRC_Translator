@@ -39,6 +39,7 @@ from src.utils.global_hotkey import (
 )
 from src.utils.ui_config import (
     DEFAULT_ASR_ENGINE,
+    DISABLED_TRANSLATION_BACKENDS,
     SUPPORTED_MANUAL_SOURCE_LANGUAGE_CODES,
     SUPPORTED_TARGET_LANGUAGE_CODES,
     _catalog_backends,
@@ -174,6 +175,7 @@ _LEGACY_OPENAI_MODEL_PREFIXES = (
 _LEGACY_OPENAI_MODEL_IDS = {
     "gpt-4",
     "gpt-5.4-pro",
+    "gpt-5.5",
     "gpt-5.6",
     "gpt-5.6-mini",
     "gpt-5.6-nano",
@@ -195,6 +197,11 @@ _LEGACY_GEMINI_MODEL_IDS = {
     "gemini-3.1-flash-lite-preview",
     "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
+    # Shut down 2026-06-01; a request naming either one now fails outright.
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
 }
 _LEGACY_DOUBAO_BASE_URLS = {
     "https://ark.cn-beijing.volces.com/api/compatible/v1",
@@ -224,20 +231,44 @@ _THINKING_MODEL_REPLACEMENTS = {
 _RETIRED_MODEL_REPLACEMENTS = {
     "qianwen": {
         "qwen3.7-max": "qwen-mt-plus",
-        "qwen-mt-turbo": "qwen-mt-plus",
-        "qwen-mt-lite": "qwen-mt-flash",
+        # qwen-mt-turbo is the one the vendor marks as no longer updated;
+        # qwen-mt-lite is a current low-latency model and must not be migrated.
+        "qwen-mt-turbo": "qwen-mt-flash",
     },
     "hunyuan": {"hunyuan-lite": "hunyuan-turbo-latest"},
     "xiaomi": {
         "mimo-v2-pro": "mimo-v2.5-pro",
         "mimo-v2-omni": "mimo-v2.5",
     },
-    "gemini": {"gemini-2.5-pro": "gemini-3.5-flash"},
+    "gemini": {
+        "gemini-2.5-pro": "gemini-3.7-flash",
+        # Shut down 2026-06-01.
+        "gemini-2.5-flash": "gemini-3.7-flash",
+        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+    },
     "kimi": {
         "kimi-k2-0905-preview": "kimi-k2.6",
         "kimi-k2-turbo-preview": "kimi-k2.6",
+        # Closed to new users after K3 shipped, with shutdown announced.
+        "kimi-k2.5": "kimi-k2.6",
     },
-    "xai": {"grok-4.20-multi-agent-0309": "grok-4.20-0309-non-reasoning"},
+    "xai": {
+        "grok-4.20-multi-agent-0309": "grok-4.20-0309-non-reasoning",
+        # No longer listed on its own; only the dated variants remain.
+        "grok-4.20": "grok-4.20-0309-non-reasoning",
+    },
+    "zhipu": {
+        # The entire GLM-4.7/5.0/5.1 catalog is gone from the vendor's docs.
+        "glm-5.1": "glm-5.3",
+        "glm-5": "glm-5.3",
+        "glm-5-turbo": "glm-5.3-flash",
+        "glm-4.7": "glm-5.3",
+        "glm-4.7-flash": "glm-5.3-flash",
+        "glm-4.7-flashx": "glm-5.3-flash",
+    },
+    # A date-suffixed Claude id is not a valid model string.
+    "anthropic": {"claude-haiku-4-5-20251001": "claude-haiku-4-5"},
+    "anthropic_compatible": {"claude-haiku-4-5-20251001": "claude-haiku-4-5"},
     "mistral": {
         "mistral-large-latest": "mistral-medium-3-5",
         "ministral-3b-latest": "ministral-8b-latest",
@@ -1417,7 +1448,12 @@ def _ensure_translation_config(
         backend_source = str(trans_cfg["backend_source"])
         changed = True
 
-    if prefer_auto_backend or not backend or backend not in _catalog_backends():
+    if (
+        prefer_auto_backend
+        or not backend
+        or backend in DISABLED_TRANSLATION_BACKENDS
+        or backend not in _catalog_backends()
+    ):
         if trans_cfg.get("backend") != recommended_backend:
             trans_cfg["backend"] = recommended_backend
             changed = True
@@ -1720,6 +1756,14 @@ def _ensure_translation_config(
         model = str(qwen_cfg.get("model", "") or "").strip().lower()
         if model in _UNROUTABLE_QWEN_GENERAL_MODEL_IDS:
             qwen_cfg["model"] = "qwen-mt-plus"
+            changed = True
+
+    # Renamed in the UI, so a stored config still holds the old identifier.
+    # The endpoint is the same; only the name players see has changed.
+    edge_web_cfg = trans_cfg.get("microsoft_edge_web", {})
+    if isinstance(edge_web_cfg, dict):
+        if str(edge_web_cfg.get("model", "") or "").strip().lower() == "microsoft-edge-web":
+            edge_web_cfg["model"] = "bing"
             changed = True
 
     for backend, legacy_models in (("gemini", _LEGACY_GEMINI_MODEL_IDS),):

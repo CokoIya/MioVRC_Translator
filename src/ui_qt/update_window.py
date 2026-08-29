@@ -1345,53 +1345,72 @@ class UpdateWindow(QDialog):
         self._destroying = True
         super().closeEvent(event)
 
+
+    def _resolved_theme(self) -> str:
+        """Return the palette this dialog should paint with.
+
+        These windows can open before or after the main window exists, so the
+        theme is read from config rather than passed down a chain that is not
+        always there.
+        """
+
+        from src.ui_qt.theme import theme_from_config
+
+        try:
+            from src.utils import config_manager
+
+            return theme_from_config(config_manager.load_config())
+        except Exception:
+            return "dark"
+
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-        QDialog { background: #f5f5f7; }
-        QLabel { color: #1d1d1f; font-size: 14px; }
-        #notesLabel {
-            background: #f7f8fc;
-            border: 1px solid #d8dde6;
+        from src.ui_qt.styles import build_app_stylesheet
+        from src.ui_qt.theme import theme_tokens
+
+        theme = self._resolved_theme()
+        c = theme_tokens(theme)
+        self.setStyleSheet(
+            build_app_stylesheet(theme)
+            + f"""
+        QDialog {{ background: {c["APP_BG"]}; }}
+        QLabel {{ color: {c["TEXT_PRIMARY"]}; font-size: 14px; }}
+        #notesLabel {{
+            background: {c["PANEL_BG"]};
+            border: 1px solid {c["PANEL_BORDER"]};
             border-radius: 12px;
             padding: 12px;
-            color: #6e6e73;
-        }
-        #versionBadge {
-            background: #e8f2ff;
+            color: {c["TEXT_SECONDARY"]};
+        }}
+        #versionBadge {{
+            background: {c["ACCENT_SOFT"]};
             border-radius: 999px;
-            color: #0071e3;
+            color: {c["ACCENT"]};
             font-weight: 700;
             font-size: 12px;
             padding: 3px 10px;
-        }
-        #progressLabel { color: #6e6e73; }
-        #successLabel { color: #1f6b3d; }
-        #errorLabel { color: #b91c1c; }
-        #subLabel { color: #8e8e93; font-size: 13px; }
-        QProgressBar {
+        }}
+        #progressLabel {{ color: {c["TEXT_SECONDARY"]}; }}
+        #successLabel {{ color: {c["SUCCESS"]}; }}
+        #errorLabel {{ color: {c["DANGER"]}; }}
+        #subLabel {{ color: {c["TEXT_MUTED"]}; font-size: 13px; }}
+        QProgressBar {{
             border: none;
-            background: #e0e4ea;
+            background: {c["PANEL_BORDER"]};
             border-radius: 6px;
             height: 8px;
-        }
-        QProgressBar::chunk { background: #0071e3; border-radius: 6px; }
-        QPushButton {
-            background: #eef1f5;
-            border: 1px solid #d8dde6;
+        }}
+        QProgressBar::chunk {{ background: {c["ACCENT"]}; border-radius: 6px; }}
+        QPushButton {{
             border-radius: 12px;
-            color: #1d1d1f;
             padding: 8px 16px;
             font-size: 14px;
             font-weight: 600;
-        }
-        QPushButton:hover { background: #e0e4ea; }
-        #primaryButton { background: #0071e3; color: #ffffff; border: 0; }
-        #primaryButton:hover { background: #0059b8; }
-        #ignoreButton {
+        }}
+        #ignoreButton {{
             background: transparent;
-            color: #8e8e93;
-            border: 1px solid #d8dde6;
+            color: {c["TEXT_MUTED"]};
+            border: 1px solid {c["PANEL_BORDER"]};
             font-size: 13px;
-        }
-        #ignoreButton:hover { background: #e0e4ea; color: #1d1d1f; }
-        """)
+        }}
+        """
+        )

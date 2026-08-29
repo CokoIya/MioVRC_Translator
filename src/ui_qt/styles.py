@@ -359,6 +359,44 @@ def _build_main_window_styles_uncached(theme: str) -> str:
         background: transparent;
         border: 0;
     }}
+    /* The OSC guide is the only dialog the main window builds itself. Without
+       these rules its scroll area kept the default palette and painted a white
+       slab under light theme text, leaving the instructions unreadable. */
+    QDialog#oscGuideDialog {{
+        background: {c["SHELL_BG"]};
+    }}
+    QScrollArea#oscGuideScroll,
+    QScrollArea#oscGuideScroll > QWidget,
+    QScrollArea#oscGuideScroll QWidget#qt_scrollarea_viewport,
+    QWidget#oscGuideContent {{
+        background: transparent;
+        border: 0;
+    }}
+    /* The first thing a new player reads: whether they need to configure
+       anything at all before pressing start. It outranks the mode cards, so it
+       is sized and coloured to be read first rather than scanned past. */
+    QFrame#wizardHeadlineCard {{
+        background: {c["ACCENT_SOFT"]};
+        border: 1px solid {c["ACCENT_BORDER"]};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QLabel#wizardHeadlinePrimary {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 17px;
+        font-weight: 800;
+        background: transparent;
+    }}
+    QLabel#wizardHeadlineSecondary {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 14px;
+        font-weight: 700;
+        background: transparent;
+    }}
+    QFrame#guideStepCard {{
+        background: {glass_alt_bg};
+        border: 1px solid {glass_border};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
     #appChrome {{
         background: {shell_bg};
         border: 0;
@@ -781,100 +819,34 @@ def build_settings_window_styles(theme: object) -> str:
 
 
 
-def build_text_input_styles(theme: object) -> str:
+def _overlay_chrome(
+    theme: object,
+    *,
+    shell: str,
+    caption: str,
+    hint: str,
+    icon_button: str,
+) -> str:
+    """Return the frameless-window chrome both floating windows are built on.
+
+    The reverse-translation overlay and the text composer are separate windows
+    with different jobs, but a player moves between them constantly and they
+    sit on screen together. Generating their shell, header caption, hint text,
+    window buttons and opacity slider from one definition keeps them reading as
+    one product without letting either window's needs distort the other's.
+    """
+
     c = theme_tokens(theme)
-    return _base(theme) + f"""
+    return f"""
     QDialog {{
         background: transparent;
     }}
-    QFrame#textInputShell {{
+    QFrame#{shell} {{
         background: {c["SHELL_BG"]};
         border: 1px solid {c["SHELL_BORDER"]};
         border-radius: {c["RADIUS_L"]}px;
     }}
-    QLabel#opacityLabel, QLabel#textInputCounter {{
-        color: {c["TEXT_SECONDARY"]};
-        font-size: 11px;
-    }}
-    QLabel#textInputTitle {{
-        color: {c["TEXT_SECONDARY"]};
-        font-size: 12px;
-        font-weight: 600;
-    }}
-    QLabel#textInputKeyHint {{
-        color: {c["TEXT_MUTED"]};
-        font-size: 11px;
-    }}
-    QLabel#textInputCounter[limit="warn"] {{
-        color: {c["WARNING"]};
-    }}
-    QLabel#textInputCounter[limit="full"] {{
-        color: {c["DANGER"]};
-        font-weight: 700;
-    }}
-    QTextEdit#inputTextEdit, QScrollArea#inputTextEdit {{
-        background: {c["PANEL_BG"]};
-        border: 1px solid {c["FIELD_BORDER"]};
-        border-radius: {c["RADIUS_M"]}px;
-        color: {c["TEXT_PRIMARY"]};
-        padding: 12px;
-        font-size: 15px;
-    }}
-    QScrollArea#inputTextEdit > QWidget,
-    QScrollArea#inputTextEdit QWidget#qt_scrollarea_viewport,
-    QWidget#floatingScrollContent {{
-        background: transparent;
-        border: 0;
-    }}
-    QTextEdit#inputTextEdit:focus, QScrollArea#inputTextEdit:focus {{
-        border-color: {c["ACCENT"]};
-    }}
-    QPushButton#iconButton {{
-        min-width: 30px;
-        max-width: 30px;
-        min-height: 30px;
-        max-height: 30px;
-        padding: 0;
-        border-radius: 10px;
-    }}
-    QPushButton#primaryButton {{
-        min-height: 34px;
-        padding: 0 14px;
-    }}
-    QSlider::groove:horizontal {{
-        background: {c["PANEL_BORDER"]};
-        border-radius: 4px;
-        height: 7px;
-    }}
-    QSlider::handle:horizontal {{
-        background: {c["ACCENT"]};
-        border-radius: 7px;
-        width: 14px;
-        margin: -4px 0;
-    }}
-    """
-
-
-
-def build_floating_window_styles(theme: object) -> str:
-    """Style the reverse-translation overlay as a chat transcript.
-
-    The overlay used to borrow the text-input sheet, which sized every control
-    for a composer the overlay does not have. It now carries its own smaller
-    metrics so the window stays readable when shrunk down beside VRChat.
-    """
-
-    c = theme_tokens(theme)
-    return _base(theme) + f"""
-    QDialog {{
-        background: transparent;
-    }}
-    QFrame#floatingShell {{
-        background: {c["SHELL_BG"]};
-        border: 1px solid {c["SHELL_BORDER"]};
-        border-radius: {c["RADIUS_L"]}px;
-    }}
-    QLabel#floatingStatus {{
+    QLabel#{caption} {{
         color: {c["TEXT_SECONDARY"]};
         font-size: 11px;
         padding: 0 8px;
@@ -884,10 +856,88 @@ def build_floating_window_styles(theme: object) -> str:
         border-radius: 9px;
         background: {c["PANEL_BG"]};
     }}
-    QLabel#floatingHint {{
+    QLabel#{hint} {{
         color: {c["TEXT_MUTED"]};
         font-size: 11px;
     }}
+    QPushButton#{icon_button} {{
+        min-width: 26px;
+        max-width: 26px;
+        min-height: 26px;
+        max-height: 26px;
+        padding: 0;
+        border-radius: 9px;
+    }}
+    QPushButton#{icon_button}[pinned="true"] {{
+        border-color: {c["ACCENT"]};
+        background: {c["ACCENT_SOFT"]};
+    }}
+    QSlider::groove:horizontal {{
+        background: {c["PANEL_BORDER"]};
+        border-radius: 3px;
+        height: 5px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {c["ACCENT"]};
+        border-radius: 5px;
+        width: 10px;
+        margin: -3px 0;
+    }}
+    """
+
+
+def build_text_input_styles(theme: object) -> str:
+    """Style the composer: shared chrome plus the input field and its counter."""
+
+    c = theme_tokens(theme)
+    return _base(theme) + _overlay_chrome(
+        theme,
+        shell="textInputShell",
+        caption="textInputTitle",
+        hint="textInputKeyHint",
+        icon_button="iconButton",
+    ) + f"""
+    QLabel#textInputCounter {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 11px;
+    }}
+    QLabel#textInputCounter[limit="warn"] {{
+        color: {c["WARNING"]};
+    }}
+    QLabel#textInputCounter[limit="full"] {{
+        color: {c["DANGER"]};
+        font-weight: 700;
+    }}
+    QTextEdit#inputTextEdit {{
+        background: {c["PANEL_BG"]};
+        border: 1px solid {c["FIELD_BORDER"]};
+        border-radius: {c["RADIUS_M"]}px;
+        color: {c["TEXT_PRIMARY"]};
+        padding: 10px;
+        font-size: 15px;
+    }}
+    QTextEdit#inputTextEdit:focus {{
+        border-color: {c["ACCENT"]};
+    }}
+    QPushButton#primaryButton {{
+        min-height: 26px;
+        padding: 0 12px;
+        border-radius: 9px;
+    }}
+    """
+
+
+def build_floating_window_styles(theme: object) -> str:
+    """Style the overlay: shared chrome plus the chat transcript."""
+
+    c = theme_tokens(theme)
+    return _base(theme) + _overlay_chrome(
+        theme,
+        shell="floatingShell",
+        caption="floatingStatus",
+        hint="floatingHint",
+        icon_button="floatingIconButton",
+    ) + f"""
     QScrollArea#floatingTranscript {{
         background: transparent;
         border: 0;
@@ -903,18 +953,6 @@ def build_floating_window_styles(theme: object) -> str:
         color: {c["TEXT_MUTED"]};
         font-size: 10px;
     }}
-    QPushButton#floatingIconButton {{
-        min-width: 26px;
-        max-width: 26px;
-        min-height: 26px;
-        max-height: 26px;
-        padding: 0;
-        border-radius: 9px;
-    }}
-    QPushButton#floatingIconButton[pinned="true"] {{
-        border-color: {c["ACCENT"]};
-        background: {c["ACCENT_SOFT"]};
-    }}
     QPushButton#floatingSendButton {{
         min-height: 26px;
         padding: 0 10px;
@@ -923,16 +961,5 @@ def build_floating_window_styles(theme: object) -> str:
     }}
     QPushButton#floatingSendButton:disabled {{
         color: {c["TEXT_MUTED"]};
-    }}
-    QSlider::groove:horizontal {{
-        background: {c["PANEL_BORDER"]};
-        border-radius: 3px;
-        height: 5px;
-    }}
-    QSlider::handle:horizontal {{
-        background: {c["ACCENT"]};
-        border-radius: 5px;
-        width: 10px;
-        margin: -3px 0;
     }}
     """

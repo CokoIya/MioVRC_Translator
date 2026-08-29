@@ -85,11 +85,11 @@ This document lists the third-party libraries, tools, and bundled models used by
 - **URL**: https://github.com/openai/openai-python
 - **Usage**: OpenAI API client
 
-#### Anthropic Python SDK
+#### Anthropic Python SDK (legacy source only)
 - **License**: MIT License
 - **Copyright**: Copyright (c) 2023 Anthropic
 - **URL**: https://github.com/anthropics/anthropic-sdk-python
-- **Usage**: Anthropic Claude API client
+- **Usage**: Legacy Anthropic translator source retained for configuration migration. Claude/Anthropic is disabled and this SDK is neither installed nor bundled in the release.
 
 #### Requests
 - **License**: Apache License 2.0

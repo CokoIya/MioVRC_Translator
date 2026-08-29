@@ -41,7 +41,9 @@ class MicrosoftEdgeTranslator(BaseTranslator):
             return configure_requests_session_for_url(session, self._base_url)
 
         self._session_pool = ThreadLocalSessionPool(session_factory)
-        self.model = "microsoft-edge-web"
+        # Matches the catalog id shown in settings; it also prefixes the
+        # translation cache key, so it must stay in step with that catalog.
+        self.model = "bing"
 
     def prewarm(self) -> bool:
         """Warm DNS/TCP/TLS without occupying Edge's translation route.

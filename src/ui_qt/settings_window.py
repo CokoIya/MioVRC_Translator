@@ -128,6 +128,7 @@ from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
+    get_tts_engine_label,
     OUTPUT_FORMAT_OPTIONS,
     UI_FONT_851,
     UI_FONT_SYSTEM,
@@ -393,26 +394,8 @@ TTS_DEFAULT_VOICES = {
     "style_bert_vits2": (),
 }
 
-TTS_ENGINE_LABELS = {
-    "qwen_vc": "Voice Cloning（API）",
-    "voicevox": "VOICEVOX（本地）",
-    "mimo_tts": "MiMo TTS（API）",
-    "qwen_tts": "Qwen TTS（API）",
-    "style_bert_vits2": "自定义音色",
-}
-
-TTS_ENGINE_I18N_KEYS = {
-    "qwen_vc": "tts_engine_voice_clone",
-    "voicevox": "tts_engine_voicevox",
-    "mimo_tts": "tts_engine_mimo_tts",
-    "qwen_tts": "tts_engine_qwen_tts",
-    "style_bert_vits2": "tts_engine_style_bert_vits2",
-}
-
-
 def _tts_engine_label(engine: str, ui_language: str | None) -> str:
-    key = TTS_ENGINE_I18N_KEYS.get(engine)
-    return tr(ui_language, key) if key else TTS_ENGINE_LABELS.get(engine, engine)
+    return get_tts_engine_label(engine, ui_language)
 
 TTS_PLACEHOLDER_VOICE = "(\u65e0\u53ef\u7528\u58f0\u97f3)"
 
@@ -2153,7 +2136,6 @@ _BACKEND_API_HINT_KEYS = {
         "xiaomi",
         "deepseek",
         "nvidia",
-        "anthropic_compatible",
     )
 }
 _BACKEND_MODEL_HINT_KEYS = {
@@ -2171,7 +2153,6 @@ _BACKEND_MODEL_HINT_KEYS = {
         "xiaomi",
         "doubao",
         "nvidia",
-        "anthropic_compatible",
     )
 }
 
@@ -2192,7 +2173,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_xiaomi": "填写与所选区域匹配的 Xiaomi MiMo API Key；按量付费密钥不能与 Token Plan 集群混用。",
         "backend_api_hint_deepseek": "填写 DeepSeek 开放平台 API Key；代理或第三方转发密钥请选择自定义区域并填写对应 Base URL。",
         "backend_api_hint_nvidia": "托管端点使用 NVIDIA API Catalog 密钥；自建 NIM 或代理请选择自定义。",
-        "backend_api_hint_anthropic_compatible": "用于兼容 Claude 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
         "backend_model_hint_openai_compatible": "选择代理公开的模型 ID；已保存的自定义模型会继续保留在列表中。",
         "backend_model_hint_grok_compatible": "默认模型为 grok-4.6，也可选择 grok-4.5。中继服务的自定义模型名称会按输入内容原样保存，不会被改写。",
         "backend_model_hint_local_ai": "填写本地 OpenAI 兼容服务器公开的模型名称。",
@@ -2205,7 +2185,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_model_hint_xiaomi": "mimo-v2.5-pro 默认质量更高；更重视延迟时可改用 mimo-v2-flash。",
         "backend_model_hint_doubao": "请填写当前可用的方舟模型 ID，例如 doubao-seed-2-0-pro-260215。",
         "backend_model_hint_nvidia": "托管 NIM 使用 provider/model 格式；自建 NIM 请填写该部署公开的模型 ID。",
-        "backend_model_hint_anthropic_compatible": "选择代理公开的 Claude 模型 ID；已保存的自定义模型会继续保留在列表中。",
     },
     "ja": {
         "backend_api_hint_openai_compatible": "OpenAI 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
@@ -2218,7 +2197,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_xiaomi": "選択地域に対応する Xiaomi MiMo API キーを使用し、従量課金キーと Token Plan を混在させないでください。",
         "backend_api_hint_deepseek": "DeepSeek Open Platform の API キーを使用します。プロキシ／中継キーではカスタム地域と対応する Base URL を指定してください。",
         "backend_api_hint_nvidia": "ホスト型は NVIDIA API Catalog キー、自前の NIM／プロキシはカスタムを使用します。",
-        "backend_api_hint_anthropic_compatible": "Claude 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
         "backend_model_hint_openai_compatible": "プロキシが公開するモデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
         "backend_model_hint_grok_compatible": "既定は grok-4.6 で、grok-4.5 も選択できます。中継サービス固有のモデル名は入力どおり保存され、書き換えられません。",
         "backend_model_hint_local_ai": "ローカルの OpenAI 互換サーバーが公開するモデル名を入力します。",
@@ -2231,7 +2209,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_model_hint_xiaomi": "品質優先は mimo-v2.5-pro、遅延優先は mimo-v2-flash を使用します。",
         "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 など、現在有効な Ark モデル ID を入力してください。",
         "backend_model_hint_nvidia": "ホスト型 NIM は provider/model 形式、自前の NIM はその環境が公開するモデル ID を入力します。",
-        "backend_model_hint_anthropic_compatible": "プロキシが公開する Claude モデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
     },
     "ru": {
         "backend_api_hint_openai_compatible": "Для прокси и шлюзов, совместимых с OpenAI. Укажите Base URL и идентификатор модели от провайдера.",
@@ -2244,7 +2221,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_xiaomi": "Используйте ключ Xiaomi MiMo выбранного региона; не смешивайте pay-as-you-go и кластеры Token Plan.",
         "backend_api_hint_deepseek": "Используйте ключ DeepSeek Open Platform; для прокси выберите пользовательский регион и соответствующий Base URL.",
         "backend_api_hint_nvidia": "Для хостинга используйте ключ NVIDIA API Catalog; для своего NIM или прокси выберите пользовательский адрес.",
-        "backend_api_hint_anthropic_compatible": "Для прокси и шлюзов, совместимых с Claude. Укажите Base URL и идентификатор модели от провайдера.",
         "backend_model_hint_openai_compatible": "Выберите ID модели, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
         "backend_model_hint_grok_compatible": "Модель по умолчанию — grok-4.6; также доступна grok-4.5. Пользовательские имена моделей шлюза сохраняются без изменений.",
         "backend_model_hint_local_ai": "Введите имя модели, которое предоставляет локальный OpenAI-совместимый сервер.",
@@ -2257,7 +2233,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_model_hint_xiaomi": "mimo-v2.5-pro — вариант по качеству; приоритет скорости — mimo-v2-flash.",
         "backend_model_hint_doubao": "Введите актуальный ID модели Ark, например doubao-seed-2-0-pro-260215.",
         "backend_model_hint_nvidia": "Хостинговые NIM используют формат provider/model; для своего NIM введите ID, открытый этим развёртыванием.",
-        "backend_model_hint_anthropic_compatible": "Выберите ID модели Claude, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
     },
     "ko": {
         "backend_api_hint_openai_compatible": "OpenAI 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
@@ -2270,7 +2245,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_api_hint_xiaomi": "선택 지역과 일치하는 Xiaomi MiMo API 키를 사용하고 pay-as-you-go 키와 Token Plan을 섞지 마세요.",
         "backend_api_hint_deepseek": "DeepSeek Open Platform API 키를 사용합니다. 프록시 키는 사용자 지정 지역과 해당 Base URL을 선택하세요.",
         "backend_api_hint_nvidia": "호스팅은 NVIDIA API Catalog 키를, 자체 NIM 또는 프록시는 사용자 지정을 사용합니다.",
-        "backend_api_hint_anthropic_compatible": "Claude 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
         "backend_model_hint_openai_compatible": "프록시가 제공하는 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
         "backend_model_hint_grok_compatible": "기본 모델은 grok-4.6이며 grok-4.5도 선택할 수 있습니다. 중계 서비스의 사용자 지정 모델 이름은 입력한 그대로 저장되며 변경되지 않습니다.",
         "backend_model_hint_local_ai": "로컬 OpenAI 호환 서버가 제공하는 모델 이름을 입력합니다.",
@@ -2283,7 +2257,6 @@ _BACKEND_HINT_TRANSLATIONS = {
         "backend_model_hint_xiaomi": "품질 기본값은 mimo-v2.5-pro이며 지연이 더 중요하면 mimo-v2-flash를 사용합니다.",
         "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 같은 현재 Ark 모델 ID를 입력하세요.",
         "backend_model_hint_nvidia": "호스팅 NIM은 provider/model 형식을 사용합니다. 자체 NIM은 해당 배포가 제공하는 모델 ID를 입력하세요.",
-        "backend_model_hint_anthropic_compatible": "프록시가 제공하는 Claude 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
     },
 }
 for _language, _texts in _BACKEND_HINT_TRANSLATIONS.items():
@@ -3237,8 +3210,6 @@ class SettingsWindow(QDialog):
             QTimer.singleShot(120, self._prebuild_next_page)
         else:
             QTimer.singleShot(150, self._load_tts_voices_deferred)
-        if not self._preloaded:
-            QTimer.singleShot(300, self._maybe_prompt_missing_model_download)
 
     @staticmethod
     def _is_child_of(widget: QWidget | None, ancestor: QWidget | None) -> bool:
@@ -4393,31 +4364,31 @@ class SettingsWindow(QDialog):
     def _asr_engine_options(self) -> tuple[tuple[str, str], ...]:
         labels_by_language = {
             "zh-CN": {
-                "edge-stt": "Edge 语音识别（在线 / 免密钥）",
+                "edge-stt": "推荐使用该ASR(免费)",
                 "qwen3-asr": "Qwen3-ASR（在线）",
                 "whisper-large-v3-turbo": "Whisper Small（本地 / 英语快速）",
                 "sensevoice-small": "SenseVoice Small（中文 / 粤语）",
             },
             "en": {
-                "edge-stt": "Edge Speech (online / no API key)",
+                "edge-stt": "Recommended ASR (free)",
                 "qwen3-asr": "Qwen3-ASR (online)",
                 "whisper-large-v3-turbo": "Whisper Small (local / fast English)",
                 "sensevoice-small": "SenseVoice Small (Chinese / Cantonese)",
             },
             "ja": {
-                "edge-stt": "Edge 音声認識（オンライン / キー不要）",
+                "edge-stt": "推奨 ASR（無料）",
                 "qwen3-asr": "Qwen3-ASR（オンライン）",
                 "whisper-large-v3-turbo": "Whisper Small（ローカル / 英語高速）",
                 "sensevoice-small": "SenseVoice Small（中国語 / 広東語）",
             },
             "ru": {
-                "edge-stt": "Edge Speech (онлайн / без ключа)",
+                "edge-stt": "Рекомендуемый ASR (бесплатно)",
                 "qwen3-asr": "Qwen3-ASR (онлайн)",
                 "whisper-large-v3-turbo": "Whisper Small (локально / быстрый английский)",
                 "sensevoice-small": "SenseVoice Small (китайский / кантонский)",
             },
             "ko": {
-                "edge-stt": "Edge 음성 인식(온라인 / 키 불필요)",
+                "edge-stt": "권장 ASR(무료)",
                 "qwen3-asr": "Qwen3-ASR(온라인)",
                 "whisper-large-v3-turbo": "Whisper Small(로컬 / 영어 빠름)",
                 "sensevoice-small": "SenseVoice Small(중국어 / 광둥어)",
@@ -5595,6 +5566,15 @@ class SettingsWindow(QDialog):
         return engine, spec
 
     def _maybe_prompt_missing_model_download(self) -> None:
+        """Offer the download only right after the player picks a local engine.
+
+        This used to fire on every settings open, so anyone who had never asked
+        for a local model was greeted by a download prompt they had no reason
+        to want. Choosing such an engine is still a direct request for it, and
+        the model action card on the page covers the case where they dismiss
+        this.
+        """
+
         if self._missing_model_prompted:
             return
         missing = self._missing_asr_model()
@@ -9534,7 +9514,6 @@ class SettingsWindow(QDialog):
         if self._preloaded:
             self._preloaded = False
             QTimer.singleShot(150, self._load_tts_voices_deferred)
-            QTimer.singleShot(300, self._maybe_prompt_missing_model_download)
         super().showEvent(event)
         if not self._audio_device_refresh_timer.isActive():
             self._audio_device_refresh_timer.start()

@@ -60,46 +60,6 @@ MIN_UI_SCALE = 0.9
 MAX_UI_SCALE = 1.55
 
 
-TEXT_INPUT_PALETTES = {
-    "dark": {
-        "shell": "rgba(9, 12, 17, 242)",
-        "border": "rgba(148, 163, 184, 58)",
-        "field": "rgba(248, 250, 252, 242)",
-        "field_border": "rgba(148, 163, 184, 70)",
-        "text": "#1d1d1f",
-        "field_muted": "#6b7280",
-        "chrome_text": "#e5e7eb",
-        "muted": "rgba(203, 213, 225, 205)",
-        "button": "rgba(30, 41, 59, 224)",
-        "button_hover": "rgba(51, 65, 85, 236)",
-        "primary": "#5b8cff",
-        "primary_hover": "#6b99ff",
-        "disabled": "rgba(51, 65, 85, 170)",
-        "disabled_text": "#93a4bb",
-        "slider_bg": "rgba(148, 163, 184, 82)",
-        "shadow": QColor(2, 6, 23, 92),
-    },
-    "light": {
-        "shell": "rgba(255, 255, 255, 246)",
-        "border": "rgba(141, 151, 168, 70)",
-        "field": "#fbfcff",
-        "field_border": "#d7dde8",
-        "text": "#111827",
-        "field_muted": "#8a93a3",
-        "chrome_text": "#111827",
-        "muted": "#667085",
-        "button": "#f3f6fb",
-        "button_hover": "#e9eef7",
-        "primary": "#0a84ff",
-        "primary_hover": "#006dde",
-        "disabled": "#dbe3ef",
-        "disabled_text": "#7b8798",
-        "slider_bg": "#dbe4ef",
-        "shadow": QColor(15, 23, 42, 46),
-    },
-}
-
-
 def _as_opacity(value: object, default: float = DEFAULT_OPACITY) -> float:
     try:
         parsed = float(value)
@@ -229,9 +189,12 @@ class TextInputWindow(QDialog):
         self._title_label = QLabel(tr(self._ui_lang, "text_input_floating"))
         self._title_label.setObjectName("textInputTitle")
         self._title_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
-        self._top_row.addWidget(self._title_label, 1)
+        self._top_row.addWidget(
+            self._title_label, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        self._top_row.addStretch(1)
 
         self._opacity_label = QLabel(f"{int(round(self._opacity * 100))}%")
         self._opacity_label.setObjectName("textInputCounter")
@@ -358,6 +321,9 @@ class TextInputWindow(QDialog):
             self._pin_text(),
         )
         self._pin_button.setToolTip(self._pin_text())
+        self._pin_button.setProperty("pinned", "true" if self._topmost else "false")
+        self._pin_button.style().unpolish(self._pin_button)
+        self._pin_button.style().polish(self._pin_button)
         self._set_button_icon(self._close_btn, "x.svg", strong, tr(self._ui_lang, "text_input_close"))
         self._close_btn.setToolTip(tr(self._ui_lang, "text_input_close"))
         self._set_button_icon(self._clear_btn, "trash.svg", strong, tr(self._ui_lang, "text_input_clear"))
@@ -390,19 +356,19 @@ class TextInputWindow(QDialog):
         if label is None:
             return
         reserved = (
-            self._scaled(64 + 26 + 26 + 40) + self._opacity_label.sizeHint().width()
+            self._scaled(64 + 26 + 26 + 48) + self._opacity_label.sizeHint().width()
         )
         available = self.width() - reserved
         title = tr(self._ui_lang, "text_input_floating")
         label.setToolTip(title)
-        if available < self._scaled(48):
+        needed = QFontMetrics(label.font()).horizontalAdvance(title) + self._scaled(20)
+        # A pill is a shape, not a sentence: half a word inside a bordered
+        # capsule looks broken, so it steps aside instead of truncating.
+        if available < needed:
             label.setVisible(False)
             return
         label.setVisible(True)
-        metrics = QFontMetrics(label.font())
-        label.setText(
-            metrics.elidedText(title, Qt.TextElideMode.ElideRight, available)
-        )
+        label.setText(title)
         hint = getattr(self, "_key_hint_label", None)
         if hint is None:
             return
@@ -531,7 +497,9 @@ class TextInputWindow(QDialog):
         control = self._scaled(HEADER_CONTROL_SIZE)
         return f"""
         QLabel#textInputTitle {{
-            font-size: {self._scaled(12)}px;
+            font-size: {self._scaled(11)}px;
+            min-height: {self._scaled(22)}px;
+            max-height: {self._scaled(22)}px;
         }}
         QLabel#textInputCounter, QLabel#textInputKeyHint {{
             font-size: {self._scaled(11)}px;

@@ -1,24 +1,24 @@
 {
-  "version": "v1.4.0",
-  "installer_name": "MioTranslator-Setup-v1.4.0.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.0/MioTranslator-Setup-v1.4.0.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.0/MioTranslator-Setup-v1.4.0.exe",
-  "size_bytes": 346472339,
-  "sha256": "f84f06aaadb6fd636825d099ea3beddabe2864569e539bc9d837c4c5a45f28b8",
+  "version": "v1.4.1",
+  "installer_name": "MioTranslator-Setup-v1.4.1.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.1/MioTranslator-Setup-v1.4.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.1/MioTranslator-Setup-v1.4.1.exe",
+  "size_bytes": 345205937,
+  "sha256": "e253920f5cb021268db1838c47a34029bdd008e73a200b169e9892afa8810595",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "f10e1ffcc5adf521f1bc82f728dbe853e2692e302e598e458f198e1335d259ff5ff1c19f4b1a23707b7e942db290bf8a95c5d2811633ced0de39bdeba39fdf02",
-  "notes": "v1.4.0 adds direct Edge speech recognition, keeps SenseVoice as an optional local ASR, removes obsolete browser/live-ASR and legacy local TTS paths, and adds Qwen cloud voice enrollment.",
+  "installer_signature": "ad2fa27e9314e4d970662fcea8103afa82b360891f8679cb918123cb9cd0c5b2c6e2d810dbe9b095a6e2aa50f99832595edcb6e03d7f08eb070da38f4ffd6d05",
+  "notes": "v1.4.1 disables Claude/Anthropic translation backends and migrates saved Claude selections to the default service; it retains direct Edge speech recognition, optional SenseVoice local ASR, and Qwen cloud voice enrollment.",
   "notes_i18n": {
-    "zh-CN": "v1.4.0 增加直连 Edge 语音识别，保留 SenseVoice 可选本地 ASR，移除过时的浏览器/实时 ASR 与旧本地 TTS 路径，并增加 Qwen 云端声音注册。",
-    "en": "v1.4.0 adds direct Edge speech recognition, keeps SenseVoice as an optional local ASR, removes obsolete browser/live-ASR and legacy local TTS paths, and adds Qwen cloud voice enrollment.",
-    "ja": "v1.4.0 は Edge 音声認識の直接接続を追加し、SenseVoice を任意のローカル ASR として残し、旧式のブラウザー／ライブ ASR とローカル TTS 経路を整理し、Qwen クラウド音声登録を追加しました。",
-    "ru": "v1.4.0 добавляет прямое распознавание речи Edge, оставляет SenseVoice необязательным локальным ASR, удаляет устаревшие браузерные/Live-ASR и локальные TTS-пути и добавляет регистрацию голоса Qwen в облаке.",
-    "ko": "v1.4.0은 Edge 음성 인식 직접 연결을 추가하고 SenseVoice를 선택적 로컬 ASR로 유지하며 오래된 브라우저/Live-ASR 및 로컬 TTS 경로를 정리하고 Qwen 클라우드 음성 등록을 추가합니다."
+    "zh-CN": "v1.4.1 增加直连 Edge 语音识别，保留 SenseVoice 可选本地 ASR，移除过时的浏览器/实时 ASR 与旧本地 TTS 路径，并增加 Qwen 云端声音注册。",
+    "en": "v1.4.1 disables Claude/Anthropic translation backends and migrates saved Claude selections to the default service; it retains direct Edge speech recognition, optional SenseVoice local ASR, and Qwen cloud voice enrollment.",
+    "ja": "v1.4.1 は Edge 音声認識の直接接続を追加し、SenseVoice を任意のローカル ASR として残し、旧式のブラウザー／ライブ ASR とローカル TTS 経路を整理し、Qwen クラウド音声登録を追加しました。",
+    "ru": "v1.4.1 добавляет прямое распознавание речи Edge, оставляет SenseVoice необязательным локальным ASR, удаляет устаревшие браузерные/Live-ASR и локальные TTS-пути и добавляет регистрацию голоса Qwen в облаке.",
+    "ko": "v1.4.1은 Edge 음성 인식 직접 연결을 추가하고 SenseVoice를 선택적 로컬 ASR로 유지하며 오래된 브라우저/Live-ASR 및 로컬 TTS 경로를 정리하고 Qwen 클라우드 음성 등록을 추가합니다."
   },
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-08-29T17:58:05+09:00",
+  "published_at": "2026-08-29T21:21:19+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "9b7994a2c9c122645f1dc8bb2dfd8d949e638e0c128aba9f0042d9bec0c10f834cf455803c1363e993b9b967febe6d6059a119139892a19eccc48bca93a49204"
+  "signature": "e10d9d9083e74b2204824dcdfb8223e49281d571fff452e32ed7819207b08928a9ff610f246e1bab60a24bec0d73a932d8b1e14826ce1852e1197c335b05e401"
 }

@@ -40,6 +40,76 @@ from src.utils.localization import (
 logger = logging.getLogger(__name__)
 
 
+def _dialog_palette_styles(extra: str = "") -> str:
+    """Return a theme-following sheet for the standalone helper dialogs.
+
+    These windows used to hardcode an Apple-style light palette, so on the dark
+    theme they opened as a white slab in the middle of a dark application.
+    """
+
+    from src.ui_qt.styles import build_app_stylesheet
+    from src.ui_qt.theme import theme_from_config, theme_tokens
+
+    try:
+        from src.utils import config_manager
+
+        theme = theme_from_config(config_manager.load_config())
+    except Exception:
+        theme = "dark"
+    c = theme_tokens(theme)
+    return build_app_stylesheet(theme) + f"""
+    QDialog {{
+        background: {c["APP_BG"]};
+    }}
+    QLabel {{
+        color: {c["TEXT_PRIMARY"]};
+        font-size: 14px;
+    }}
+    #accentLabel {{
+        color: {c["ACCENT"]};
+        font-weight: 700;
+    }}
+    #successLabel {{
+        color: {c["SUCCESS"]};
+        font-size: 13px;
+    }}
+    #warningLabel {{
+        color: {c["WARNING"]};
+        font-weight: 700;
+        font-size: 16px;
+        background: transparent;
+        border: 0;
+    }}
+    #setupHeader {{
+        font-weight: 700;
+        font-size: 16px;
+    }}
+    #progressStatus {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+    }}
+    #pctLabel {{
+        color: {c["TEXT_PRIMARY"]};
+        font-weight: 700;
+        font-size: 13px;
+    }}
+    #speedLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 13px;
+    }}
+    QProgressBar {{
+        border: none;
+        background: {c["PANEL_BORDER"]};
+        border-radius: 6px;
+        height: 8px;
+    }}
+    QProgressBar::chunk {{
+        background: {c["ACCENT"]};
+        border-radius: 6px;
+    }}
+    """ + extra
+
+
 def _safe_disconnect(signal: QObject, slot: QObject) -> None:
     """Disconnect a Qt signal without warning if it was already disconnected."""
     try:
@@ -299,28 +369,17 @@ class DownloadProgressWidget(QFrame):
                 self._status_label.setText(self._t("model_download_hint_error"))
 
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-        QLabel { color: #6e6e73; }
-        #progressStatus { font-size: 13px; }
-        #pctLabel { color: #1d1d1f; font-weight: 700; font-size: 13px; }
-        #speedLabel { color: #6e6e73; font-size: 13px; }
-        QProgressBar {
-            border: none;
-            background: #e0e4ea;
-            border-radius: 6px;
-            height: 8px;
-        }
-        QProgressBar::chunk { background: #0071e3; border-radius: 6px; }
-        QPushButton {
-            background: #eef1f5;
-            border: 1px solid #e4e7ed;
-            border-radius: 10px;
-            color: #1d1d1f;
-            padding: 6px 12px;
-            font-weight: 600;
-        }
-        QPushButton:hover { background: #e0e4ea; }
-        """)
+        self.setStyleSheet(
+            _dialog_palette_styles(
+                """
+    QPushButton {
+        border-radius: 10px;
+        padding: 6px 12px;
+        font-weight: 600;
+    }
+    """
+            )
+        )
 
 
 # ── "No model" prompt dialog ─────────────────────────────────────────────────
@@ -469,25 +528,18 @@ class ModelMissingDialog(QDialog):
         return get_asr_engine_spec(self._engine).label
 
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-        QDialog { background: #f5f5f7; }
-        QLabel { color: #1d1d1f; font-size: 14px; }
-        #warningLabel { color: #ff9f0a; font-weight: 700; font-size: 16px; }
-        #accentLabel { color: #0071e3; font-weight: 700; }
-        #successLabel { color: #34c759; font-size: 13px; }
-        QPushButton {
-            background: #eef1f5;
-            border: 1px solid #e4e7ed;
-            border-radius: 10px;
-            color: #1d1d1f;
-            padding: 9px 16px;
-            font-size: 14px;
-            font-weight: 600;
-        }
-        QPushButton:hover { background: #e0e4ea; }
-        #primaryButton { background: #0071e3; color: #ffffff; border: 0; }
-        #primaryButton:hover { background: #0059b8; }
-        """)
+        self.setStyleSheet(
+            _dialog_palette_styles(
+                """
+    QPushButton {
+        border-radius: 10px;
+        padding: 9px 16px;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    """
+            )
+        )
 
 
 # ── Standalone setup window (--setup CLI flag) ───────────────────────────────
@@ -715,13 +767,7 @@ class SetupWindow(QDialog):
         QTimer.singleShot(delay_ms, self.close)
 
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-        QDialog { background: #f5f5f7; }
-        QLabel { color: #1d1d1f; font-size: 14px; }
-        #setupHeader { font-weight: 700; font-size: 16px; }
-        #accentLabel { color: #0071e3; font-weight: 700; }
-        #successLabel { color: #34c759; font-size: 13px; }
-        """)
+        self.setStyleSheet(_dialog_palette_styles())
 
 
 def run_setup_mode(engine: str) -> int:

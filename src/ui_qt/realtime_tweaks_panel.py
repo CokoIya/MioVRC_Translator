@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from src.ui_qt.icon_utils import ui_icon, ui_icon_url
 from src.ui_qt.theme import icon_tint, theme_tokens
 from src.ui_qt.widgets import NoWheelComboBox
+from src.utils.ui_config import get_tts_engine_label
 from src.translators.asr_rewriter import (
     get_asr_rewrite_options,
     normalize_asr_rewrite_style,
@@ -92,16 +93,40 @@ def _tts_language_entries(ui_language: str, engine: str) -> list[tuple[str, str]
     return [(tr(ui_language, key), code) for key, code in TTS_LANGUAGE_OPTION_KEYS.get(engine, ())]
 
 
-def _voice_entries_for_engine(config: Mapping[str, object], engine: str) -> list[tuple[str, str]]:
+# Engines whose catalog is a constant in the source tree. Anything not listed
+# has to be discovered at runtime, which is a network or filesystem call the
+# quick panel must never make on the UI thread.
+STATIC_VOICE_CATALOG_ENGINES = frozenset({"mimo_tts", "qwen_tts"})
+
+
+def _voice_entries_for_engine(
+    config: Mapping[str, object],
+    engine: str,
+    live_voices: Callable[[str], object] | None = None,
+) -> list[tuple[str, str]]:
+    """Return (label, id) pairs for the engine's selectable voices.
+
+    VOICEVOX and Style-Bert-VITS2 publish their voices from a running local
+    service, so the panel asks the host for the list the audio engine already
+    holds instead of opening its own connection. Without that, the voice box
+    was simply empty for anyone using VOICEVOX while settings showed it fine.
+    """
+
+    if engine not in STATIC_VOICE_CATALOG_ENGINES and engine != "qwen_vc":
+        if live_voices is None:
+            return []
+        try:
+            return _voice_entries(live_voices(engine))
+        except Exception:
+            logger.debug(
+                "Failed to read live quick-switch voices for %s", engine, exc_info=True
+            )
+            return []
     try:
         if engine in {"mimo_tts", "qwen_tts"}:
             from src.tts.api_tts_config import get_tts_api_voice_options
 
             return [(label, voice_id) for voice_id, label, *_rest in get_tts_api_voice_options(engine)]
-        if engine == "style_bert_vits2":
-            from src.tts.style_bert_vits2_engine import list_style_bert_vits2_voices
-
-            return _voice_entries(list_style_bert_vits2_voices(_tts_language(config, engine)))
         if engine == "qwen_vc":
             from src.tts.api_tts_config import get_cloned_voice_options
 
@@ -137,10 +162,14 @@ class RealtimeTweaksPanel(QDialog):
         ui_language: str = "zh-CN",
         theme: str = "dark",
         on_change: QuickSwitchCallback | None = None,
+        live_voices: Callable[[str], object] | None = None,
+        available_engines: Callable[[], object] | None = None,
     ) -> None:
         super().__init__(None)
         self._owner = parent
         self._config = config
+        self._live_voices = live_voices
+        self._available_engines = available_engines
         self._ui_lang = normalize_ui_language(ui_language)
         self._theme = theme
         self._on_change = on_change
@@ -233,6 +262,7 @@ class RealtimeTweaksPanel(QDialog):
         self._tts_engine_label = QLabel("")
         self._tts_engine_label.setObjectName("quickSwitchMeta")
         self._tts_section.layout().addWidget(self._tts_engine_label)
+        self._add_combo(self._tts_section, "tts_engine", "quick_switch_tts_engine")
         self._add_combo(self._tts_section, "tts_language", "quick_switch_tts_language")
         self._add_combo(self._tts_section, "tts_voice", "quick_switch_tts_voice")
 
@@ -366,6 +396,15 @@ class RealtimeTweaksPanel(QDialog):
 
         engine = _tts_engine(self._config)
         self._tts_engine_label.setText(tr(self._ui_lang, "quick_switch_current_tts_engine", engine=engine))
+
+        # Only engines that are ready right now: switching to one that still
+        # needs a key, a download or a local service is not a quick switch, it
+        # is a trip to settings.
+        engine_options = self._engine_options(engine)
+        self._set_combo_visible("tts_engine", len(engine_options) > 1)
+        if engine_options:
+            self._set_combo_options("tts_engine", engine_options, engine)
+
         language_options = _tts_language_entries(self._ui_lang, engine)
         self._set_combo_visible("tts_language", bool(language_options))
         if language_options:
@@ -374,7 +413,8 @@ class RealtimeTweaksPanel(QDialog):
         tts_cfg = _dict_section(self._config, "tts")
         engine_cfg = tts_cfg.get(engine, {})
         engine_cfg = engine_cfg if isinstance(engine_cfg, dict) else {}
-        voice_options = _voice_entries_for_engine(self._config, engine)
+        voice_options = _voice_entries_for_engine(self._config, engine, self._live_voices)
+        self._set_combo_visible("tts_voice", bool(voice_options))
         self._set_combo_options("tts_voice", voice_options, str(engine_cfg.get("voice", "") or ""))
 
         rewrite_style = normalize_asr_rewrite_style(
@@ -385,6 +425,25 @@ class RealtimeTweaksPanel(QDialog):
             list(get_asr_rewrite_options(self._ui_lang)),
             rewrite_style,
         )
+
+    def _engine_options(self, current: str) -> list[tuple[str, str]]:
+        """List the switchable speech engines, current one always included."""
+
+        if self._available_engines is None:
+            return []
+        try:
+            engines = list(self._available_engines() or ())
+        except Exception:
+            logger.debug("Failed to read switchable TTS engines", exc_info=True)
+            return []
+        codes: list[str] = []
+        for engine in engines:
+            code = str(engine or "").strip()
+            if code and code not in codes:
+                codes.append(code)
+        if current and current not in codes:
+            codes.insert(0, current)
+        return [(get_tts_engine_label(code, self._ui_lang), code) for code in codes]
 
     def _refresh_toggle_controls(self) -> None:
         trans_cfg = _dict_section(self._config, "translation")

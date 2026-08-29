@@ -17,8 +17,6 @@ from src.utils.ui_config import get_backend_label
 _REQUIRED_PROVIDER_PATHS = {
     "openai",
     "openai_compatible",
-    "anthropic",
-    "anthropic_compatible",
     "xai",
     "grok_compatible",
 }
@@ -190,7 +188,7 @@ def test_active_official_provider_model_ids_are_editable(
     _patch_dialog_dependencies(monkeypatch)
     dialog = SettingsWindow(None, _config("openai"))
     try:
-        for backend in ("openai", "anthropic", "xai"):
+        for backend in ("openai", "xai"):
             _open_provider_page(dialog, backend)
             model_combo = next(
                 (
@@ -246,7 +244,7 @@ def test_active_settings_surface_loads_and_tests_granular_timeouts(
 
 @pytest.mark.parametrize(
     "backend",
-    ("openai_compatible", "anthropic_compatible", "grok_compatible"),
+    ("openai_compatible", "grok_compatible"),
 )
 def test_active_relay_settings_reject_unsafe_public_http_base_urls(
     qapp,
@@ -299,10 +297,10 @@ def test_active_provider_switches_preserve_and_save_each_unsaved_draft(
 ):
     _patch_dialog_dependencies(monkeypatch)
     config = _config("openai_compatible")
-    config["translation"]["anthropic_compatible"] = {
-        "api_key": "anthropic-old",
-        "base_url": "https://anthropic-relay.example/v1/",
-        "model": "claude-old",
+    config["translation"]["grok_compatible"] = {
+        "api_key": "grok-old",
+        "base_url": "https://grok-relay.example/v1/",
+        "model": "grok-old",
         "timeout_s": 20,
         "connect_timeout_s": 2,
         "pool_timeout_s": 1,
@@ -321,10 +319,10 @@ def test_active_provider_switches_preserve_and_save_each_unsaved_draft(
         dialog._backend_model_var.set("Org/Exact-GPT:Preview")
         dialog._backend_connect_timeout_var.set("3.5")
 
-        _open_provider_page(dialog, "anthropic_compatible")
-        dialog._backend_api_key_var.set("anthropic-unsaved")
-        dialog._backend_base_url_var.set("https://new-anthropic-relay.example/v1/")
-        dialog._backend_model_var.set("claude-custom-2026-07")
+        _open_provider_page(dialog, "grok_compatible")
+        dialog._backend_api_key_var.set("grok-unsaved")
+        dialog._backend_base_url_var.set("https://new-grok-relay.example/v1/")
+        dialog._backend_model_var.set("grok-custom-2026-07")
         dialog._backend_wall_timeout_var.set("58")
 
         _open_provider_page(dialog, "openai_compatible")
@@ -339,17 +337,17 @@ def test_active_provider_switches_preserve_and_save_each_unsaved_draft(
         dialog._save()
 
         openai_saved = config["translation"]["openai_compatible"]
-        anthropic_saved = config["translation"]["anthropic_compatible"]
+        grok_saved = config["translation"]["grok_compatible"]
         assert openai_saved["api_key"] == "openai-unsaved"
         assert openai_saved["model"] == "Org/Exact-GPT:Preview"
         assert openai_saved["connect_timeout_s"] == 3.5
-        assert anthropic_saved["api_key"] == "anthropic-unsaved"
+        assert grok_saved["api_key"] == "grok-unsaved"
         assert (
-            anthropic_saved["base_url"]
-            == "https://new-anthropic-relay.example/v1/"
+            grok_saved["base_url"]
+            == "https://new-grok-relay.example/v1/"
         )
-        assert anthropic_saved["model"] == "claude-custom-2026-07"
-        assert anthropic_saved["wall_timeout_s"] == 58.0
+        assert grok_saved["model"] == "grok-custom-2026-07"
+        assert grok_saved["wall_timeout_s"] == 58.0
     finally:
         _dispose(dialog, qapp)
 

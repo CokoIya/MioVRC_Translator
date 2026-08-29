@@ -292,6 +292,7 @@ def test_credentialed_local_ai_allows_literal_private_lan_http(monkeypatch):
     assert translator._trust_env is False
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
@@ -341,6 +342,7 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
         ("https://api.anthropic.com", "https://api.anthropic.com"),
     ),
 )
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_normalizes_sdk_api_suffix(
     monkeypatch,
     configured_url,
@@ -367,6 +369,7 @@ def test_anthropic_compatible_normalizes_sdk_api_suffix(
     assert translator._client.kwargs["base_url"] == sdk_base_url
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_rejects_plaintext_public_http(monkeypatch):
     monkeypatch.setitem(
         sys.modules,

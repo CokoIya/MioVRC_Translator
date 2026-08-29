@@ -2,6 +2,13 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.4.1] - 2026-08-29
+
+### Release hardening
+
+- Disabled Claude/Anthropic translation backends for this release. Existing Claude selections are migrated to the default translation service, and the Anthropic SDK is no longer installed or bundled.
+- Hardened the active backend catalog so remote catalog data and saved fallback lists cannot re-enable the disabled Claude paths.
+
 ## [1.4.0] - 2026-08-29
 
 ### Speech recognition and runtime footprint

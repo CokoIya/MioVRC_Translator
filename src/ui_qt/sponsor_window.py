@@ -305,41 +305,64 @@ class SponsorWindow(QDialog):
                     logger.debug("Failed to notify sponsor window close", exc_info=True)
         super().closeEvent(event)
 
+
+    def _resolved_theme(self) -> str:
+        """Return the palette this dialog should paint with.
+
+        These windows can open before or after the main window exists, so the
+        theme is read from config rather than passed down a chain that is not
+        always there.
+        """
+
+        from src.ui_qt.theme import theme_from_config
+
+        try:
+            from src.utils import config_manager
+
+            return theme_from_config(config_manager.load_config())
+        except Exception:
+            return "dark"
+
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-        QDialog { background: #f5f5f7; }
-        #pageHeader { color: #1d1d1f; font-size: 16px; font-weight: 700; }
-        QScrollArea { background: transparent; border: none; }
-        #noticeLabel {
-            background: #fff7df;
-            border: 1px solid #f1d27b;
+        from src.ui_qt.styles import build_app_stylesheet
+        from src.ui_qt.theme import theme_tokens
+
+        theme = self._resolved_theme()
+        c = theme_tokens(theme)
+        # The QR code is printed on white by whoever generated it, so that one
+        # card keeps a light plate in both themes; everything else follows the
+        # application palette instead of the hardcoded light one it used to use.
+        self.setStyleSheet(
+            build_app_stylesheet(theme)
+            + f"""
+        QDialog {{ background: {c["APP_BG"]}; }}
+        #pageHeader {{ color: {c["TEXT_PRIMARY"]}; font-size: 16px; font-weight: 700; }}
+        QScrollArea {{ background: transparent; border: none; }}
+        #noticeLabel {{
+            background: {c["WARNING_SOFT"]};
+            border: 1px solid {c["WARNING_BORDER"]};
             border-radius: 10px;
-            color: #8a5a00;
+            color: {c["WARNING"]};
             padding: 10px;
             font-weight: 600;
-        }
-        #mutedLabel { color: #6e6e73; }
-        #hintLabel { color: #8e8e93; font-size: 12px; }
-        #sponsorCard {
-            background: #fffbf0;
-            border: 1px solid #e4e7ed;
+        }}
+        #mutedLabel {{ color: {c["TEXT_SECONDARY"]}; }}
+        #hintLabel {{ color: {c["TEXT_MUTED"]}; font-size: 12px; }}
+        #sponsorCard {{
+            background: {c["PANEL_BG"]};
+            border: 1px solid {c["PANEL_BORDER"]};
             border-radius: 10px;
-        }
-        #sponsorName { color: #d4a638; font-size: 20px; font-weight: 700; }
-        #qrCard {
+        }}
+        #sponsorName {{ color: {c["ACCENT"]}; font-size: 20px; font-weight: 700; }}
+        #qrCard {{
             background: #ffffff;
-            border: 1px solid #e4e7ed;
+            border: 1px solid {c["PANEL_BORDER"]};
             border-radius: 14px;
-        }
-        QPushButton {
-            background: #eef1f5;
-            border: 1px solid #e4e7ed;
+        }}
+        QPushButton {{
             border-radius: 10px;
-            color: #1d1d1f;
             padding: 7px 14px;
             font-weight: 600;
-        }
-        QPushButton:hover { background: #e0e4ea; }
-        #primaryButton { background: #0071e3; color: #ffffff; border: 0; }
-        #primaryButton:hover { background: #0059b8; }
-        """)
+        }}
+        """
+        )

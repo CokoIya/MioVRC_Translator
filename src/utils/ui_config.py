@@ -4,6 +4,11 @@ from collections.abc import Collection, Mapping
 
 DEFAULT_UI_LANGUAGE = "zh-CN"
 
+# Claude/Anthropic is intentionally disabled for this release.  Keep the
+# legacy catalog entries available only for safe migration of old configs; no
+# UI selector, active catalog, or translator factory may expose them.
+DISABLED_TRANSLATION_BACKENDS = frozenset({"anthropic", "anthropic_compatible"})
+
 UI_FONT_851 = "851"
 UI_FONT_SYSTEM = "system"
 UI_FONT_PREFERENCES = (UI_FONT_851, UI_FONT_SYSTEM)
@@ -683,9 +688,9 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         ),
     },
     "microsoft_edge_web": {
-        "label": "Unlimited High-Quality Free Translation (Highly Recommended)",
+        "label": "Bing Translate (Free)",
         "base_url": "https://edge.microsoft.com/translate/translatetext",
-        "model": "microsoft-edge-web",
+        "model": "bing",
         "timeout_s": 8.0,
         "max_output_tokens": 192,
         "max_retries": 1,
@@ -930,17 +935,15 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.5",
     ),
     "openai_compatible": (
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.5",
     ),
     "grok_compatible": ("grok-4.6", "grok-4.5"),
     "google_web": ("google-web",),
-    "microsoft_edge_web": ("microsoft-edge-web",),
+    "microsoft_edge_web": ("bing",),
     "mymemory": ("mymemory",),
     "deepl": ("deepl-api",),
     "libretranslate": ("libretranslate",),
@@ -949,16 +952,14 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "deepseek-v4-pro",
     ),
     "zhipu": (
-        "glm-5.1",
-        "glm-5-turbo",
-        "glm-5",
-        "glm-4.7-flash",
-        "glm-4.7-flashx",
-        "glm-4.7",
+        "glm-5.3",
+        "glm-5.3-flash",
+        "glm-5.2",
     ),
     "qianwen": (
         "qwen-mt-plus",
         "qwen-mt-flash",
+        "qwen-mt-lite",
     ),
     "hunyuan": (
         "hunyuan-turbos-latest",
@@ -970,17 +971,19 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "mimo-v2-flash",
     ),
     "gemini": (
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
         "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
+        "gemini-3.5-flash-lite",
     ),
     "kimi": (
+        "kimi-k3",
         "kimi-k2.6",
-        "kimi-k2.5",
     ),
     "xai": (
+        "grok-4.6",
+        "grok-4.5",
         "grok-4.3",
-        "grok-4.20",
         "grok-4.20-0309-non-reasoning",
     ),
     "mistral": (
@@ -996,12 +999,12 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
     "anthropic": (
         "claude-sonnet-5",
         "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5",
     ),
     "anthropic_compatible": (
         "claude-sonnet-5",
         "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
+        "claude-haiku-4-5",
     ),
 }
 
@@ -1056,7 +1059,7 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "microsoft_edge_web": {
-        "microsoft-edge-web": {
+        "bing": {
             "speed": "very_fast",
             "quality": "high",
             "fit": "recommended",
@@ -1102,6 +1105,24 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "zhipu": {
+        "glm-5.3-flash": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "glm-5.3": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
+        "glm-5.2": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
         "glm-5.1": {
             "speed": "balanced",
             "quality": "high",
@@ -1140,6 +1161,12 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "qianwen": {
+        "qwen-mt-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
         "qwen-mt-flash": {
             "speed": "very_fast",
             "quality": "balanced",
@@ -1188,11 +1215,29 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "gemini": {
-        "gemini-3.5-flash": {
+        "gemini-3.7-flash": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
+        },
+        "gemini-3.6-flash": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "gemini-3.5-flash-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
+        "gemini-3.5-flash": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "balanced_quality",
         },
         "gemini-2.5-flash-lite": {
             "speed": "very_fast",
@@ -1208,6 +1253,12 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "kimi": {
+        "kimi-k3": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
         "kimi-k2.6": {
             "speed": "fast",
             "quality": "high",
@@ -1222,6 +1273,18 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "xai": {
+        "grok-4.6": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
+        "grok-4.5": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "general_high_quality",
+        },
         "grok-4.3": {
             "speed": "fast",
             "quality": "high",
@@ -1276,6 +1339,12 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "anthropic": {
+        "claude-haiku-4-5": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "general",
+            "note": "economy_first",
+        },
         "claude-sonnet-5": {
             "speed": "balanced",
             "quality": "high",
@@ -1329,11 +1398,11 @@ TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
         "ko": "Google 웹 번역",
     },
     "microsoft_edge_web": {
-        "zh-CN": "无限高质免费翻译(强推)",
-        "en": "Unlimited High-Quality Free Translation (Highly Recommended)",
-        "ja": "無制限・高品質の無料翻訳（強くおすすめ）",
-        "ru": "Безлимитный качественный бесплатный перевод (очень рекомендуется)",
-        "ko": "무제한 고품질 무료 번역(강력 추천)",
+        "zh-CN": "Bing翻译(免费)",
+        "en": "Bing Translate (Free)",
+        "ja": "Bing 翻訳（無料）",
+        "ru": "Bing Переводчик (бесплатно)",
+        "ko": "Bing 번역(무료)",
     },
     "mymemory": {"zh-CN": "MyMemory", "en": "MyMemory", "ja": "MyMemory", "ru": "MyMemory", "ko": "MyMemory"},
     "deepl": {
@@ -1395,7 +1464,7 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "google-web": "8.6",
     },
     "microsoft_edge_web": {
-        "microsoft-edge-web": "8.5",
+        "bing": "8.5",
     },
     "mymemory": {
         "mymemory": "7.2",
@@ -1411,15 +1480,13 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "deepseek-v4-pro": "8.7",
     },
     "zhipu": {
-        "glm-5.1": "8.8",
-        "glm-5-turbo": "9.0",
-        "glm-5": "8.5",
-        "glm-4.7-flash": "8.4",
-        "glm-4.7-flashx": "8.1",
-        "glm-4.7": "7.9",
+        "glm-5.3": "9.4",
+        "glm-5.2": "9.1",
+        "glm-5.3-flash": "9.0",
     },
     "qianwen": {
         "qwen-mt-plus": "9.7",
+        "qwen-mt-lite": "8.4",
         "qwen-mt-flash": "8.7",
     },
     "hunyuan": {
@@ -1432,15 +1499,21 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "mimo-v2-flash": "8.4",
     },
     "gemini": {
+        "gemini-3.7-flash": "9.5",
+        "gemini-3.6-flash": "9.4",
+        "gemini-3.5-flash-lite": "8.6",
         "gemini-3.5-flash": "9.3",
         "gemini-2.5-flash": "8.8",
         "gemini-2.5-flash-lite": "8.4",
     },
     "kimi": {
+        "kimi-k3": "9.4",
         "kimi-k2.6": "9.1",
         "kimi-k2.5": "8.6",
     },
     "xai": {
+        "grok-4.6": "9.4",
+        "grok-4.5": "9.2",
         "grok-4.3": "9.0",
         "grok-4.20": "9.0",
         "grok-4.20-0309-non-reasoning": "8.4",
@@ -1455,6 +1528,7 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "nvidia/nemotron-3-nano-30b-a3b": "8.4",
     },
     "anthropic": {
+        "claude-haiku-4-5": "8.5",
         "claude-sonnet-5": "9.2",
         "claude-sonnet-4-6": "9.2",
         "claude-haiku-4-5-20251001": "8.4",
@@ -1484,7 +1558,39 @@ BACKEND_ORDER = tuple(TRANSLATION_BACKENDS.keys())
 DEFAULT_CHINESE_BACKEND = "microsoft_edge_web"
 DEFAULT_INTERNATIONAL_BACKEND = "microsoft_edge_web"
 DEFAULT_BACKEND = DEFAULT_CHINESE_BACKEND
-DEFAULT_ASR_ENGINE = "sensevoice-small"
+# Edge speech recognition needs no download, no key and no GPU, so a fresh
+# install can start translating immediately instead of stalling on a model
+# download the player has not asked for yet.
+DEFAULT_ASR_ENGINE = "edge-stt"
+
+# Speech engine naming lives here rather than in the settings window, because
+# the quick-switch panel needs the same names and must not import that module.
+TTS_ENGINE_LABELS = {
+    "qwen_vc": "Voice Cloning（API）",
+    "voicevox": "VOICEVOX（本地）",
+    "mimo_tts": "MiMo TTS（API）",
+    "qwen_tts": "Qwen TTS（API）",
+    "style_bert_vits2": "自定义音色",
+}
+
+TTS_ENGINE_I18N_KEYS = {
+    "qwen_vc": "tts_engine_voice_clone",
+    "voicevox": "tts_engine_voicevox",
+    "mimo_tts": "tts_engine_mimo_tts",
+    "qwen_tts": "tts_engine_qwen_tts",
+    "style_bert_vits2": "tts_engine_style_bert_vits2",
+}
+
+
+def get_tts_engine_label(engine: str, ui_language: str | None = None) -> str:
+    """Return the player-facing name of a speech engine."""
+
+    from src.utils.i18n import tr
+
+    key = TTS_ENGINE_I18N_KEYS.get(engine)
+    if key:
+        return tr(ui_language, key)
+    return TTS_ENGINE_LABELS.get(engine, engine)
 UI_LANGUAGE_LABELS = {code: label for label, code in UI_LANGUAGE_OPTIONS}
 TARGET_LANGUAGE_OPTIONS = ()
 MANUAL_SOURCE_LANGUAGE_OPTIONS = ()
@@ -1536,7 +1642,7 @@ def _with_code(label: str, code: str) -> str:
 
 
 def normalize_backend(backend: str | None) -> str:
-    if backend in _catalog_backends():
+    if backend in _catalog_backends() and backend not in DISABLED_TRANSLATION_BACKENDS:
         return str(backend)
     return DEFAULT_BACKEND
 
@@ -1862,8 +1968,14 @@ def set_catalog(catalog) -> None:
 
 def _catalog_backends() -> dict:
     if _CATALOG is not None:
-        return _CATALOG.translation_backends
-    return TRANSLATION_BACKENDS
+        backends = _CATALOG.translation_backends
+    else:
+        backends = TRANSLATION_BACKENDS
+    return {
+        backend: spec
+        for backend, spec in backends.items()
+        if backend not in DISABLED_TRANSLATION_BACKENDS
+    }
 
 
 def _catalog_model_presets() -> dict:

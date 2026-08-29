@@ -1394,6 +1394,7 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_original_only_read_translation_wait_for_tts": "朗读结束后发送原文",
         "quick_switch_noise_reduction": "麦克风降噪",
         "quick_switch_tts_language": "朗读语言",
+        "quick_switch_tts_engine": "朗读模型",
         "quick_switch_tts_voice": "音色包",
         "quick_switch_current_tts_engine": "当前朗读引擎：{engine}",
         "quick_switch_no_option": "没有可切换选项",
@@ -1413,6 +1414,7 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_original_only_read_translation_wait_for_tts": "Send original after TTS",
         "quick_switch_noise_reduction": "Mic noise reduction",
         "quick_switch_tts_language": "TTS language",
+        "quick_switch_tts_engine": "Speech engine",
         "quick_switch_tts_voice": "Voice package",
         "quick_switch_current_tts_engine": "Current TTS engine: {engine}",
         "quick_switch_no_option": "No quick-switch option",
@@ -1432,6 +1434,7 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_original_only_read_translation_wait_for_tts": "読み上げ後に原文を送信",
         "quick_switch_noise_reduction": "マイクノイズ低減",
         "quick_switch_tts_language": "読み上げ言語",
+        "quick_switch_tts_engine": "読み上げエンジン",
         "quick_switch_tts_voice": "音色パック",
         "quick_switch_current_tts_engine": "現在の読み上げエンジン: {engine}",
         "quick_switch_no_option": "切り替え可能な項目はありません",
@@ -1451,6 +1454,7 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_original_only_read_translation_wait_for_tts": "Отправлять оригинал после TTS",
         "quick_switch_noise_reduction": "Шумоподавление микрофона",
         "quick_switch_tts_language": "Язык TTS",
+        "quick_switch_tts_engine": "Движок озвучивания",
         "quick_switch_tts_voice": "Голосовой пакет",
         "quick_switch_current_tts_engine": "Текущий движок TTS: {engine}",
         "quick_switch_no_option": "Нет вариантов быстрого переключения",
@@ -1470,6 +1474,7 @@ _QUICK_SWITCH_PANEL_TEXTS = {
         "quick_switch_original_only_read_translation_wait_for_tts": "TTS 후 원문 전송",
         "quick_switch_noise_reduction": "마이크 노이즈 감소",
         "quick_switch_tts_language": "TTS 언어",
+        "quick_switch_tts_engine": "음성 엔진",
         "quick_switch_tts_voice": "음색 팩",
         "quick_switch_current_tts_engine": "현재 TTS 엔진: {engine}",
         "quick_switch_no_option": "빠른 전환 옵션 없음",
@@ -1694,19 +1699,19 @@ for _language, _texts in _VOICE_RECORD_DIALOG_TEXTS.items():
 
 _EDGE_STT_TEXTS = {
     "zh-CN": {
-        "asr_hint_edge_stt": "Edge 语音识别：直接连接微软在线识别服务，免 API Key，识别结果自带标点。需要联网，语音会发送到微软服务器。",
+        "asr_hint_edge_stt": "联网ASR，需要联网，完全免费，速度快占用低，没有句尾情绪小表情。",
     },
     "en": {
-        "asr_hint_edge_stt": "Edge Speech: connects straight to Microsoft's online recognizer, needs no API key, and returns punctuated text. Requires an internet connection; audio is sent to Microsoft.",
+        "asr_hint_edge_stt": "Online ASR. Needs an internet connection, is completely free, and is fast and light on memory. It does not add the end-of-sentence emotion emoji.",
     },
     "ja": {
-        "asr_hint_edge_stt": "Edge 音声認識：Microsoft のオンライン認識サービスに直接接続します。API キー不要で、句読点付きの結果が返ります。インターネット接続が必要で、音声は Microsoft に送信されます。",
+        "asr_hint_edge_stt": "オンライン ASR。インターネット接続が必要で、完全無料、高速かつ省メモリです。文末の感情絵文字は付きません。",
     },
     "ru": {
-        "asr_hint_edge_stt": "Edge Speech: прямое подключение к онлайн-распознаванию Microsoft, ключ API не нужен, текст возвращается с пунктуацией. Требуется интернет; звук отправляется в Microsoft.",
+        "asr_hint_edge_stt": "Онлайн-распознавание. Нужен интернет, полностью бесплатно, быстро и с малым потреблением памяти. Эмодзи эмоций в конце фразы не добавляются.",
     },
     "ko": {
-        "asr_hint_edge_stt": "Edge 음성 인식: Microsoft 온라인 인식 서비스에 직접 연결하며 API 키가 필요 없고 구두점이 포함된 결과를 반환합니다. 인터넷 연결이 필요하며 음성은 Microsoft로 전송됩니다.",
+        "asr_hint_edge_stt": "온라인 ASR입니다. 인터넷 연결이 필요하며 완전 무료이고 빠르며 메모리 사용량이 적습니다. 문장 끝 감정 이모지는 붙지 않습니다.",
     },
 }
 

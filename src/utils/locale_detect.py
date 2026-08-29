@@ -59,10 +59,15 @@ def get_system_language() -> str:
 
 
 def select_default_asr_engine() -> str:
-    """Return the recommended ASR engine ID based on system language."""
-    lang = get_system_language()
-    if lang in SENSEVOICE_LANGUAGES:
-        return SENSEVOICE_ENGINE
+    """Return the ASR engine a fresh install should start on.
+
+    Chinese systems used to start on SenseVoice, which cannot transcribe a
+    single word until a multi-hundred-megabyte model finishes downloading. Edge
+    speech recognition needs no download, no key and no GPU, so the first
+    launch works immediately; SenseVoice stays one click away for players who
+    want a local model.
+    """
+
     return EDGE_STT_ENGINE
 
 

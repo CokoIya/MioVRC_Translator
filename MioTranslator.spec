@@ -128,7 +128,6 @@ for package_name in (
     "annotated_types",
     "charset_normalizer",
     "websockets",
-    "anthropic",
     "rich",
     "markdown_it",
     "mdurl",
@@ -179,7 +178,6 @@ hiddenimports += [
     "src.translators.microsoft_edge_translator",
     "websockets",
     "openai",
-    "anthropic",
     "sentencepiece",
     "sentencepiece._sentencepiece",
     "sentencepiece.sentencepiece_model_pb2",
@@ -229,6 +227,11 @@ hiddenimports = filter_hiddenimports(hiddenimports)
 
 excludes = [
     "torchvision",
+    # Claude/Anthropic is disabled for this release. Keep a stale SDK or
+    # legacy translator module out of the frozen bundle even if present in a
+    # developer environment.
+    "anthropic",
+    "anthropic.*",
     # Recognition no longer runs in a browser page, so the whole Qt
     # WebEngine stack (a ~195 MB core DLL plus resource packs) is dead
     # weight in the bundle.

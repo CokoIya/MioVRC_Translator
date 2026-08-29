@@ -8,6 +8,8 @@ from unittest.mock import patch
 import sys
 import os
 
+import pytest
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -622,13 +624,13 @@ class TestConfigValidation(unittest.TestCase):
         assert config["osc"]["listener_enabled"] is False
 
     def test_removed_legacy_asr_engine_migrates_away(self):
-        """Removed local ASR engines should migrate to the default local ASR."""
+        """A removed engine migrates to one that works without a download."""
         config = {"asr": {"engine": "legacy-local-asr-large", "legacy_local_asr": {}}}
 
         changed = config_manager._ensure_asr_config(config)
 
         assert changed is True
-        assert config["asr"]["engine"] == "sensevoice-small"
+        assert config["asr"]["engine"] == "edge-stt"
         assert "legacy_local_asr" not in config["asr"]
 
     def test_initial_asr_default_uses_locale_recommendation(self):
@@ -1317,7 +1319,8 @@ class TestConfigValidation(unittest.TestCase):
         assert "gpt-5.6-sol" in presets
         assert "gpt-5.6-terra" in presets
         assert "gpt-5.6-luna" in presets
-        assert "gpt-5.5" in presets
+        # Dropped from OpenAI's own catalog once the 5.6 family shipped.
+        assert "gpt-5.5" not in presets
         assert "gpt-5.4" not in presets
         assert "gpt-5.4-mini" not in presets
         assert "gpt-5.4-nano" not in presets
@@ -1327,17 +1330,17 @@ class TestConfigValidation(unittest.TestCase):
     def test_api_provider_presets_include_latest_model_families(self):
         """All hosted translation backends should expose their current model families."""
         expected_models = {
-            "qianwen": ("qwen-mt-plus", "qwen-mt-flash"),
+            "qianwen": ("qwen-mt-plus", "qwen-mt-flash", "qwen-mt-lite"),
             "xiaomi": ("mimo-v2.5-pro", "mimo-v2-flash"),
             "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
-            "zhipu": ("glm-5.1", "glm-5-turbo"),
-            "gemini": ("gemini-3.5-flash", "gemini-2.5-flash"),
-            "kimi": ("kimi-k2.6", "kimi-k2.5"),
+            "zhipu": ("glm-5.3", "glm-5.3-flash"),
+            "gemini": ("gemini-3.7-flash", "gemini-3.6-flash"),
+            "kimi": ("kimi-k3", "kimi-k2.6"),
             "hunyuan": ("hunyuan-turbos-latest", "hunyuan-turbo-latest"),
-            "xai": ("grok-4.3",),
+            "xai": ("grok-4.6", "grok-4.3"),
             "mistral": ("mistral-medium-3-5", "mistral-small-latest"),
             "nvidia": ("nvidia/nemotron-3-nano-30b-a3b",),
-            "anthropic": ("claude-sonnet-5", "claude-sonnet-4-6"),
+            "anthropic": ("claude-sonnet-5", "claude-haiku-4-5"),
         }
 
         for backend, models in expected_models.items():
@@ -1360,12 +1363,12 @@ class TestConfigValidation(unittest.TestCase):
         assert "gpt-5.6-sol" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.6-terra" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.6-luna" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
-        assert "gpt-5.5" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "gpt-5.5" not in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.4-mini" not in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "claude-sonnet-5" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert "claude-sonnet-4-6" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert (
-            "claude-haiku-4-5-20251001"
+            "claude-haiku-4-5"
             in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         )
         qwen_flash = TRANSLATION_MODEL_PRESETS["qianwen"].index("qwen-mt-flash")
@@ -1383,7 +1386,11 @@ class TestConfigValidation(unittest.TestCase):
         example = json.loads(example_path.read_text(encoding="utf-8"))
         translation = example["translation"]
 
+        from src.utils.ui_config import DISABLED_TRANSLATION_BACKENDS
+
         for backend, spec in TRANSLATION_BACKENDS.items():
+            if backend in DISABLED_TRANSLATION_BACKENDS:
+                continue
             assert translation[backend]["model"] == spec["model"]
 
         assert example["asr"]["sensevoice"]["model_revision"] == SENSEVOICE_DEFAULT_REVISION
@@ -1442,23 +1449,15 @@ class TestConfigValidation(unittest.TestCase):
 
     def test_model_profiles_expose_ten_point_live_scores(self):
         qwen_mt = get_backend_model_profile("qianwen", "qwen-mt-plus")
-        gpt = get_backend_model_profile("openai", "gpt-5.5")
-        sonnet_5 = get_backend_model_profile("anthropic", "claude-sonnet-5")
-        compat_gpt = get_backend_model_profile("openai_compatible", "gpt-5.5")
-        compat_claude = get_backend_model_profile(
-            "anthropic_compatible", "claude-sonnet-4-6"
-        )
+        gpt = get_backend_model_profile("openai", "gpt-5.6-terra")
+        compat_gpt = get_backend_model_profile("openai_compatible", "gpt-5.6-terra")
         custom = get_backend_model_profile("openai", "custom-router-model")
 
         assert qwen_mt["score"] == "9.7"
-        assert gpt["score"] == "9.5"
-        assert sonnet_5["score"] == "9.2"
-        assert compat_gpt["score"] == "9.5"
-        assert compat_gpt["note"] == "general_high_quality"
-        assert compat_claude["score"] == "9.2"
-        assert compat_claude["note"] == "live_default"
+        assert gpt["score"] == "9.4"
+        assert compat_gpt["score"] == "9.4"
+        assert compat_gpt["note"] == "balanced_quality"
         assert custom["score"] == "6.5"
-        assert float(qwen_mt["score"]) > float(compat_claude["score"])
 
     def test_legacy_provider_defaults_migrate_without_overwriting_selectable_fast_models(self):
         config = {
@@ -1979,3 +1978,137 @@ class TestConfigGet(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFirstRunDefaults:
+    def test_fresh_install_starts_on_an_asr_that_needs_no_download(self):
+        """The first launch must transcribe without a model download.
+
+        Chinese systems used to start on SenseVoice, so a new player could not
+        say a single word until hundreds of megabytes had arrived.
+        """
+
+        from src.utils.locale_detect import select_default_asr_engine
+
+        assert select_default_asr_engine() == "edge-stt"
+
+    def test_fresh_install_starts_on_the_free_keyless_translator(self):
+        from src.utils.ui_config import DEFAULT_BACKEND
+
+        assert DEFAULT_BACKEND == "microsoft_edge_web"
+
+    def test_renamed_edge_web_model_id_migrates(self):
+        """The catalog id changed with the rename; the endpoint did not."""
+
+        config = {
+            "translation": {
+                "backend": "microsoft_edge_web",
+                "microsoft_edge_web": {"model": "microsoft-edge-web"},
+            }
+        }
+
+        config_manager._ensure_translation_config(config)
+
+        assert config["translation"]["microsoft_edge_web"]["model"] == "bing"
+
+    def test_a_deliberate_edge_web_model_choice_is_left_alone(self):
+        config = {
+            "translation": {
+                "backend": "microsoft_edge_web",
+                "microsoft_edge_web": {"model": "custom-relay-model"},
+            }
+        }
+
+        config_manager._ensure_translation_config(config)
+
+        assert (
+            config["translation"]["microsoft_edge_web"]["model"] == "custom-relay-model"
+        )
+
+
+class TestModelCatalogCurrency:
+    """A retired model id is not cosmetic: the request fails outright."""
+
+    def test_every_selectable_model_has_a_profile_and_score(self):
+        from src.utils.ui_config import (
+            TRANSLATION_MODEL_PRESETS,
+            get_backend_model_profile,
+        )
+
+        unrated = []
+        from src.utils.ui_config import DISABLED_TRANSLATION_BACKENDS
+
+        for backend, models in TRANSLATION_MODEL_PRESETS.items():
+            if backend in DISABLED_TRANSLATION_BACKENDS:
+                continue
+            for model in models:
+                profile = get_backend_model_profile(backend, model)
+                if profile["score"] == "6.5" and profile.get("note") == "custom":
+                    unrated.append((backend, model))
+
+        assert unrated == []
+
+    def test_each_backend_marks_at_most_one_live_default(self):
+        from src.utils.ui_config import (
+            TRANSLATION_MODEL_PRESETS,
+            get_backend_model_profile,
+        )
+
+        for backend, models in TRANSLATION_MODEL_PRESETS.items():
+            defaults = [
+                model
+                for model in models
+                if get_backend_model_profile(backend, model).get("note")
+                == "live_default"
+            ]
+            assert len(defaults) <= 1, (backend, defaults)
+
+    def test_retired_models_are_gone_from_the_picker(self):
+        from src.utils.ui_config import TRANSLATION_MODEL_PRESETS as presets
+
+        # Verified retired against each provider's own catalog.
+        assert "gpt-5.5" not in presets["openai"]
+        assert "gemini-2.5-flash" not in presets["gemini"]
+        assert "gemini-2.5-flash-lite" not in presets["gemini"]
+        assert "kimi-k2.5" not in presets["kimi"]
+        for dead in ("glm-5.1", "glm-5", "glm-5-turbo", "glm-4.7"):
+            assert dead not in presets["zhipu"], dead
+
+    def test_claude_ids_carry_no_date_suffix(self):
+        """A date-suffixed Claude id is not a valid model string."""
+
+        import re
+
+        from src.utils.ui_config import TRANSLATION_MODEL_PRESETS as presets
+
+        for backend in ("anthropic", "anthropic_compatible"):
+            for model in presets[backend]:
+                assert not re.search(r"-\d{8}$", model), model
+
+    @pytest.mark.parametrize(
+        ("backend", "dead", "replacement"),
+        [
+            ("zhipu", "glm-4.7-flash", "glm-5.3-flash"),
+            ("kimi", "kimi-k2.5", "kimi-k2.6"),
+            ("anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+            ("xai", "grok-4.20", "grok-4.20-0309-non-reasoning"),
+        ],
+    )
+    def test_a_saved_retired_model_migrates(self, backend, dead, replacement):
+        config = {"translation": {"backend": backend, backend: {"model": dead}}}
+
+        config_manager._ensure_translation_config(config)
+
+        assert config["translation"][backend]["model"] == replacement
+
+    def test_a_deliberate_model_choice_survives_migration(self):
+        config = {
+            "translation": {
+                "backend": "zhipu",
+                "zhipu": {"model": "glm-private-relay-build"},
+            }
+        }
+
+        config_manager._ensure_translation_config(config)
+
+        assert config["translation"]["zhipu"]["model"] == "glm-private-relay-build"

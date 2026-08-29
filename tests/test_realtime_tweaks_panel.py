@@ -66,6 +66,7 @@ def test_realtime_tweaks_panel_only_exposes_quick_switch_controls(qtbot):
         "translation_provider",
         "translation_model",
         "output_format",
+        "tts_engine",
         "tts_language",
         "tts_voice",
         "asr_rewrite_style",
@@ -180,3 +181,100 @@ def test_realtime_tweaks_panel_localizes_backend_qualifiers(qtbot):
 
     provider_combo = panel._combos["translation_provider"]
     assert provider_combo.currentText() == "GPT-совместимый сервис"
+
+
+def test_quick_panel_lists_voicevox_voices_from_the_running_engine(qtbot):
+    """VOICEVOX voices were simply missing from the quick panel.
+
+    Its catalog comes from a local service, and the panel only knew how to
+    read the two engines whose voices are constants in the source tree, so the
+    box was empty for VOICEVOX while settings showed it correctly.
+    """
+
+    from types import SimpleNamespace
+
+    config = _quick_switch_config()
+    config["tts"] = {"engine": "voicevox", "voicevox": {"voice": "2"}}
+    asked: list[str] = []
+
+    def live_voices(engine):
+        asked.append(engine)
+        return [
+            SimpleNamespace(id="2", name="四国めたん（ノーマル）"),
+            SimpleNamespace(id="3", name="ずんだもん（ノーマル）"),
+        ]
+
+    panel = RealtimeTweaksPanel(
+        None,
+        config,
+        "en",
+        "dark",
+        lambda key, value: None,
+        live_voices=live_voices,
+    )
+    qtbot.addWidget(panel)
+
+    assert asked == ["voicevox"]
+    combo = panel._combos["tts_voice"]
+    assert combo.count() == 2
+    assert combo.currentText() == "四国めたん（ノーマル）"
+
+
+def test_quick_panel_never_opens_its_own_connection_for_voices(qtbot):
+    """Without a host provider the panel returns nothing rather than blocking.
+
+    A synchronous call to a local speech service freezes the window whenever
+    that service is not running.
+    """
+
+    config = _quick_switch_config()
+    config["tts"] = {"engine": "voicevox", "voicevox": {"voice": "2"}}
+
+    panel = RealtimeTweaksPanel(None, config, "en", "dark", lambda key, value: None)
+    qtbot.addWidget(panel)
+
+    combo = panel._combos["tts_voice"]
+
+    # The box shows its "no option" placeholder and offers no real voice.
+    assert combo.isEnabled() is False
+    assert panel._combo_codes["tts_voice"] == {}
+
+
+def test_quick_panel_offers_only_engines_that_are_ready(qtbot):
+    """Switching to an engine that still needs setup is not a quick switch."""
+
+    config = _quick_switch_config()
+    config["tts"] = {"engine": "qwen_tts", "qwen_tts": {"voice": "Cherry"}}
+
+    panel = RealtimeTweaksPanel(
+        None,
+        config,
+        "en",
+        "dark",
+        lambda key, value: None,
+        available_engines=lambda: ["qwen_tts", "voicevox"],
+    )
+    qtbot.addWidget(panel)
+
+    combo = panel._combos["tts_engine"]
+    codes = set(panel._combo_codes["tts_engine"].values())
+
+    assert combo.isVisible() or combo.count() == 2
+    assert codes == {"qwen_tts", "voicevox"}
+
+
+def test_quick_panel_hides_the_engine_picker_when_only_one_is_ready(qtbot):
+    config = _quick_switch_config()
+    config["tts"] = {"engine": "qwen_tts", "qwen_tts": {"voice": "Cherry"}}
+
+    panel = RealtimeTweaksPanel(
+        None,
+        config,
+        "en",
+        "dark",
+        lambda key, value: None,
+        available_engines=lambda: ["qwen_tts"],
+    )
+    qtbot.addWidget(panel)
+
+    assert panel._combos["tts_engine"].isVisibleTo(panel) is False

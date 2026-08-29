@@ -2566,3 +2566,74 @@ def test_overlay_resend_ignores_an_empty_entry():
     MainWindow._resend_history_to_vrc(window, "   ", "listen")
 
     assert sent == []
+
+
+def test_osc_guide_dialog_is_painted_by_the_theme():
+    """The guide's scroll area used to keep Qt's default white palette.
+
+    Its labels take their colour from the dark theme, so the result was pale
+    text on a white slab: the instructions were unreadable.
+    """
+
+    from src.ui_qt.styles import build_main_window_styles
+
+    for theme in ("dark", "light"):
+        sheet = build_main_window_styles(theme)
+        assert "QDialog#oscGuideDialog" in sheet, theme
+        assert "QScrollArea#oscGuideScroll" in sheet, theme
+        assert "QWidget#oscGuideContent" in sheet, theme
+        assert "QFrame#guideStepCard" in sheet, theme
+
+
+def test_osc_guide_names_every_styled_widget():
+    """A renamed objectName would silently bring the white slab back."""
+
+    import inspect
+
+    from src.ui_qt.main_window import MainWindow
+
+    source = inspect.getsource(MainWindow._open_osc_guide)
+
+    for object_name in (
+        "oscGuideDialog",
+        "oscGuideScroll",
+        "oscGuideContent",
+        "guideStepCard",
+    ):
+        assert f'"{object_name}"' in source, object_name
+
+
+def test_first_run_wizard_leads_with_the_no_setup_answer():
+    """New players ask one thing first: must I configure anything to start?
+
+    The answer used to be buried under five mode cards.
+    """
+
+    from src.ui_qt.mode_wizard_dialog import _COPY
+
+    for language, copy in _COPY.items():
+        assert copy["headline_primary"], language
+        assert copy["headline_secondary"], language
+
+
+def test_first_run_wizard_headline_is_styled_above_the_mode_cards():
+    from src.ui_qt.styles import build_main_window_styles
+
+    for theme in ("dark", "light"):
+        sheet = build_main_window_styles(theme)
+        assert "QFrame#wizardHeadlineCard" in sheet, theme
+        assert "QLabel#wizardHeadlinePrimary" in sheet, theme
+        assert "QLabel#wizardHeadlineSecondary" in sheet, theme
+
+
+def test_helper_dialogs_follow_the_theme():
+    """These windows hardcoded a light palette and opened as a white slab."""
+
+    import inspect
+
+    from src.ui_qt import model_download_dialog, sponsor_window, update_window
+
+    for module in (model_download_dialog, sponsor_window, update_window):
+        source = inspect.getsource(module)
+        for literal in ("#f5f5f7", "#1d1d1f", "#eef1f5", "#e0e4ea", "#6e6e73"):
+            assert literal not in source, f"{module.__name__} still hardcodes {literal}"

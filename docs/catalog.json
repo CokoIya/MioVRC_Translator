@@ -216,26 +216,6 @@
       "base_url_input": "entry",
       "api_key_hint": "Use an NVIDIA API Catalog key for the hosted endpoint, or choose Custom for a self-hosted NIM/proxy endpoint.",
       "model_hint": "Hosted NIM model ids use provider/model format. For self-hosted NIM endpoints, enter the model id exposed by that deployment."
-    },
-    "anthropic": {
-      "label": "Claude",
-      "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-6",
-      "timeout_s": 15.0,
-      "max_output_tokens": 192,
-      "model_input": "select"
-    },
-    "anthropic_compatible": {
-      "label": "Claude Compatible",
-      "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-6",
-      "timeout_s": 15.0,
-      "max_output_tokens": 192,
-      "max_retries": 0,
-      "model_input": "select",
-      "base_url_input": "entry",
-      "api_key_hint": "Use this for Claude-compatible proxy or relay providers. Enter the Base URL and model id supplied by that provider.",
-      "model_hint": "Choose the Claude model id exposed by your proxy. If your saved model is not in the preset list, Mio keeps it available in this dropdown."
     }
   },
   "translation_model_presets": {
@@ -256,9 +236,7 @@
     "xai": ["grok-4.3", "grok-4.20", "grok-4.20-0309-non-reasoning"],
     "mistral": ["mistral-medium-3-5", "mistral-medium-latest", "mistral-small-latest", "ministral-8b-latest"],
     "doubao": [],
-    "nvidia": ["nvidia/nemotron-3-nano-30b-a3b"],
-    "anthropic": ["claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-    "anthropic_compatible": ["claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
+    "nvidia": ["nvidia/nemotron-3-nano-30b-a3b"]
   },
   "translation_model_profiles": {
     "openai": {
@@ -331,13 +309,7 @@
     },
     "nvidia": {
       "nvidia/nemotron-3-nano-30b-a3b": {"speed": "balanced", "quality": "high", "fit": "very_recommended", "note": "live_default"}
-    },
-    "anthropic": {
-      "claude-sonnet-5": {"speed": "balanced", "quality": "high", "fit": "recommended", "note": "general_high_quality"},
-      "claude-sonnet-4-6": {"speed": "balanced", "quality": "high", "fit": "very_recommended", "note": "live_default"},
-      "claude-haiku-4-5-20251001": {"speed": "fast", "quality": "balanced", "fit": "recommended", "note": "ultra_fast"}
-    },
-    "anthropic_compatible": {}
+    }
   },
   "translation_backend_region_base_urls": {
     "qianwen": {

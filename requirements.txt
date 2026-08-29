@@ -35,7 +35,6 @@ tqdm>=4.66.0,<5.0.0
 
 # Translation backends
 openai>=1.30.0,<2.0.0        # covers OpenAI / DeepSeek / Qianwen / Custom
-anthropic>=0.28.0,<1.0.0
 # Qwen TTS DNS pinning subclasses the TLS-aware adapter hook added in 2.32.2.
 requests>=2.32.2,<3.0.0
 # Use the native Windows/macOS/Linux trust store for provider HTTPS. On

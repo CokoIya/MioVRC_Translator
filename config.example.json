@@ -147,7 +147,7 @@
     },
     "microsoft_edge_web": {
       "base_url": "https://edge.microsoft.com/translate/translatetext",
-      "model": "microsoft-edge-web",
+      "model": "bing",
       "timeout_s": 8.0,
       "max_retries": 1
     },
@@ -239,20 +239,6 @@
       "region": "global",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "model": "nvidia/nemotron-3-nano-30b-a3b"
-    },
-    "anthropic": {
-      "api_key": "",
-      "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-6",
-      "timeout_s": 15.0,
-      "max_retries": 0
-    },
-    "anthropic_compatible": {
-      "api_key": "",
-      "base_url": "https://api.anthropic.com",
-      "model": "claude-sonnet-4-6",
-      "timeout_s": 15.0,
-      "max_retries": 0
     },
     "custom": {
       "api_key": "",

@@ -3992,9 +3992,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         scroll = QScrollArea()
+        scroll.setObjectName("oscGuideScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)
         content = QWidget()
         content.setObjectName("oscGuideContent")
         content_layout = QVBoxLayout(content)
@@ -10974,6 +10976,8 @@ class MainWindow(QMainWindow):
                 ui_language=self._ui_lang,
                 theme=self._main_theme,
                 on_change=self._on_quick_switch_changed,
+                live_voices=self._quick_switch_live_voices,
+                available_engines=self._quick_switch_available_engines,
             )
             self._tweaks_panel.finished.connect(self._on_tweaks_panel_closed)
         if self._tweaks_panel.isVisible():
@@ -11085,6 +11089,76 @@ class MainWindow(QMainWindow):
             tts_cfg[engine] = engine_cfg
         engine_cfg["voice"] = str(value or "").strip()
 
+    def _quick_switch_live_voices(self, engine: str) -> list:
+        """Return the voices the running speech engine already knows about.
+
+        VOICEVOX and Style-Bert-VITS2 publish their catalog from a local
+        service. The panel must not open that connection itself - a blocking
+        call on the UI thread freezes the window whenever the service is not
+        running - so it reuses the list the audio engine has already loaded.
+        """
+
+        manager = getattr(self, "_tts_manager", None)
+        if manager is None:
+            return []
+        if str(engine or "").strip() != self._current_tts_engine():
+            # A different engine's catalog would need its own client; the panel
+            # only offers voices for the engine that is actually loaded.
+            return []
+        try:
+            return list(manager.get_available_voices() or [])
+        except Exception as exc:
+            logger.debug(
+                "Failed to read live TTS voices: %s", safe_exception_summary(exc)
+            )
+            return []
+
+    def _quick_switch_available_engines(self) -> list[str]:
+        """List speech engines that can be switched to without leaving the app.
+
+        An engine still waiting on an API key, a model download or a local
+        service is not a quick switch, so it stays out of the panel and the
+        player is not offered a choice that fails the moment they make it.
+        """
+
+        from src.ui_qt.settings_window import TTS_ENGINE_IDS
+
+        current = self._current_tts_engine()
+        ready: list[str] = []
+        for engine in TTS_ENGINE_IDS:
+            if engine == current or self._tts_engine_is_ready(engine):
+                ready.append(engine)
+        return ready
+
+    def _tts_engine_is_ready(self, engine: str) -> bool:
+        tts_cfg = self._tts_config()
+        engine_cfg = tts_cfg.get(engine, {})
+        if not isinstance(engine_cfg, Mapping):
+            return False
+        if engine in {"qwen_tts", "mimo_tts"}:
+            return bool(str(engine_cfg.get("api_key", "") or "").strip())
+        if engine == "qwen_vc":
+            if not str(engine_cfg.get("api_key", "") or "").strip():
+                return False
+            voices = engine_cfg.get("custom_voices")
+            return bool(isinstance(voices, (list, tuple)) and voices)
+        # Local engines depend on a service or model this window cannot probe
+        # without blocking, so they are offered only once one has been used.
+        return bool(engine_cfg.get("voice"))
+
+    def _set_quick_tts_engine(self, value: object) -> None:
+        engine = str(value or "").strip()
+        if not engine:
+            return
+        tts_cfg = self._config.setdefault("tts", {})
+        if not isinstance(tts_cfg, dict):
+            tts_cfg = {}
+            self._config["tts"] = tts_cfg
+        if str(tts_cfg.get("engine", "") or "").strip() == engine:
+            return
+        tts_cfg["engine"] = engine
+        self._reset_tts_manager()
+
     def _set_quick_rewrite_typed_text(self, value: object) -> None:
         self._config.setdefault("translation", {})["rewrite_typed_text"] = bool(
             value
@@ -11111,6 +11185,7 @@ class MainWindow(QMainWindow):
             ),
             "asr_rewrite_style": self._set_quick_asr_rewrite_style,
             "rewrite_typed_text": self._set_quick_rewrite_typed_text,
+            "tts_engine": self._set_quick_tts_engine,
             "tts_language": self._set_quick_tts_language,
             "tts_voice": self._set_quick_tts_voice,
             "noise_reduction": self._set_quick_noise_reduction,

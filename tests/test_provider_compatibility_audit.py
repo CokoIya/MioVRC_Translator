@@ -308,6 +308,7 @@ def _anthropic_config() -> dict:
     }
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_streams_with_custom_headers_and_exact_model(monkeypatch):
     instances = _install_fake_anthropic(monkeypatch)
     translator = create_translator(_anthropic_config())
@@ -330,6 +331,7 @@ def test_anthropic_compatible_streams_with_custom_headers_and_exact_model(monkey
         translator.close()
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_falls_back_only_for_explicit_stream_rejection(
     monkeypatch,
 ):
@@ -343,6 +345,7 @@ def test_anthropic_compatible_falls_back_only_for_explicit_stream_rejection(
         translator.close()
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_provider_logs_hide_relay_path_and_raw_error(
     monkeypatch,
     caplog,
@@ -414,7 +417,7 @@ def test_provider_status_and_cancellation_categories_do_not_leak_raw_text(
 ):
     friendly = format_translation_error(
         error,
-        backend="anthropic_compatible",
+        backend="openai_compatible",
         ui_language="ja",
     )
 
@@ -440,6 +443,7 @@ def test_common_relay_http_status_text_is_classified(error):
     assert friendly.category == "auth"
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_overload_is_provider_failure_not_billing_quota():
     friendly = format_translation_error(
         "HTTP 529 - {'type': 'overloaded_error', 'message': 'Overloaded'}",
@@ -450,6 +454,7 @@ def test_anthropic_overload_is_provider_failure_not_billing_quota():
     assert friendly.category == "provider"
 
 
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_model_not_found_404_is_model_error():
     friendly = format_translation_error(
         "HTTP 404 Not Found: not_found_error model: claude-custom-preview",
@@ -462,7 +467,7 @@ def test_anthropic_model_not_found_404_is_model_error():
 
 @pytest.mark.parametrize(
     "backend",
-    ("openai_compatible", "anthropic_compatible", "xai"),
+    ("openai_compatible", "xai"),
 )
 def test_compatible_and_xai_auth_errors_use_provider_specific_guidance(backend):
     friendly = format_translation_error(
@@ -486,11 +491,11 @@ def test_compatible_provider_names_use_localized_backend_labels():
 
 
 def test_config_normalization_preserves_relay_model_and_bounds_phase_timeouts():
-    custom_model = "relay/claude-opus-custom:2026-07"
+    custom_model = "relay/custom-gpt:2026-07"
     config = {
         "translation": {
-            "backend": "anthropic_compatible",
-            "anthropic_compatible": {
+            "backend": "openai_compatible",
+            "openai_compatible": {
                 "model": custom_model,
                 "timeout_s": 12,
                 "connect_timeout_s": "2.5",
@@ -508,7 +513,7 @@ def test_config_normalization_preserves_relay_model_and_bounds_phase_timeouts():
         config,
         loaded={"translation": dict(config["translation"])},
     )
-    provider = config["translation"]["anthropic_compatible"]
+    provider = config["translation"]["openai_compatible"]
 
     assert provider["model"] == custom_model
     assert provider["connect_timeout_s"] == 2.5
@@ -738,6 +743,7 @@ def _install_close_released_anthropic(monkeypatch, *, reject_streaming: bool):
 
 
 @pytest.mark.parametrize("streaming", (False, True))
+@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_hard_wall_timeout_covers_nonstream_and_stream_fallback(
     monkeypatch,
     streaming,

@@ -155,19 +155,34 @@ def test_text_input_window_resize_hit_testing_and_scaling(qtbot, monkeypatch):
     assert window._input_edit.minimumHeight() >= int(INPUT_MIN_HEIGHT * 1.25)
 
 
-def test_text_input_window_does_not_share_the_overlay_stylesheet():
-    """The composer and the reverse-translation overlay are styled apart.
+def test_composer_and_overlay_share_chrome_without_sharing_a_sheet():
+    """One definition drives both windows' shell, caption, buttons and slider.
 
-    They used to share one sheet, so every metric had to suit both windows.
+    They are separate windows with different jobs, so neither sheet may
+    contain the other's widgets; but a player sees them side by side, so the
+    chrome they do have in common is generated once.
     """
 
     from src.ui_qt.styles import build_floating_window_styles, build_text_input_styles
 
     composer = build_text_input_styles("dark")
+    overlay = build_floating_window_styles("dark")
 
-    assert composer != build_floating_window_styles("dark")
+    assert composer != overlay
     assert "QFrame#textInputShell" in composer
     assert "QFrame#floatingShell" not in composer
+    assert "QTextEdit#inputTextEdit" in composer
+    assert "QTextEdit#inputTextEdit" not in overlay
+
+    # The shared chrome must land in both, with the same metrics.
+    for fragment in (
+        "min-height: 22px;",
+        "border-radius: 9px;",
+        'QSlider::handle:horizontal',
+        "width: 10px;",
+    ):
+        assert fragment in composer, fragment
+        assert fragment in overlay, fragment
 
 
 def test_text_input_counter_warns_before_vrchat_truncates(qtbot, monkeypatch):

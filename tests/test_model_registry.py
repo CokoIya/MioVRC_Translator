@@ -50,14 +50,19 @@ def test_qwen3_region_base_url_helpers():
     assert get_qwen3_asr_base_url("custom") == ""
 
 
-def test_unknown_legacy_engine_normalizes_to_default_local_asr():
+def test_unknown_legacy_engine_normalizes_to_the_default_engine():
+    """A retired engine id must land somewhere the player can use at once.
+
+    The fallback used to be the local model, which left anyone migrating from
+    a removed engine unable to transcribe until a large download finished.
+    """
+
     config = {"asr": {"engine": "legacy-local-asr-large"}}
 
     spec = get_asr_runtime_spec(config)
 
-    assert spec.engine == "sensevoice-small"
-    assert spec.model_id == "iic/SenseVoiceSmall"
-    assert spec.requires_local_model is True
+    assert spec.engine == "edge-stt"
+    assert spec.requires_local_model is False
 
 
 def test_sensevoice_spec_is_pinned_and_all_required_files_are_hashed():

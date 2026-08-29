@@ -6,7 +6,6 @@ from threading import Lock
 from typing import Callable
 import logging
 
-from .anthropic_translator import AnthropicTranslator
 from .base import BaseTranslator, TranslationContextStore
 from .deepl_translator import DeepLTranslator
 from .google_web_translator import GoogleWebTranslator
@@ -27,6 +26,7 @@ from src.utils.qwen_endpoints import (
 )
 from src.utils.ui_config import (
     DEFAULT_BACKEND,
+    DISABLED_TRANSLATION_BACKENDS,
     get_backend_order,
     get_backend_config_value,
     get_backend_label,
@@ -524,6 +524,9 @@ def _create_translator_for_backend(
     backend: str,
     context_store: TranslationContextStore | None = None,
 ) -> BaseTranslator:
+    if backend in DISABLED_TRANSLATION_BACKENDS:
+        raise ValueError(f"Translation backend is disabled: {backend}")
+
     if backend == "deepl":
         spec = get_backend_spec(backend)
         backend_cfg = _backend_cfg(trans_cfg, backend)
@@ -629,75 +632,6 @@ def _create_translator_for_backend(
             trans_cfg,
             backend,
             context_store=context_store,
-        )
-
-    if backend in {"anthropic", "anthropic_compatible"}:
-        spec = get_backend_spec(backend)
-        backend_cfg = _backend_cfg(trans_cfg, backend)
-        api_key = _require_text(
-            backend_cfg.get("api_key", ""), f"{get_backend_label(backend)} API Key"
-        )
-        model = _require_text(
-            get_backend_config_value(trans_cfg, backend, "model"),
-            f"{get_backend_label(backend)} Model",
-            max_chars=512,
-        )
-
-        timeout_s = _float_setting(
-            backend_cfg.get("timeout_s"),
-            spec.get("timeout_s", 15.0),
-            minimum=3.0,
-            maximum=120.0,
-        )
-        return AnthropicTranslator(
-            api_key=api_key,
-            model=model,
-            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
-            timeout_s=timeout_s,
-            max_retries=_int_setting(
-                backend_cfg.get("max_retries"),
-                spec.get("max_retries", 0),
-                minimum=0,
-                maximum=3,
-            ),
-            max_output_tokens=int(spec.get("max_output_tokens", 192)),
-            context_store=context_store,
-            provider_id=backend,
-            custom_headers=backend_cfg.get("custom_headers", {}),
-            streaming=_bool_setting(
-                backend_cfg.get("streaming"),
-                spec.get("streaming", False),
-            ),
-            connect_timeout_s=_float_setting(
-                backend_cfg.get("connect_timeout_s"),
-                timeout_s,
-                minimum=0.1,
-                maximum=120.0,
-            ),
-            pool_timeout_s=_float_setting(
-                backend_cfg.get("pool_timeout_s"),
-                timeout_s,
-                minimum=0.1,
-                maximum=120.0,
-            ),
-            read_timeout_s=_float_setting(
-                backend_cfg.get("read_timeout_s"),
-                timeout_s,
-                minimum=0.1,
-                maximum=300.0,
-            ),
-            write_timeout_s=_float_setting(
-                backend_cfg.get("write_timeout_s"),
-                timeout_s,
-                minimum=0.1,
-                maximum=300.0,
-            ),
-            wall_timeout_s=_float_setting(
-                backend_cfg.get("wall_timeout_s"),
-                timeout_s,
-                minimum=0.1,
-                maximum=300.0,
-            ),
         )
 
     raise ValueError(f"Unknown translation backend: {backend}")

@@ -29,6 +29,8 @@ class ModeWizardResult:
 _COPY = {
     "zh-CN": {
         "title": "Mio 新手设置",
+        "headline_primary": "只想要语音转文字翻译？直接点「开始监听」就能用。",
+        "headline_secondary": "需要同声传译朗读等进阶功能，请进群观看教学视频。",
         "subtitle": "先选一个最像你要做的事。Mio 会帮你打开常用开关；麦克风、翻译账号和音色之后还能慢慢改。",
         "chatbox_title": "我说话，发到聊天框",
         "chatbox_body": "你对着麦克风说话，Mio 翻译后发到 VRChat 聊天框。",
@@ -47,6 +49,8 @@ _COPY = {
     },
     "en": {
         "title": "Mio First-run Guide",
+        "headline_primary": "Just want speech translated to text? Press Start Listening and it works.",
+        "headline_secondary": "For interpretation and read-aloud, watch the tutorial video in the group.",
         "subtitle": "Pick the closest usage mode. Mio will save recommended toggles; API keys, devices, and models can still be tuned in Settings.",
         "chatbox_title": "Chatbox Translation",
         "chatbox_body": "Speech → ASR → translation → VRChat Chatbox.",
@@ -65,6 +69,8 @@ _COPY = {
     },
     "ja": {
         "title": "Mio 初回設定ガイド",
+        "headline_primary": "音声を文字に翻訳したいだけなら「リスニング開始」を押すだけで使えます。",
+        "headline_secondary": "同時通訳の読み上げなど上級機能はグループの解説動画をご覧ください。",
         "subtitle": "やりたいことに近い使い方を選んでください。Mio がよく使うスイッチを設定します。API Key、デバイス、モデルは後から設定で調整できます。",
         "chatbox_title": "チャットボックス翻訳",
         "chatbox_body": "マイクに向かって話すと、Mio が翻訳して VRChat のチャットボックスへ送信します。",
@@ -83,6 +89,8 @@ _COPY = {
     },
     "ru": {
         "title": "Первичная настройка Mio",
+        "headline_primary": "Нужен только перевод речи в текст? Нажмите «Начать прослушивание».",
+        "headline_secondary": "Для синхронного перевода с озвучкой смотрите видеоурок в группе.",
         "subtitle": "Выберите ближайший сценарий. Mio сохранит рекомендуемые переключатели; API-ключи, устройства и модели можно настроить позже.",
         "chatbox_title": "Перевод в Chatbox",
         "chatbox_body": "Речь → распознавание → перевод → VRChat Chatbox.",
@@ -101,6 +109,8 @@ _COPY = {
     },
     "ko": {
         "title": "Mio 첫 설정 가이드",
+        "headline_primary": "음성을 텍스트로 번역만 하려면 '듣기 시작'을 누르면 바로 됩니다.",
+        "headline_secondary": "동시통역 낭독 등 고급 기능은 그룹의 설명 영상을 참고하세요.",
         "subtitle": "가장 가까운 사용 방식을 선택하세요. Mio가 추천 스위치를 저장합니다. API 키, 장치, 모델은 설정에서 나중에 조정할 수 있습니다.",
         "chatbox_title": "채팅박스 번역",
         "chatbox_body": "말하기 → 음성 인식 → 번역 → VRChat 채팅박스로 전송합니다.",
@@ -162,6 +172,21 @@ class ModeWizardDialog(QDialog):
         self._title_label = QLabel(self._copy["title"])
         self._title_label.setObjectName("sectionTitle")
         layout.addWidget(self._title_label)
+
+        self._headline_card = QFrame()
+        self._headline_card.setObjectName("wizardHeadlineCard")
+        headline_layout = QVBoxLayout(self._headline_card)
+        headline_layout.setContentsMargins(16, 14, 16, 14)
+        headline_layout.setSpacing(6)
+        self._headline_primary = QLabel(self._copy["headline_primary"])
+        self._headline_primary.setObjectName("wizardHeadlinePrimary")
+        self._headline_primary.setWordWrap(True)
+        headline_layout.addWidget(self._headline_primary)
+        self._headline_secondary = QLabel(self._copy["headline_secondary"])
+        self._headline_secondary.setObjectName("wizardHeadlineSecondary")
+        self._headline_secondary.setWordWrap(True)
+        headline_layout.addWidget(self._headline_secondary)
+        layout.addWidget(self._headline_card)
 
         self._subtitle_label = QLabel(self._copy["subtitle"])
         self._subtitle_label.setObjectName("hintLabel")
@@ -240,6 +265,8 @@ class ModeWizardDialog(QDialog):
         self._copy = _COPY[self._ui_lang]
         self.setWindowTitle(self._copy["title"])
         self._title_label.setText(self._copy["title"])
+        self._headline_primary.setText(self._copy["headline_primary"])
+        self._headline_secondary.setText(self._copy["headline_secondary"])
         self._subtitle_label.setText(self._copy["subtitle"])
         self._steps_label.setText(self._copy["steps"])
         self._skip_btn.setText(self._copy["skip"])

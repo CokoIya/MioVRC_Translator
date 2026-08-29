@@ -34,7 +34,6 @@ REQUIRED_MODULES = (
     "tqdm",
     "editdistance",
     "openai",
-    "anthropic",
     "tiktoken",
     "pythonosc",
     "torch",

@@ -2868,9 +2868,27 @@ def _voice_clone_config(config, **overrides):
 
 
 def test_voice_clone_engine_is_offered_in_place_of_local_cloning():
+    from src.utils.ui_config import TTS_ENGINE_I18N_KEYS
+
     assert "qwen_vc" in settings_module.TTS_ENGINE_IDS
     assert "xtts" not in settings_module.TTS_ENGINE_IDS
-    assert settings_module.TTS_ENGINE_I18N_KEYS["qwen_vc"] == "tts_engine_voice_clone"
+    assert TTS_ENGINE_I18N_KEYS["qwen_vc"] == "tts_engine_voice_clone"
+
+
+def test_engine_names_come_from_one_catalog():
+    """The settings page and the quick panel must not drift apart.
+
+    The quick panel cannot import the settings window, so the names live in
+    ui_config and both read them from there.
+    """
+
+    from src.utils.ui_config import TTS_ENGINE_I18N_KEYS, get_tts_engine_label
+
+    for engine in settings_module.TTS_ENGINE_IDS:
+        assert engine in TTS_ENGINE_I18N_KEYS, engine
+        assert settings_module._tts_engine_label(engine, "zh-CN") == (
+            get_tts_engine_label(engine, "zh-CN")
+        )
 
 
 def test_voice_clone_test_text_covers_the_ui_languages():
