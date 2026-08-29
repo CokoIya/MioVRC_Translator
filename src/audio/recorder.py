@@ -16,20 +16,6 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
-try:
-    from scipy.signal import resample_poly as _scipy_resample_poly
-
-    _HAS_SCIPY = True
-except ImportError:
-    _HAS_SCIPY = False
-
-try:
-    import soxr as _soxr
-
-    _HAS_SOXR = True
-except ImportError:
-    _HAS_SOXR = False
-
 from .adaptive_denoiser import AdaptiveDenoiser
 from .chunk_streamer import ChunkStreamer
 from .device_inventory import (
@@ -39,6 +25,38 @@ from .device_inventory import (
     list_output_devices as list_sounddevice_output_devices,
 )
 from .vad_detector import VADDetector
+
+# SciPy is only needed when the microphone's native rate differs from the
+# capture rate, yet importing it costs ~80 MB of resident memory at startup for
+# every player. Resolve it on first use and cache the outcome.
+_SCIPY_RESAMPLE_POLY: Callable[..., "np.ndarray"] | None = None
+_SCIPY_RESAMPLE_CHECKED = False
+
+
+def _scipy_resample_poly():
+    """Return ``scipy.signal.resample_poly``, or None when SciPy is absent."""
+
+    global _SCIPY_RESAMPLE_POLY, _SCIPY_RESAMPLE_CHECKED
+    if not _SCIPY_RESAMPLE_CHECKED:
+        _SCIPY_RESAMPLE_CHECKED = True
+        try:
+            from scipy.signal import resample_poly
+
+            _SCIPY_RESAMPLE_POLY = resample_poly
+        except ImportError:
+            logger.info(
+                "SciPy is unavailable; capture resampling falls back to linear "
+                "interpolation"
+            )
+            _SCIPY_RESAMPLE_POLY = None
+    return _SCIPY_RESAMPLE_POLY
+
+try:
+    import soxr as _soxr
+
+    _HAS_SOXR = True
+except ImportError:
+    _HAS_SOXR = False
 
 FRAME_QUEUE_MAXSIZE = 64
 logger = logging.getLogger(__name__)
@@ -958,9 +976,10 @@ class AudioRecorder:
         if audio.size == 0 or source_rate == target_rate:
             return audio.astype(np.float32, copy=False)
 
-        if _HAS_SCIPY:
+        resample_poly = _scipy_resample_poly()
+        if resample_poly is not None:
             g = gcd(target_rate, source_rate)
-            resampled = _scipy_resample_poly(audio, target_rate // g, source_rate // g)
+            resampled = resample_poly(audio, target_rate // g, source_rate // g)
             return resampled.astype(np.float32)
 
         # Fallback: linear interpolation (no scipy)

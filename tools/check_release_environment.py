@@ -17,8 +17,6 @@ REQUIRED_PYTHON = (3, 11)
 REQUIRED_MODULES = (
     "PyInstaller",
     "PySide6",
-    "PySide6.QtWebEngineCore",
-    "PySide6.QtWebEngineWidgets",
     "PIL",
     "requests",
     "truststore",
@@ -36,24 +34,15 @@ REQUIRED_MODULES = (
     "tqdm",
     "editdistance",
     "openai",
-    "google.genai",
     "anthropic",
     "tiktoken",
     "pythonosc",
     "torch",
     "torchaudio",
     "whisper",
-    "TTS",
     "sklearn",
-    "edge_tts",
-    "gtts",
-    "pyttsx3",
-    "style_bert_vits2",
-    "cutlet",
-    "fugashi",
-    "unidic_lite",
-    "mojimoji",
     "websockets",
+    "style_bert_vits2",
     "aiohttp",
     "librosa",
     "scipy",
@@ -71,11 +60,123 @@ REQUIRED_MODULES = (
     "nltk",
     "defusedxml",
     "pyworld",
-    "num2words",
-    "ko_speech_tools",
 )
 
 _INLINE_COMMENT_RE = re.compile(r"\s+#.*$")
+
+
+# Pins that requirements.txt cannot reach because nothing imports them at
+# runtime. Each one has to earn its place here, because the alternative is how
+# the bundle silently kept shipping engines that had already been deleted.
+BUILD_ONLY_LOCK_PINS = {
+    # PyInstaller and the packages it needs to freeze the app.
+    "pyinstaller",
+    "pyinstaller-hooks-contrib",
+    "altgraph",
+    "pefile",
+    "pywin32-ctypes",
+    # psutil declares this on Windows; the marker is easy to lose in a graph
+    # walk, and dropping a Win32 binding from a Windows-only app is not worth
+    # the few megabytes.
+    "pywin32",
+    # modelscope resolves an ONNX runtime for some model formats. It is not
+    # imported directly, so a graph walk cannot see the need for it.
+    "onnxruntime",
+    "flatbuffers",
+}
+
+# Dependency markers are evaluated for the machine the release is built on.
+_LOCK_MARKER_ENVIRONMENT = {
+    "python_version": "3.11",
+    "python_full_version": "3.11.9",
+    "sys_platform": "win32",
+    "platform_system": "Windows",
+    "platform_machine": "AMD64",
+    "os_name": "nt",
+    "implementation_name": "cpython",
+    "extra": "",
+}
+
+
+def _canonical_project_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def _requirement_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = _INLINE_COMMENT_RE.sub("", raw_line.split("#", 1)[0]).strip()
+        if not line or line.startswith("-"):
+            continue
+        name = re.split(r"[<>=!~\[; ]", line, 1)[0].strip()
+        if name:
+            names.add(_canonical_project_name(name))
+    return names
+
+
+def _installed_dependencies(dist) -> set[str]:
+    """Return the runtime dependencies a distribution declares here."""
+
+    from packaging.markers import Marker
+
+    resolved: set[str] = set()
+    for spec in dist.requires or []:
+        name = re.split(r"[<>=!~\[; ]", spec, 1)[0].strip()
+        if not name:
+            continue
+        if ";" in spec:
+            marker_text = spec.split(";", 1)[1].strip()
+            if "extra ==" in marker_text or "extra==" in marker_text:
+                # Optional extras are not installed unless something asks.
+                continue
+            try:
+                if not Marker(marker_text).evaluate(_LOCK_MARKER_ENVIRONMENT):
+                    continue
+            except Exception:
+                pass
+        resolved.add(_canonical_project_name(name))
+    return resolved
+
+
+def _orphaned_lock_pins(
+    requirements_path: Path = ROOT / "requirements.txt",
+    lock_path: Path = ROOT / "requirements.lock.txt",
+) -> list[str]:
+    """Report locked packages nothing in the app can reach any more.
+
+    Deleting a feature leaves its dependency pinned, and the pin keeps the
+    package installed, which keeps PyInstaller collecting it into the bundle.
+    """
+
+    from importlib import metadata
+
+    installed = {}
+    for dist in metadata.distributions():
+        name = dist.metadata["Name"]
+        if name:
+            installed[_canonical_project_name(name)] = dist
+
+    reachable: set[str] = set()
+    queue = [
+        name for name in _requirement_names(requirements_path) if name in installed
+    ]
+    while queue:
+        name = queue.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        for dependency in _installed_dependencies(installed[name]):
+            if dependency in installed and dependency not in reachable:
+                queue.append(dependency)
+
+    orphans = sorted(
+        _requirement_names(lock_path) - reachable - BUILD_ONLY_LOCK_PINS
+    )
+    return [
+        f"{name} is pinned in requirements.lock.txt but nothing in "
+        "requirements.txt depends on it"
+        for name in orphans
+    ]
 
 
 def _iter_requirements(path: Path) -> list[Requirement]:
@@ -198,37 +299,22 @@ def _runtime_import_errors() -> list[str]:
     except Exception as exc:
         errors.append(f"cryptography Ed25519 runtime: {exc}")
     try:
-        import cutlet as _cutlet  # noqa: F401
-        import fugashi as _fugashi  # noqa: F401
-        import unidic_lite as _unidic_lite  # noqa: F401
-        import mojimoji as _mojimoji  # noqa: F401
+        # librosa (via funasr/SenseVoice and transformers) requires sklearn, so a
+        # bundle without it fails only once speech recognition starts.
         import sklearn as _sklearn  # noqa: F401
-        from src.tts.xtts_engine import _ensure_transformers_xtts_exports
-
-        _ensure_transformers_xtts_exports()
         from transformers import GenerationMixin as _GenerationMixin  # noqa: F401
-        from transformers import GPT2Config as _GPT2Config  # noqa: F401
-        from transformers import GPT2PreTrainedModel as _GPT2PreTrainedModel  # noqa: F401
-        from TTS.api import TTS as _TTS  # noqa: F401
-        import TTS.tts.layers.xtts.gpt_inference as _xtts_gpt_inference  # noqa: F401
+        from transformers.models.deberta_v2 import (  # noqa: F401
+            modeling_deberta_v2 as _deberta_modeling,
+            tokenization_deberta_v2 as _deberta_tokenization,
+        )
     except Exception as exc:
-        errors.append(f"XTTS Japanese runtime / TTS.api: {exc}")
-
-    try:
-        from transformers.pytorch_utils import isin_mps_friendly as _isin  # noqa: F401
-    except Exception as exc:
-        errors.append(f"transformers.pytorch_utils.isin_mps_friendly: {exc}")
+        errors.append(f"shared model runtime imports: {exc}")
 
     try:
         import av as _av  # noqa: F401
         from av.audio.resampler import AudioResampler as _AudioResampler  # noqa: F401
     except Exception as exc:
-        errors.append(f"TTS audio runtime imports: {exc}")
-    try:
-        import ko_speech_tools as _ko_speech_tools  # noqa: F401
-        import num2words as _num2words  # noqa: F401
-    except Exception as exc:
-        errors.append(f"XTTS multilingual text frontend imports: {exc}")
+        errors.append(f"audio decode runtime imports: {exc}")
     return errors
 
 
@@ -250,6 +336,7 @@ def main() -> int:
         requirement_errors = _unsatisfied_requirements()
         lock_errors = _lock_mismatches()
         lock_dependency_errors = _unpinned_lock_dependencies()
+        lock_dependency_errors += _orphaned_lock_pins()
     except (OSError, RuntimeError) as exc:
         print(f"Release dependency metadata is invalid: {exc}", file=sys.stderr)
         return 1
@@ -303,7 +390,7 @@ def main() -> int:
     torch_version = Version(torch.__version__.split("+", 1)[0])
     if torch_version >= Version("2.9"):
         print(
-            "Release builds must use CPU PyTorch < 2.9 for Coqui XTTS on Windows; "
+            "Release builds must use the pinned CPU PyTorch < 2.9 on Windows; "
             f"current torch is {torch.__version__}.",
             file=sys.stderr,
         )

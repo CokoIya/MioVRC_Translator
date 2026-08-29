@@ -5,7 +5,7 @@ import time
 
 import requests
 
-from .base import BaseTranslator
+from .base import BaseTranslator, TransformationOutputRejected
 from src.utils.http_session_pool import ThreadLocalSessionPool
 from src.utils.input_validation import ValidationError, validate_translation_text
 from src.utils.provider_diagnostics import safe_exception_summary
@@ -98,10 +98,10 @@ class MicrosoftEdgeTranslator(BaseTranslator):
         }
         if source:
             params["from"] = source
-        translated = self._request_translation(params, text)
-        translated = self._finalize_translation_output_for_target(
-            translated,
-            source_text=text,
+        translated = self._translate_with_source_recovery(
+            params,
+            text,
+            source=source,
             target_language=tgt_lang,
         )
         if not translated:
@@ -115,6 +115,49 @@ class MicrosoftEdgeTranslator(BaseTranslator):
         )
         self._remember_context_turn(text, translated, src_lang, tgt_lang)
         return translated
+
+    def _translate_with_source_recovery(
+        self,
+        params: dict[str, str],
+        text: str,
+        *,
+        source: str,
+        target_language: str,
+    ) -> str:
+        """Translate, retrying once with language detection on a wrong result.
+
+        A declared source language that does not match the audio makes the
+        endpoint echo the input back untranslated. Reverse translation hears
+        whichever language the other player happens to speak, so a stale hint
+        must not cost the whole utterance: drop it and let the endpoint detect.
+        """
+
+        translated = self._request_translation(params, text)
+        try:
+            return self._finalize_translation_output_for_target(
+                translated,
+                source_text=text,
+                target_language=target_language,
+            )
+        except TransformationOutputRejected as exc:
+            if not source:
+                # Detection was already in use; there is nothing left to relax.
+                raise
+            logger.info(
+                "Microsoft Edge Web output was not in the target language "
+                "(reason=%s); retrying with language detection instead of the "
+                "configured source",
+                exc.reason,
+            )
+
+        retry_params = dict(params)
+        retry_params.pop("from", None)
+        retried = self._request_translation(retry_params, text)
+        return self._finalize_translation_output_for_target(
+            retried,
+            source_text=text,
+            target_language=target_language,
+        )
 
     def _request_translation(self, params: dict[str, str], text: str) -> str:
         last_exc: Exception | None = None

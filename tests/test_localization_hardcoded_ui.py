@@ -8,7 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UI_ROOTS = (
     ROOT / "src" / "ui_qt",
-    ROOT / "src" / "asr" / "webspeech_asr.py",
 )
 
 DISPLAY_CALLS = {

@@ -617,7 +617,7 @@ def test_reset_tts_manager_stops_manager_worker():
     window = MainWindow.__new__(MainWindow)
     manager = FakeManager()
     window._tts_manager = manager
-    window._tts_manager_signature = ("xtts",)
+    window._tts_manager_signature = ("qwen_vc",)
 
     window._reset_tts_manager()
 
@@ -666,7 +666,7 @@ def test_final_mic_segment_queues_tts_after_translation():
     auto_read_calls: list[dict[str, str]] = []
 
     window._running = True
-    window._listen_session = 1
+    window._runtime_generation = 1
     window._merge_lock = threading.Lock()
     window._translator = _FakeTranslator()
     window._current_tgt_lang = "ja"
@@ -697,7 +697,7 @@ def test_final_mic_segment_queues_tts_after_translation():
         "audio",
         "en",
         "en",
-        window._listen_session,
+        window._runtime_generation,
         MIC_SOURCE,
     )
 
@@ -715,7 +715,7 @@ def test_final_mic_segment_reports_translating_status():
     status_events: list[tuple[str | None, str, str]] = []
 
     window._running = True
-    window._listen_session = 1
+    window._runtime_generation = 1
     window._translator = _FakeTranslator()
     window._current_tgt_lang = "ja"
     window._config = {"translation": {"output_format": "translated_only", "send_to_chatbox": False}}
@@ -749,7 +749,7 @@ def test_final_mic_segment_reports_translating_status():
         "audio",
         "en",
         "en",
-        window._listen_session,
+        window._runtime_generation,
         MIC_SOURCE,
     )
 
@@ -770,7 +770,7 @@ def test_final_mic_segment_original_only_does_not_create_translator(monkeypatch)
     )
 
     window._running = True
-    window._listen_session = 1
+    window._runtime_generation = 1
     window._translator = None
     window._config = {
         "translation": {
@@ -792,7 +792,7 @@ def test_final_mic_segment_original_only_does_not_create_translator(monkeypatch)
         "audio",
         "en",
         "en",
-        window._listen_session,
+        window._runtime_generation,
         MIC_SOURCE,
     )
 

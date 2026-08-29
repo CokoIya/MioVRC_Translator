@@ -44,7 +44,7 @@ def _realtime_window_for_submission():
     provider = object()
     window._running = True
     window._destroying = False
-    window._listen_session = 3
+    window._runtime_generation = 3
     window._mic_muted = False
     window._asr = provider
     window._listen_asr = provider
@@ -500,7 +500,7 @@ def test_scheduler_completion_is_applied_as_one_ordered_ui_transaction():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 11
+    window._runtime_generation = 11
     calls = []
     window._dispatch_output_message = (
         lambda message, *, sinks: calls.append(("dispatch", message, sinks))
@@ -554,7 +554,7 @@ def test_scheduler_completion_correlates_osc_and_tts_request_context():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 21
+    window._runtime_generation = 21
     captured: dict[str, object] = {}
 
     def dispatch(message, *, sinks):
@@ -648,7 +648,7 @@ def test_original_read_mode_defers_realtime_osc_until_tts_finishes():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 31
+    window._runtime_generation = 31
     scheduled = []
     sent = []
     captured = {}
@@ -742,7 +742,7 @@ def test_qwen_asr_timeout_uses_localized_asr_failure_instead_of_translation_erro
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 11
+    window._runtime_generation = 11
     window._copy = lambda key, **_kwargs: {
         "asr_temporary_failure": "ASR is recovering",
     }.get(key, key)
@@ -793,7 +793,7 @@ def test_stale_asr_marker_without_audio_payload_reports_localized_failure():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 11
+    window._runtime_generation = 11
     window._copy = lambda key, **_kwargs: {
         "asr_queue_expired": "ASR queue expired",
     }.get(key, key)
@@ -828,7 +828,7 @@ def test_ordered_delivery_holds_scheduler_slot_until_ui_acknowledges():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 12
+    window._runtime_generation = 12
     window._ui_thread_id = -1
     window._realtime_delivery_cancel_event = threading.Event()
     queued = threading.Event()
@@ -864,7 +864,7 @@ def test_ordered_delivery_wait_is_cancellation_safe_when_ui_is_stalled():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 13
+    window._runtime_generation = 13
     window._ui_thread_id = -1
     cancel_event = threading.Event()
     window._realtime_delivery_cancel_event = cancel_event
@@ -1050,7 +1050,7 @@ def test_stale_startup_cleanup_cannot_touch_newer_session():
     window = MainWindow.__new__(MainWindow)
     current_event = threading.Event()
     stale_event = threading.Event()
-    window._listen_session = 9
+    window._runtime_generation = 9
     window._startup_cancel_event = current_event
     window._running = True
 
@@ -1072,7 +1072,7 @@ def test_stale_startup_cleanup_cannot_touch_newer_session():
     )
 
     assert window._running is True
-    assert window._listen_session == 9
+    assert window._runtime_generation == 9
     assert window._startup_cancel_event is current_event
 
 
@@ -1083,7 +1083,7 @@ def test_shutdown_sets_exact_startup_event_and_invalidates_session(caplog):
     close_waits: list[threading.Event | None] = []
     window._destroying = False
     window._running = False
-    window._listen_session = 4
+    window._runtime_generation = 4
     window._startup_cancel_event = startup_event
     window._sender = None
     window._osc_service = None
@@ -1104,7 +1104,7 @@ def test_shutdown_sets_exact_startup_event_and_invalidates_session(caplog):
     assert startup_event.is_set()
     assert window._destroying is True
     assert window._running is False
-    assert window._listen_session == 5
+    assert window._runtime_generation == 5
     assert close_waits == [shutdown_barrier]
     messages = [record.getMessage() for record in caplog.records]
     assert any("foreground shutdown complete" in message for message in messages)
@@ -1419,7 +1419,7 @@ def test_shutdown_terminal_event_waits_for_tts_and_manual_quiescence(caplog):
     window = MainWindow.__new__(MainWindow)
     window._destroying = False
     window._running = False
-    window._listen_session = 4
+    window._runtime_generation = 4
     window._startup_cancel_event = threading.Event()
     window._sender = None
     window._osc_service = None
@@ -1511,7 +1511,7 @@ def test_stop_workers_clears_every_translation_context_session():
 
     window = MainWindow.__new__(MainWindow)
     window._translation_context_store = store
-    window._listen_session = 3
+    window._runtime_generation = 3
     window._realtime_delivery_cancel_event = threading.Event()
     window._ui_priority_callback_queue = Queue(maxsize=1)
     window._tts_manager = None
@@ -1556,7 +1556,7 @@ def test_translation_workers_keep_translators_confined_to_worker_state(monkeypat
     window._translator = main_window_translator
     window._running = True
     window._destroying = False
-    window._listen_session = 17
+    window._runtime_generation = 17
     window._translation_cooldown_active = lambda _source: False
     window._record_translation_success = lambda: None
     window._record_translation_failure = lambda _error: None
@@ -1623,7 +1623,7 @@ def test_translation_stage_uses_request_aggregated_provider_metrics(monkeypatch)
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 17
+    window._runtime_generation = 17
     window._translation_cooldown_active = lambda _source: False
     window._record_source_translation_success = lambda _source: None
     window._record_source_translation_failure = lambda *_args: None
@@ -1703,7 +1703,7 @@ def test_translation_stage_claims_prewarm_that_finished_after_worker_start(monke
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 17
+    window._runtime_generation = 17
     window._translation_prewarm_lock = threading.RLock()
     window._translation_prewarm_signature = (
         main_window.provider_runtime_config_signature({})
@@ -1883,7 +1883,7 @@ def test_translation_worker_rebuilds_only_when_provider_runtime_changes(monkeypa
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 19
+    window._runtime_generation = 19
     window._translation_cooldown_active = lambda _source: False
     window._record_translation_success = lambda: None
     window._record_translation_failure = lambda _error: None
@@ -2235,7 +2235,7 @@ def test_invalidating_reverse_source_cancels_only_reverse_generation_and_context
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 23
+    window._runtime_generation = 23
     window._realtime_source_generations = {MIC_SOURCE: 4, DESKTOP_SOURCE: 8}
     window._realtime_scheduler = Scheduler()
     window._translation_context_store = TranslationContextStore()
@@ -2299,7 +2299,7 @@ def test_scheduler_reverse_translation_uses_isolated_listen_context(monkeypatch)
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 29
+    window._runtime_generation = 29
     window._realtime_source_generations = {MIC_SOURCE: 0, DESKTOP_SOURCE: 0}
     window._translation_cooldown_active = lambda _source: False
     window._record_translation_success = lambda: None
@@ -2387,7 +2387,7 @@ def test_translation_failure_discards_worker_client_for_clean_retry():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 31
+    window._runtime_generation = 31
     window._realtime_source_generations = {MIC_SOURCE: 0, DESKTOP_SOURCE: 0}
     window._translation_cooldown_active = lambda _source: False
     window._format_translation_error = lambda _error: SimpleNamespace(category="network")
@@ -2463,7 +2463,7 @@ def test_wall_timeout_detaches_worker_client_without_competing_blocking_close():
     window = MainWindow.__new__(MainWindow)
     window._running = True
     window._destroying = False
-    window._listen_session = 32
+    window._runtime_generation = 32
     window._realtime_source_generations = {MIC_SOURCE: 0, DESKTOP_SOURCE: 0}
     window._translation_cooldown_active = lambda _source: False
     window._format_translation_error = lambda _error: SimpleNamespace(

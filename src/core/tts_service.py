@@ -29,7 +29,7 @@ class TtsService(QObject):
         if self._manager is not None:
             return True
         tts_cfg = self._config.get("tts", {})
-        engine = str(tts_cfg.get("engine", "edge")).strip() or "edge"
+        engine = str(tts_cfg.get("engine", "qwen_tts")).strip() or "qwen_tts"
         output_device = tts_cfg.get("output_device")
         output_device_name = tts_cfg.get("output_device_name", "")
         prefer_virtual = bool(tts_cfg.get("output_to_vrchat", False))
@@ -46,23 +46,6 @@ class TtsService(QObject):
                 engine_config = dict(engine_config)
             else:
                 engine_config = {}
-            if engine == "xtts":
-                engine_config.setdefault("device", self._config.get("xtts_device", "cpu"))
-                engine_config.setdefault("language", "auto")
-                from src.tts.xtts_engine import normalize_xtts_language_code, xtts_language_from_target_language
-
-                configured_language = normalize_xtts_language_code(engine_config.get("language"))
-                if configured_language == "auto":
-                    translation_cfg = self._config.get("translation", {})
-                    target_language = (
-                        translation_cfg.get("target_language")
-                        if isinstance(translation_cfg, dict)
-                        else None
-                    )
-                    target_xtts_language = xtts_language_from_target_language(target_language)
-                    if target_xtts_language != "auto":
-                        configured_language = target_xtts_language
-                engine_config["language"] = configured_language
             manager = TTSManager(
                 engine_name=engine,
                 cache_enabled=True,
@@ -125,7 +108,7 @@ class TtsService(QObject):
             self.error.emit(tts_error_token("unavailable"))
             return False
         tts_cfg = self._config.get("tts", {})
-        engine_cfg = tts_cfg.get(tts_cfg.get("engine", "edge"), {})
+        engine_cfg = tts_cfg.get(tts_cfg.get("engine", "qwen_tts"), {})
         if not isinstance(engine_cfg, Mapping):
             engine_cfg = {}
         voice = engine_cfg.get("voice")

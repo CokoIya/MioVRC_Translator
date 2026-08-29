@@ -10,7 +10,7 @@ from collections.abc import Callable
 import logging
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -36,14 +36,20 @@ from src.utils.localization import normalize_ui_language
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY = 15
-DEFAULT_SIZE = (520, 320)
-MIN_SIZE = (360, 220)
+DEFAULT_SIZE = (440, 300)
+MIN_SIZE = (300, 170)
+# The floor is what the window collapses to beside VRChat. Scaling it by the
+# full UI scale put a "minimum" of 558x341 on a high-DPI screen, which is not
+# a minimum at all, so the floor follows the display only part of the way.
+MIN_SIZE_SCALE_CAP = 1.12
 DEFAULT_OPACITY = 0.88
 MIN_OPACITY = 0.45
 MAX_OPACITY = 1.0
-BUBBLE_MIN_WRAP = 180
-BUBBLE_MAX_WRAP = 980
-BUBBLE_WRAP_RATIO = 0.9
+BUBBLE_MIN_WRAP = 150
+BUBBLE_MAX_WRAP = 720
+# A bubble that spans the full row reads as a paragraph, not as a message.
+# Leaving a gutter on the far side is what makes the left/right split legible.
+BUBBLE_WRAP_RATIO = 0.82
 BASE_DPI = 96.0
 RESIZE_MARGIN = 14
 MIN_UI_SCALE = 0.9
@@ -114,7 +120,7 @@ class FloatingWindow(QDialog):
         self._root_layout.setSpacing(0)
 
         self._shell = QFrame()
-        self._shell.setObjectName("textInputShell")
+        self._shell.setObjectName("floatingShell")
         shell_shadow = QGraphicsDropShadowEffect(self._shell)
         shell_shadow.setBlurRadius(28)
         shell_shadow.setOffset(0, 12)
@@ -123,75 +129,99 @@ class FloatingWindow(QDialog):
         self._root_layout.addWidget(self._shell, 1)
 
         self._shell_layout = QVBoxLayout(self._shell)
-        self._shell_layout.setContentsMargins(10, 10, 10, 10)
-        self._shell_layout.setSpacing(8)
+        self._shell_layout.setContentsMargins(8, 8, 8, 8)
+        self._shell_layout.setSpacing(6)
 
+        # Header: what the overlay is doing on the left, window controls right.
         self._top_row = QHBoxLayout()
         self._top_row.setSpacing(6)
 
-        self._opacity_label = QLabel(self._opacity_label_text())
-        self._opacity_label.setObjectName("opacityLabel")
+        self._status_label = QLabel(self._status_text())
+        self._status_label.setObjectName("floatingStatus")
+        self._status_label.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        self._status_label.setToolTip(self._status_label.text())
+        self._top_row.addWidget(
+            self._status_label, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        self._top_row.addStretch(1)
+
+        self._opacity_label = QLabel("")
+        self._opacity_label.setObjectName("floatingHint")
+        self._opacity_label.setToolTip(self._opacity_label_text())
         self._top_row.addWidget(self._opacity_label)
 
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(int(MIN_OPACITY * 100), int(MAX_OPACITY * 100))
         self._opacity_slider.setValue(int(self._opacity * 100))
-        self._opacity_slider.setFixedWidth(86)
-        self._opacity_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._opacity_slider.setFixedWidth(64)
+        self._opacity_slider.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self._opacity_slider.setToolTip(self._opacity_label_text())
         self._opacity_slider.valueChanged.connect(self._on_opacity_change)
         self._top_row.addWidget(self._opacity_slider)
-        self._top_row.addStretch(1)
 
+        # Both header buttons share one object name so a single stylesheet
+        # rule owns their geometry; the pinned look rides on a property.
         self._pin_button = QPushButton("")
-        self._pin_button.setObjectName("pinButton")
-        self._pin_button.setFixedSize(30, 30)
-        self._pin_button.setIconSize(QSize(15, 15))
+        self._pin_button.setObjectName("floatingIconButton")
+        self._pin_button.setFixedSize(26, 26)
+        self._pin_button.setIconSize(QSize(14, 14))
         self._pin_button.clicked.connect(self.toggle_topmost)
         self._refresh_pin_button()
         self._top_row.addWidget(self._pin_button)
 
         self._close_button = QPushButton("")
-        self._close_button.setObjectName("iconButton")
-        self._close_button.setFixedSize(30, 30)
-        self._close_button.setIconSize(QSize(15, 15))
+        self._close_button.setObjectName("floatingIconButton")
+        self._close_button.setFixedSize(26, 26)
+        self._close_button.setIconSize(QSize(14, 14))
         self._close_button.clicked.connect(self.close)
         self._refresh_close_button()
         self._top_row.addWidget(self._close_button)
         self._shell_layout.addLayout(self._top_row)
 
         self._scroll_area = QScrollArea()
-        self._scroll_area.setObjectName("inputTextEdit")
+        self._scroll_area.setObjectName("floatingTranscript")
         self._scroll_area.setWidgetResizable(True)
         self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self._scroll_content = QWidget()
         self._scroll_content.setObjectName("floatingScrollContent")
         self._scroll_layout = QVBoxLayout(self._scroll_content)
-        self._scroll_layout.setContentsMargins(6, 6, 6, 5)
-        self._scroll_layout.setSpacing(8)
+        self._scroll_layout.setContentsMargins(2, 2, 2, 2)
+        self._scroll_layout.setSpacing(6)
         self._scroll_layout.addStretch(1)
         self._scroll_area.setWidget(self._scroll_content)
         self._shell_layout.addWidget(self._scroll_area, 1)
 
+        # Footer: the send button stays visible even when nothing is selected,
+        # so players learn it exists before they need it. The hint next to it
+        # says how to arm it.
         self._footer_layout = QHBoxLayout()
         self._footer_layout.setSpacing(8)
 
-        self._status_label = QLabel(self._status_text())
-        self._status_label.setObjectName("textInputCounter")
-        self._status_label.setToolTip(self._status_label.text())
-        self._footer_layout.addWidget(self._status_label, 1)
+        self._hint_label = QLabel(self._hint_text())
+        self._hint_label.setObjectName("floatingHint")
+        self._hint_label.setToolTip(self._hint_text())
+        self._hint_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        self._footer_layout.addWidget(self._hint_label, 1)
 
         self._send_selected_button = QPushButton(tr(self._ui_lang, "send_to_vrc"))
-        self._send_selected_button.setObjectName("primaryButton")
-        send_icon = ui_icon("send.svg", 15, "#ffffff")
-        if not send_icon.isNull():
-            self._send_selected_button.setIcon(send_icon)
-        self._send_selected_button.setIconSize(QSize(15, 15))
+        self._send_selected_button.setObjectName("floatingSendButton")
+        self._send_selected_button.setIconSize(QSize(13, 13))
+        self._send_selected_button.setToolTip(tr(self._ui_lang, "floating_send_hint"))
         self._send_selected_button.clicked.connect(self._send_selected_history)
         self._footer_layout.addWidget(self._send_selected_button)
         self._shell_layout.addLayout(self._footer_layout)
 
         self._apply_style()
+        self._refresh_send_button()
         self._install_interaction_filter(self)
         self._apply_scaled_layout(force=True)
 
@@ -199,6 +229,7 @@ class FloatingWindow(QDialog):
         super().resizeEvent(event)
         width = event.size().width()
         scale_changed = self._apply_scaled_layout()
+        self._refresh_hint_label()
         if abs(width - self._last_layout_width) >= 12 or scale_changed:
             self._last_layout_width = width
             self._update_wraplengths()
@@ -206,9 +237,11 @@ class FloatingWindow(QDialog):
             self._layout_refresh_timer.start(40)
 
     def _bubble_wraplength(self) -> int:
+        """Return the widest a bubble may grow, not the width it takes."""
+
         viewport = getattr(self, "_scroll_area", None)
         width = viewport.viewport().width() if viewport is not None else self.width()
-        horizontal_padding = self._scaled(32)
+        horizontal_padding = self._scaled(16)
         available = max(BUBBLE_MIN_WRAP, width - horizontal_padding)
         return max(
             self._scaled(BUBBLE_MIN_WRAP),
@@ -216,11 +249,32 @@ class FloatingWindow(QDialog):
         )
 
     def _update_wraplengths(self) -> None:
-        wraplength = self._bubble_wraplength()
-        for entry_id, widgets in self._history_widgets.items():
+        # Bubbles are sized by their content: a two-word reply must not occupy
+        # the same slab as a paragraph, or the left/right split stops reading
+        # as a conversation.
+        limit = self._bubble_wraplength()
+        for widgets in self._history_widgets.values():
             bubble = widgets.get("bubble")
             if bubble is not None:
-                bubble.setFixedWidth(wraplength)
+                bubble.setMaximumWidth(limit)
+            self._elide_original(widgets, limit)
+
+    def _elide_original(self, widgets: dict[str, object], limit: int) -> None:
+        """Trim the source line to one row, full text in the tooltip.
+
+        The translation is what players read; letting the original wrap made a
+        single message fill the whole overlay and hid the conversation.
+        """
+
+        label = widgets.get("original")
+        if label is None:
+            return
+        text = str(widgets.get("original_text", "") or "")
+        if not text:
+            return
+        available = max(self._scaled(60), limit - self._scaled(24))
+        metrics = QFontMetrics(label.font())
+        label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, available))
 
     def _apply_layout_update(self) -> None:
         self._update_wraplengths()
@@ -240,8 +294,13 @@ class FloatingWindow(QDialog):
         screen = self._screen()
         if screen is None:
             return 1.0
-        geometry = screen.availableGeometry()
-        dpi_scale = max(0.8, float(screen.logicalDotsPerInch()) / BASE_DPI)
+        try:
+            geometry = screen.availableGeometry()
+            dpi_scale = max(0.8, float(screen.logicalDotsPerInch()) / BASE_DPI)
+        except RuntimeError:
+            # The overlay outlives a monitor being unplugged or reconfigured,
+            # which leaves the cached QScreen wrapper pointing at freed memory.
+            return 1.0
         resolution_scale = max(
             0.9,
             min(1.12, min(geometry.width() / 1366.0, geometry.height() / 768.0)),
@@ -255,19 +314,33 @@ class FloatingWindow(QDialog):
         width_bonus = max(0, min(3, (self.width() - DEFAULT_SIZE[0]) // 220))
         return max(12, min(22, self._scaled(13) + int(width_bonus)))
 
+    def _original_font_px(self) -> int:
+        return max(10, self._history_font_px() - 2)
+
     def _floating_scale_styles(self) -> str:
+        control = self._scaled(26)
         return f"""
-        QLabel#opacityLabel, QLabel#textInputCounter {{
+        QLabel#floatingStatus {{
+            font-size: {self._scaled(11)}px;
+            min-height: {self._scaled(22)}px;
+            max-height: {self._scaled(22)}px;
+        }}
+        QLabel#floatingHint {{
             font-size: {self._scaled(11)}px;
         }}
-        QPushButton#primaryButton {{
-            font-size: {self._scaled(14)}px;
-            min-height: {self._scaled(34)}px;
-            padding: 0 {self._scaled(14)}px;
+        QLabel#bubbleSpeaker {{
+            font-size: {max(9, self._scaled(10))}px;
         }}
-        QScrollArea#inputTextEdit {{
-            padding: {self._scaled(10)}px;
-            font-size: {self._history_font_px()}px;
+        QPushButton#floatingIconButton {{
+            min-width: {control}px;
+            max-width: {control}px;
+            min-height: {control}px;
+            max-height: {control}px;
+        }}
+        QPushButton#floatingSendButton {{
+            font-size: {self._scaled(12)}px;
+            min-height: {control}px;
+            padding: 0 {self._scaled(10)}px;
         }}
         """
 
@@ -276,7 +349,11 @@ class FloatingWindow(QDialog):
         if not force and abs(scale - self._last_ui_scale) < 0.03:
             return False
         self._last_ui_scale = scale
-        self.setMinimumSize(self._scaled(MIN_SIZE[0]), self._scaled(MIN_SIZE[1]))
+        floor_scale = min(scale, MIN_SIZE_SCALE_CAP)
+        self.setMinimumSize(
+            int(round(MIN_SIZE[0] * floor_scale)),
+            int(round(MIN_SIZE[1] * floor_scale)),
+        )
         self._root_layout.setContentsMargins(
             self._scaled(10),
             self._scaled(10),
@@ -284,30 +361,31 @@ class FloatingWindow(QDialog):
             self._scaled(10),
         )
         self._shell_layout.setContentsMargins(
-            self._scaled(10),
-            self._scaled(10),
-            self._scaled(10),
-            self._scaled(10),
+            self._scaled(8),
+            self._scaled(8),
+            self._scaled(8),
+            self._scaled(8),
         )
-        self._shell_layout.setSpacing(self._scaled(8))
+        self._shell_layout.setSpacing(self._scaled(6))
         self._top_row.setSpacing(self._scaled(6))
         self._footer_layout.setSpacing(self._scaled(8))
         self._scroll_layout.setContentsMargins(
-            self._scaled(6),
-            self._scaled(6),
-            self._scaled(6),
-            self._scaled(5),
+            self._scaled(2),
+            self._scaled(2),
+            self._scaled(2),
+            self._scaled(2),
         )
-        self._scroll_layout.setSpacing(self._scaled(8))
-        self._opacity_slider.setFixedWidth(self._scaled(86))
-        control_size = self._scaled(30)
-        icon_size = self._scaled(15)
+        self._scroll_layout.setSpacing(self._scaled(6))
+        self._opacity_slider.setFixedWidth(self._scaled(64))
+        control_size = self._scaled(26)
+        icon_size = self._scaled(14)
         for button in (self._pin_button, self._close_button):
             button.setFixedSize(control_size, control_size)
             button.setIconSize(QSize(icon_size, icon_size))
-        self._send_selected_button.setIconSize(QSize(icon_size, icon_size))
+        self._send_selected_button.setIconSize(QSize(self._scaled(13), self._scaled(13)))
         self._apply_style()
         self._update_wraplengths()
+        self._refresh_hint_label()
         return True
 
     def _is_near_bottom(self) -> bool:
@@ -326,6 +404,34 @@ class FloatingWindow(QDialog):
 
     def _opacity_label_text(self) -> str:
         return tr(self._ui_lang, "text_input_opacity", pct=int(round(self._opacity * 100)))
+
+    def _hint_text(self) -> str:
+        return tr(self._ui_lang, "floating_send_hint")
+
+    def _refresh_hint_label(self) -> None:
+        """Fit the hint to whatever the send button leaves behind.
+
+        Squeezed to the minimum width the footer has room for the button and
+        little else, so the hint shortens and then steps aside rather than
+        running underneath it.
+        """
+
+        label = getattr(self, "_hint_label", None)
+        if label is None:
+            return
+        button = getattr(self, "_send_selected_button", None)
+        reserved = (button.sizeHint().width() if button is not None else 0)
+        available = self.width() - reserved - self._scaled(44)
+        if available < self._scaled(64):
+            label.setVisible(False)
+            return
+        label.setVisible(True)
+        metrics = QFontMetrics(label.font())
+        label.setText(
+            metrics.elidedText(
+                self._hint_text(), Qt.TextElideMode.ElideRight, available
+            )
+        )
 
     def _status_text(self) -> str:
         return tr(self._ui_lang, self._status_key)
@@ -367,6 +473,7 @@ class FloatingWindow(QDialog):
         self.setStyleSheet(build_floating_window_styles(self._theme) + self._floating_scale_styles())
         self._refresh_pin_button()
         self._refresh_close_button()
+        self._refresh_send_button()
         for entry_id in self._history_widgets:
             self._style_history_entry(entry_id)
 
@@ -380,6 +487,9 @@ class FloatingWindow(QDialog):
         self._pin_button.setIcon(icon)
         self._pin_button.setText(self._pin_text() if icon.isNull() else "")
         self._pin_button.setToolTip(self._pin_text())
+        self._pin_button.setProperty("pinned", "true" if self._topmost else "false")
+        self._pin_button.style().unpolish(self._pin_button)
+        self._pin_button.style().polish(self._pin_button)
 
     def _refresh_close_button(self) -> None:
         icon = ui_icon("x.svg", self._scaled(15), icon_tint(self._theme, strong=True))
@@ -391,7 +501,12 @@ class FloatingWindow(QDialog):
     def _on_opacity_change(self, value: int) -> None:
         self._opacity = max(MIN_OPACITY, min(MAX_OPACITY, float(value) / 100.0))
         self.setWindowOpacity(self._opacity)
-        self._opacity_label.setText(self._opacity_label_text())
+        # The percentage lives in the tooltip; a permanent readout of a value
+        # the player is already dragging only costs header width.
+        text = self._opacity_label_text()
+        self._opacity_label.setText(f"{int(round(self._opacity * 100))}%")
+        self._opacity_label.setToolTip(text)
+        self._opacity_slider.setToolTip(text)
 
     def toggle_topmost(self) -> None:
         self._topmost = not self._topmost
@@ -416,35 +531,74 @@ class FloatingWindow(QDialog):
     def _entry_side(entry: dict[str, object]) -> str:
         return "right" if FloatingWindow._entry_source(entry) in {"manual", "mic"} else "left"
 
+    @staticmethod
+    def _entry_original(entry: dict[str, object]) -> str:
+        return str(entry.get("original", "") or "").strip()
+
+    def _starts_a_turn(self, entry: dict[str, object]) -> bool:
+        """True when this entry is the first from its side in a row."""
+
+        previous: dict[str, object] | None = None
+        for candidate in self._history:
+            if candidate.get("id") == entry.get("id"):
+                break
+            previous = candidate
+        if previous is None:
+            return True
+        return self._entry_side(previous) != self._entry_side(entry)
+
+    def _reveal_leading_speaker(self) -> None:
+        """Keep a name on the oldest visible message after an eviction."""
+
+        if not self._history:
+            return
+        widgets = self._history_widgets.get(int(self._history[0].get("id", 0)))
+        if widgets is None:
+            return
+        label = widgets.get("speaker")
+        if label is not None:
+            label.setVisible(True)
+
+    def _entry_speaker(self, entry: dict[str, object]) -> str:
+        source = self._entry_source(entry)
+        if source == "error":
+            return ""
+        key = (
+            "floating_speaker_self"
+            if source in {"manual", "mic"}
+            else "floating_speaker_other"
+        )
+        return tr(self._ui_lang, key)
+
     def _bubble_colors(self, source: str, *, selected: bool) -> tuple[str, str, str, str]:
-        """返回 (背景, 边框, 文本, 阴影) 四元组"""
+        """Return (background, border, text, secondary text) for one bubble.
+
+        Side, not selection, drives the fill: what the player said is tinted
+        with the accent and what they heard stays neutral, so a glance at the
+        colour tells them who spoke. Selection only thickens the border, which
+        keeps that cue readable on either side.
+        """
+
         tokens = theme_tokens(self._theme)
         text = str(tokens["TEXT_PRIMARY"])
-        is_dark = self._theme == "dark"
-
-        if selected:
-            bg = str(tokens["ACCENT_SOFT"])
-            border = str(tokens["ACCENT_BORDER"])
-            shadow = "rgba(47, 111, 255, 0.28)" if is_dark else "rgba(0, 152, 199, 0.24)"
-            return bg, border, text, shadow
-
-        if source in {"manual", "mic"}:
-            bg = "rgba(28, 34, 50, 0.82)" if is_dark else "rgba(232, 241, 249, 0.88)"
-            border = "rgba(120, 154, 200, 0.38)" if is_dark else "rgba(93, 115, 145, 0.42)"
-            shadow = "rgba(0, 0, 0, 0.12)" if is_dark else "rgba(0, 0, 0, 0.08)"
-            return bg, border, text, shadow
+        secondary = str(tokens["TEXT_MUTED"])
 
         if source == "error":
-            bg = str(tokens["DANGER_SOFT"])
-            border = str(tokens["DANGER_BORDER"])
-            shadow = "rgba(220, 38, 38, 0.18)"
-            return bg, border, text, shadow
+            return (
+                str(tokens["DANGER_SOFT"]),
+                str(tokens["DANGER_BORDER"]),
+                text,
+                secondary,
+            )
 
-        # 默认 incoming 消息
-        bg = "rgba(22, 27, 40, 0.78)" if is_dark else "rgba(248, 251, 255, 0.92)"
-        border = "rgba(148, 163, 184, 0.32)" if is_dark else "rgba(141, 151, 168, 0.38)"
-        shadow = "rgba(0, 0, 0, 0.10)" if is_dark else "rgba(0, 0, 0, 0.06)"
-        return bg, border, text, shadow
+        if source in {"manual", "mic"}:
+            border = (
+                str(tokens["ACCENT"]) if selected else str(tokens["ACCENT_BORDER"])
+            )
+            return str(tokens["ACCENT_SOFT"]), border, text, secondary
+
+        border = str(tokens["ACCENT"]) if selected else str(tokens["PANEL_BORDER"])
+        return str(tokens["PANEL_BG"]), border, text, secondary
 
     def _entry_can_resend(self, entry: dict[str, object]) -> bool:
         return bool(self._entry_payload(entry)) and self._entry_source(entry) != "error"
@@ -514,47 +668,98 @@ class FloatingWindow(QDialog):
         source = self._entry_source(entry)
         can_resend = self._entry_can_resend(entry)
         side = self._entry_side(entry)
-        wraplength = self._bubble_wraplength()
 
         lane = QFrame()
         lane.setObjectName("historyLane")
         lane_layout = QHBoxLayout(lane)
         lane_layout.setContentsMargins(0, 0, 0, 0)
         lane_layout.setSpacing(0)
-        if side == "right":
-            lane_layout.addStretch(1)
+
+        column = QWidget()
+        column_layout = QVBoxLayout(column)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.setSpacing(self._scaled(2))
+
+        speaker = self._entry_speaker(entry)
+        speaker_label: QLabel | None = None
+        if speaker:
+            speaker_label = QLabel(speaker)
+            speaker_label.setObjectName("bubbleSpeaker")
+            speaker_label.setAlignment(
+                Qt.AlignmentFlag.AlignRight
+                if side == "right"
+                else Qt.AlignmentFlag.AlignLeft
+            )
+            # One name per turn: repeating it above every line of a monologue
+            # is what made the transcript feel padded.
+            speaker_label.setVisible(self._starts_a_turn(entry))
+            column_layout.addWidget(speaker_label)
 
         bubble = QFrame()
         bubble.setObjectName("historyBubble")
-        bubble.setFixedWidth(wraplength)
+        bubble.setMaximumWidth(self._bubble_wraplength())
+        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         bubble_layout = QVBoxLayout(bubble)
         bubble_layout.setContentsMargins(
-            self._scaled(12),
-            self._scaled(10),
-            self._scaled(12),
-            self._scaled(10),
+            self._scaled(11),
+            self._scaled(7),
+            self._scaled(11),
+            self._scaled(7),
         )
+        bubble_layout.setSpacing(self._scaled(2))
 
         label = QLabel(str(entry.get("text", "")))
+        label.setObjectName("bubbleText")
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble_layout.addWidget(label)
-        lane_layout.addWidget(bubble, 0)
+
+        # The original is kept, but demoted: players read the translation and
+        # only glance at the source line to check a name or a number.
+        original_text = self._entry_original(entry)
+        original_label: QLabel | None = None
+        if original_text and original_text != str(entry.get("text", "")):
+            original_label = QLabel(original_text)
+            original_label.setObjectName("bubbleOriginal")
+            original_label.setWordWrap(False)
+            original_label.setToolTip(original_text)
+            original_label.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            )
+            original_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            bubble_layout.addWidget(original_label)
+
+        bubble_row = QHBoxLayout()
+        bubble_row.setContentsMargins(0, 0, 0, 0)
+        bubble_row.setSpacing(0)
+        if side == "right":
+            bubble_row.addStretch(1)
+        bubble_row.addWidget(bubble, 0)
         if side == "left":
-            lane_layout.addStretch(1)
+            bubble_row.addStretch(1)
+        column_layout.addLayout(bubble_row)
+
+        lane_layout.addWidget(column, 1)
 
         if can_resend:
-            lane.setCursor(Qt.CursorShape.PointingHandCursor)
-            bubble.setCursor(Qt.CursorShape.PointingHandCursor)
-            lane.mousePressEvent = lambda _event, eid=entry_id: self._select_history_entry(eid)  # type: ignore[method-assign]
-            bubble.mousePressEvent = lambda _event, eid=entry_id: self._select_history_entry(eid)  # type: ignore[method-assign]
-            label.mousePressEvent = lambda _event, eid=entry_id: self._select_history_entry(eid)  # type: ignore[method-assign]
+            for widget in (lane, bubble, label, original_label):
+                if widget is None:
+                    continue
+                widget.setCursor(Qt.CursorShape.PointingHandCursor)
+                widget.mousePressEvent = (  # type: ignore[method-assign]
+                    lambda _event, eid=entry_id: self._select_history_entry(eid)
+                )
 
         self._scroll_layout.insertWidget(max(0, self._scroll_layout.count() - 1), lane)
         self._history_widgets[entry_id] = {
             "lane": lane,
             "bubble": bubble,
             "label": label,
+            "original": original_label,
+            "original_text": original_text,
+            "speaker": speaker_label,
             "source": source,
             "can_resend": can_resend,
         }
@@ -569,20 +774,28 @@ class FloatingWindow(QDialog):
         source = str(widgets.get("source", "listen"))
         is_selected = entry_id == self._selected_history_id
         if bubble is not None:
-            bg, border, text, shadow = self._bubble_colors(source, selected=is_selected)
+            bg, border, text, secondary = self._bubble_colors(
+                source, selected=is_selected
+            )
+            radius = self._scaled(12)
             bubble.setStyleSheet(f"""
                 #historyBubble {{
                     background: {bg};
-                    border: 1px solid {border};
-                    border-radius: 16px;
-                    padding: 12px 14px;
+                    border: {2 if is_selected else 1}px solid {border};
+                    border-radius: {radius}px;
                 }}
-                #historyBubble QLabel {{
+                #historyBubble QLabel#bubbleText {{
                     color: {text};
                     font-size: {self._history_font_px()}px;
-                    line-height: 1.5;
+                    background: transparent;
+                }}
+                #historyBubble QLabel#bubbleOriginal {{
+                    color: {secondary};
+                    font-size: {self._original_font_px()}px;
+                    background: transparent;
                 }}
             """)
+            self._elide_original(widgets, self._bubble_wraplength())
 
     def _select_history_entry(self, entry_id: int) -> None:
         previous_id = self._selected_history_id
@@ -599,9 +812,40 @@ class FloatingWindow(QDialog):
             self._style_history_entry(current_id)
         self._update_actions()
 
+    def _refresh_send_button(self) -> None:
+        """Keep the button legible in both states.
+
+        It stays on screen while nothing is selected so players discover it,
+        and only takes the accent tint once clicking it would do something.
+        """
+
+        button = getattr(self, "_send_selected_button", None)
+        if button is None:
+            return
+        armed = button.isEnabled()
+        tokens = theme_tokens(self._theme)
+        icon = ui_icon(
+            "send.svg",
+            self._scaled(13),
+            "#ffffff" if armed else icon_tint(self._theme),
+        )
+        if not icon.isNull():
+            button.setIcon(icon)
+        button.setProperty("armed", armed)
+        button.setStyleSheet(
+            f"""
+            QPushButton#floatingSendButton {{
+                background: {tokens["ACCENT"] if armed else tokens["PANEL_BG"]};
+                color: {"#ffffff" if armed else tokens["TEXT_MUTED"]};
+                border: 1px solid {tokens["ACCENT"] if armed else tokens["PANEL_BORDER"]};
+            }}
+            """
+        )
+
     def _update_actions(self) -> None:
         entry = self._selected_entry()
         self._send_selected_button.setEnabled(entry is not None and self._entry_can_resend(entry))
+        self._refresh_send_button()
 
     def _send_selected_history(self) -> None:
         entry = self._selected_entry()
@@ -619,23 +863,36 @@ class FloatingWindow(QDialog):
     def update_language(self, ui_language: str) -> None:
         self._ui_lang = normalize_ui_language(ui_language)
         self.setWindowTitle(tr(self._ui_lang, "floating_window_title"))
-        self._opacity_label.setText(self._opacity_label_text())
+        self._opacity_label.setToolTip(self._opacity_label_text())
+        self._opacity_slider.setToolTip(self._opacity_label_text())
+        self._hint_label.setToolTip(self._hint_text())
+        self._refresh_hint_label()
         self._refresh_status_label()
         self._refresh_pin_button()
         self._refresh_close_button()
         self._send_selected_button.setText(tr(self._ui_lang, "send_to_vrc"))
+        self._send_selected_button.setToolTip(tr(self._ui_lang, "floating_send_hint"))
         self._refresh_history()
 
     def refresh_theme(self, theme: str) -> None:
         self._theme = str(theme or "dark")
         self._apply_style()
 
-    def show_translation(self, text: str, *, source: str = "listen", payload: str | None = None) -> None:
+    def show_translation(
+        self,
+        text: str,
+        *,
+        source: str = "listen",
+        payload: str | None = None,
+        original: str | None = None,
+    ) -> None:
         message = str(text or "").strip()
         if not message:
             return
         self._last_text = message
-        self.add_history_entry(message, source=source, payload=payload)
+        self.add_history_entry(
+            message, source=source, payload=payload, original=original
+        )
         if not self._visible:
             self.show()
             self._visible = True
@@ -644,19 +901,36 @@ class FloatingWindow(QDialog):
             self.activateWindow()
 
     def show_message(self, message) -> bool:
+        # Prefer the split fields: the bubble renders the translation and the
+        # source line separately, so the combined "original（translated）"
+        # display string would double the text up.
+        translated = str(getattr(message, "translated_text", "") or "").strip()
+        original = str(getattr(message, "original_text", "") or "").strip()
         display = str(getattr(message, "display_text", "") or "").strip()
-        if not display:
+        if not (translated or display):
             return False
         payload = str(getattr(message, "chatbox_text", "") or "").strip() or None
         source = str(getattr(message, "source", "listen") or "listen")
-        self.show_translation(display, source=source, payload=payload)
+        self.show_translation(
+            translated or display,
+            source=source,
+            payload=payload,
+            original=original if translated else "",
+        )
         return True
 
     def set_listen_status(self, listening: bool) -> None:
         self._status_key = "floating_status_listening" if listening else "floating_status_waiting"
         self._refresh_status_label()
 
-    def add_history_entry(self, text: str, *, source: str = "listen", payload: str | None = None) -> None:
+    def add_history_entry(
+        self,
+        text: str,
+        *,
+        source: str = "listen",
+        payload: str | None = None,
+        original: str | None = None,
+    ) -> None:
         message = str(text or "").strip()
         if not message:
             return
@@ -674,11 +948,13 @@ class FloatingWindow(QDialog):
             "text": message,
             "source": str(source or "listen"),
             "payload": resolved_payload,
+            "original": str(original or "").strip(),
         }
         self._history.append(entry)
         if evicted_id is not None:
             self._remove_history_entry_ui(evicted_id)
             self._reindex_history_rows()
+            self._reveal_leading_speaker()
             if self._selected_history_id == evicted_id:
                 self._selected_history_id = None
         self._append_history_entry_ui(entry)

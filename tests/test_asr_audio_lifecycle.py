@@ -13,13 +13,10 @@ import pytest
 
 from src.asr import hf_model_downloader, model_manager
 from src.asr.base import ASRProvider
-from src.asr.errors import ASRConfigurationError
 from src.asr.fallback_asr import FallbackASR
-from src.asr.gemini_live_asr import GeminiLiveASRProvider
 from src.asr.hf_model_downloader import HFModelDownloader
 from src.asr.qwen3_asr import Qwen3ASRProvider
 from src.asr.sensevoice_asr import SenseVoiceASR
-from src.asr.webspeech_asr import WebSpeechASRProvider
 from src.asr.whisper_asr import WhisperASR
 from src.audio.desktop_recorder import DesktopAudioRecorder
 from src.audio.recorder import AudioRecorder
@@ -103,35 +100,6 @@ def test_qwen_close_closes_http_client_and_is_idempotent():
     assert provider._corrector is None
 
 
-def test_gemini_close_closes_client_and_prevents_runtime_recreation():
-    closed: list[bool] = []
-
-    class Client:
-        def close(self) -> None:
-            closed.append(True)
-
-    provider = GeminiLiveASRProvider(
-        {
-            "asr": {
-                "gemini_live": {
-                    "api_key": "test-key",
-                    "use_live_api": False,
-                }
-            }
-        },
-        corrector=object(),
-    )
-    provider._client = Client()
-    provider._genai = object()
-
-    provider.close()
-    provider.close()
-
-    assert closed == [True]
-    assert provider.is_loaded is False
-    assert provider._corrector is None
-    with pytest.raises(ASRConfigurationError, match="closed"):
-        provider.load()
 
 
 def test_fallback_close_releases_lazy_factory_closure_without_constructing_it():
@@ -232,60 +200,8 @@ def test_process_downloader_registry_does_not_own_idle_downloaders():
     assert "owner/ephemeral-model" not in hf_model_downloader._downloaders
 
 
-def test_webspeech_close_joins_bridge_thread_and_drops_handles():
-    provider = WebSpeechASRProvider(
-        {
-            "asr": {
-                "webspeech": {
-                    "bridge_port": 0,
-                    "auto_open_browser": False,
-                }
-            }
-        }
-    )
-    provider.set_browser_opener(lambda _url: None)
-    provider.load()
-    thread = provider._thread
-
-    provider.close()
-
-    assert thread is not None
-    assert not thread.is_alive()
-    assert provider._thread is None
-    assert provider._server is None
-    assert provider._url == ""
-    assert provider._browser_opener is None
-    assert provider.is_loaded is False
 
 
-def test_webspeech_close_does_not_shutdown_a_server_thread_that_never_started():
-    class Server:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def shutdown(self) -> None:
-            raise AssertionError("shutdown would deadlock without serve_forever")
-
-        def server_close(self) -> None:
-            self.closed = True
-
-    class Thread:
-        @staticmethod
-        def is_alive() -> bool:
-            return False
-
-    provider = WebSpeechASRProvider(
-        {"asr": {"webspeech": {"auto_open_browser": False}}}
-    )
-    server = Server()
-    provider._server = server
-    provider._thread = Thread()
-
-    provider.close()
-
-    assert server.closed is True
-    assert provider._server is None
-    assert provider._thread is None
 
 
 def test_repeated_audio_device_restarts_leave_no_worker_threads_or_recorders(

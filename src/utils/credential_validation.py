@@ -45,7 +45,6 @@ class MissingCredential:
 _DEFAULT_SCOPES = ("translation", "asr", "tts")
 _ASR_CREDENTIALS = {
     "qwen3-asr": ("qwen3_asr", "Qwen3-ASR", "qwen_api_key"),
-    "gemini-live": ("gemini_live", "Gemini Live", "gemini_api_key"),
 }
 _TTS_PROVIDER_LABELS = {
     "mimo_tts": "MiMo TTS",
@@ -202,7 +201,7 @@ def _tts_requirement(
         return None
     if active_only and not bool(tts_cfg.get("enabled", False)):
         return None
-    engine = str(tts_cfg.get("engine", "edge") or "edge").strip().lower()
+    engine = str(tts_cfg.get("engine", "qwen_tts") or "qwen_tts").strip().lower()
     if engine not in TTS_API_ENGINE_IDS:
         return None
     engine_cfg = _mapping(tts_cfg.get(engine))

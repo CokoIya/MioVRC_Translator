@@ -3,82 +3,61 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from src.ui_qt.settings.localized_tab import (
-    SETTINGS_UI_LANGUAGES,
-    normalize_settings_language,
-)
-from src.ui_qt.settings.settings_window_tabbed import SettingsWindowTabbed
 from src.ui_qt.settings_window import (
     FIELD_HINTS,
     QT_SETTINGS_COPY,
     _BACKEND_API_HINT_KEYS,
     _BACKEND_MODEL_HINT_KEYS,
 )
-from src.utils.i18n import (
-    UI_TEXTS,
-    _SETTINGS_TABBED_KO_TEXTS,
-    _SETTINGS_TABBED_NEW_TEXTS,
-    _SETTINGS_TABBED_RU_TEXTS,
-    tr,
+from src.utils.i18n import UI_TEXTS
+from src.utils.localization import (
+    SUPPORTED_UI_LANGUAGES,
+    normalize_ui_language,
+    placeholder_fields,
 )
-from src.utils.localization import placeholder_fields
 from src.utils.ui_config import get_manual_source_label
 
 
-SETTINGS_PACKAGE = Path(__file__).resolve().parents[1] / "src" / "ui_qt" / "settings"
-SETTINGS_WINDOW_SOURCE = SETTINGS_PACKAGE.parent / "settings_window.py"
+SETTINGS_WINDOW_SOURCE = (
+    Path(__file__).resolve().parents[1] / "src" / "ui_qt" / "settings_window.py"
+)
+
+# Names that read the same in every language, so an English match proves
+# nothing about whether the catalog was actually translated.
+UNTRANSLATED_BY_DESIGN = {
+    "provider_deepseek",
+    "provider_gemini",
+    "provider_qwen",
+    "tts_device_cpu",
+}
 
 
 def _settings_translation_keys() -> set[str]:
+    """Collect the global catalog keys the settings window asks for by name."""
+
     keys: set[str] = set()
-    for path in SETTINGS_PACKAGE.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = (
-                node.func.attr
-                if isinstance(node.func, ast.Attribute)
-                else node.func.id
-                if isinstance(node.func, ast.Name)
-                else ""
-            )
-            argument = None
-            if name == "_t" and node.args:
-                argument = node.args[0]
-            elif name == "tr" and len(node.args) > 1:
-                argument = node.args[1]
-            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                keys.add(argument.value)
-    return keys
-
-
-def _config() -> dict:
-    return {
-        "ui": {"language": "en", "main_window_theme": "dark"},
-        "translation": {
-            "backend": "qianwen",
-            "source_language": "auto",
-            "target_language": "ja",
-            "qianwen": {
-                "api_key": "test-key",
-                "region": "singapore",
-                "model": "qwen-plus",
-            },
-        },
-        "audio": {
-            "input_device_mode": "auto",
-            "vad_sensitivity": 2,
-            "vad_speech_ratio": 0.6,
-        },
-        "tts": {
-            "engine": "edge",
-            "voice": "en-US-JennyNeural",
-            "output_device": "virtual_cable",
-        },
-        "vrc": {"osc_enabled": True, "output_format": "translated"},
-        "vrc_listen": {"enabled": False, "target_language": "zh-CN"},
-    }
+    tree = ast.parse(
+        SETTINGS_WINDOW_SOURCE.read_text(encoding="utf-8"),
+        filename=str(SETTINGS_WINDOW_SOURCE),
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (
+            node.func.attr
+            if isinstance(node.func, ast.Attribute)
+            else node.func.id
+            if isinstance(node.func, ast.Name)
+            else ""
+        )
+        argument = None
+        if name == "_t" and node.args:
+            argument = node.args[0]
+        elif name == "tr" and len(node.args) > 1:
+            argument = node.args[1]
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            keys.add(argument.value)
+    return {key for key in keys if key in UI_TEXTS["en"]}
 
 
 def test_settings_translation_keys_cover_every_supported_language():
@@ -86,43 +65,27 @@ def test_settings_translation_keys_cover_every_supported_language():
     assert keys
     for key in keys:
         reference_fields = placeholder_fields(UI_TEXTS["en"][key])
-        for language in SETTINGS_UI_LANGUAGES:
+        for language in SUPPORTED_UI_LANGUAGES:
             value = UI_TEXTS[language].get(key)
             assert value and value != key, (language, key)
             assert placeholder_fields(value) == reference_fields, (language, key)
 
 
-def test_settings_specific_catalog_keys_are_referenced_by_settings_ui():
-    source_literals: set[str] = set()
-    for path in (*SETTINGS_PACKAGE.glob("*.py"), SETTINGS_WINDOW_SOURCE):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        source_literals.update(
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        )
-
-    catalog_keys = set(_SETTINGS_TABBED_RU_TEXTS) | set(_SETTINGS_TABBED_KO_TEXTS)
-    catalog_keys.update(
-        key
-        for values in _SETTINGS_TABBED_NEW_TEXTS.values()
-        for key in values
-    )
-    assert sorted(catalog_keys - source_literals) == []
-
-
 def test_settings_russian_and_korean_are_not_english_fallbacks():
-    for key in (
-        "quick_setup_title",
-        "audio_mic_title",
-        "tts_voice_title",
-        "vrchat_title",
-        "advanced_title",
-        "xtts_language_hint",
-        "voice_xiaoxiao",
-    ):
-        assert UI_TEXTS["ru"][key] != UI_TEXTS["en"][key]
-        assert UI_TEXTS["ko"][key] != UI_TEXTS["en"][key]
+    """Catch a language that was added by copying the English column.
+
+    The keys are derived from the window itself so the check keeps covering
+    the settings UI as it grows, instead of a list someone has to remember.
+    """
+
+    unchanged: list[tuple[str, str]] = []
+    for key in sorted(_settings_translation_keys() - UNTRANSLATED_BY_DESIGN):
+        english = UI_TEXTS["en"][key]
+        for language in ("ru", "ko"):
+            if UI_TEXTS[language][key] == english:
+                unchanged.append((language, key))
+
+    assert unchanged == []
 
 
 def test_backend_help_and_manual_source_labels_are_localized():
@@ -146,37 +109,6 @@ def test_region_labels_and_long_hints_do_not_fall_back_to_english_fragments():
 
 
 def test_settings_language_normalization_uses_supported_fallbacks():
-    assert normalize_settings_language("ja-JP") == "ja"
-    assert normalize_settings_language("ko_KR") == "ko"
-    assert normalize_settings_language("unsupported") in SETTINGS_UI_LANGUAGES
-
-
-def test_tabbed_settings_runtime_language_switch_preserves_unsaved_qwen_values(qtbot):
-    dialog = SettingsWindowTabbed(_config(), ui_language="en")
-    qtbot.addWidget(dialog)
-
-    quick = dialog._quick_setup_tab
-    api = dialog._api_models_tab
-    quick._provider_combo.setCurrentIndex(quick._provider_combo.findText(tr("en", "provider_qwen")))
-    quick._api_key_input.setText("unsaved-qwen-key")
-    api._qwen_key_input.setText("unsaved-qwen-key")
-    api._qwen_region_combo.setCurrentIndex(api._qwen_region_combo.findData("china_mainland"))
-    dialog._tabs.setCurrentIndex(1)
-
-    dialog.set_ui_language("ru-RU")
-
-    assert dialog.windowTitle() == tr("ru", "settings_title")
-    assert tr("ru", "quick_setup_tab") in dialog._tabs.tabText(0)
-    assert dialog._tabs.currentIndex() == 1
-    assert quick._api_key_input.text() == "unsaved-qwen-key"
-    assert api._qwen_key_input.text() == "unsaved-qwen-key"
-    assert api._qwen_region_combo.currentData() == "china_mainland"
-
-    collected = dialog._collect_config()
-    assert collected["ui"]["language"] == "ru"
-    assert collected["translation"]["backend"] == "qianwen"
-    assert collected["translation"]["qianwen"]["api_key"] == "unsaved-qwen-key"
-    assert collected["translation"]["qianwen"]["region"] == "china_mainland"
-    assert collected["translation"]["qianwen"]["base_url"] == (
-        "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
+    assert normalize_ui_language("ja-JP") == "ja"
+    assert normalize_ui_language("ko_KR") == "ko"
+    assert normalize_ui_language("unsupported") in SUPPORTED_UI_LANGUAGES

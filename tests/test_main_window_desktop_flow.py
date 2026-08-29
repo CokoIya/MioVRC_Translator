@@ -29,7 +29,7 @@ def _base_desktop_window(*, send_to_chatbox: bool):
     auto_read_calls: list[dict[str, str]] = []
 
     window._running = True
-    window._listen_session = 5
+    window._runtime_generation = 5
     window._config = {"translation": {}}
     window._output_dispatcher = None
     window._merge_lock = threading.Lock()

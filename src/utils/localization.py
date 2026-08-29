@@ -78,7 +78,7 @@ RESERVED_COMPATIBILITY_UI_KEYS = frozenset(
         "vad_silence_label",
         "voice_record_imported_status",
         "window_must_not_be_less_than_interval",
-        "xtts_download_open_release",
+        "runtime_repair_open_release",
     }
 )
 

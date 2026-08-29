@@ -189,8 +189,8 @@ def choose_torch_precision(
 ) -> str:
     """Choose a CUDA autocast precision, falling back to reliable FP32.
 
-    FP16 is the automatic choice on modern CUDA devices because the Coqui
-    XTTS inference stack still contains operations and output paths that do
+    FP16 is the automatic choice on modern CUDA devices because the local
+    inference stacks still contain operations and output paths that do
     not consistently support BF16.  BF16 remains available as an explicit
     opt-in, but selecting it automatically adds a costly failed first pass on
     otherwise compatible hardware.

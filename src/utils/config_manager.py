@@ -59,6 +59,8 @@ from src.utils.ui_config import (
 from src.tts.api_tts_config import (
     TTS_API_ENGINE_IDS,
     get_tts_api_default_config,
+    normalize_cloned_voices,
+    region_supports_voice_cloning,
     resolve_tts_api_config,
 )
 from src.asr.model_registry import (
@@ -98,9 +100,22 @@ class SecretProtectionError(RuntimeError):
 
 _DEFAULT_DENOISE_STRENGTH = 0.0
 _DEFAULT_MIC_TAIL_SILENCE_S = 0.65
-_LEGACY_LISTEN_TAIL_SILENCE_S = 0.65
-_DEFAULT_LISTEN_TAIL_SILENCE_S = 0.40
-_LISTEN_LATENCY_PROFILE_VERSION = 1
+# Tail-silence values shipped as defaults by earlier profiles. Only these
+# are replaced on upgrade; anything else was chosen by the player.
+_LEGACY_LISTEN_TAIL_SILENCE_VALUES = (0.65, 0.40)
+_LEGACY_LISTEN_SEGMENT_DURATION_S = 2.0
+# A short pause inside a sentence is not the end of one. 0.40 s cut people
+# off mid-thought and split single sentences across several translations.
+_DEFAULT_LISTEN_TAIL_SILENCE_S = 0.80
+# The VAD force-closes a segment at this length even when the speaker has
+# not paused, so a low cap chops long sentences apart regardless of the
+# silence threshold.
+_DEFAULT_LISTEN_SEGMENT_DURATION_S = 5.0
+_LISTEN_LATENCY_PROFILE_VERSION = 2
+# Public aliases: the UI layer needs the same fallbacks this module
+# writes, otherwise a missing key silently restores the old timing.
+LISTEN_TAIL_SILENCE_DEFAULT_S = _DEFAULT_LISTEN_TAIL_SILENCE_S
+LISTEN_SEGMENT_DURATION_DEFAULT_S = _DEFAULT_LISTEN_SEGMENT_DURATION_S
 _DEFAULT_VAD_SENSITIVITY = 2
 _DEFAULT_VAD_SPEECH_RATIO = 0.6
 _DEFAULT_VAD_ACTIVATION_THRESHOLD_S = 0.2
@@ -240,13 +255,12 @@ _ASR_CONFIG_KEYS = frozenset(
         "engine",
         "engine_source",
         "fallback_engine",
-        "gemini_live",
+        "edge_stt",
         "language",
         "qwen3_asr",
         "sensevoice",
         "streaming",
         "user_selected_engine",
-        "webspeech",
         "whisper",
     }
 )
@@ -398,7 +412,7 @@ def _walk_asr_provider_configs(config: dict):
     asr_cfg = config.get("asr", {}) if isinstance(config, dict) else {}
     if not isinstance(asr_cfg, dict):
         return
-    for key in ("qwen3_asr", "gemini_live"):
+    for key in ("qwen3_asr",):
         provider_cfg = asr_cfg.get(key, {})
         if isinstance(provider_cfg, dict):
             yield provider_cfg
@@ -757,7 +771,7 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "asr_engine": ASR_ENGINE_FOLLOW_MAIN,
         "source_language": "auto",
         "target_language": "zh",
-        "segment_duration_s": 2.0,
+        "segment_duration_s": _DEFAULT_LISTEN_SEGMENT_DURATION_S,
         "tail_silence_s": _DEFAULT_LISTEN_TAIL_SILENCE_S,
         "asr_timeout_s": 5.0,
         "translation_timeout_s": 4.0,
@@ -871,20 +885,22 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
             elif legacy_window_s is not None:
                 migrated_segment_s = float(legacy_window_s)
             else:
-                migrated_segment_s = 2.0
+                migrated_segment_s = _DEFAULT_LISTEN_SEGMENT_DURATION_S
             if migrated_segment_s <= 0:
                 raise ValueError
         except (TypeError, ValueError):
-            migrated_segment_s = 2.0
+            migrated_segment_s = _DEFAULT_LISTEN_SEGMENT_DURATION_S
         vrc_cfg["segment_duration_s"] = migrated_segment_s
         changed = True
     else:
         try:
-            segment_duration_s = float(vrc_cfg.get("segment_duration_s", 2.0))
+            segment_duration_s = float(
+                vrc_cfg.get("segment_duration_s", _DEFAULT_LISTEN_SEGMENT_DURATION_S)
+            )
             if segment_duration_s <= 0:
                 raise ValueError
         except (TypeError, ValueError):
-            vrc_cfg["segment_duration_s"] = 2.0
+            vrc_cfg["segment_duration_s"] = _DEFAULT_LISTEN_SEGMENT_DURATION_S
             changed = True
     if "tail_silence_s" not in loaded_vrc_cfg:
         try:
@@ -923,8 +939,20 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
             )
         except (TypeError, ValueError):
             current_tail_s = _DEFAULT_LISTEN_TAIL_SILENCE_S
-        if abs(current_tail_s - _LEGACY_LISTEN_TAIL_SILENCE_S) < 0.001:
-            vrc_cfg["tail_silence_s"] = _DEFAULT_LISTEN_TAIL_SILENCE_S
+        for legacy_tail_s in _LEGACY_LISTEN_TAIL_SILENCE_VALUES:
+            if abs(current_tail_s - legacy_tail_s) < 0.001:
+                vrc_cfg["tail_silence_s"] = _DEFAULT_LISTEN_TAIL_SILENCE_S
+                break
+        # Only replace a segment cap the player never touched: a deliberate
+        # value stays, an inherited default moves to the longer window.
+        try:
+            current_segment_s = float(
+                vrc_cfg.get("segment_duration_s", _DEFAULT_LISTEN_SEGMENT_DURATION_S)
+            )
+        except (TypeError, ValueError):
+            current_segment_s = _DEFAULT_LISTEN_SEGMENT_DURATION_S
+        if abs(current_segment_s - _LEGACY_LISTEN_SEGMENT_DURATION_S) < 0.001:
+            vrc_cfg["segment_duration_s"] = _DEFAULT_LISTEN_SEGMENT_DURATION_S
         vrc_cfg["latency_profile_version"] = _LISTEN_LATENCY_PROFILE_VERSION
         changed = True
     if _coerce_float_range_config(vrc_cfg, "asr_timeout_s", 5.0, 2.0, 12.0):
@@ -1763,7 +1791,7 @@ def _ensure_translation_config(
 
 def _ensure_asr_config(config: dict) -> bool:
     """Validate the ASR section and keep provider secrets separate from translation."""
-    changed = False
+    changed = _migrate_removed_asr_engines(config)
     asr_cfg = config.get("asr", {})
     if not isinstance(asr_cfg, dict):
         return False
@@ -1857,32 +1885,6 @@ def _ensure_asr_config(config: dict) -> bool:
         whisper_cfg["model_revision"] = whisper_spec.model_revision
         changed = True
 
-    webspeech_cfg = asr_cfg.get("webspeech")
-    if not isinstance(webspeech_cfg, dict):
-        webspeech_cfg = {}
-        asr_cfg["webspeech"] = webspeech_cfg
-        changed = True
-    webspeech_defaults = {
-        "language": "ja-JP",
-        "continuous": True,
-        "interim_results": True,
-        "max_alternatives": 1,
-        "restart_on_end": True,
-        "silence_timeout_ms": 800,
-        "final_timeout_seconds": 4.0,
-        "partial_timeout_seconds": 0.2,
-        "connection_timeout_seconds": 3.0,
-        "stale_connection_seconds": 8.0,
-        "embedded_browser": True,
-        "auto_fallback": False,
-        "auto_open_browser": True,
-        "bridge_port": 0,
-    }
-    for key, value in webspeech_defaults.items():
-        if key not in webspeech_cfg:
-            webspeech_cfg[key] = value
-            changed = True
-
     qwen_cfg = asr_cfg.get("qwen3_asr")
     if not isinstance(qwen_cfg, dict):
         qwen_cfg = {}
@@ -1933,27 +1935,25 @@ def _ensure_asr_config(config: dict) -> bool:
             qwen_cfg["model"] = QWEN3_ASR_DEFAULT_MODEL
             changed = True
 
-    gemini_cfg = asr_cfg.get("gemini_live")
-    if not isinstance(gemini_cfg, dict):
-        gemini_cfg = {}
-        asr_cfg["gemini_live"] = gemini_cfg
+    edge_stt_cfg = asr_cfg.get("edge_stt")
+    if not isinstance(edge_stt_cfg, dict):
+        edge_stt_cfg = {}
+        asr_cfg["edge_stt"] = edge_stt_cfg
         changed = True
-    gemini_defaults = {
-        "api_key": "",
-        "model": "gemini-3.1-flash-live-preview",
+    edge_stt_defaults = {
         "language": "ja-JP",
-        "transcribe_only": True,
-        "system_instruction": (
-            "You are a speech-to-text engine. Output only the transcription. "
-            "Do not translate, summarize, explain, or answer."
-        ),
-        "timeout_seconds": 20,
-        "use_live_api": True,
-        "live_silence_duration_ms": 600,
+        "connect_timeout_seconds": 6,
+        "recognition_timeout_seconds": 12,
+        # Trailing silence is what makes the service commit a final phrase.
+        "trailing_silence_seconds": 0.15,
+        # One socket serves many utterances; reconnect before the service ends
+        # the session on its own.
+        "reuse_connection": True,
+        "max_turns": 18,
     }
-    for key, value in gemini_defaults.items():
-        if key not in gemini_cfg:
-            gemini_cfg[key] = value
+    for key, value in edge_stt_defaults.items():
+        if key not in edge_stt_cfg:
+            edge_stt_cfg[key] = value
             changed = True
 
     streaming_cfg = asr_cfg.get("streaming")
@@ -2077,9 +2077,89 @@ def normalize_style_bert_bert_language(value: object) -> str:
 _normalize_style_bert_bert_language = normalize_style_bert_bert_language
 
 
+_REMOVED_TTS_ENGINES = frozenset(
+    {"edge", "gtts", "google", "pyttsx3", "aivis_speech", "aivis"}
+)
+_REPLACEMENT_TTS_ENGINE = "qwen_tts"
+
+
+def _migrate_removed_tts_engines(config: dict) -> bool:
+    """Move configs off TTS engines that no longer ship.
+
+    Every remaining engine needs setup (an API key, a local server, or a model
+    download), so there is no equivalent drop-in. Point the selection at the
+    cloud engine the app is built around and drop the orphaned sections; the
+    settings page then states plainly what is still missing.
+    """
+
+    changed = False
+    tts_cfg = config.get("tts")
+    if not isinstance(tts_cfg, dict):
+        return False
+    if str(tts_cfg.get("engine", "") or "").strip().lower() in _REMOVED_TTS_ENGINES:
+        tts_cfg["engine"] = _REPLACEMENT_TTS_ENGINE
+        changed = True
+    for key in _REMOVED_TTS_ENGINES:
+        if key in tts_cfg:
+            tts_cfg.pop(key, None)
+            changed = True
+    return changed
+
+
+def _migrate_removed_asr_engines(config: dict) -> bool:
+    """Move configs off the removed Gemini Live recognizer."""
+
+    changed = False
+    asr_cfg = config.get("asr")
+    if not isinstance(asr_cfg, dict):
+        return False
+    if str(asr_cfg.get("engine", "") or "").strip().lower() == "gemini-live":
+        asr_cfg["engine"] = "edge-stt"
+        changed = True
+    if str(asr_cfg.get("fallback_engine", "") or "").strip().lower() == "gemini-live":
+        asr_cfg["fallback_engine"] = "edge-stt"
+        changed = True
+    if "gemini_live" in asr_cfg:
+        asr_cfg.pop("gemini_live", None)
+        changed = True
+    return changed
+
+
+def _migrate_local_voice_cloning(config: dict) -> bool:
+    """Move configs off the removed local XTTS cloning engine.
+
+    XTTS ran the whole cloning model on the player's own machine, which is the
+    reason it was dropped.  Cloud cloning takes its place in the engine list,
+    so an existing selection is repointed rather than silently reset to Edge —
+    the player still wants a cloned voice, just not a local one.  Its stored
+    tuning (device, precision, cache size) has no cloud equivalent and is
+    discarded.
+    """
+
+    changed = False
+    tts_cfg = config.get("tts")
+    if isinstance(tts_cfg, dict):
+        if str(tts_cfg.get("engine", "") or "").strip().lower() in {
+            "xtts",
+            "xtts_v2",
+            "xtts-v2",
+            "xttsts",
+        }:
+            tts_cfg["engine"] = "qwen_vc"
+            changed = True
+        if "xtts" in tts_cfg:
+            tts_cfg.pop("xtts", None)
+            changed = True
+    if "xtts_device" in config:
+        config.pop("xtts_device", None)
+        changed = True
+    return changed
+
+
 def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
     """Ensure TTS configuration exists and is valid."""
-    changed = False
+    changed = _migrate_local_voice_cloning(config)
+    changed = _migrate_removed_tts_engines(config) or changed
     tts_cfg = config.get("tts", {})
     if "tts" not in config or not isinstance(tts_cfg, dict):
         tts_cfg = {}
@@ -2109,7 +2189,7 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
     # Default values
     defaults = {
         "enabled": False,
-        "engine": "edge",
+        "engine": "qwen_tts",
         "auto_read": True,
         "monitor_enabled": False,
         "output_device": None,
@@ -2123,27 +2203,7 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
 
     # Ensure engine configs exist
     engine_defaults = {
-        "edge": {
-            "voice": "zh-CN-XiaoxiaoNeural",
-            "rate": 1.0,
-            "volume": 0.8,
-        },
-        "gtts": {
-            "voice": "zh-CN",
-            "rate": 1.0,
-            "volume": 0.8,
-        },
-        "pyttsx3": {
-            "voice": None,
-            "rate": 1.0,
-            "volume": 1.0,
-        },
         "voicevox": {
-            "voice": None,
-            "rate": 1.0,
-            "volume": 0.8,
-        },
-        "aivis_speech": {
             "voice": None,
             "rate": 1.0,
             "volume": 0.8,
@@ -2154,22 +2214,6 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             "volume": 0.8,
             "device": "cpu",
             "bert_language": "jp",
-        },
-        "xtts": {
-            "voice": "custom",
-            "rate": 1.0,
-            "volume": 0.8,
-            "device": "cpu",
-            "language": "auto",
-            "prewarm": True,
-            "lazy_load": True,
-            "optimized_inference": True,
-            "conditioning_cache_size": 4,
-            "enable_text_splitting": True,
-            "precision": "auto",
-            "cuda_device_index": 0,
-            "allow_cpu_fallback": True,
-            "cuda_tf32": True,
         },
     }
     for engine in TTS_API_ENGINE_IDS:
@@ -2204,93 +2248,6 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             style_bert_cfg["bert_language"] = normalized_language
             changed = True
 
-    xtts_cfg = tts_cfg.get("xtts")
-    if isinstance(xtts_cfg, dict):
-        current_device = str(
-            xtts_cfg.get("device") or config.get("xtts_device") or "cpu"
-        ).strip().lower()
-        if current_device not in {"cpu", "cuda"}:
-            current_device = "cpu"
-        if xtts_cfg.get("device") != current_device:
-            xtts_cfg["device"] = current_device
-            changed = True
-        config["xtts_device"] = current_device
-
-        current_language = str(xtts_cfg.get("language") or "auto").strip().lower().replace("_", "-")
-        if current_language == "zh":
-            current_language = "zh-cn"
-        valid_xtts_languages = {
-            "auto",
-            "en",
-            "es",
-            "fr",
-            "de",
-            "it",
-            "pt",
-            "pl",
-            "tr",
-            "ru",
-            "nl",
-            "cs",
-            "ar",
-            "zh-cn",
-            "ja",
-            "hu",
-            "ko",
-            "hi",
-        }
-        if current_language not in valid_xtts_languages:
-            current_language = "auto"
-        if xtts_cfg.get("language") != current_language:
-            xtts_cfg["language"] = current_language
-            changed = True
-
-        for key, default in (
-            ("prewarm", True),
-            ("lazy_load", True),
-            ("optimized_inference", True),
-            ("enable_text_splitting", True),
-            ("allow_cpu_fallback", True),
-            ("cuda_tf32", True),
-        ):
-            value = _coerce_bool_value(xtts_cfg.get(key), default)
-            if xtts_cfg.get(key) is not value:
-                xtts_cfg[key] = value
-                changed = True
-
-        try:
-            cache_size = int(xtts_cfg.get("conditioning_cache_size", 4))
-        except (TypeError, ValueError):
-            cache_size = 4
-        cache_size = max(0, min(cache_size, 16))
-        if xtts_cfg.get("conditioning_cache_size") != cache_size:
-            xtts_cfg["conditioning_cache_size"] = cache_size
-            changed = True
-
-        precision = str(xtts_cfg.get("precision", "auto") or "auto").strip().lower()
-        precision_aliases = {
-            "fp16": "float16",
-            "half": "float16",
-            "fp32": "float32",
-            "full": "float32",
-            "bf16": "bfloat16",
-        }
-        precision = precision_aliases.get(precision, precision)
-        if precision not in {"auto", "float16", "float32", "bfloat16"}:
-            precision = "auto"
-        if xtts_cfg.get("precision") != precision:
-            xtts_cfg["precision"] = precision
-            changed = True
-
-        try:
-            cuda_device_index = int(xtts_cfg.get("cuda_device_index", 0))
-        except (TypeError, ValueError):
-            cuda_device_index = 0
-        cuda_device_index = max(0, min(cuda_device_index, 15))
-        if xtts_cfg.get("cuda_device_index") != cuda_device_index:
-            xtts_cfg["cuda_device_index"] = cuda_device_index
-            changed = True
-
     for engine in TTS_API_ENGINE_IDS:
         api_cfg = tts_cfg.get(engine)
         if not isinstance(api_cfg, dict):
@@ -2300,6 +2257,47 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
             if api_cfg.get(key) != resolved[key]:
                 api_cfg[key] = resolved[key]
                 changed = True
+
+    vc_cfg = tts_cfg.get("qwen_vc")
+    if isinstance(vc_cfg, dict):
+        # Cloning and preset-voice Qwen TTS authenticate against the same
+        # DashScope account, so reuse a key the player already entered rather
+        # than asking for the identical value twice.  A key issued for a region
+        # without an enrollment endpoint is deliberately NOT copied: it would
+        # authenticate against its own region only and surface as a confusing
+        # "invalid key" against the cloning fallback region.
+        if not str(vc_cfg.get("api_key", "") or "").strip():
+            preset_cfg = tts_cfg.get("qwen_tts")
+            shared_key = ""
+            if isinstance(preset_cfg, dict) and region_supports_voice_cloning(
+                preset_cfg.get("region")
+            ):
+                shared_key = str(preset_cfg.get("api_key", "") or "").strip()
+            if shared_key:
+                vc_cfg["api_key"] = shared_key
+                changed = True
+
+        voices = [dict(voice) for voice in normalize_cloned_voices(vc_cfg.get("custom_voices"))]
+        if vc_cfg.get("custom_voices") != voices:
+            vc_cfg["custom_voices"] = voices
+            changed = True
+
+        consent = _coerce_bool_value(vc_cfg.get("upload_consent"), False)
+        if vc_cfg.get("upload_consent") is not consent:
+            vc_cfg["upload_consent"] = consent
+            changed = True
+
+        # A selected voice that is no longer registered locally would fail at
+        # the first utterance; fall back to the first remaining clone.
+        selected = str(vc_cfg.get("voice", "") or "").strip()
+        known_ids = {voice["voice_id"] for voice in voices}
+        if selected and selected not in known_ids:
+            selected = ""
+        if not selected and voices:
+            selected = voices[0]["voice_id"]
+        if vc_cfg.get("voice") != selected:
+            vc_cfg["voice"] = selected
+            changed = True
 
     return changed
 

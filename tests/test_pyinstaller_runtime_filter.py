@@ -52,13 +52,11 @@ def test_runtime_filter_keeps_required_runtime_payloads() -> None:
         "PySide6/translations/qtwebengine_locales/ru.pak",
         "PySide6/translations/qtwebengine_locales/zh-CN.pak",
         "PySide6/translations/qtwebengine_locales/zh-TW.pak",
-        "unidic_lite/dicdir/sys.dic",
         "pyopenjtalk/open_jtalk_dic_utf_8-1.11/sys.dic",
         "assets/fonts/851tegakizatsu.TTF",
         "assets/dictionaries/asr_terms.official.json",
         "librosa/__init__.pyi",
-        "TTS/tts/layers/xtts/model.pyi",
-        "TTS/tts/models/xtts.py",
+        "style_bert_vits2/models/infer.py",
         "soundcard/coreaudio.py.h",
         "soundcard/mediafoundation.py.h",
         "soundcard/pulseaudio.py.h",
@@ -118,7 +116,7 @@ def test_hidden_import_filter_removes_tests_and_keeps_runtime_modules() -> None:
         "pytest",
     ]
     kept = [
-        "TTS.tts.models.xtts",
+        "style_bert_vits2.tts_model",
         "transformers.pytorch_utils",
         "PySide6.QtWebEngineCore",
         "src.asr.sensevoice_model_manager",

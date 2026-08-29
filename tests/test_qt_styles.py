@@ -19,3 +19,24 @@ def test_custom_cjk_latin_font_is_first_in_stack():
         set_cjk_latin_font_family(None)
 
     assert 'font-family: "851tegakizatsu", "Segoe UI Variable Text"' in styles
+
+
+def test_app_stylesheet_themes_non_native_file_dialogs():
+    """File pickers are forced non-native, so they need explicit styling.
+
+    Without these rules the browser renders with the default light palette
+    inside a dark window.
+    """
+    from src.ui_qt.styles import build_app_stylesheet
+    from src.ui_qt.theme import theme_tokens
+
+    for theme in ("dark", "light"):
+        sheet = build_app_stylesheet(theme)
+        tokens = theme_tokens(theme)
+        assert "QFileDialog QListView" in sheet
+        assert "QFileDialog QTreeView" in sheet
+        assert "QFileDialog QToolButton" in sheet
+        assert "QFileDialog QHeaderView::section" in sheet
+        # The list body must use the themed panel color, not the Qt default.
+        assert str(tokens["PANEL_BG"]) in sheet
+        assert str(tokens["TEXT_PRIMARY"]) in sheet

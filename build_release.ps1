@@ -83,7 +83,7 @@ try {
     $env:MIO_TRANSLATOR_NO_VENV_RELAUNCH = "1"
     & $releasePython main.py --mio-selftest
     if ($LASTEXITCODE -ne 0) {
-        throw "Source runtime self-test failed; refusing to package an incomplete XTTS/ASR runtime."
+        throw "Source runtime self-test failed; refusing to package an incomplete ASR runtime."
     }
 } finally {
     if ($hadSourceSelftestHome) {
@@ -147,6 +147,15 @@ try {
     if (Test-Path -LiteralPath $frozenSelftestRoot) {
         Remove-Item -LiteralPath $frozenSelftestRoot -Recurse -Force
     }
+}
+
+# The self-test above proves the app starts. This proves the bundle still
+# carries everything it needs, and nothing it dropped: a data file that stopped
+# being collected, or a package deleted from the source tree that a stale pin
+# kept shipping.
+& $releasePython tools\verify_release_bundle.py
+if ($LASTEXITCODE -ne 0) {
+    throw "The frozen bundle failed payload verification."
 }
 
 $compilerCandidates = @(

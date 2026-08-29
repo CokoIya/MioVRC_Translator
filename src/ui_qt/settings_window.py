@@ -62,6 +62,7 @@ from src.asr.text_corrections import (
 from src.audio.desktop_recorder import list_output_devices as _list_desktop_output_devices
 from src.audio.recorder import AudioRecorder
 from src.tts.api_tts_config import (
+    region_supports_voice_cloning,
     TTS_API_ENGINE_IDS,
     get_tts_api_base_url,
     get_tts_api_default_value,
@@ -76,19 +77,11 @@ from src.tts.factory import create_tts_engine
 from src.tts.error_utils import tts_error_code, tts_error_token
 from src.tts.manager import TTSManager, find_best_virtual_output_device, resolve_output_device
 from src.tts.base import TTSVoice
-from src.tts.xtts_engine import (
-    XTTS_SUPPORTED_LANGUAGES,
-    first_usable_xtts_reference_audio_path,
-    first_xtts_reference_audio_path,
-    list_xtts_reference_voices,
-    normalize_xtts_language_code,
-    normalize_xtts_reference_audio_file,
-    repair_xtts_reference_audio_file,
-    safe_xtts_voice_name,
-    validate_xtts_reference_audio_file,
-    xtts_language_from_target_language,
-    xtts_reference_audio_dir,
-    xtts_runtime_status,
+from src.core import voice_clone_service
+from src.tts.qwen_voice_enrollment import QwenVoiceEnrollmentError
+from src.tts.reference_audio import (
+    ReferenceAudioDecoderUnavailableError,
+    normalize_reference_audio_file,
 )
 from src.tts.style_bert_vits2_models import (
     import_style_bert_model_path,
@@ -108,14 +101,16 @@ from src.ui_qt.widgets import NoWheelComboBox
 from src.translators.factory import test_translation_connection
 from src.updater.update_checker import UpdateInfo, check_for_update, fetch_latest_installer_info
 from src.utils import config_manager
-from src.utils.config_manager import normalize_style_bert_bert_language
+from src.utils.config_manager import (
+    LISTEN_SEGMENT_DURATION_DEFAULT_S,
+    LISTEN_TAIL_SILENCE_DEFAULT_S,
+    normalize_style_bert_bert_language,
+)
 from src.utils.app_paths import (
     atomic_copy_secure_file,
-    atomic_write_bytes,
     backgrounds_dir,
     secure_file_path,
     secure_file_size,
-    secure_unlink,
 )
 from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
@@ -228,57 +223,6 @@ def list_style_bert_vits2_voices(bert_language: object = "jp") -> list[TTSVoice]
     return voices
 
 
-XTTS_LANGUAGE_OPTIONS: tuple[tuple[str, str], ...] = (
-    ("Auto-detect", "auto"),
-    ("English", "en"),
-    ("Chinese (zh-cn)", "zh-cn"),
-    ("Japanese", "ja"),
-    ("Korean", "ko"),
-    ("Spanish", "es"),
-    ("French", "fr"),
-    ("German", "de"),
-    ("Italian", "it"),
-    ("Portuguese", "pt"),
-    ("Polish", "pl"),
-    ("Turkish", "tr"),
-    ("Russian", "ru"),
-    ("Dutch", "nl"),
-    ("Czech", "cs"),
-    ("Arabic", "ar"),
-    ("Hungarian", "hu"),
-    ("Hindi", "hi"),
-)
-XTTS_LANGUAGE_LABEL_TO_CODE = dict(XTTS_LANGUAGE_OPTIONS)
-XTTS_LANGUAGE_CODE_TO_LABEL = {code: label for label, code in XTTS_LANGUAGE_OPTIONS}
-XTTS_LANGUAGE_SUPPORTED_CODES = {"auto", *XTTS_SUPPORTED_LANGUAGES}
-XTTS_LANGUAGE_KEY_BY_CODE = {
-    "auto": "xtts_language_auto",
-    "en": "xtts_language_english",
-    "zh-cn": "xtts_language_chinese",
-    "ja": "xtts_language_japanese",
-    "ko": "xtts_language_korean",
-    "es": "xtts_language_spanish",
-    "fr": "xtts_language_french",
-    "de": "xtts_language_german",
-    "it": "xtts_language_italian",
-    "pt": "xtts_language_portuguese",
-    "pl": "xtts_language_polish",
-    "tr": "xtts_language_turkish",
-    "ru": "xtts_language_russian",
-    "nl": "xtts_language_dutch",
-    "cs": "xtts_language_czech",
-    "ar": "xtts_language_arabic",
-    "hu": "xtts_language_hungarian",
-    "hi": "xtts_language_hindi",
-}
-
-
-def xtts_language_options(ui_language: str | None) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (tr(ui_language, XTTS_LANGUAGE_KEY_BY_CODE[code]), code)
-        for _label, code in XTTS_LANGUAGE_OPTIONS
-    )
-
 SETTINGS_WINDOW_WIDTH = 1180
 SETTINGS_WINDOW_HEIGHT = 740
 SETTINGS_NAV_WIDTH = 250
@@ -320,21 +264,21 @@ _NUMERIC_INPUT_VAR_NAMES = (
 )
 _BACKGROUND_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".webp"})
 _MAX_BACKGROUND_IMAGE_BYTES = 64 * 1024 * 1024
-_MAX_XTTS_RECORDED_AUDIO_BYTES = 256 * 1024 * 1024
+_MAX_RECORDED_VOICE_AUDIO_BYTES = 256 * 1024 * 1024
 TTS_TEST_TEXT_BY_LANGUAGE = {
     "jp": "こんにちは、これは読み上げテストです。",
     "ja": "こんにちは、これは読み上げテストです。",
     "en": "Hello, this is a speech test.",
     "zh": "你好，这是中文朗读测试。",
 }
-XTTS_TEST_TEXT_BY_LANGUAGE = {
-    "jp": "こんにちは。これはXTTSの音声合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
-    "ja": "こんにちは。これはXTTSの音声合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
+VOICE_CLONE_TEST_TEXT_BY_LANGUAGE = {
+    "jp": "こんにちは。これは音声クローンの合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
+    "ja": "こんにちは。これは音声クローンの合成テストです。短いノイズではなく、自然な人の声として聞こえるか確認してください。",
     "en": "Hello, this is a Voice Cloning synthesis test. The result should sound like a clear human voice, not a short burst of noise.",
-    "zh": "你好，这是XTTS语音合成测试。请确认它听起来像清晰的人声，而不是短促的噪声。",
+    "zh": "你好，这是声音克隆语音合成测试。请确认它听起来像清晰的人声，而不是短促的噪声。",
 }
 
-XTTS_TEST_TEXT_BY_LANGUAGE.update(
+VOICE_CLONE_TEST_TEXT_BY_LANGUAGE.update(
     {
         "en": "Hello, this is a Voice Cloning synthesis test. The result should sound clear, natural, and human.",
         "es": "Hola, esta es una prueba de sintesis de voz clonada. La voz debe sonar clara y natural.",
@@ -425,20 +369,15 @@ DENOISE_LABELS = {
 }
 
 TTS_ENGINE_IDS = (
-    "edge",
-    "gtts",
-    "xtts",
-    "pyttsx3",
+    "qwen_vc",
     "voicevox",
-    "aivis_speech",
     "mimo_tts",
     "qwen_tts",
     "style_bert_vits2",
 )
-DEFAULT_TTS_ENGINE = "edge"
+DEFAULT_TTS_ENGINE = "qwen_tts"
 MIXLINE_DOWNLOAD_URL = "https://www.logitechg.com/en-us/software/mixline.html"
 VOICEVOX_DOWNLOAD_URL = "https://voicevox.hiroshiba.jp/"
-AIVIS_SPEECH_DOWNLOAD_URL = "https://aivis-project.com/AivisSpeech"
 NVIDIA_DRIVER_DOWNLOAD_URL = "https://www.nvidia.com/Download/index.aspx"
 MIO_RELEASE_DOWNLOAD_URL = "https://miovrc.com/#download"
 
@@ -448,46 +387,23 @@ def _api_tts_voice_ids(engine: str) -> tuple[str, ...]:
 
 
 TTS_DEFAULT_VOICES = {
-    "edge": (
-        "zh-CN-XiaoxiaoNeural",
-        "zh-CN-XiaoyiNeural",
-        "zh-CN-YunyangNeural",
-        "ja-JP-NanamiNeural",
-        "ja-JP-AoiNeural",
-        "ja-JP-MayuNeural",
-        "en-US-JennyNeural",
-        "en-US-AriaNeural",
-        "en-US-MichelleNeural",
-    ),
-    "gtts": ("zh-CN", "en", "ja", "ko", "ru"),
-    "xtts": (),  # Voice Cloning uses custom reference audio.
-    "pyttsx3": (),
     "voicevox": (),
-    "aivis_speech": (),
     "mimo_tts": ("mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"),
     "qwen_tts": _api_tts_voice_ids("qwen_tts"),
     "style_bert_vits2": (),
 }
 
 TTS_ENGINE_LABELS = {
-    "edge": "Edge TTS（推荐）",
-    "gtts": "Google TTS（需要外网）",
-    "xtts": "Voice Cloning",
-    "pyttsx3": "pyttsx3（离线）",
+    "qwen_vc": "Voice Cloning（API）",
     "voicevox": "VOICEVOX（本地）",
-    "aivis_speech": "AivisSpeech（本地）",
     "mimo_tts": "MiMo TTS（API）",
     "qwen_tts": "Qwen TTS（API）",
     "style_bert_vits2": "自定义音色",
 }
 
 TTS_ENGINE_I18N_KEYS = {
-    "edge": "tts_engine_edge",
-    "gtts": "tts_engine_gtts",
-    "xtts": "tts_engine_xtts",
-    "pyttsx3": "tts_engine_pyttsx3",
+    "qwen_vc": "tts_engine_voice_clone",
     "voicevox": "tts_engine_voicevox",
-    "aivis_speech": "tts_engine_aivis_speech",
     "mimo_tts": "tts_engine_mimo_tts",
     "qwen_tts": "tts_engine_qwen_tts",
     "style_bert_vits2": "tts_engine_style_bert_vits2",
@@ -969,13 +885,6 @@ QT_SETTINGS_COPY = {
         "ru": "Размер фонового изображения не должен превышать 64 МиБ.",
         "ko": "배경 이미지는 64 MiB 이하여야 합니다.",
     },
-    "xtts_recording_too_large": {
-        "zh-CN": "录制的音频超过 256 MiB 安全限制。",
-        "en": "The recorded audio exceeds the 256 MiB safety limit.",
-        "ja": "録音データが安全上限の 256 MiB を超えています。",
-        "ru": "Записанное аудио превышает безопасный предел 256 МиБ.",
-        "ko": "녹음 오디오가 256 MiB 안전 제한을 초과했습니다.",
-    },
     "hotkey_invalid": {
         "zh-CN": "{field} 的格式无效或无法使用。请换一个快捷键。",
         "en": "{field} is invalid or unavailable. Choose a different hotkey.",
@@ -1003,13 +912,6 @@ QT_SETTINGS_COPY = {
         "ja": "最新版",
         "ru": "последняя версия",
         "ko": "최신 버전",
-    },
-    "xtts_runtime_component_default": {
-        "zh-CN": "Coqui TTS 运行组件",
-        "en": "Coqui TTS runtime",
-        "ja": "Coqui TTS 実行コンポーネント",
-        "ru": "компонент Coqui TTS",
-        "ko": "Coqui TTS 실행 구성 요소",
     },
     "settings_update_available_message": {
         "zh-CN": "发现新版本：{version}\n\n{notes}",
@@ -1496,11 +1398,6 @@ QT_SETTINGS_COPY.update({
         "en": "Recommendation · ★★★★★ Recommended · Low-latency online ASR when local models are not installed.",
         "ja": "おすすめ度 · ★★★★★ 推奨 · ローカルモデルなしで使いやすい低遅延オンライン ASR。",
     },
-    "gemini_model_recommendation": {
-        "zh-CN": "推荐度 · ★★★★ 适合特定场景 · 适合需要 Gemini Live 流程的用户。",
-        "en": "Recommendation · ★★★★ Specific cases · Good when you already use a Gemini Live flow.",
-        "ja": "おすすめ度 · ★★★★ 特定用途向け · Gemini Live を使う構成向け。",
-    },
     "missing_model_prompt_title": {
         "zh-CN": "需要先下载语音包",
         "en": "Local Model Required",
@@ -1525,11 +1422,6 @@ QT_SETTINGS_COPY.update({
         "zh-CN": "下载 VOICEVOX",
         "en": "Download VOICEVOX",
         "ja": "VOICEVOX をダウンロード",
-    },
-    "download_aivis": {
-        "zh-CN": "下载 AivisSpeech",
-        "en": "Download AivisSpeech",
-        "ja": "AivisSpeech をダウンロード",
     },
     "local_tts_unavailable": {
         "zh-CN": "未检测到本地服务。请先启动 {engine}，然后返回这里刷新音色。",
@@ -1798,13 +1690,6 @@ QT_SETTINGS_COPY.update({
         "ru": "Qwen3-ASR (онлайн-распознавание речи)",
         "ko": "Qwen3-ASR (온라인 음성 인식)",
     },
-    "gemini_asr_label": {
-        "zh-CN": "Gemini Live (在线语音识别)",
-        "en": "Gemini Live (Online Speech Recognition)",
-        "ja": "Gemini Live (オンライン音声認識)",
-        "ru": "Gemini Live (онлайн-распознавание речи)",
-        "ko": "Gemini Live (온라인 음성 인식)",
-    },
     "tts_online_services_label": {
         "zh-CN": "MiMo/Qwen TTS等在线语音合成服务",
         "en": "MiMo/Qwen TTS and other online TTS services",
@@ -1825,36 +1710,6 @@ QT_SETTINGS_COPY.update({
         "ja": "API キーは API 設定ページで設定します。キーと同じサービス地域を、ここでも直接選択できます。",
         "ru": "Укажите API-ключ в настройке API. Регион должен соответствовать ключу; его также можно выбрать здесь.",
         "ko": "API 키는 API 설정 페이지에서 지정하세요. 키와 일치하는 서비스 지역을 여기에서도 선택할 수 있습니다.",
-    },
-    "xtts_device_label": {
-        "zh-CN": "计算设备",
-        "en": "Compute Device",
-        "ja": "計算デバイス",
-    },
-    "xtts_device_cpu": {
-        "zh-CN": "CPU (兼容性最佳)",
-        "en": "CPU (Best Compatibility)",
-        "ja": "CPU (互換性が最高)",
-    },
-    "xtts_device_cuda": {
-        "zh-CN": "CUDA GPU (需要NVIDIA显卡)",
-        "en": "CUDA GPU (Requires NVIDIA GPU)",
-        "ja": "CUDA GPU (NVIDIA GPUが必要)",
-    },
-    "xtts_device_cpu_info": {
-        "zh-CN": "ℹ CPU模式适用于所有电脑，无需额外配置",
-        "en": "ℹ CPU mode works on all computers, no additional setup needed",
-        "ja": "ℹ CPUモードはすべてのコンピューターで動作し、追加設定は不要です",
-    },
-    "xtts_device_cuda_info": {
-        "zh-CN": "ℹ GPU模式需要NVIDIA显卡和CUDA支持，速度比CPU快3-5倍",
-        "en": "ℹ GPU mode requires NVIDIA GPU with CUDA support, 3-5x faster than CPU",
-        "ja": "ℹ GPUモードはCUDAサポート付きのNVIDIA GPUが必要で、CPUより3～5倍高速です",
-    },
-    "xtts_cuda_not_available": {
-        "zh-CN": "未检测到CUDA支持。请确保已安装NVIDIA显卡驱动和CUDA。",
-        "en": "CUDA support not detected. Please ensure NVIDIA GPU drivers and CUDA are installed.",
-        "ja": "CUDAサポートが検出されませんでした。NVIDIA GPUドライバーとCUDAがインストールされていることを確認してください。",
     },
 })
 
@@ -1990,7 +1845,6 @@ _SETTINGS_COMPLETE_RU_KO_COPY = {
     "general_high_quality": {"ru": "Универсальная модель высокого качества. Лучше формулирует сложные фразы, но обычно медленнее специализированных и flash-моделей.", "ko": "범용 고품질 모델입니다. 복잡한 문장 표현은 좋지만 번역 전용 또는 flash 모델보다 대체로 느립니다."},
     "custom": {"ru": "Пользовательская модель без встроенной оценки. Сначала проверьте скорость и стабильность на коротких фразах.", "ko": "내장 평가가 없는 사용자 지정 모델입니다. 먼저 짧은 문장으로 속도와 안정성을 테스트하세요."},
     "qwen_model_recommendation": {"ru": "Рекомендация · ★★★★★ · Низкая задержка онлайн-ASR без установки локальных моделей.", "ko": "추천도 · ★★★★★ 권장 · 로컬 모델이 없을 때도 지연이 낮은 온라인 ASR입니다."},
-    "gemini_model_recommendation": {"ru": "Рекомендация · ★★★★ · Подходит, если уже используется поток Gemini Live.", "ko": "추천도 · ★★★★ 특정 상황 · Gemini Live 흐름을 이미 사용할 때 적합합니다."},
     "missing_model_prompt_title": {"ru": "Нужна локальная модель", "ko": "로컬 모델 필요"},
     "missing_model_prompt_body": {
         "ru": "Для выбранного движка {engine_label} нужна локальная модель: {model_id}\n\nОткрыть встроенный загрузчик? Файлы сохраняются в папке Mio, а после разрыва сети загрузка по возможности продолжится.",
@@ -1999,7 +1853,6 @@ _SETTINGS_COMPLETE_RU_KO_COPY = {
     "open_downloader": {"ru": "Открыть загрузчик", "ko": "다운로더 열기"},
     "later": {"ru": "Позже", "ko": "나중에"},
     "download_voicevox": {"ru": "Скачать VOICEVOX", "ko": "VOICEVOX 다운로드"},
-    "download_aivis": {"ru": "Скачать AivisSpeech", "ko": "AivisSpeech 다운로드"},
     "local_tts_unavailable": {"ru": "{engine} не обнаружен. Запустите локальное приложение, затем вернитесь сюда и обновите список голосов.", "ko": "{engine}을 찾지 못했습니다. 로컬 앱을 실행한 뒤 돌아와 음색 목록을 새로 고치세요."},
     "local_tts_ready": {"ru": "Локальный сервис {engine} обнаружен. Голоса можно загрузить для озвучивания.", "ko": "{engine} 로컬 서비스를 감지했습니다. 통역용 음색을 불러올 수 있습니다."},
     "tts_custom_voice_picker": {"ru": "Пользовательский пакет голоса", "ko": "사용자 음색 팩"},
@@ -2029,30 +1882,6 @@ _SETTINGS_RU_KO_COPY = {
     "header_subtitle": {
         "ru": "Настройте перевод, речь, обратный перевод, синхронный перевод и дополнительные параметры.",
         "ko": "번역, 음성, 역번역, 동시통역 및 고급 설정을 조정합니다.",
-    },
-    "xtts_device_label": {
-        "ru": "Вычислительное устройство",
-        "ko": "컴퓨팅 장치",
-    },
-    "xtts_device_cpu": {
-        "ru": "CPU (лучшая совместимость)",
-        "ko": "CPU (최고의 호환성)",
-    },
-    "xtts_device_cuda": {
-        "ru": "CUDA GPU (требуется NVIDIA GPU)",
-        "ko": "CUDA GPU (NVIDIA GPU 필요)",
-    },
-    "xtts_device_cpu_info": {
-        "ru": "ℹ Режим CPU работает на всех компьютерах без дополнительной настройки",
-        "ko": "ℹ CPU 모드는 모든 컴퓨터에서 작동하며 추가 설정이 필요 없습니다",
-    },
-    "xtts_device_cuda_info": {
-        "ru": "ℹ Режим GPU требует NVIDIA GPU с поддержкой CUDA, в 3-5 раз быстрее CPU",
-        "ko": "ℹ GPU 모드는 CUDA 지원이 있는 NVIDIA GPU가 필요하며 CPU보다 3-5배 빠릅니다",
-    },
-    "xtts_cuda_not_available": {
-        "ru": "Поддержка CUDA не обнаружена. Убедитесь, что установлены драйверы NVIDIA GPU и CUDA.",
-        "ko": "CUDA 지원이 감지되지 않았습니다. NVIDIA GPU 드라이버와 CUDA가 설치되어 있는지 확인하세요.",
     },
     "translation_section": {"ru": "Общее / Перевод", "ko": "일반 / 번역"},
     "voice_section": {"ru": "Настройки речи", "ko": "음성 설정"},
@@ -2158,34 +1987,6 @@ for _key, _values in _SETTINGS_RU_KO_COPY.items():
 _SETTINGS_LANGUAGES = SUPPORTED_UI_LANGUAGES
 
 _VOICE_CLONING_SETTINGS_COPY = {
-    "xtts_runtime_missing_details": {
-        "zh-CN": "声音克隆缺少完整安装包附带的运行组件：{components}。请在 Mio 中下载完整安装包，然后使用“安装并重启”修复应用。",
-        "en": "Voice Cloning is missing bundled runtime components: {components}. Download the full installer in Mio, then use Install & Restart to repair the app.",
-        "ja": "音声クローンの同梱実行コンポーネントが不足しています：{components}。Mio で完全版インストーラーをダウンロードし、「インストールして再起動」で修復してください。",
-        "ru": "Не хватает компонентов Voice Cloning из установщика: {components}. Загрузите полный установщик в Mio и выберите «Установить и перезапустить».",
-        "ko": "음성 클로닝 실행 구성 요소가 없습니다: {components}. Mio에서 전체 설치 파일을 다운로드한 뒤 ‘설치 후 재시작’으로 복구하세요.",
-    },
-    "xtts_runtime_reinstall": {
-        "zh-CN": "下载完整安装包",
-        "en": "Download Full Installer",
-        "ja": "完全版インストーラーをダウンロード",
-        "ru": "Скачать полный установщик",
-        "ko": "전체 설치 파일 다운로드",
-    },
-    "xtts_runtime_repair_checking": {
-        "zh-CN": "正在准备安装包…",
-        "en": "Preparing installer…",
-        "ja": "インストーラーを準備しています…",
-        "ru": "Подготовка установщика…",
-        "ko": "설치 파일 준비 중…",
-    },
-    "xtts_device_change_notice": {
-        "zh-CN": "设备更改将在下次使用声音克隆时生效。",
-        "en": "Device change will take effect the next time Voice Cloning is used.",
-        "ja": "デバイスの変更は次回の音声クローン使用時に反映されます。",
-        "ru": "Смена устройства вступит в силу при следующем запуске Voice Cloning.",
-        "ko": "장치 변경은 다음 음성 클로닝 사용 시 적용됩니다.",
-    },
 }
 for _key, _values in _VOICE_CLONING_SETTINGS_COPY.items():
     QT_SETTINGS_COPY.setdefault(_key, {}).update(_values)
@@ -2211,41 +2012,6 @@ QT_SETTINGS_COPY.update({
         "ja": "録音ダイアログを開けませんでした：{error}",
         "ru": "Не удалось открыть окно записи голоса: {error}",
         "ko": "음성 녹음 창을 열 수 없습니다: {error}",
-    },
-    "xtts_voice_saved_message": {
-        "zh-CN": "音色“{voice}”已保存。\n\n声音克隆会使用这个音色进行语音合成。",
-        "en": "Voice '{voice}' saved successfully.\n\nVoice Cloning will use this voice for speech synthesis.",
-        "ja": "音色「{voice}」を保存しました。\n\n音声クローンはこの音色を使って音声合成します。",
-        "ru": "Голос «{voice}» сохранён.\n\nVoice Cloning будет использовать его для синтеза речи.",
-        "ko": "음색 '{voice}'이 저장되었습니다.\n\n음성 클로닝에서 이 음색을 합성에 사용합니다.",
-    },
-    "xtts_voice_save_failed": {
-        "zh-CN": "保存音色失败：{error}",
-        "en": "Failed to save voice: {error}",
-        "ja": "音色の保存に失敗しました：{error}",
-        "ru": "Не удалось сохранить голос: {error}",
-        "ko": "음색 저장 실패: {error}",
-    },
-    "xtts_voice_imported_message": {
-        "zh-CN": "音色“{voice}”已导入。\n\n声音克隆会使用这个音色进行语音合成。",
-        "en": "Voice '{voice}' imported successfully.\n\nVoice Cloning will use this voice for speech synthesis.",
-        "ja": "音色「{voice}」をインポートしました。\n\n音声クローンはこの音色を使って音声合成します。",
-        "ru": "Голос «{voice}» импортирован.\n\nVoice Cloning будет использовать его для синтеза речи.",
-        "ko": "음색 '{voice}'을 가져왔습니다.\n\n음성 클로닝에서 이 음색을 합성에 사용합니다.",
-    },
-    "xtts_voice_import_failed": {
-        "zh-CN": "导入音色失败：{error}",
-        "en": "Failed to import voice: {error}",
-        "ja": "音色のインポートに失敗しました：{error}",
-        "ru": "Не удалось импортировать голос: {error}",
-        "ko": "음색 가져오기 실패: {error}",
-    },
-    "xtts_download_open_failed": {
-        "zh-CN": "无法打开下载窗口：{error}",
-        "en": "Failed to open download dialog: {error}",
-        "ja": "ダウンロードダイアログを開けませんでした：{error}",
-        "ru": "Не удалось открыть окно загрузки: {error}",
-        "ko": "다운로드 창을 열 수 없습니다: {error}",
     },
     "tts_test_not_accepted": {
         "zh-CN": "TTS 测试请求未被接受",
@@ -2352,42 +2118,21 @@ QT_SETTINGS_COPY.update({
         "ru": "Временный сбой Qwen TTS, задача освобождена. Повторите тест позже.",
         "ko": "Qwen TTS 서비스에 일시적인 오류가 발생해 작업을 해제했습니다. 잠시 후 다시 테스트하세요.",
     },
-    "xtts_runtime_missing": {
-        "zh-CN": "声音克隆需要可选的 Coqui TTS 运行环境。当前尚未安装，因此可以管理参考音频，但暂时不能合成和测试。",
-        "en": "Voice Cloning needs the optional Coqui TTS runtime. It is not installed, so reference voices can be managed but synthesis and tests are disabled.",
-        "ja": "音声クローンには任意の Coqui TTS ランタイムが必要です。未インストールのため、参照音声の管理はできますが、合成とテストは無効です。",
-        "ru": "Voice Cloning требует дополнительную среду Coqui TTS. Она не установлена: можно управлять эталонными голосами, но синтез и тесты отключены.",
-        "ko": "음성 클로닝에는 선택 항목인 Coqui TTS 런타임이 필요합니다. 아직 설치되지 않아 참조 음성 관리는 가능하지만 합성과 테스트는 비활성화됩니다.",
-    },
-    "xtts_model_missing": {
-        "zh-CN": "已检测到声音克隆运行环境，但本地模型文件尚未准备好。请先下载模型。",
-        "en": "Voice Cloning runtime is detected, but local model files are not ready. Download the model first.",
-        "ja": "音声クローンのランタイムは検出されましたが、ローカルモデルファイルが未準備です。先にモデルをダウンロードしてください。",
-        "ru": "Среда Voice Cloning обнаружена, но локальные файлы модели не готовы. Сначала скачайте модель.",
-        "ko": "음성 클로닝 런타임은 감지되었지만 로컬 모델 파일이 준비되지 않았습니다. 먼저 모델을 다운로드하세요.",
-    },
-    "xtts_ready": {
-        "zh-CN": "声音克隆模型文件已准备好。录制或导入参考音频后即可测试声音克隆。",
-        "en": "Voice Cloning model files are ready. Record or import reference audio, then test voice cloning.",
-        "ja": "音声クローンモデルは準備済みです。参照音声を録音またはインポートしてからテストできます。",
-        "ru": "Файлы модели Voice Cloning готовы. Запишите или импортируйте эталонный звук и протестируйте клонирование.",
-        "ko": "음성 클로닝 모델 파일이 준비되었습니다. 참조 음성을 녹음하거나 가져온 뒤 테스트하세요.",
-    },
-    "xtts_reference_missing": {
+    "voice_reference_missing": {
         "zh-CN": "声音克隆需要参考音频。请先录制或导入一段清晰、有表现力的声音样本。",
         "en": "Voice Cloning needs reference audio. Record or import one expressive voice sample first.",
         "ja": "音声クローンには参照音声が必要です。先に明瞭で表情のある音声サンプルを録音またはインポートしてください。",
         "ru": "Voice Cloning нужен эталонный звук. Сначала запишите или импортируйте выразительный образец голоса.",
         "ko": "음성 클로닝에는 참조 음성이 필요합니다. 먼저 표현이 잘 담긴 음성 샘플을 녹음하거나 가져오세요.",
     },
-    "xtts_reference_invalid": {
+    "voice_reference_invalid": {
         "zh-CN": "声音克隆无法使用当前选择的参考音频。",
         "en": "Voice Cloning cannot use the selected reference audio.",
         "ja": "選択した参照音声は音声クローンで使用できません。",
         "ru": "Voice Cloning не может использовать выбранный эталонный звук.",
         "ko": "선택한 참조 음성을 음성 클로닝에 사용할 수 없습니다.",
     },
-    "xtts_voice_cloning_hint": {
+    "voice_clone_hint": {
         "zh-CN": "声音克隆会使用参考样本的音色和说话方式。想要更有情绪，请使用清晰且带有目标情绪的样本。",
         "en": "Voice Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want.",
         "ja": "音声クローンは参照サンプルの声質と話し方を使います。感情を出したい場合は、欲しい雰囲気の明瞭で表情のあるサンプルを使ってください。",
@@ -2574,35 +2319,210 @@ QT_SETTINGS_COPY.update({
         "ru": "Другой словарь",
         "ko": "기타 사전",
     },
-    "xtts_import_audio_title": {
+    "voice_clone_import_audio_title": {
         "zh-CN": "导入声音克隆参考音频",
         "en": "Import Voice Cloning Reference Audio",
         "ja": "音声クローンの参照音声を読み込む",
         "ru": "Импорт эталонного аудио для клонирования голоса",
         "ko": "음성 클로닝 참조 오디오 가져오기",
     },
-    "xtts_reference_quality_too_short": {
-        "zh-CN": "参考音频太短。请录制或导入至少 5–10 秒的清晰语音。",
-        "en": "The reference audio is too short. Record or import at least 5–10 seconds of clear speech.",
-        "ja": "参照音声が短すぎます。5～10 秒以上の明瞭な音声を録音または読み込んでください。",
-        "ru": "Эталонная запись слишком короткая. Запишите или импортируйте не менее 5–10 секунд чистой речи.",
-        "ko": "참조 오디오가 너무 짧습니다. 선명한 음성을 최소 5~10초 녹음하거나 가져오세요.",
+    "voice_reference_quality_too_short": {
+        "zh-CN": "参考音频太短。请录制或导入 10–20 秒的清晰语音。",
+        "en": "The reference audio is too short. Record or import 10-20 seconds of clear speech.",
+        "ja": "参照音声が短すぎます。10～20 秒の明瞭な音声を録音または読み込んでください。",
+        "ru": "Эталонная запись слишком короткая. Запишите или импортируйте 10-20 секунд чистой речи.",
+        "ko": "참조 오디오가 너무 짧습니다. 선명한 음성을 10~20초 녹음하거나 가져오세요.",
     },
-    "xtts_reference_quality_quiet": {
+    "voice_reference_quality_quiet": {
         "zh-CN": "参考音频太安静或大部分是静音。请靠近麦克风重新录制，或导入更清晰的人声。",
         "en": "The reference audio is too quiet or mostly silent. Record closer to the microphone or import a clearer voice sample.",
         "ja": "参照音声が小さすぎるか、ほとんど無音です。マイクに近づいて録音し直すか、より明瞭な音声を読み込んでください。",
         "ru": "Эталонная запись слишком тихая или почти пустая. Запишите ближе к микрофону либо импортируйте более чистый голос.",
         "ko": "참조 오디오가 너무 작거나 대부분 무음입니다. 마이크에 더 가까이 대고 다시 녹음하거나 더 선명한 음성을 가져오세요.",
     },
-    "xtts_reference_quality_dc_offset": {
+    "voice_reference_quality_dc_offset": {
         "zh-CN": "参考音频的直流偏移过大。请使用更干净的录音，或先进行归一化。",
         "en": "The reference audio has excessive DC offset. Use a cleaner recording or normalize it first.",
         "ja": "参照音声の DC オフセットが大きすぎます。よりきれいな録音を使うか、先に正規化してください。",
         "ru": "В эталонной записи слишком большое смещение постоянной составляющей. Используйте более чистую запись или сначала нормализуйте её.",
         "ko": "참조 오디오의 DC 오프셋이 너무 큽니다. 더 깨끗한 녹음을 사용하거나 먼저 정규화하세요.",
     },
-    "xtts_reference_quality_clipped": {
+    "voice_clone_title": {
+        "zh-CN": "声音克隆",
+        "en": "Voice Cloning",
+        "ja": "音声クローン",
+        "ru": "Клонирование голоса",
+        "ko": "음성 클로닝",
+    },
+    "voice_clone_privacy_notice": {
+        "zh-CN": "声音克隆需要把你的参考录音上传到你自己配置的阿里云百炼账号。录音会保存在该服务上，未使用满一年会被自动删除。不要上传他人未授权的声音。",
+        "en": "Voice cloning uploads your reference recording to the Alibaba Cloud Model Studio account you configured. The recording is stored by that service and is deleted automatically after a year without use. Do not upload anyone else's voice without their permission.",
+        "ja": "音声クローンは、設定した Alibaba Cloud Model Studio アカウントに参照録音をアップロードします。録音はそのサービス上に保存され、1 年間使用されないと自動的に削除されます。他人の声を許可なくアップロードしないでください。",
+        "ru": "Клонирование голоса загружает эталонную запись в настроенный вами аккаунт Alibaba Cloud Model Studio. Запись хранится в этом сервисе и удаляется автоматически после года без использования. Не загружайте чужой голос без разрешения.",
+        "ko": "음성 클로닝은 설정한 Alibaba Cloud Model Studio 계정으로 참조 녹음을 업로드합니다. 녹음은 해당 서비스에 저장되며 1년간 사용되지 않으면 자동으로 삭제됩니다. 타인의 목소리를 허락 없이 업로드하지 마세요.",
+    },
+    "voice_clone_consent": {
+        "zh-CN": "我已了解并同意上传录音用于声音克隆",
+        "en": "I understand and agree to upload recordings for voice cloning",
+        "ja": "音声クローンのために録音をアップロードすることに同意します",
+        "ru": "Я понимаю и согласен загружать записи для клонирования голоса",
+        "ko": "음성 클로닝을 위해 녹음을 업로드하는 데 동의합니다",
+    },
+    "voice_clone_consent_title": {
+        "zh-CN": "需要确认上传",
+        "en": "Upload confirmation required",
+        "ja": "アップロードの確認が必要です",
+        "ru": "Требуется подтверждение загрузки",
+        "ko": "업로드 확인이 필요합니다",
+    },
+    "voice_clone_consent_required": {
+        "zh-CN": "请先勾选同意上传录音，然后再进行声音克隆。",
+        "en": "Agree to the recording upload first, then clone a voice.",
+        "ja": "先に録音のアップロードに同意してから音声クローンを実行してください。",
+        "ru": "Сначала согласитесь на загрузку записи, затем клонируйте голос.",
+        "ko": "먼저 녹음 업로드에 동의한 뒤 음성을 복제하세요.",
+    },
+    "voice_clone_api_key_required": {
+        "zh-CN": "声音克隆需要阿里云百炼 API Key。请在上方的 API 设置中填写后重试。",
+        "en": "Voice cloning needs an Alibaba Cloud Model Studio API key. Enter one in the API settings above and try again.",
+        "ja": "音声クローンには Alibaba Cloud Model Studio の API キーが必要です。上の API 設定に入力してから再試行してください。",
+        "ru": "Для клонирования голоса нужен ключ API Alibaba Cloud Model Studio. Введите его в настройках API выше и повторите попытку.",
+        "ko": "음성 클로닝에는 Alibaba Cloud Model Studio API 키가 필요합니다. 위의 API 설정에 입력한 뒤 다시 시도하세요.",
+    },
+    "voice_clone_no_voices": {
+        "zh-CN": "还没有克隆音色。请先录制或导入一段 10–20 秒的清晰语音。",
+        "en": "No cloned voice yet. Record or import 10-20 seconds of clear speech first.",
+        "ja": "クローン音声がまだありません。まず 10～20 秒の明瞭な音声を録音または読み込んでください。",
+        "ru": "Клонированных голосов пока нет. Сначала запишите или импортируйте 10-20 секунд чистой речи.",
+        "ko": "복제된 음성이 아직 없습니다. 먼저 10~20초 분량의 선명한 음성을 녹음하거나 가져오세요.",
+    },
+    "voice_clone_ready": {
+        "zh-CN": "声音克隆已就绪。",
+        "en": "Voice cloning is ready.",
+        "ja": "音声クローンの準備ができました。",
+        "ru": "Клонирование голоса готово.",
+        "ko": "음성 클로닝이 준비되었습니다.",
+    },
+    "voice_clone_created": {
+        "zh-CN": "已创建克隆音色：{voice}",
+        "en": "Cloned voice created: {voice}",
+        "ja": "クローン音声を作成しました：{voice}",
+        "ru": "Клонированный голос создан: {voice}",
+        "ko": "복제된 음성을 만들었습니다: {voice}",
+    },
+    "voice_clone_refresh": {
+        "zh-CN": "同步云端音色",
+        "en": "Sync Cloud Voices",
+        "ja": "クラウド音声を同期",
+        "ru": "Синхронизировать голоса",
+        "ko": "클라우드 음성 동기화",
+    },
+    "voice_clone_refreshed": {
+        "zh-CN": "已同步 {count} 个克隆音色。",
+        "en": "Synced {count} cloned voices.",
+        "ja": "{count} 件のクローン音声を同期しました。",
+        "ru": "Синхронизировано клонированных голосов: {count}.",
+        "ko": "복제된 음성 {count}개를 동기화했습니다.",
+    },
+    "voice_clone_delete": {
+        "zh-CN": "删除克隆音色",
+        "en": "Delete Cloned Voice",
+        "ja": "クローン音声を削除",
+        "ru": "Удалить клонированный голос",
+        "ko": "복제된 음성 삭제",
+    },
+    "voice_clone_delete_confirm": {
+        "zh-CN": "确定要删除克隆音色「{voice}」吗？该操作会同时从云端账号中移除。",
+        "en": "Delete the cloned voice \"{voice}\"? This also removes it from your cloud account.",
+        "ja": "クローン音声「{voice}」を削除しますか？クラウドアカウントからも削除されます。",
+        "ru": "Удалить клонированный голос «{voice}»? Он также будет удалён из вашего облачного аккаунта.",
+        "ko": "복제된 음성 \"{voice}\"을(를) 삭제할까요? 클라우드 계정에서도 제거됩니다.",
+    },
+    "voice_clone_none_selected": {
+        "zh-CN": "请先在音色列表中选择一个克隆音色。",
+        "en": "Select a cloned voice from the voice list first.",
+        "ja": "先に音声リストからクローン音声を選択してください。",
+        "ru": "Сначала выберите клонированный голос в списке.",
+        "ko": "먼저 음성 목록에서 복제된 음성을 선택하세요.",
+    },
+    "voice_clone_recording_too_large": {
+        "zh-CN": "录制的音频超过安全限制，无法用于声音克隆。",
+        "en": "The recorded audio exceeds the safety limit and cannot be used for cloning.",
+        "ja": "録音データが安全上限を超えているため、クローンに使用できません。",
+        "ru": "Записанное аудио превышает безопасный предел и не может использоваться для клонирования.",
+        "ko": "녹음 오디오가 안전 제한을 초과하여 복제에 사용할 수 없습니다.",
+    },
+    "voice_clone_auth_failed": {
+        "zh-CN": "声音克隆服务拒绝了 API Key。请确认密钥有效，并且与所选服务区域一致。",
+        "en": "The voice cloning service rejected the API key. Check that it is valid and matches the selected service region.",
+        "ja": "音声クローンサービスが API キーを拒否しました。キーが有効で、選択したサービス地域と一致しているか確認してください。",
+        "ru": "Сервис клонирования голоса отклонил ключ API. Убедитесь, что он действителен и соответствует выбранному региону.",
+        "ko": "음성 클로닝 서비스가 API 키를 거부했습니다. 키가 유효하고 선택한 서비스 지역과 일치하는지 확인하세요.",
+    },
+    "voice_clone_rate_limited": {
+        "zh-CN": "声音克隆请求过于频繁，请稍后重试。",
+        "en": "Too many voice cloning requests. Try again in a moment.",
+        "ja": "音声クローンのリクエストが多すぎます。しばらくしてから再試行してください。",
+        "ru": "Слишком много запросов на клонирование голоса. Повторите попытку позже.",
+        "ko": "음성 클로닝 요청이 너무 많습니다. 잠시 후 다시 시도하세요.",
+    },
+    "voice_clone_network_failed": {
+        "zh-CN": "无法连接声音克隆服务。请检查网络后重试。",
+        "en": "Could not reach the voice cloning service. Check your network and try again.",
+        "ja": "音声クローンサービスに接続できませんでした。ネットワークを確認して再試行してください。",
+        "ru": "Не удалось подключиться к сервису клонирования голоса. Проверьте сеть и повторите попытку.",
+        "ko": "음성 클로닝 서비스에 연결할 수 없습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+    },
+    "voice_clone_request_rejected": {
+        "zh-CN": "声音克隆服务拒绝了这次请求。常见原因：所选模型在当前服务区域不可用，或参考音频不符合要求（单声道、24 kHz 以上、10–20 秒）。",
+        "en": "The voice cloning service rejected this request. Common causes: the selected model is not available in the current service region, or the reference audio does not meet the requirements (mono, 24 kHz or higher, 10-20 seconds).",
+        "ja": "音声クローンサービスがこのリクエストを拒否しました。よくある原因: 選択したモデルが現在のサービス地域で利用できない、または参照音声が要件（モノラル・24 kHz 以上・10～20 秒）を満たしていない。",
+        "ru": "Сервис клонирования голоса отклонил запрос. Частые причины: выбранная модель недоступна в текущем регионе или эталонное аудио не отвечает требованиям (моно, от 24 кГц, 10-20 секунд).",
+        "ko": "음성 클로닝 서비스가 이 요청을 거부했습니다. 흔한 원인: 선택한 모델을 현재 서비스 지역에서 사용할 수 없거나, 참조 오디오가 요구 사항(모노, 24 kHz 이상, 10~20초)을 충족하지 않습니다.",
+    },
+    "listen_asr_edge_stt_warning": {
+        "zh-CN": "⚠ Edge 语音识别会把听到的一切都按所选语言识别。反向翻译面对的是其他玩家，一旦对方说的不是这个语言，结果会变成音译乱码。若周围语言不固定，请改用 Qwen3-ASR 或 SenseVoice。",
+        "en": "\u26a0 Edge Speech forces everything it hears into the selected language. Reverse translation listens to other players, so anyone speaking a different language comes back as transliterated nonsense. Use Qwen3-ASR or SenseVoice when the languages around you vary.",
+        "ja": "\u26a0 Edge 音声認識は聞こえたものをすべて選択した言語として認識します。逆翻訳は他のプレイヤーの声を扱うため、別の言語で話されると音訳された無意味な文字列になります。周囲の言語が一定でない場合は Qwen3-ASR または SenseVoice をお使いください。",
+        "ru": "\u26a0 Edge Speech распознаёт всё услышанное только на выбранном языке. Обратный перевод слышит других игроков, поэтому речь на другом языке вернётся бессмысленной транслитерацией. Если языки вокруг разные, используйте Qwen3-ASR или SenseVoice.",
+        "ko": "\u26a0 Edge 음성 인식은 들리는 모든 소리를 선택한 언어로 인식합니다. 역번역은 다른 플레이어의 말을 다루므로 다른 언어로 말하면 음차된 의미 없는 문자열이 됩니다. 주변 언어가 일정하지 않다면 Qwen3-ASR 또는 SenseVoice를 사용하세요.",
+    },
+    "voice_clone_region_fallback": {
+        "zh-CN": "你的 Qwen TTS 使用的服务区域不提供声音克隆接口，克隆已改用「{region}」区域。请在上方为该区域单独填写 API Key——不同区域的密钥不能通用。",
+        "en": "Your Qwen TTS service region does not offer voice cloning, so cloning uses the \u201c{region}\u201d region instead. Enter an API key for that region above; keys are not shared across regions.",
+        "ja": "お使いの Qwen TTS のサービス地域では音声クローンを利用できないため、クローンは「{region}」地域を使用します。上でその地域用の API キーを入力してください。キーは地域間で共通ではありません。",
+        "ru": "Регион вашего Qwen TTS не предоставляет клонирование голоса, поэтому используется регион \u00ab{region}\u00bb. Введите выше ключ API для этого региона: ключи не работают между регионами.",
+        "ko": "사용 중인 Qwen TTS 서비스 지역에서는 음성 클로닝을 제공하지 않아 \u2018{region}\u2019 지역을 사용합니다. 위에서 해당 지역용 API 키를 입력하세요. 키는 지역 간에 공용이 아닙니다.",
+    },
+    "voice_clone_region_unsupported": {
+        "zh-CN": "当前服务区域没有提供声音克隆接口。请在上方的 API 设置中改用新加坡或北京区域后重试。",
+        "en": "The current service region does not provide the voice cloning endpoint. Switch to the Singapore or Beijing region in the API settings above and try again.",
+        "ja": "現在のサービス地域では音声クローンのエンドポイントが提供されていません。上の API 設定でシンガポールまたは北京地域に変更して再試行してください。",
+        "ru": "В текущем регионе нет конечной точки клонирования голоса. Переключитесь на регион Сингапур или Пекин в настройках API выше и повторите попытку.",
+        "ko": "현재 서비스 지역에서는 음성 클로닝 엔드포인트를 제공하지 않습니다. 위의 API 설정에서 싱가포르 또는 베이징 지역으로 변경한 뒤 다시 시도하세요.",
+    },
+    "voice_clone_provider_unavailable": {
+        "zh-CN": "声音克隆服务暂时不可用。请稍后重试。",
+        "en": "The voice cloning service is temporarily unavailable. Try again later.",
+        "ja": "音声クローンサービスが一時的に利用できません。しばらくしてから再試行してください。",
+        "ru": "Сервис клонирования голоса временно недоступен. Повторите попытку позже.",
+        "ko": "음성 클로닝 서비스를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요.",
+    },
+    "voice_clone_bad_response": {
+        "zh-CN": "声音克隆服务返回了无法识别的结果。请确认所选模型支持声音复刻后重试。",
+        "en": "The voice cloning service returned an unrecognized result. Check that the selected model supports voice cloning and try again.",
+        "ja": "音声クローンサービスから認識できない応答が返されました。選択したモデルが音声クローンに対応しているか確認して再試行してください。",
+        "ru": "Сервис клонирования голоса вернул нераспознанный ответ. Убедитесь, что выбранная модель поддерживает клонирование, и повторите попытку.",
+        "ko": "음성 클로닝 서비스가 인식할 수 없는 응답을 반환했습니다. 선택한 모델이 음성 복제를 지원하는지 확인한 뒤 다시 시도하세요.",
+    },
+    "voice_clone_failed_generic": {
+        "zh-CN": "声音克隆失败。请稍后重试。",
+        "en": "Voice cloning failed. Try again later.",
+        "ja": "音声クローンに失敗しました。しばらくしてから再試行してください。",
+        "ru": "Не удалось клонировать голос. Повторите попытку позже.",
+        "ko": "음성 클로닝에 실패했습니다. 나중에 다시 시도하세요.",
+    },
+    "voice_reference_quality_clipped": {
         "zh-CN": "参考音频有削波或失真。请降低输入增益后重新录制。",
         "en": "The reference audio is clipped or distorted. Lower the input gain and record again.",
         "ja": "参照音声がクリップまたは歪んでいます。入力ゲインを下げて録音し直してください。",
@@ -2714,9 +2634,9 @@ FIELD_HINTS: dict[str, dict[str, str]] = {
         "ja": "VRChat 音声が再生されるデバイスを選びます。見つからない場合は OS と VRChat の出力設定を確認してください。",
     },
     "tts_engine": {
-        "zh-CN": "选择 Mio 用哪个声音来朗读。MiMo/Qwen 需要 API Key 和服务区域；VOICEVOX、AivisSpeech 或自定义音色需要先启动本地程序或准备音色文件。",
-        "en": "Select the interpretation voice engine. MiMo/Qwen need an API key and service region; VOICEVOX/AivisSpeech/custom voices need local services or models.",
-        "ja": "同時通訳の読み上げエンジンです。MiMo/Qwen は API Key とサービス地域、VOICEVOX/AivisSpeech/カスタム音声はローカルサービスやモデルが必要です。",
+        "zh-CN": "选择 Mio 用哪个声音来朗读。MiMo/Qwen 需要 API Key 和服务区域；VOICEVOX 或自定义音色需要先启动本地程序或准备音色文件。",
+        "en": "Select the interpretation voice engine. MiMo/Qwen need an API key and service region; VOICEVOX and custom voices need a local service or a downloaded model.",
+        "ja": "同時通訳の読み上げエンジンです。MiMo/Qwen は API Key とサービス地域、VOICEVOX とカスタム音声はローカルサービスやモデルが必要です。",
     },
     "tts_device": {
         "zh-CN": "默认用 CPU，兼容大多数电脑。自定义音色如果想用 NVIDIA 显卡加速，建议 RTX 4060 或更高、8GB 显存以上。6GB 显存也能试，但同时开 VRChat 和麦克风听写时可能不稳。",
@@ -2841,8 +2761,8 @@ _SETTINGS_HINT_RU_KO_COPY = {
         "ko": "VRChat 오디오가 재생되는 장치를 선택합니다. 장치가 없으면 시스템 재생 및 VRChat 출력 설정을 확인하세요.",
     },
     "tts_engine": {
-        "ru": "Выберите движок голоса перевода. MiMo/Qwen требуют API-ключ и регион; VOICEVOX, AivisSpeech и пользовательские голоса — локальное приложение или модель.",
-        "ko": "통역 음성 엔진을 선택합니다. MiMo/Qwen에는 API 키와 서비스 지역이 필요하고, VOICEVOX/AivisSpeech/사용자 음색에는 로컬 서비스나 모델이 필요합니다.",
+        "ru": "Выберите движок голоса перевода. MiMo/Qwen требуют API-ключ и регион; VOICEVOX и пользовательские голоса — локальное приложение или модель.",
+        "ko": "통역 음성 엔진을 선택합니다. MiMo/Qwen에는 API 키와 서비스 지역이 필요하고, VOICEVOX와 사용자 음색에는 로컬 서비스나 모델이 필요합니다.",
     },
     "tts_device": {
         "ru": "Для слабых ПК по умолчанию используется CPU. Для Style-Bert-VITS2 на GPU рекомендуется NVIDIA RTX 4060 или лучше и не менее 8 ГБ VRAM; с 6 ГБ возможна нестабильность вместе с VRChat и локальным ASR.",
@@ -3114,8 +3034,6 @@ class SettingsWindow(QDialog):
         self._qwen_region_var = _StrVar()
         self._qwen_base_url_var = _StrVar()
         self._qwen_model_var = _StrVar()
-        self._gemini_api_key_var = _StrVar()
-        self._gemini_model_var = _StrVar()
         self._input_device_mode_var = _StrVar()
         self._input_device_var = _StrVar()
         self._vad_var = _StrVar()
@@ -3155,13 +3073,11 @@ class SettingsWindow(QDialog):
         self._tts_monitor_var = _BoolVar(False)
         self._tts_device_var = _StrVar()
         self._tts_bert_language_var = _StrVar()
+        self._voice_clone_consent_var = _BoolVar(False)
         self._tts_rate_var = _FloatVar(1.0)
         self._tts_volume_var = _FloatVar(0.8)
         self._vrc_listen_enabled_var = _BoolVar(False)
 
-        # XTTS variables
-        self._xtts_language_var = _StrVar("Auto-detect")
-        self._xtts_device_var = _StrVar()
         self._vrc_listen_overlay_var = _BoolVar(False)
         self._vrc_listen_send_var = _BoolVar(True)
         self._vrc_listen_src_var = _StrVar()
@@ -3214,7 +3130,6 @@ class SettingsWindow(QDialog):
         self._qwen_model_codes: dict[str, str] = {}
         self._tts_engine_codes: dict[str, str] = {}
         self._tts_device_codes: dict[str, str] = {}
-        self._xtts_device_codes: dict[str, str] = {}
         self._tts_bert_language_codes: dict[str, str] = {}
         self._tts_api_region_codes: dict[str, str] = {}
         self._roleplay_preset_codes: dict[str, str] = {}
@@ -3250,7 +3165,6 @@ class SettingsWindow(QDialog):
         self._tts_api_read_timeout_entry: QLineEdit | None = None
         self._tts_api_wall_timeout_entry: QLineEdit | None = None
         self._tts_device_combo: QComboBox | None = None
-        self._xtts_device_combo: QComboBox | None = None
         self._asr_device_combo: QComboBox | None = None
         self._input_device_combo: QComboBox | None = None
         self._loopback_device_combo: QComboBox | None = None
@@ -3487,9 +3401,9 @@ class SettingsWindow(QDialog):
         self._partial_min_speech_var.set(self._format_numeric_input(audio_cfg.get("partial_min_speech_s", 0.45)))
         self._init_denoise_var(audio_cfg)
 
-        tts_engine = str(tts_cfg.get("engine", "edge")).strip() or "edge"
+        tts_engine = str(tts_cfg.get("engine", DEFAULT_TTS_ENGINE)).strip() or DEFAULT_TTS_ENGINE
         if tts_engine not in TTS_ENGINE_IDS:
-            tts_engine = "edge"
+            tts_engine = DEFAULT_TTS_ENGINE
         self._tts_engine_codes = {_tts_engine_label(engine, self._ui_lang): engine for engine in TTS_ENGINE_IDS}
         self._tts_engine_var.set(_tts_engine_label(tts_engine, self._ui_lang))
         engine_cfg = tts_cfg.get(tts_engine, {}) if isinstance(tts_cfg.get(tts_engine, {}), dict) else {}
@@ -3504,21 +3418,25 @@ class SettingsWindow(QDialog):
         self._tts_volume_var.set(tts_vol)
         self._init_tts_device_vars(tts_cfg)
         self._init_tts_api_vars(tts_cfg, tts_engine)
-
-        # Load XTTS config
-        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
-        self._init_xtts_device_vars(tts_cfg)
-        xtts_lang_code = str(xtts_cfg.get("language", "auto") or "auto").strip().lower()
-        options = xtts_language_options(self._ui_lang)
-        self._xtts_language_var.set(self._label_for_code(options, xtts_lang_code))
+        self._voice_clone_consent_var.set(
+            voice_clone_service.has_upload_consent(self._config)
+        )
 
         self._vrc_listen_enabled_var.set(bool(vrc_cfg.get("enabled", False)))
         self._vrc_listen_overlay_var.set(bool(vrc_cfg.get("show_overlay", False)))
         self._vrc_listen_send_var.set(bool(vrc_cfg.get("send_to_chatbox", True)))
         self._listen_self_suppress_var.set(bool(vrc_cfg.get("self_suppress", False)))
         self._listen_self_suppress_seconds_var.set(self._format_numeric_input(vrc_cfg.get("self_suppress_seconds", 0.65)))
-        self._listen_segment_duration_var.set(self._format_numeric_input(vrc_cfg.get("segment_duration_s", 2.0)))
-        self._listen_tail_silence_var.set(self._format_numeric_input(vrc_cfg.get("tail_silence_s", 0.40)))
+        self._listen_segment_duration_var.set(
+            self._format_numeric_input(
+                vrc_cfg.get("segment_duration_s", LISTEN_SEGMENT_DURATION_DEFAULT_S)
+            )
+        )
+        self._listen_tail_silence_var.set(
+            self._format_numeric_input(
+                vrc_cfg.get("tail_silence_s", LISTEN_TAIL_SILENCE_DEFAULT_S)
+            )
+        )
         self._listen_vad_min_rms_var.set(self._format_numeric_input(vrc_cfg.get("vad_min_rms", 0.02)))
         listen_src = str(vrc_cfg.get("source_language", "auto"))
         listen_tgt = str(vrc_cfg.get("target_language", "zh"))
@@ -3786,7 +3704,6 @@ class SettingsWindow(QDialog):
             "denoise": self._denoise_codes.get(self._denoise_var.value(), 0.0),
             "tts_engine": self._selected_tts_engine(),
             "tts_voice": self._selected_tts_voice_id(),
-            "xtts_language": self._selected_xtts_language_code(),
             "tts_device": self._tts_device_codes.get(self._tts_device_var.value(), "cpu"),
             "tts_bert_language": self._tts_bert_language_codes.get(self._tts_bert_language_var.value(), "jp"),
             "roleplay_preset": self._roleplay_preset_codes.get(self._roleplay_preset_var.value(), "custom"),
@@ -3872,11 +3789,6 @@ class SettingsWindow(QDialog):
         self._tts_engine_codes = {_tts_engine_label(engine, self._ui_lang): engine for engine in TTS_ENGINE_IDS}
         self._tts_engine_var.set(_tts_engine_label(tts_engine, self._ui_lang))
         self._tts_voice_var.set(str(codes.get("tts_voice", "")))
-        xtts_options = xtts_language_options(self._ui_lang)
-        self._xtts_language_var.set(
-            self._label_for_code(xtts_options, str(codes.get("xtts_language", "auto")))
-        )
-
         device_options = self._tts_device_options()
         self._tts_device_codes = {label: code for label, code in device_options}
         self._tts_device_var.set(self._label_for_code(device_options, str(codes.get("tts_device", "cpu"))))
@@ -4179,7 +4091,6 @@ class SettingsWindow(QDialog):
 
     def _init_asr_provider_vars(self, asr_cfg: dict) -> None:
         qwen_cfg = asr_cfg.get("qwen3_asr", {}) if isinstance(asr_cfg.get("qwen3_asr", {}), dict) else {}
-        gemini_cfg = asr_cfg.get("gemini_live", {}) if isinstance(asr_cfg.get("gemini_live", {}), dict) else {}
         qwen_region = normalize_qwen3_asr_region(qwen_cfg.get("region", QWEN3_ASR_DEFAULT_REGION))
         qwen_model = str(qwen_cfg.get("model", QWEN3_ASR_DEFAULT_MODEL) or QWEN3_ASR_DEFAULT_MODEL)
         if qwen_model not in QWEN3_ASR_MODEL_CHOICES:
@@ -4204,8 +4115,6 @@ class SettingsWindow(QDialog):
         ]
         self._qwen_model_codes = {label: code for label, code in model_options}
         self._qwen_model_var.set(next((label for label, code in model_options if code == qwen_model), model_options[0][0]))
-        self._gemini_api_key_var.set(str(gemini_cfg.get("api_key", "") or ""))
-        self._gemini_model_var.set(str(gemini_cfg.get("model", "gemini-3.1-flash-live-preview") or "gemini-3.1-flash-live-preview"))
 
     def _init_asr_device_vars(self, asr_cfg: dict) -> None:
         device_options = self._device_options()
@@ -4240,17 +4149,6 @@ class SettingsWindow(QDialog):
         self._tts_bert_language_codes = {label: code for label, code in bert_options}
         current_bert = normalize_style_bert_bert_language(style_cfg.get("bert_language", "jp"))
         self._tts_bert_language_var.set(next((label for label, code in bert_options if code == current_bert), bert_options[0][0]))
-
-    def _init_xtts_device_vars(self, tts_cfg: dict) -> None:
-        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
-        device_options = self._xtts_device_options()
-        self._xtts_device_codes = {label: code for label, code in device_options}
-        current_device = str(
-            xtts_cfg.get("device") or self._config.get("xtts_device") or "cpu"
-        ).strip().lower()
-        self._xtts_device_var.set(
-            next((label for label, code in device_options if code == current_device), device_options[0][0])
-        )
 
     def _capture_tts_api_draft(self) -> None:
         engine = self._active_tts_api_engine
@@ -4486,12 +4384,6 @@ class SettingsWindow(QDialog):
     def _tts_device_options(self) -> list[tuple[str, str]]:
         return self._device_options()
 
-    def _xtts_device_options(self) -> list[tuple[str, str]]:
-        return [
-            (self._copy("xtts_device_cpu"), "cpu"),
-            (self._copy("xtts_device_cuda"), "cuda"),
-        ]
-
     def _device_options(self) -> list[tuple[str, str]]:
         return [
             (tr(self._ui_lang, "tts_device_cpu"), "cpu"),
@@ -4501,43 +4393,64 @@ class SettingsWindow(QDialog):
     def _asr_engine_options(self) -> tuple[tuple[str, str], ...]:
         labels_by_language = {
             "zh-CN": {
-                "webspeech": "Web Speech（在线 / 浏览器）",
+                "edge-stt": "Edge 语音识别（在线 / 免密钥）",
                 "qwen3-asr": "Qwen3-ASR（在线）",
-                "gemini-live": "Gemini Live（在线）",
                 "whisper-large-v3-turbo": "Whisper Small（本地 / 英语快速）",
                 "sensevoice-small": "SenseVoice Small（中文 / 粤语）",
             },
             "en": {
-                "webspeech": "Web Speech (online / browser)",
+                "edge-stt": "Edge Speech (online / no API key)",
                 "qwen3-asr": "Qwen3-ASR (online)",
-                "gemini-live": "Gemini Live (online)",
                 "whisper-large-v3-turbo": "Whisper Small (local / fast English)",
                 "sensevoice-small": "SenseVoice Small (Chinese / Cantonese)",
             },
             "ja": {
-                "webspeech": "Web Speech（オンライン / ブラウザ）",
+                "edge-stt": "Edge 音声認識（オンライン / キー不要）",
                 "qwen3-asr": "Qwen3-ASR（オンライン）",
-                "gemini-live": "Gemini Live（オンライン）",
                 "whisper-large-v3-turbo": "Whisper Small（ローカル / 英語高速）",
                 "sensevoice-small": "SenseVoice Small（中国語 / 広東語）",
             },
             "ru": {
-                "webspeech": "Web Speech (онлайн / браузер)",
+                "edge-stt": "Edge Speech (онлайн / без ключа)",
                 "qwen3-asr": "Qwen3-ASR (онлайн)",
-                "gemini-live": "Gemini Live (онлайн)",
                 "whisper-large-v3-turbo": "Whisper Small (локально / быстрый английский)",
                 "sensevoice-small": "SenseVoice Small (китайский / кантонский)",
             },
             "ko": {
-                "webspeech": "Web Speech(온라인 / 브라우저)",
+                "edge-stt": "Edge 음성 인식(온라인 / 키 불필요)",
                 "qwen3-asr": "Qwen3-ASR(온라인)",
-                "gemini-live": "Gemini Live(온라인)",
                 "whisper-large-v3-turbo": "Whisper Small(로컬 / 영어 빠름)",
                 "sensevoice-small": "SenseVoice Small(중국어 / 광둥어)",
             },
         }
         labels = labels_by_language.get(self._ui_lang) or labels_by_language["en"]
         return tuple((labels.get(engine, engine), engine) for engine in USER_SELECTABLE_ASR_ENGINES)
+
+    def _selected_listen_asr_engine(self) -> str:
+        return self._listen_asr_engine_codes.get(
+            self._listen_asr_engine_var.value(), ASR_ENGINE_FOLLOW_MAIN
+        )
+
+    def _on_listen_asr_engine_changed(self, _label: str | None = None) -> None:
+        self._refresh_listen_asr_warning()
+
+    def _refresh_listen_asr_warning(self) -> None:
+        """Warn that Edge Speech forces every voice into one language.
+
+        Reverse translation listens to whoever is nearby, and this engine takes
+        its language as a hard constraint: speech in any other language comes
+        back as transliterated nonsense rather than being recognized.
+        """
+
+        label = getattr(self, "_listen_asr_warning_label", None)
+        if label is None:
+            return
+        engine = self._selected_listen_asr_engine()
+        if engine == ASR_ENGINE_FOLLOW_MAIN:
+            engine = self._selected_asr_engine()
+        show = engine == "edge-stt"
+        label.setText(self._copy("listen_asr_edge_stt_warning") if show else "")
+        label.setVisible(show)
 
     def _listen_asr_engine_options(self) -> tuple[tuple[str, str], ...]:
         follow_labels = {
@@ -5090,17 +5003,6 @@ class SettingsWindow(QDialog):
         self._qwen_base_url_entry = base
         self._row_layout(layout, self._copy("base_url"), base)
 
-        # Gemini ASR Configuration
-        layout.addSpacing(10)
-        gemini_asr_hint = QLabel(self._copy("gemini_asr_label"))
-        gemini_asr_hint.setObjectName("fieldLabel")
-        layout.addWidget(gemini_asr_hint)
-
-        api_gemini = self._line_edit("gemini_api_key", self._gemini_api_key_var)
-        api_gemini.setEchoMode(QLineEdit.EchoMode.Password)
-        self._gemini_api_key_entry = api_gemini
-        self._row_layout(layout, self._copy("asr_api_key"), api_gemini)
-
         # TTS API Configuration
         self._section_title(layout, self._copy("tts_api_config_section"))
 
@@ -5269,8 +5171,22 @@ class SettingsWindow(QDialog):
             self._loopback_device_combo,
         )
         self._field_hint(layout, "vrc_listen_device")
-        self._row_layout(layout, self._copy("asr_listen"), self._combo("listen_asr", self._listen_asr_engine_var, list(self._listen_asr_engine_codes.keys())))
+        self._row_layout(
+            layout,
+            self._copy("asr_listen"),
+            self._combo(
+                "listen_asr",
+                self._listen_asr_engine_var,
+                list(self._listen_asr_engine_codes.keys()),
+                self._on_listen_asr_engine_changed,
+            ),
+        )
         self._field_hint(layout, "asr_listen")
+        self._listen_asr_warning_label = QLabel("")
+        self._listen_asr_warning_label.setObjectName("warningLabel")
+        self._listen_asr_warning_label.setWordWrap(True)
+        layout.addWidget(self._listen_asr_warning_label)
+        self._refresh_listen_asr_warning()
 
         # Language Settings Section
         self._section_title(layout, self._copy("language_settings_section"))
@@ -5342,87 +5258,65 @@ class SettingsWindow(QDialog):
             QTimer.singleShot(0, self._load_tts_voices_async)
 
         # Voice Cloning options
-        self._xtts_options_frame = QFrame()
-        self._xtts_options_frame.setObjectName("xttsOptionsFrame")
-        xtts_layout = QVBoxLayout(self._xtts_options_frame)
-        xtts_layout.setContentsMargins(0, 0, 0, 0)
-        xtts_layout.setSpacing(8)
+        self._voice_clone_frame = QFrame()
+        self._voice_clone_frame.setObjectName("voiceCloneOptionsFrame")
+        clone_layout = QVBoxLayout(self._voice_clone_frame)
+        clone_layout.setContentsMargins(0, 0, 0, 0)
+        clone_layout.setSpacing(8)
 
-        xtts_hint_text = self._copy("xtts_voice_cloning_hint")
-        xtts_hint = QLabel(xtts_hint_text)
-        xtts_hint.setObjectName("hintLabel")
-        xtts_hint.setWordWrap(True)
-        xtts_layout.addWidget(xtts_hint)
+        clone_hint = QLabel(self._copy("voice_clone_hint"))
+        clone_hint.setObjectName("hintLabel")
+        clone_hint.setWordWrap(True)
+        clone_layout.addWidget(clone_hint)
 
-        # Speaking language selection
-        xtts_lang_layout = QHBoxLayout()
-        xtts_lang_layout.setSpacing(10)
-        xtts_lang_label = QLabel(tr(self._ui_lang, "xtts_language"))
-        xtts_lang_layout.addWidget(xtts_lang_label)
+        # The reference recording leaves the machine, so the privacy notice is
+        # a gate rather than a footnote: enrollment refuses to run until it is
+        # acknowledged here.
+        privacy_hint = QLabel(self._copy("voice_clone_privacy_notice"))
+        privacy_hint.setObjectName("hintLabel")
+        privacy_hint.setWordWrap(True)
+        clone_layout.addWidget(privacy_hint)
 
-        self._xtts_language_combo = self._combo(
-            "xtts_language",
-            self._xtts_language_var,
-            [label for label, _code in xtts_language_options(self._ui_lang)],
-            self._on_xtts_language_changed,
+        self._build_switch_row(
+            clone_layout,
+            self._copy("voice_clone_consent"),
+            self._voice_clone_consent_var,
         )
-        xtts_lang_layout.addWidget(self._xtts_language_combo, 1)
-        xtts_layout.addLayout(xtts_lang_layout)
-
-        xtts_lang_hint = QLabel(tr(self._ui_lang, "xtts_language_hint"))
-        xtts_lang_hint.setObjectName("hintLabel")
-        xtts_lang_hint.setWordWrap(True)
-        xtts_layout.addWidget(xtts_lang_hint)
-
-        # Device selection (CPU/CUDA)
-        self._xtts_device_combo = self._combo(
-            "xtts_device",
-            self._xtts_device_var,
-            list(self._xtts_device_codes.keys()),
-            self._on_xtts_device_changed,
-        )
-        self._row_layout(
-            xtts_layout,
-            self._copy("xtts_device_label"),
-            self._xtts_device_combo,
-        )
-
-        # Device info hints
-        cpu_info = QLabel(self._copy("xtts_device_cpu_info"))
-        cpu_info.setObjectName("hintLabel")
-        cpu_info.setWordWrap(True)
-        xtts_layout.addWidget(cpu_info)
-
-        cuda_info = QLabel(self._copy("xtts_device_cuda_info"))
-        cuda_info.setObjectName("hintLabel")
-        cuda_info.setWordWrap(True)
-        xtts_layout.addWidget(cuda_info)
 
         voice_btn_row = QHBoxLayout()
         voice_btn_row.setSpacing(10)
 
         record_voice_btn = QPushButton(tr(self._ui_lang, "record_voice"))
-        record_voice_btn.clicked.connect(self._on_record_voice_for_xtts)
+        record_voice_btn.clicked.connect(self._on_record_voice_for_clone)
         voice_btn_row.addWidget(record_voice_btn)
 
         import_voice_btn = QPushButton(tr(self._ui_lang, "import_voice"))
-        import_voice_btn.clicked.connect(self._on_import_voice_for_xtts)
+        import_voice_btn.clicked.connect(self._on_import_voice_for_clone)
         voice_btn_row.addWidget(import_voice_btn)
 
         voice_btn_row.addStretch(1)
-        xtts_layout.addLayout(voice_btn_row)
+        clone_layout.addLayout(voice_btn_row)
 
-        model_btn_row = QHBoxLayout()
-        model_btn_row.setSpacing(10)
-        self._download_xtts_btn = QPushButton(tr(self._ui_lang, "download_xtts_models"))
-        self._download_xtts_btn.clicked.connect(self._on_download_xtts_models)
-        model_btn_row.addWidget(self._download_xtts_btn)
+        manage_btn_row = QHBoxLayout()
+        manage_btn_row.setSpacing(10)
+        self._refresh_clone_voices_btn = QPushButton(
+            tr(self._ui_lang, "voice_clone_refresh")
+        )
+        self._refresh_clone_voices_btn.clicked.connect(self._on_refresh_cloned_voices)
+        manage_btn_row.addWidget(self._refresh_clone_voices_btn)
 
-        model_btn_row.addStretch(1)
-        xtts_layout.addLayout(model_btn_row)
+        self._delete_clone_voice_btn = QPushButton(
+            tr(self._ui_lang, "voice_clone_delete")
+        )
+        self._delete_clone_voice_btn.clicked.connect(self._on_delete_cloned_voice)
+        manage_btn_row.addWidget(self._delete_clone_voice_btn)
 
-        layout.addWidget(self._xtts_options_frame)
-        self._refresh_xtts_options_visibility()
+        manage_btn_row.addStretch(1)
+        clone_layout.addLayout(manage_btn_row)
+
+        layout.addWidget(self._voice_clone_frame)
+        self._refresh_voice_clone_options_visibility()
+        self._refresh_listen_asr_warning()
 
         self._sbv2_options_frame = QFrame()
         self._sbv2_options_frame.setObjectName("sbv2OptionsFrame")
@@ -6166,9 +6060,6 @@ class SettingsWindow(QDialog):
                     get_qwen3_asr_base_url(qwen_region)
                     or self._qwen_base_url_var.value().strip().rstrip("/")
                 )
-            gemini_cfg = asr_cfg.setdefault("gemini_live", {})
-            if isinstance(gemini_cfg, dict):
-                gemini_cfg["api_key"] = self._gemini_api_key_var.value().strip()
             # Selection validation concerns the provider chosen on the main
             # ASR control. A distinct listen-ASR choice is checked on save.
             cfg.setdefault("vrc_listen", {})["asr_engine"] = ASR_ENGINE_FOLLOW_MAIN
@@ -6620,12 +6511,10 @@ class SettingsWindow(QDialog):
             )
 
     def _asr_hint_text(self, engine: str) -> str:
-        if engine == "webspeech":
-            return tr(self._ui_lang, "asr_hint_webspeech")
+        if engine == "edge-stt":
+            return tr(self._ui_lang, "asr_hint_edge_stt")
         if engine == "qwen3-asr":
             return tr(self._ui_lang, "asr_hint_qwen3")
-        if engine == "gemini-live":
-            return tr(self._ui_lang, "asr_hint_gemini")
         if engine == "whisper-large-v3-turbo":
             return tr(self._ui_lang, "asr_hint_whisper")
         return tr(self._ui_lang, "asr_hint_sensevoice")
@@ -6633,7 +6522,7 @@ class SettingsWindow(QDialog):
     def _asr_recommendation_text(self, engine: str) -> str:
         if engine == "sensevoice-small":
             level = self._copy("recommended_high")
-        elif engine in {"qwen3-asr", "gemini-live", "whisper-large-v3-turbo"}:
+        elif engine in {"qwen3-asr", "edge-stt", "whisper-large-v3-turbo"}:
             level = self._copy("recommended_medium")
         else:
             level = self._copy("recommended_low")
@@ -6714,22 +6603,7 @@ class SettingsWindow(QDialog):
             self._refresh_qwen_model_hint()
             return
 
-        if engine == "gemini-live":
-            # API key is now in API Configuration page
-            # Only show model selection here
-            hint = QLabel(self._copy("api_key_in_api_config_hint"))
-            hint.setObjectName("hintLabel")
-            hint.setWordWrap(True)
-            self._asr_provider_layout.addWidget(hint)
-
-            self._row_layout(self._asr_provider_layout, tr(self._ui_lang, "model"), self._line_edit("gemini_model", self._gemini_model_var))
-            gemini_hint = QLabel(self._copy("gemini_model_recommendation"))
-            gemini_hint.setObjectName("hintLabel")
-            gemini_hint.setWordWrap(True)
-            self._asr_provider_layout.addWidget(gemini_hint)
-            return
-
-        note = QLabel(tr(self._ui_lang, "asr_hint_webspeech"))
+        note = QLabel(tr(self._ui_lang, "asr_hint_edge_stt"))
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
         self._asr_provider_layout.addWidget(note)
@@ -6859,7 +6733,9 @@ class SettingsWindow(QDialog):
 
     def _selected_tts_engine(self) -> str:
         value = self._tts_engine_var.value()
-        return self._tts_engine_codes.get(value, value if value in TTS_ENGINE_IDS else "edge")
+        return self._tts_engine_codes.get(
+            value, value if value in TTS_ENGINE_IDS else DEFAULT_TTS_ENGINE
+        )
 
     def _set_tts_device_code(self, device: str) -> None:
         label = next((label for label, code in self._tts_device_codes.items() if code == device), "")
@@ -6880,19 +6756,6 @@ class SettingsWindow(QDialog):
             return
         self._asr_device_var.set(label)
         combo = getattr(self, "_asr_device_combo", None)
-        if combo is not None and combo.currentText() != label:
-            combo.blockSignals(True)
-            try:
-                combo.setCurrentText(label)
-            finally:
-                combo.blockSignals(False)
-
-    def _set_xtts_device_code(self, device: str) -> None:
-        label = next((label for label, code in self._xtts_device_codes.items() if code == device), "")
-        if not label:
-            return
-        self._xtts_device_var.set(label)
-        combo = getattr(self, "_xtts_device_combo", None)
         if combo is not None and combo.currentText() != label:
             combo.blockSignals(True)
             try:
@@ -6958,40 +6821,6 @@ class SettingsWindow(QDialog):
                 format_locale_percent(self._tts_volume_var.value() * 100, self._ui_lang)
             )
 
-    def _on_xtts_language_changed(self, text: str) -> None:
-        """Handle XTTS language selection change."""
-        label_to_code = dict(xtts_language_options(self._ui_lang))
-        lang_code = label_to_code.get(text, normalize_xtts_language_code(text))
-        self._xtts_language_var.set(text)
-        logger.info("XTTS language changed to: %s (%s)", text, lang_code)
-
-    def _on_xtts_device_changed(self, _label: str) -> None:
-        """Handle XTTS device selection change."""
-        device = self._xtts_device_codes.get(self._xtts_device_var.value(), "cpu")
-
-        if device == "cuda" and not torch_cuda_available():
-            self._show_tts_gpu_unavailable_dialog()
-
-        # Save device preference
-        tts_cfg = self._config.setdefault("tts", {})
-        if not isinstance(tts_cfg, dict):
-            tts_cfg = {}
-            self._config["tts"] = tts_cfg
-        xtts_cfg = tts_cfg.setdefault("xtts", {})
-        if not isinstance(xtts_cfg, dict):
-            xtts_cfg = {}
-            tts_cfg["xtts"] = xtts_cfg
-        xtts_cfg["device"] = device
-        self._config["xtts_device"] = device
-        logger.info(f"XTTS device changed to: {device}")
-
-        # Show notice
-        QMessageBox.information(
-            self,
-            self._copy("notice"),
-            self._copy("xtts_device_change_notice"),
-        )
-
     def _tts_output_device_status_text(self) -> str:
         virtual = find_best_virtual_output_device()
         if virtual:
@@ -7024,31 +6853,7 @@ class SettingsWindow(QDialog):
         engine = self._selected_tts_engine()
         if engine == "style_bert_vits2":
             return self._selected_tts_bert_language()
-        if engine == "xtts":
-            xtts_language = self._selected_xtts_language_code()
-            if xtts_language == "auto":
-                target = str(self._config.get("translation", {}).get("target_language", "") or "").strip().lower()
-                resolved = xtts_language_from_target_language(target)
-                if resolved != "auto":
-                    return resolved
-                if target in {"ja", "jp"}:
-                    return "ja"
-                if target in {"zh", "zh-cn", "cn", "chinese"}:
-                    return "zh"
-                if target in {"ko", "kr", "korean"}:
-                    return "ko"
-                if target in {"en", "en-us", "en-gb", "english"}:
-                    return "en"
-                ui_language = str(self._ui_lang or "").lower()
-                if ui_language.startswith(("ja", "jp")):
-                    return "ja"
-                if ui_language.startswith("zh"):
-                    return "zh-cn"
-                if ui_language.startswith("ko"):
-                    return "ko"
-                return "en"
-            return xtts_language
-        if engine in {"voicevox", "aivis_speech"}:
+        if engine == "voicevox":
             return "jp"
         if engine == "qwen_tts":
             target = str(self._config.get("translation", {}).get("target_language", "") or "").strip().lower()
@@ -7097,8 +6902,8 @@ class SettingsWindow(QDialog):
 
     def _selected_tts_test_text(self) -> str:
         language = self._selected_tts_test_language()
-        if self._selected_tts_engine() == "xtts":
-            return XTTS_TEST_TEXT_BY_LANGUAGE.get(language, XTTS_TEST_TEXT_BY_LANGUAGE["en"])
+        if self._selected_tts_engine() == "qwen_vc":
+            return VOICE_CLONE_TEST_TEXT_BY_LANGUAGE.get(language, VOICE_CLONE_TEST_TEXT_BY_LANGUAGE["en"])
         return TTS_TEST_TEXT_BY_LANGUAGE.get(language, self._copy("tts_test_text"))
 
     def _current_tts_test_timeout_ms(self, engine: str) -> int:
@@ -7133,26 +6938,6 @@ class SettingsWindow(QDialog):
     def _selected_tts_voice_id(self) -> str:
         display = self._tts_voice_var.value()
         return self._tts_voice_display_to_id.get(display, display) if hasattr(self, "_tts_voice_display_to_id") else display
-
-    def _selected_xtts_language_code(self) -> str:
-        option_codes = [code for _label, code in XTTS_LANGUAGE_OPTIONS]
-        combo = getattr(self, "_xtts_language_combo", None)
-        if combo is not None:
-            index = combo.currentIndex()
-            if 0 <= index < len(option_codes):
-                return option_codes[index]
-        text = str(self._xtts_language_var.value() or "").strip()
-        localized_codes = dict(xtts_language_options(self._ui_lang))
-        return localized_codes.get(text, normalize_xtts_language_code(text))
-
-    def _selected_xtts_device(self) -> str:
-        if getattr(self, "_xtts_device_codes", None):
-            device = self._xtts_device_codes.get(self._xtts_device_var.value())
-            if device in {"cpu", "cuda"}:
-                return device
-        tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
-        xtts_cfg = tts_cfg.get("xtts", {}) if isinstance(tts_cfg.get("xtts", {}), dict) else {}
-        return str(xtts_cfg.get("device") or self._config.get("xtts_device") or "cpu").lower()
 
     def _tts_api_timeout_values(self) -> dict[str, float]:
         return self._tts_api_timeout_values_from_draft(
@@ -7232,14 +7017,6 @@ class SettingsWindow(QDialog):
         engine_cfg["voice"] = voice or None
         engine_cfg["rate"] = self._safe_tts_rate(self._tts_rate_var.value(), engine=engine)
         engine_cfg["volume"] = self._safe_tts_volume(self._tts_volume_var.value())
-        if engine == "xtts":
-            engine_cfg["device"] = self._selected_xtts_device()
-            xtts_language = self._selected_xtts_language_code()
-            engine_cfg["language"] = (
-                self._selected_tts_test_language()
-                if xtts_language == "auto"
-                else xtts_language
-            )
         if engine in TTS_API_ENGINE_IDS:
             region = self._selected_tts_api_region()
             engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
@@ -7278,13 +7055,12 @@ class SettingsWindow(QDialog):
         return ""
 
     @staticmethod
-    def _safe_tts_rate(value: object, *, engine: str) -> float:
+    def _safe_tts_rate(value: object, *, engine: str = "") -> float:
+        del engine
         try:
             parsed = float(value)
         except (TypeError, ValueError):
             return 1.0
-        if engine == "pyttsx3" and parsed > 10.0:
-            parsed = parsed / 150.0
         return max(0.5, min(2.0, parsed))
 
     @staticmethod
@@ -7431,26 +7207,61 @@ class SettingsWindow(QDialog):
         if visible:
             self._refresh_bert_model_prompt()
 
-    def _refresh_xtts_options_visibility(self) -> None:
-        """Show/hide XTTS-v2 voice cloning options based on selected engine."""
-        frame = getattr(self, "_xtts_options_frame", None)
+    def _refresh_voice_clone_options_visibility(self) -> None:
+        """Show/hide cloud voice cloning options based on selected engine."""
+        frame = getattr(self, "_voice_clone_frame", None)
         if frame is None:
             return
-        visible = self._selected_tts_engine() == "xtts"
+        visible = self._selected_tts_engine() == "qwen_vc"
         frame.setVisible(visible)
+        if not visible:
+            return
+        has_voices = bool(voice_clone_service.stored_voices(self._config))
+        delete_btn = getattr(self, "_delete_clone_voice_btn", None)
+        if delete_btn is not None:
+            delete_btn.setEnabled(has_voices)
 
-        # Update download button visibility based on model status
-        download_btn = getattr(self, "_download_xtts_btn", None)
-        if download_btn is not None and visible:
-            from src.tts.xtts_downloader import xtts_models_ready
-            download_btn.setEnabled(True)
-            if xtts_models_ready():
-                download_btn.hide()
+    def _voice_clone_busy(self, busy: bool) -> None:
+        for name in ("_refresh_clone_voices_btn", "_delete_clone_voice_btn"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setEnabled(not busy)
+        # An enrollment upload takes seconds; without this the settings page
+        # sits unchanged and the next thing the player sees is a result dialog.
+        label = getattr(self, "_tts_runtime_status_label", None)
+        if label is not None and self._qt_widget_is_alive(label):
+            if busy:
+                label.setText(tr(self._ui_lang, "voice_record_uploading"))
             else:
-                download_btn.show()
+                self._refresh_tts_runtime_card()
+        if not busy:
+            self._refresh_voice_clone_options_visibility()
 
-    def _on_record_voice_for_xtts(self) -> None:
-        """Open voice recording dialog for XTTS-v2."""
+    def _sync_voice_clone_consent(self) -> None:
+        """Persist the consent switch before any upload reads it."""
+        tts_cfg = self._config.setdefault("tts", {})
+        if not isinstance(tts_cfg, dict):
+            tts_cfg = {}
+            self._config["tts"] = tts_cfg
+        engine_cfg = tts_cfg.setdefault("qwen_vc", {})
+        if not isinstance(engine_cfg, dict):
+            engine_cfg = {}
+            tts_cfg["qwen_vc"] = engine_cfg
+        engine_cfg["upload_consent"] = bool(self._voice_clone_consent_var.value())
+        # The API key lives in the shared TTS API panel, which is only written
+        # back on save; mirror the in-progress value so cloning works before
+        # the player closes the window.
+        if self._active_tts_api_engine == "qwen_vc":
+            engine_cfg["api_key"] = self._tts_api_key_var.value().strip()
+            region = self._selected_tts_api_region()
+            engine_cfg["region"] = region
+            engine_cfg["base_url"] = (
+                get_tts_api_base_url("qwen_vc", region)
+                or self._tts_api_base_url_var.value().strip().rstrip("/")
+            )
+
+    def _on_record_voice_for_clone(self) -> None:
+        """Open the voice recording dialog and clone from the result."""
         try:
             from src.ui_qt.voice_recording_dialog import VoiceRecordingDialog
 
@@ -7460,8 +7271,13 @@ class SettingsWindow(QDialog):
                 input_device = int(input_device) if input_device is not None else None
             except (TypeError, ValueError):
                 input_device = None
-            dialog = VoiceRecordingDialog(self, input_device=input_device, ui_lang=self._ui_lang)
-            dialog.voice_recorded.connect(self._on_voice_recorded_for_xtts)
+            dialog = VoiceRecordingDialog(
+                self,
+                input_device=input_device,
+                ui_lang=self._ui_lang,
+                theme=self._current_active_theme(),
+            )
+            dialog.voice_recorded.connect(self._on_voice_recorded_for_clone)
             dialog.exec()
         except Exception as exc:
             logger.error("Failed to open voice recording dialog: %s", exc)
@@ -7471,153 +7287,339 @@ class SettingsWindow(QDialog):
                 self._copy("voice_record_open_failed", error=self._copy("unknown_error")),
             )
 
-    def _on_voice_recorded_for_xtts(self, audio_data: bytes, voice_name: str) -> None:
-        """Handle recorded voice data for XTTS-v2."""
-        tmp_path: Path | None = None
-        tmp_stat: os.stat_result | None = None
-        try:
-            if len(audio_data) > _MAX_XTTS_RECORDED_AUDIO_BYTES:
-                raise ValueError(self._copy("xtts_recording_too_large"))
-
-            ref_audio_dir = xtts_reference_audio_dir()
-            output_path = secure_file_path(
-                ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
-            )
-            fd, tmp_name = tempfile.mkstemp(
-                prefix=f".{output_path.stem}.recording.",
-                suffix=".wav",
-                dir=ref_audio_dir,
-            )
-            try:
-                tmp_stat = os.fstat(fd)
-            finally:
-                os.close(fd)
-            tmp_path = Path(tmp_name)
-            atomic_write_bytes(tmp_path, audio_data)
-            tmp_stat = os.lstat(tmp_path)
-            try:
-                normalize_xtts_reference_audio_file(tmp_path, output_path)
-            finally:
-                try:
-                    secure_unlink(
-                        tmp_path,
-                        missing_ok=True,
-                        expected_stat=tmp_stat,
-                    )
-                except Exception as cleanup_exc:
-                    logger.warning(
-                        "Refused unsafe XTTS recording temporary-file cleanup %s: %s",
-                        tmp_path,
-                        cleanup_exc,
-                    )
-                tmp_path = None
-
-            logger.info("Saved XTTS reference audio: %s", output_path)
-
-            QMessageBox.information(
-                self,
-                self._copy("success"),
-                self._copy("xtts_voice_saved_message", voice=voice_name)
-            )
-
-            # Clear cache and reload TTS voices to include the new one
-            self._tts_voices_loaded.pop(self._selected_tts_engine(), None)
-            self._load_tts_voices()
-
-        except Exception as exc:
-            if tmp_path is not None:
-                try:
-                    secure_unlink(
-                        tmp_path,
-                        missing_ok=True,
-                        expected_stat=tmp_stat,
-                    )
-                except Exception as cleanup_exc:
-                    logger.warning(
-                        "Refused unsafe XTTS recording temporary-file cleanup %s: %s",
-                        tmp_path,
-                        cleanup_exc,
-                    )
-            logger.error("Failed to save voice: %s", exc)
-            QMessageBox.critical(
-                self,
-                self._copy("save_failed"),
-                self._copy("xtts_voice_save_failed", error=self._copy("unknown_error")),
-            )
-
-    def _on_import_voice_for_xtts(self) -> None:
-        """Import voice audio file for XTTS-v2."""
-        file_dialog = configure_file_dialog(
-            QFileDialog(self),
-            self._ui_lang,
-            title=self._copy("xtts_import_audio_title"),
-        )
-        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        file_dialog.setNameFilter(tr(self._ui_lang, "settings_audio_file_filter"))
-
-        if file_dialog.exec():
-            files = file_dialog.selectedFiles()
-            if files:
-                audio_path = files[0]
-                try:
-                    from pathlib import Path
-
-                    # Get filename as voice name
-                    voice_name = Path(audio_path).stem
-
-                    # Convert to reference audio directory
-                    ref_audio_dir = xtts_reference_audio_dir()
-                    ref_audio_dir.mkdir(parents=True, exist_ok=True)
-
-                    output_path = ref_audio_dir / f"{safe_xtts_voice_name(voice_name)}.wav"
-                    normalize_xtts_reference_audio_file(audio_path, output_path)
-
-                    logger.info("Imported XTTS voice: %s", output_path)
-
-                    QMessageBox.information(
-                        self,
-                        self._copy("success"),
-                        self._copy("xtts_voice_imported_message", voice=voice_name)
-                    )
-
-                    # Clear cache and reload TTS voices
-                    self._tts_voices_loaded.pop(self._selected_tts_engine(), None)
-                    self._load_tts_voices()
-
-                except Exception as exc:
-                    logger.error("Failed to import voice: %s", exc)
-                    QMessageBox.critical(
-                        self,
-                        self._copy("error"),
-                        self._copy(
-                            "xtts_voice_import_failed",
-                            error=self._copy("unknown_error"),
-                        )
-                    )
-
-    def _on_download_xtts_models(self) -> None:
-        """Open XTTS-v2 model download dialog."""
-        try:
-            from src.ui_qt.xtts_download_dialog import XTTSDownloadDialog
-
-            dialog = XTTSDownloadDialog(self, ui_lang=self._ui_lang)
-            dialog.download_complete.connect(self._on_xtts_download_complete)
-            dialog.exec()
-
-        except Exception as exc:
-            logger.error("Failed to open XTTS download dialog: %s", exc)
-            QMessageBox.critical(
+    def _on_voice_recorded_for_clone(self, audio_data: bytes, voice_name: str) -> None:
+        """Upload a freshly recorded sample to the cloning service."""
+        if len(audio_data) > _MAX_RECORDED_VOICE_AUDIO_BYTES:
+            QMessageBox.warning(
                 self,
                 self._copy("error"),
-                self._copy("xtts_download_open_failed", error=self._copy("unknown_error")),
+                self._copy("voice_clone_recording_too_large"),
+            )
+            return
+        self._enroll_cloned_voice(audio_data, voice_name)
+
+    def _on_import_voice_for_clone(self) -> None:
+        """Import a reference clip from disk and clone from it."""
+        dialog = QFileDialog(self)
+        configure_file_dialog(
+            dialog,
+            self._ui_lang,
+            title=self._copy("voice_clone_import_audio_title"),
+        )
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setNameFilter(self._copy("settings_audio_file_filter"))
+        if not dialog.exec():
+            return
+        files = dialog.selectedFiles()
+        if not files:
+            return
+
+        source = files[0]
+        voice_name = Path(source).stem
+        try:
+            # Normalizing locally first keeps an unusable clip from being
+            # uploaded and billed as a failed enrollment.
+            with tempfile.TemporaryDirectory(prefix="mio_voice_ref_") as tmp_dir:
+                prepared = Path(tmp_dir) / "reference.wav"
+                normalize_reference_audio_file(source, prepared)
+                audio_data = prepared.read_bytes()
+        except ReferenceAudioDecoderUnavailableError:
+            # The bundled PyAV/FFmpeg decoder is missing, which no amount of
+            # retrying fixes; offer the installer repair instead of an error.
+            logger.warning("Voice cloning import failed: bundled audio decoder is missing")
+            self._open_runtime_repair(self._copy("voice_record_import_decoder_missing"))
+            return
+        except Exception as exc:
+            detail = self._localized_reference_problem(exc, None)
+            logger.warning("Voice cloning import rejected the selected file")
+            QMessageBox.warning(self, self._copy("import_voice"), detail)
+            return
+
+        self._enroll_cloned_voice(audio_data, voice_name)
+
+    def _open_runtime_repair(self, detail: str) -> None:
+        """Offer a full-installer reinstall for a missing bundled component."""
+        window_ref = weakref.ref(self)
+
+        def deliver_info(info: UpdateInfo) -> None:
+            window = window_ref()
+            if window is not None and not window._closing:
+                window._open_update_window(
+                    build_runtime_repair_update_info(info, window._ui_lang, detail)
+                )
+
+        def deliver_error(error: str) -> None:
+            window = window_ref()
+            if window is not None and not window._closing:
+                show_installer_download_fallback(
+                    window, window._ui_lang, detail=detail, error=error
+                )
+
+        def on_info(info: UpdateInfo) -> None:
+            window = window_ref()
+            if window is None or window._closing:
+                return
+            window._call_in_ui(lambda update_info=info: deliver_info(update_info))
+
+        def on_error(error: str) -> None:
+            window = window_ref()
+            if window is None or window._closing:
+                return
+            window._call_in_ui(lambda err=str(error or ""): deliver_error(err))
+
+        try:
+            fetch_latest_installer_info(
+                on_info,
+                on_error=on_error,
+                max_retries=2,
+                retry_delays=(2,),
+            )
+        except Exception as exc:
+            logger.warning("Failed to start runtime repair: %s", exc)
+            show_installer_download_fallback(
+                self, self._ui_lang, detail=detail, error=self._copy("unknown_error")
             )
 
-    def _on_xtts_download_complete(self) -> None:
-        """Handle XTTS model download completion."""
-        logger.info("XTTS-v2 models download completed")
-        # Refresh TTS engine status if needed
-        self._refresh_tts_runtime_card()
-        self._refresh_xtts_options_visibility()
+    def _run_voice_clone_task(self, task, on_success, thread_name: str) -> None:
+        """Run one enrollment call off the UI thread and report back on it.
+
+        Every cloning action is a network round trip; running them inline would
+        freeze the settings window for the length of an upload.
+        """
+
+        self._voice_clone_busy(True)
+        window_ref = weakref.ref(self)
+
+        def worker() -> None:
+            try:
+                result = task()
+                message = ""
+            except Exception as exc:
+                result = None
+                message = self._localized_voice_clone_error(exc)
+
+            def deliver() -> None:
+                window = window_ref()
+                if window is None or window._closing:
+                    return
+                window._voice_clone_busy(False)
+                if message:
+                    QMessageBox.warning(
+                        window, window._copy("voice_clone_title"), message
+                    )
+                    return
+                window._load_tts_voices_async()
+                on_success(window, result)
+
+            window = window_ref()
+            if window is not None and not window._closing:
+                window._call_in_ui(deliver)
+
+        threading.Thread(target=worker, daemon=True, name=thread_name).start()
+
+    def _enroll_cloned_voice(self, audio_data: bytes, voice_name: str) -> None:
+        """Register a prepared recording with the service."""
+        self._sync_voice_clone_consent()
+        if not voice_clone_service.has_upload_consent(self._config):
+            QMessageBox.warning(
+                self,
+                self._copy("voice_clone_consent_title"),
+                self._copy("voice_clone_consent_required"),
+            )
+            return
+
+        def on_success(window, voice) -> None:
+            created = getattr(voice, "display_name", "") or getattr(voice, "voice_id", "")
+            QMessageBox.information(
+                window,
+                window._copy("voice_clone_title"),
+                window._copy("voice_clone_created", voice=created),
+            )
+
+        self._run_voice_clone_task(
+            lambda: voice_clone_service.create_voice(
+                self._config, audio_data, voice_name
+            ),
+            on_success,
+            "voice-clone-enroll",
+        )
+
+    def _on_refresh_cloned_voices(self) -> None:
+        """Re-read the registered voices from the service."""
+        self._sync_voice_clone_consent()
+
+        def on_success(window, voices) -> None:
+            QMessageBox.information(
+                window,
+                window._copy("voice_clone_title"),
+                window._copy("voice_clone_refreshed", count=len(voices or ())),
+            )
+
+        self._run_voice_clone_task(
+            lambda: voice_clone_service.refresh_voices(self._config),
+            on_success,
+            "voice-clone-refresh",
+        )
+
+    def _on_delete_cloned_voice(self) -> None:
+        """Delete the currently selected cloned voice."""
+        voice_id = self._selected_tts_voice_id()
+        if self._is_tts_placeholder(voice_id):
+            voice_id = ""
+        voice_id = str(voice_id or "").strip()
+        if not voice_id:
+            QMessageBox.information(
+                self,
+                self._copy("voice_clone_title"),
+                self._copy("voice_clone_none_selected"),
+            )
+            return
+
+        label = next(
+            (
+                item["display_name"] or item["voice_id"]
+                for item in voice_clone_service.stored_voices(self._config)
+                if item["voice_id"] == voice_id
+            ),
+            voice_id,
+        )
+        confirmed = QMessageBox.question(
+            self,
+            self._copy("voice_clone_delete"),
+            self._copy("voice_clone_delete_confirm", voice=label),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+
+        self._sync_voice_clone_consent()
+        self._run_voice_clone_task(
+            lambda: voice_clone_service.delete_voice(self._config, voice_id),
+            lambda _window, _result: None,
+            "voice-clone-delete",
+        )
+
+    def _voice_clone_region_warning(self) -> str | None:
+        """Warn when the Qwen TTS region cannot be reused for cloning.
+
+        Tokyo has no enrollment endpoint, so cloning falls back to another
+        region. Its key is not carried over, and without this the player only
+        sees an "invalid key" error for a region they never chose.
+        """
+
+        tts_cfg = self._config.get("tts")
+        preset_cfg = tts_cfg.get("qwen_tts") if isinstance(tts_cfg, dict) else None
+        if not isinstance(preset_cfg, dict):
+            return None
+        preset_region = str(preset_cfg.get("region", "") or "").strip()
+        if not preset_region or region_supports_voice_cloning(preset_region):
+            return None
+        resolved = voice_clone_service.voice_clone_config(self._config)
+        return self._copy(
+            "voice_clone_region_fallback",
+            region=self._tts_api_region_label("qwen_vc", str(resolved.get("region") or "")),
+        )
+
+    def _voice_clone_preflight_error(self) -> str | None:
+        """Explain, before synthesis, why cloning cannot run yet."""
+        self._sync_voice_clone_consent()
+        resolved = voice_clone_service.voice_clone_config(self._config)
+        if not str(resolved.get("api_key", "") or "").strip():
+            region_warning = self._voice_clone_region_warning()
+            if region_warning:
+                return region_warning
+            return self._copy("voice_clone_api_key_required")
+        if not voice_clone_service.stored_voices(self._config):
+            return self._copy("voice_clone_no_voices")
+        return None
+
+    def _tts_api_region_label(self, engine: str, region: str) -> str:
+        """Localized name of a TTS API service region, falling back to its code."""
+        for label, code in self._tts_api_region_options(engine):
+            if code == region:
+                return label
+        return region or "?"
+
+    def _localized_voice_clone_error(self, error: object) -> str:
+        """Map an enrollment failure onto a translated, actionable message.
+
+        The provider error code is appended to whatever the player is told.
+        Without it a rejected enrollment is indistinguishable from a network
+        blip, and the player has nothing to search for or report.
+        """
+
+        if isinstance(error, voice_clone_service.VoiceCloneConsentRequiredError):
+            return self._copy("voice_clone_consent_required")
+        if isinstance(error, voice_clone_service.VoiceCloneNotConfiguredError):
+            return self._copy("voice_clone_api_key_required")
+
+        status_code = getattr(error, "status_code", None)
+        provider_code = str(getattr(error, "provider_code", "") or "")
+        text = str(error or "").casefold()
+        logger.warning(
+            "Voice cloning failed: %s",
+            safe_exception_summary(error)
+            if isinstance(error, BaseException)
+            else "unknown",
+        )
+        if isinstance(error, BaseException) and not isinstance(
+            error, QwenVoiceEnrollmentError
+        ):
+            # Only provider replies need redaction. Anything else reaching here
+            # is a local failure, and hiding it makes the app undiagnosable.
+            logger.warning(
+                "Voice cloning failed with an unexpected local error",
+                exc_info=error,
+            )
+
+        if (
+            status_code in (401, 403)
+            or "http 401" in text
+            or "http 403" in text
+            or "api key" in text
+        ):
+            message = self._copy("voice_clone_auth_failed")
+        elif status_code == 429 or "http 429" in text or "rate limit" in text:
+            message = self._copy("voice_clone_rate_limited")
+        elif status_code == 404 or "http 404" in text:
+            # A 404 here means the endpoint or the target model is not
+            # published for the selected service region.
+            message = self._copy("voice_clone_region_unsupported")
+        elif status_code == 400 or "http 400" in text:
+            message = self._copy("voice_clone_request_rejected")
+        elif isinstance(status_code, int) and status_code >= 500:
+            message = self._copy("voice_clone_provider_unavailable")
+        elif "could not reach" in text or "timeout" in text or "timed out" in text:
+            message = self._copy("voice_clone_network_failed")
+        elif "10 mb" in text or "too short" in text or "wav, mp3" in text:
+            return self._localized_reference_problem(error, None)
+        elif "did not return a voice id" in text or "unreadable response" in text:
+            message = self._copy("voice_clone_bad_response")
+        else:
+            message = self._copy("voice_clone_failed_generic")
+
+        return self._append_voice_clone_error_code(message, status_code, provider_code)
+
+    @staticmethod
+    def _append_voice_clone_error_code(
+        message: str,
+        status_code: object,
+        provider_code: str,
+    ) -> str:
+        """Append the provider identifiers, which are codes rather than prose."""
+
+        parts = []
+        if isinstance(status_code, int) and status_code:
+            parts.append(f"HTTP {status_code}")
+        code = "".join(
+            char for char in provider_code if char.isalnum() or char in "._-"
+        )[:64]
+        if code:
+            parts.append(code)
+        if not parts:
+            return message
+        return f"{message}\n\n({' / '.join(parts)})"
 
     def _open_asr_model_download(self, engine: str) -> None:
         try:
@@ -7918,10 +7920,18 @@ class SettingsWindow(QDialog):
         if self._theme_btn is not None:
             self._theme_btn.setEnabled(True)
 
+    def _current_active_theme(self) -> str:
+        """Resolved light/dark theme currently painted by this window."""
+        return getattr(
+            self,
+            "_active_theme",
+            _resolve_theme(self._theme_code_from_value(self._theme_var.value())),
+        )
+
     def _refresh_theme_button(self) -> None:
         if self._theme_btn is None:
             return
-        active_theme = getattr(self, "_active_theme", _resolve_theme(self._theme_code_from_value(self._theme_var.value())))
+        active_theme = self._current_active_theme()
         icon_name = "sun.svg" if active_theme == "dark" else "moon.svg"
         icon = ui_icon(icon_name, 17, icon_tint(active_theme, strong=True))
         self._theme_btn.setIcon(icon)
@@ -8009,7 +8019,7 @@ class SettingsWindow(QDialog):
         self._refresh_tts_runtime_card()
         self._refresh_tts_api_visibility()
         self._refresh_sbv2_options_visibility()
-        self._refresh_xtts_options_visibility()
+        self._refresh_voice_clone_options_visibility()
         self._prompt_for_missing_credential("tts")
 
     def _on_tts_api_model_changed(self, text: str) -> None:
@@ -8096,25 +8106,6 @@ class SettingsWindow(QDialog):
         layout.addWidget(self._tts_api_frame)
         self._refresh_tts_api_visibility()
 
-    def _xtts_runtime_missing_message(self, *, require_api: bool = False) -> str:
-        from src.ui_qt.xtts_runtime_localization import (
-            localized_xtts_runtime_components,
-        )
-
-        status = xtts_runtime_status(require_api=require_api)
-        components = localized_xtts_runtime_components(status, self._ui_lang)
-        if not components:
-            components = self._copy("xtts_runtime_component_default")
-        return self._copy("xtts_runtime_missing_details", components=components)
-
-    def _xtts_runtime_error_message(self, error: object) -> str:
-        from src.ui_qt.xtts_runtime_localization import (
-            localized_xtts_runtime_error_component,
-        )
-
-        component = localized_xtts_runtime_error_component(error, self._ui_lang)
-        return self._copy("xtts_runtime_missing_details", components=component)
-
     def _refresh_tts_runtime_card(self) -> None:
         frame = getattr(self, "_tts_runtime_frame", None)
         label = getattr(self, "_tts_runtime_status_label", None)
@@ -8122,33 +8113,25 @@ class SettingsWindow(QDialog):
         if frame is None or label is None or button is None:
             return
         engine = self._selected_tts_engine()
-        if engine not in {"voicevox", "aivis_speech", "style_bert_vits2", "xtts"}:
+        if engine not in {"voicevox", "style_bert_vits2", "qwen_vc"}:
             frame.hide()
             return
         frame.show()
         frame.setObjectName("voiceDropZone" if engine == "style_bert_vits2" else "runtimeNotice")
         frame.style().unpolish(frame)
         frame.style().polish(frame)
-        if engine == "xtts":
-            from src.tts.xtts_downloader import xtts_models_ready
-
+        if engine == "qwen_vc":
             button.setVisible(False)
-            status = xtts_runtime_status(require_api=True)
-            if not status.ready:
-                label.setText(self._xtts_runtime_missing_message(require_api=True))
-                button.setText(self._copy("xtts_runtime_reinstall"))
-                button.setVisible(True)
-                self._set_tts_runtime_button_action(
-                    button,
-                    lambda: self._open_xtts_runtime_repair(self._xtts_runtime_missing_message(require_api=True)),
+            resolved = voice_clone_service.voice_clone_config(self._config)
+            if not str(resolved.get("api_key", "") or "").strip():
+                label.setText(
+                    self._voice_clone_region_warning()
+                    or self._copy("voice_clone_api_key_required")
                 )
-            elif not xtts_models_ready():
-                label.setText(self._copy("xtts_model_missing"))
-                button.setText(tr(self._ui_lang, "download_xtts_models"))
-                button.setVisible(True)
-                self._set_tts_runtime_button_action(button, self._on_download_xtts_models)
+            elif not voice_clone_service.stored_voices(self._config):
+                label.setText(self._copy("voice_clone_no_voices"))
             else:
-                label.setText(self._copy("xtts_ready"))
+                label.setText(self._copy("voice_clone_ready"))
         elif engine == "voicevox":
             ready = self._local_tts_availability.get(engine)
             if ready is None:
@@ -8160,17 +8143,6 @@ class SettingsWindow(QDialog):
                 button.setVisible(not ready)
             button.setText(self._copy("download_voicevox"))
             self._set_tts_runtime_button_action(button, self._open_voicevox_download)
-        elif engine == "aivis_speech":
-            ready = self._local_tts_availability.get(engine)
-            if ready is None:
-                label.setText(self._copy("tts_voice_loading"))
-                button.setVisible(False)
-                self._check_local_tts_engine_async(engine)
-            else:
-                label.setText(self._copy("local_tts_ready" if ready else "local_tts_unavailable", engine="AivisSpeech"))
-                button.setVisible(not ready)
-            button.setText(self._copy("download_aivis"))
-            self._set_tts_runtime_button_action(button, self._open_aivis_download)
         else:
             button.setVisible(True)
             label.setText(self._copy("tts_custom_voice_picker"))
@@ -8225,117 +8197,6 @@ class SettingsWindow(QDialog):
 
     def _open_voicevox_download(self) -> None:
         self._open_external_url(VOICEVOX_DOWNLOAD_URL)
-
-    def _open_aivis_download(self) -> None:
-        self._open_external_url(AIVIS_SPEECH_DOWNLOAD_URL)
-
-    def _set_xtts_runtime_repair_fetching(self, fetching: bool) -> None:
-        button = getattr(self, "_tts_runtime_action_btn", None)
-        if button is None or self._selected_tts_engine() != "xtts":
-            return
-        button.setEnabled(not fetching)
-        button.setText(
-            self._copy("xtts_runtime_repair_checking")
-            if fetching
-            else self._copy("xtts_runtime_reinstall")
-        )
-        text_width = button.fontMetrics().horizontalAdvance(button.text()) + 30
-        button.setFixedWidth(max(104, text_width))
-
-    def _safe_xtts_runtime_repair_detail(self, detail: object) -> str:
-        default_message = self._xtts_runtime_missing_message(require_api=True)
-        candidate = str(detail or "").strip()
-        if not candidate or candidate == default_message:
-            return default_message
-        localized_component_messages = {
-            self._xtts_runtime_error_message(probe)
-            for probe in (
-                "no module named 'TTS'",
-                "sklearn",
-                "no module named 'av'",
-                "av.audio.resampler",
-                "pypinyin",
-                "ko_speech_tools",
-                "num2words",
-                "fugashi",
-                "voice cloning runtime",
-            )
-        }
-        if candidate in localized_component_messages:
-            return candidate
-        if self._is_xtts_runtime_error_message(candidate):
-            return self._xtts_runtime_error_message(candidate)
-        logger.warning("Suppressing unlocalized XTTS repair detail: %s", candidate)
-        return self._copy("xtts_runtime_unknown_issue")
-
-    def _open_xtts_runtime_repair(self, detail: str | None = None) -> None:
-        message = self._safe_xtts_runtime_repair_detail(detail)
-        self._refresh_tts_runtime_card()
-        self._set_xtts_runtime_repair_fetching(True)
-        window_ref = weakref.ref(self)
-
-        def deliver_info(info: UpdateInfo) -> None:
-            window = window_ref()
-            if window is not None and not window._closing:
-                window._open_xtts_runtime_repair_update(info, message)
-
-        def deliver_error(error: str) -> None:
-            window = window_ref()
-            if window is not None and not window._closing:
-                window._show_xtts_runtime_repair_fallback(message, error)
-
-        def on_info(info: UpdateInfo) -> None:
-            window = window_ref()
-            if window is None or window._closing:
-                return
-            window._call_in_ui(lambda update_info=info: deliver_info(update_info))
-
-        def on_error(error: str) -> None:
-            window = window_ref()
-            if window is None or window._closing:
-                return
-            window._call_in_ui(
-                lambda err=str(error or ""): deliver_error(err)
-            )
-
-        try:
-            fetch_latest_installer_info(
-                on_info,
-                on_error=on_error,
-                max_retries=2,
-                retry_delays=(2,),
-            )
-        except Exception as exc:
-            logger.warning("Failed to start XTTS runtime repair: %s", exc)
-            self._show_xtts_runtime_repair_fallback(message, self._copy("unknown_error"))
-
-    def _open_xtts_runtime_repair_update(self, info: UpdateInfo, detail: str) -> None:
-        self._set_xtts_runtime_repair_fetching(False)
-        self._open_update_window(build_runtime_repair_update_info(info, self._ui_lang, detail))
-
-    def _show_xtts_runtime_repair_fallback(self, detail: str, error: str = "") -> None:
-        self._set_xtts_runtime_repair_fetching(False)
-        show_installer_download_fallback(self, self._ui_lang, detail=detail, error=error)
-
-    @staticmethod
-    def _is_xtts_runtime_error_message(message: str) -> bool:
-        text = str(message or "").casefold()
-        return any(
-            token in text
-            for token in (
-                "coqui tts import error",
-                "no module named",
-                "scikit-learn",
-                "sklearn",
-                "mp3/audio decoder",
-                "av.audio",
-                "tts library",
-                "tts.api",
-                "voice cloning runtime",
-                "xtts runtime",
-                "bundled runtime components",
-            )
-        )
 
     def _set_tts_runtime_button_action(self, button: QPushButton, action: Callable[[], None] | None) -> None:
         previous = self._tts_runtime_button_action
@@ -8464,20 +8325,33 @@ class SettingsWindow(QDialog):
             finally:
                 combo.blockSignals(False)
         bert_language = self._selected_tts_bert_language() if engine == "style_bert_vits2" else "jp"
+        # Cloned voices come from config rather than a provider catalog, so the
+        # engine config is snapshotted here, on the UI thread, instead of being
+        # read off widgets from the worker.
+        engine_config = (
+            self._current_tts_engine_config(engine) if engine == "qwen_vc" else None
+        )
         threading.Thread(
             target=self._load_tts_voices_worker,
-            args=(engine, generation, bert_language),
+            args=(engine, generation, bert_language, engine_config),
             daemon=True,
             name=f"tts-voice-load-{engine}",
         ).start()
 
-    def _load_tts_voices_worker(self, engine: str, generation: int, bert_language: str = "jp") -> None:
+    def _load_tts_voices_worker(
+        self,
+        engine: str,
+        generation: int,
+        bert_language: str = "jp",
+        engine_config: dict | None = None,
+    ) -> None:
         tts = None
         try:
             if engine == "style_bert_vits2":
                 available = list_style_bert_vits2_voices(bert_language)
-            elif engine == "xtts":
-                available = list_xtts_reference_voices()
+            elif engine_config is not None:
+                tts = create_tts_engine(engine, config=engine_config)
+                available = tts.get_available_voices() if tts is not None else []
             else:
                 tts = create_tts_engine(engine)
                 available = tts.get_available_voices() if tts is not None else []
@@ -8524,7 +8398,7 @@ class SettingsWindow(QDialog):
         id_to_display: dict[str, str] = {}
         for d, vid in entries:
             id_to_display.setdefault(str(vid), str(d))
-        if engine == "xtts" and (not preferred or preferred == "custom") and len(entries) > 1:
+        if engine == "qwen_vc" and not preferred and len(entries) > 1:
             for display, voice_id in entries:
                 if str(voice_id) != "custom":
                     preferred = str(voice_id)
@@ -8551,7 +8425,7 @@ class SettingsWindow(QDialog):
             if self._qt_widget_is_alive(combo):
                 combo.blockSignals(blocked)
 
-    def _localized_xtts_reference_problem(
+    def _localized_reference_problem(
         self,
         reason: object,
         stats: object | None,
@@ -8559,10 +8433,10 @@ class SettingsWindow(QDialog):
         raw_reason = str(reason or "").strip()
         lowered = raw_reason.casefold()
         if raw_reason:
-            logger.warning("XTTS reference audio validation failed: %s", raw_reason)
+            logger.warning("Reference audio validation failed: %s", raw_reason)
         if "too short" in lowered:
             if stats is None:
-                return self._copy("xtts_reference_quality_too_short")
+                return self._copy("voice_reference_quality_too_short")
             return tr(
                 self._ui_lang,
                 "voice_record_quality_too_short",
@@ -8574,7 +8448,7 @@ class SettingsWindow(QDialog):
             )
         if "too quiet" in lowered or "mostly silent" in lowered:
             if stats is None:
-                return self._copy("xtts_reference_quality_quiet")
+                return self._copy("voice_reference_quality_quiet")
             return tr(
                 self._ui_lang,
                 "voice_record_quality_quiet",
@@ -8596,7 +8470,7 @@ class SettingsWindow(QDialog):
             )
         if "dc offset" in lowered:
             if stats is None:
-                return self._copy("xtts_reference_quality_dc_offset")
+                return self._copy("voice_reference_quality_dc_offset")
             return tr(
                 self._ui_lang,
                 "voice_record_quality_dc_offset",
@@ -8608,7 +8482,7 @@ class SettingsWindow(QDialog):
             )
         if "clipped" in lowered or "distorted" in lowered:
             if stats is None:
-                return self._copy("xtts_reference_quality_clipped")
+                return self._copy("voice_reference_quality_clipped")
             return tr(
                 self._ui_lang,
                 "voice_record_quality_clipped",
@@ -8619,7 +8493,7 @@ class SettingsWindow(QDialog):
                 ),
             )
         if "not found" in lowered or "no such file" in lowered:
-            return self._copy("xtts_reference_missing")
+            return self._copy("voice_reference_missing")
         if any(
             token in lowered
             for token in (
@@ -8636,50 +8510,7 @@ class SettingsWindow(QDialog):
             for token in ("could not be decoded", "decode", "invalid wav", "wave error")
         ):
             return tr(self._ui_lang, "voice_record_import_decode_failed")
-        return self._copy("xtts_reference_invalid")
-
-    def _xtts_reference_preflight_error(self) -> str | None:
-        first_reference = first_xtts_reference_audio_path()
-        if first_reference is None:
-            return self._copy("xtts_reference_missing")
-
-        voice = self._selected_tts_voice_id()
-        selected_reference: Path | None = None
-        if voice and voice != "custom" and not self._is_tts_placeholder(voice):
-            candidate = xtts_reference_audio_dir() / f"{voice}.wav"
-            if candidate.exists():
-                selected_reference = candidate
-
-        prefix = self._copy("xtts_reference_invalid")
-        if selected_reference is not None:
-            usable, reason, stats = validate_xtts_reference_audio_file(selected_reference)
-            if not usable:
-                repaired, repair_reason, repair_stats = repair_xtts_reference_audio_file(selected_reference)
-                if repaired:
-                    return None
-                reason = repair_reason or reason
-                detail = self._localized_xtts_reference_problem(
-                    reason,
-                    repair_stats or stats,
-                )
-                return detail if detail == prefix else f"{prefix}\n\n{detail}"
-            return None
-
-        usable_reference = first_usable_xtts_reference_audio_path()
-        if usable_reference is not None:
-            return None
-
-        repaired, repair_reason, repair_stats = repair_xtts_reference_audio_file(first_reference)
-        if repaired:
-            return None
-
-        _usable, reason, stats = validate_xtts_reference_audio_file(first_reference)
-        reason = repair_reason or reason
-        detail = self._localized_xtts_reference_problem(
-            reason,
-            repair_stats or stats,
-        )
-        return detail if detail == prefix else f"{prefix}\n\n{detail}"
+        return self._copy("voice_reference_invalid")
 
     def _on_tts_test(self) -> None:
         if self._tts_testing:
@@ -8713,30 +8544,12 @@ class SettingsWindow(QDialog):
                     self.tts_test_finished.emit(generation, False, message)
                     QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
                     return
-            if engine == "xtts":
-                from src.tts.xtts_downloader import xtts_models_ready
-
-                runtime_status = xtts_runtime_status(require_api=True)
-                if not runtime_status.ready:
-                    message = self._xtts_runtime_missing_message(require_api=True)
-                    logger.warning("XTTS test blocked: Coqui TTS runtime is not importable")
-                    self.tts_test_finished.emit(generation, False, message)
-                    self._open_xtts_runtime_repair(message)
-                    return
-                if not xtts_models_ready():
-                    message = self._copy("xtts_model_missing")
-                    logger.warning("XTTS test blocked: local XTTS model files are not ready")
-                    self._refresh_xtts_options_visibility()
-                    self._refresh_tts_runtime_card()
-                    self.tts_test_finished.emit(generation, False, message)
-                    self._on_download_xtts_models()
-                    return
-                reference_error = self._xtts_reference_preflight_error()
-                if reference_error:
-                    message = reference_error
-                    logger.warning("XTTS test blocked: reference audio is not usable: %s", message)
-                    self.tts_test_finished.emit(generation, False, message)
-                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+            if engine == "qwen_vc":
+                preflight = self._voice_clone_preflight_error()
+                if preflight:
+                    logger.warning("Voice cloning test blocked before synthesis")
+                    self.tts_test_finished.emit(generation, False, preflight)
+                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), preflight)
                     return
             (
                 output_device,
@@ -8764,12 +8577,8 @@ class SettingsWindow(QDialog):
                     sbv2_bert_language,
                 )
                 self.tts_test_finished.emit(generation, False, message)
-                if engine == "xtts":
-                    status = xtts_runtime_status(require_api=True)
-                    if not status.ready:
-                        message = self._xtts_runtime_missing_message(require_api=True)
-                    self._open_xtts_runtime_repair(message)
-                    return
+                if engine == "qwen_vc":
+                    message = self._voice_clone_preflight_error() or message
                 QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
                 return
             self._tts_test_manager.start()
@@ -8816,23 +8625,17 @@ class SettingsWindow(QDialog):
             if not accepted:
                 self.tts_test_finished.emit(generation, False, self._copy("tts_test_not_accepted"))
         except Exception as e:
-            raw_message = str(e)
             logger.warning(
                 "TTS test failed: %s",
                 safe_exception_summary(e),
             )
-            is_xtts_runtime_error = (
-                engine == "xtts" and self._is_xtts_runtime_error_message(raw_message)
-            )
-            if is_xtts_runtime_error:
-                message = self._xtts_runtime_error_message(e)
+            if engine == "qwen_vc":
+                message = self._localized_voice_clone_error(e)
             elif engine == "qwen_tts":
                 message = tts_error_token(tts_error_code(e))
             else:
                 message = self._copy("tts_test_failed")
             self.tts_test_finished.emit(generation, False, message)
-            if is_xtts_runtime_error:
-                self._open_xtts_runtime_repair(message)
 
     def _on_tts_stop(self) -> None:
         if self._tts_test_manager:
@@ -8916,14 +8719,6 @@ class SettingsWindow(QDialog):
                         tr(self._ui_lang, "tts_test"),
                         self._copy(message_key),
                     )
-            if (
-                manager_was_active
-                and self._selected_tts_engine() == "xtts"
-                and self._is_xtts_runtime_error_message(message)
-            ):
-                self._open_xtts_runtime_repair(
-                    self._xtts_runtime_error_message(message)
-                )
 
     def _stop_tts_test_manager(self) -> None:
         manager = self._tts_test_manager
@@ -8975,7 +8770,7 @@ class SettingsWindow(QDialog):
                     safe_exception_summary(exc),
                 )
 
-        # XTTS inference cannot be interrupted. Closing on a cleanup thread
+        # Local inference cannot be interrupted. Closing on a cleanup thread
         # avoids freezing the Qt event loop for the manager's join timeout and
         # does not retain this window.
         cleanup_thread = threading.Thread(
@@ -9350,14 +9145,6 @@ class SettingsWindow(QDialog):
             qwen_cfg.setdefault("hard_timeout_seconds", 12)
             qwen_cfg.setdefault("max_retries", 0)
             qwen_cfg.setdefault("max_concurrent_transcriptions", 1)
-        gemini_cfg = asr_cfg.setdefault("gemini_live", {})
-        if isinstance(gemini_cfg, dict):
-            gemini_cfg["api_key"] = self._gemini_api_key_var.value().strip()
-            gemini_cfg["model"] = self._gemini_model_var.value().strip() or "gemini-3.1-flash-live-preview"
-            gemini_cfg.setdefault("language", "ja-JP")
-            gemini_cfg.setdefault("transcribe_only", True)
-            gemini_cfg.setdefault("timeout_seconds", 20)
-            gemini_cfg.setdefault("use_live_api", True)
 
         try:
             if isinstance(qwen_cfg, dict) and qwen_cfg.get("region") == "japan":
@@ -9470,10 +9257,9 @@ class SettingsWindow(QDialog):
         if isinstance(style_cfg, dict):
             style_cfg["device"] = self._tts_device_codes.get(self._tts_device_var.value(), "cpu")
             style_cfg["bert_language"] = self._selected_tts_bert_language()
-        xtts_cfg = tts_cfg.setdefault("xtts", {})
-        if isinstance(xtts_cfg, dict):
-            xtts_cfg["device"] = self._selected_xtts_device()
-            xtts_cfg["language"] = self._selected_xtts_language_code()
+        clone_cfg = tts_cfg.setdefault("qwen_vc", {})
+        if isinstance(clone_cfg, dict):
+            clone_cfg["upload_consent"] = bool(self._voice_clone_consent_var.value())
         (
             output_device,
             output_device_name,

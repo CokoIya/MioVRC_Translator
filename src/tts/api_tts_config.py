@@ -26,6 +26,43 @@ QWEN_TTS_REGION_ALIASES = {
     "japan": "japan",
 }
 
+# Cloud voice cloning (DashScope voice enrollment).  The Tokyo workspace
+# region is deliberately absent: the enrollment endpoint is only published for
+# Beijing and Singapore, so offering it would produce voices that can never be
+# created.  Tokyo users pick another region for cloning.
+QWEN_VC_DEFAULT_REGION = "singapore"
+QWEN_VC_DEFAULT_MODEL = "qwen3-tts-vc-2026-01-22"
+QWEN_VC_REGION_BASE_URLS = {
+    "china_mainland": QWEN_TTS_BASE_URL_MAINLAND,
+    "singapore": QWEN_TTS_BASE_URL_INTERNATIONAL,
+}
+QWEN_VC_REGION_ALIASES = {
+    "china": "china_mainland",
+    "cn": "china_mainland",
+    "mainland": "china_mainland",
+    "china-mainland": "china_mainland",
+    "beijing": "china_mainland",
+    "intl": "singapore",
+    "international": "singapore",
+    "sg": "singapore",
+    # Tokyo cannot enroll voices; fall back to the shared international host
+    # instead of leaving the endpoint blank.
+    "jp": "singapore",
+    "japan": "singapore",
+}
+# Regions where DashScope publishes the voice enrollment endpoint. A key issued
+# for any other region authenticates against its own region only, so it cannot
+# be reused for cloning.
+VOICE_CLONE_SUPPORTED_REGIONS = frozenset({"china_mainland", "singapore"})
+
+
+def region_supports_voice_cloning(region: object) -> bool:
+    """Report whether enrollment is offered in a preset-engine region."""
+
+    token = _normalize_region_token(region)
+    resolved = QWEN_TTS_REGION_ALIASES.get(token, token)
+    return resolved in VOICE_CLONE_SUPPORTED_REGIONS
+
 XIAOMI_TTS_BASE_URL_PAYG = "https://api.xiaomimimo.com/v1"
 XIAOMI_TTS_BASE_URL_TOKEN_PLAN_CN = "https://token-plan-cn.xiaomimimo.com/v1"
 XIAOMI_TTS_BASE_URL_TOKEN_PLAN_SG = "https://token-plan-sgp.xiaomimimo.com/v1"
@@ -61,7 +98,7 @@ XIAOMI_TTS_REGION_ALIASES = {
     "token_plan_ams": "europe_cluster",
 }
 
-TTS_API_ENGINE_IDS = ("mimo_tts", "qwen_tts")
+TTS_API_ENGINE_IDS = ("mimo_tts", "qwen_tts", "qwen_vc")
 TTS_API_REGION_OPTION_KEYS = {
     "mimo_tts": (
         ("xiaomi_region_global", "global"),
@@ -76,18 +113,26 @@ TTS_API_REGION_OPTION_KEYS = {
         ("qwen_region_china_mainland", "china_mainland"),
         ("qwen_region_custom", "custom"),
     ),
+    "qwen_vc": (
+        ("qwen_region_singapore", "singapore"),
+        ("qwen_region_china_mainland", "china_mainland"),
+        ("qwen_region_custom", "custom"),
+    ),
 }
 TTS_API_REGION_BASE_URLS = {
     "mimo_tts": XIAOMI_TTS_REGION_BASE_URLS,
     "qwen_tts": QWEN_TTS_REGION_BASE_URLS,
+    "qwen_vc": QWEN_VC_REGION_BASE_URLS,
 }
 TTS_API_REGION_ALIASES = {
     "mimo_tts": XIAOMI_TTS_REGION_ALIASES,
     "qwen_tts": QWEN_TTS_REGION_ALIASES,
+    "qwen_vc": QWEN_VC_REGION_ALIASES,
 }
 TTS_API_DEFAULT_REGIONS = {
     "mimo_tts": XIAOMI_TTS_DEFAULT_REGION,
     "qwen_tts": QWEN_TTS_DEFAULT_REGION,
+    "qwen_vc": QWEN_VC_DEFAULT_REGION,
 }
 TTS_API_MODEL_OPTIONS = {
     "mimo_tts": (XIAOMI_TTS_DEFAULT_MODEL,),
@@ -95,6 +140,7 @@ TTS_API_MODEL_OPTIONS = {
         "qwen3-tts-flash",
         "qwen3-tts-instruct-flash",
     ),
+    "qwen_vc": (QWEN_VC_DEFAULT_MODEL,),
 }
 TTS_API_DEFAULT_CONFIGS = {
     "mimo_tts": {
@@ -123,6 +169,30 @@ TTS_API_DEFAULT_CONFIGS = {
         "read_timeout_seconds": 30,
         "wall_timeout_seconds": 45,
         "max_retries": 0,
+    },
+    "qwen_vc": {
+        "api_key": "",
+        "region": QWEN_VC_DEFAULT_REGION,
+        "base_url": QWEN_TTS_BASE_URL_INTERNATIONAL,
+        "model": QWEN_VC_DEFAULT_MODEL,
+        # No preset voices exist for cloning; the player registers one first.
+        "voice": "",
+        "rate": 1.0,
+        "volume": 0.8,
+        # Opens the TLS session ahead of the first utterance; there is no local
+        # model to load, so this is purely a connection warm-up.
+        "prewarm": True,
+        "timeout_seconds": 30,
+        "connect_timeout_seconds": 30,
+        "read_timeout_seconds": 30,
+        "wall_timeout_seconds": 45,
+        "max_retries": 0,
+        # Locally remembered enrollments; the service remains the source of
+        # truth and the settings page can re-sync from it on demand.
+        "custom_voices": [],
+        # Uploading a recording of the player's own voice to a third-party
+        # service is opt-in and must be confirmed before the first upload.
+        "upload_consent": False,
     },
 }
 
@@ -191,6 +261,9 @@ TTS_API_VOICE_OPTIONS = {
         ("Dean", "Dean", "en", "Male", "en-US"),
     ),
     "qwen_tts": QWEN_TTS_VOICE_OPTIONS,
+    # Cloning has no catalog: every voice is registered by the player and is
+    # resolved from config at runtime.
+    "qwen_vc": (),
 }
 _ENGINE_ALIASES = {
     "mimo": "mimo_tts",
@@ -200,7 +273,56 @@ _ENGINE_ALIASES = {
     "qwen3_tts": "qwen_tts",
     "qwen-tts": "qwen_tts",
     "qwen3-tts": "qwen_tts",
+    "qwen_voice_clone": "qwen_vc",
+    "qwen-vc": "qwen_vc",
+    "qwen3_tts_vc": "qwen_vc",
+    "qwen3-tts-vc": "qwen_vc",
+    "voice_clone": "qwen_vc",
 }
+
+
+def normalize_cloned_voices(value: object) -> tuple[dict[str, str], ...]:
+    """Normalize stored cloned-voice records, dropping malformed entries."""
+
+    if not isinstance(value, (list, tuple)):
+        return ()
+    voices: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            continue
+        voice_id = str(entry.get("voice_id") or entry.get("voice") or "").strip()
+        if not voice_id or voice_id in seen:
+            continue
+        seen.add(voice_id)
+        voices.append(
+            {
+                "voice_id": voice_id,
+                "display_name": str(entry.get("display_name") or "").strip(),
+                "target_model": str(entry.get("target_model") or "").strip(),
+                "created_at": str(entry.get("created_at") or "").strip(),
+                "language": str(entry.get("language") or "").strip(),
+            }
+        )
+    return tuple(voices)
+
+
+def get_cloned_voice_options(
+    config: Mapping[str, object] | None,
+) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Render stored cloned voices in the shared voice-option tuple shape."""
+
+    raw = config.get("custom_voices") if isinstance(config, Mapping) else None
+    return tuple(
+        (
+            voice["voice_id"],
+            voice["display_name"] or voice["voice_id"],
+            voice["language"] or "multi",
+            "",
+            voice["language"] or "multi",
+        )
+        for voice in normalize_cloned_voices(raw)
+    )
 
 
 def normalize_tts_api_engine(engine: object) -> str:

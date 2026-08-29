@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 from PySide6.QtWidgets import QFileDialog
 
-from src.asr.webspeech_asr import _page
 from src.ui_qt.audio_diagnostics_window import AudioDiagnosticsWindow
 from src.ui_qt.main_window import MainWindow
 from src.ui_qt.mode_wizard_dialog import ModeWizardDialog
@@ -14,13 +13,6 @@ from src.ui_qt.vad_calibration_window import VadCalibrationWindow
 from src.ui_qt.voice_recording_dialog import VoiceRecordingDialog
 
 
-def test_webspeech_browser_page_uses_selected_ui_language():
-    page = _page("ja-JP", ui_language="ru").decode("utf-8")
-
-    assert '<html lang="ru">' in page
-    assert "Мост Mio WebSpeech" in page
-    assert "Этот браузер не поддерживает Web Speech API" in page
-    assert "Keep this page open" not in page
 
 
 def test_mode_wizard_switches_language_without_recreation(qtbot):
@@ -173,26 +165,3 @@ def test_main_language_switch_updates_an_open_settings_window():
     MainWindow._refresh_open_window_languages(window)
 
     assert received == ["ko"]
-
-
-def test_main_language_switch_updates_active_webspeech_provider():
-    received: list[str] = []
-    provider = SimpleNamespace(update_language=received.append)
-    window = MainWindow.__new__(MainWindow)
-    window._ui_lang = "ja"
-    window._settings_window = None
-    window._floating_window = None
-    window._text_input_window = None
-    window._tweaks_panel = None
-    window._mode_wizard_dialog = None
-    window._sponsor_window = None
-    window._update_win = None
-    window._audio_diagnostics_windows = {}
-    window._vad_calibration_windows = {}
-    window._asr = provider
-    window._listen_asr = None
-    window._refresh_osc_guide_language = lambda: None
-
-    MainWindow._refresh_open_window_languages(window)
-
-    assert received == ["ja"]

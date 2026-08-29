@@ -215,16 +215,16 @@ class TestConfigValidation(unittest.TestCase):
         assert config["tts"]["output_to_vrchat"] is False
         assert config["tts"]["output_device"] is None
         assert config["tts"]["output_device_name"] == ""
-        assert config["tts"]["pyttsx3"]["rate"] == 1.0
         assert config["tts"]["voicevox"]["voice"] is None
-        assert config["tts"]["aivis_speech"]["volume"] == 0.8
+        assert config["tts"]["voicevox"]["volume"] == 0.8
         assert config["tts"]["style_bert_vits2"]["voice"] is None
         assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
         assert config["tts"]["style_bert_vits2"]["bert_language"] == "jp"
-        assert config["tts"]["xtts"]["device"] == "cpu"
-        assert config["tts"]["xtts"]["language"] == "auto"
-        assert config["tts"]["xtts"]["prewarm"] is True
-        assert config["tts"]["xtts"]["optimized_inference"] is True
+        assert config["tts"]["qwen_vc"]["voice"] == ""
+        assert config["tts"]["qwen_vc"]["upload_consent"] is False
+        assert config["tts"]["engine"] == "qwen_tts"
+        assert config["tts"]["qwen_vc"]["prewarm"] is True
+        assert config["tts"]["qwen_vc"]["model"] == "qwen3-tts-vc-2026-01-22"
         assert config["tts"]["mimo_tts"]["model"] == "mimo-v2.5-tts"
         assert config["tts"]["mimo_tts"]["voice"] == "mimo_default"
         assert config["tts"]["qwen_tts"]["region"] == "singapore"
@@ -312,32 +312,58 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["tts"]["style_bert_vits2"]["device"] == "cpu"
 
-    def test_ensure_tts_config_normalizes_xtts_runtime_options(self):
+    def test_ensure_tts_config_migrates_local_cloning_to_cloud_cloning(self):
+        """Configs naming the removed local engine keep cloning, not silence."""
+        config = {
+            "xtts_device": "cuda",
+            "tts": {
+                "engine": "xtts",
+                "xtts": {"device": "CUDA", "language": "zh", "voice": "custom"},
+            },
+        }
+
+        changed = config_manager._ensure_tts_config(config)
+
+        assert changed is True
+        assert config["tts"]["engine"] == "qwen_vc"
+        assert "xtts" not in config["tts"]
+        assert "xtts_device" not in config
+        assert config["tts"]["qwen_vc"]["model"] == "qwen3-tts-vc-2026-01-22"
+        assert config["tts"]["qwen_vc"]["custom_voices"] == []
+        assert config["tts"]["qwen_vc"]["upload_consent"] is False
+
+    def test_ensure_tts_config_drops_cloned_voices_that_no_longer_exist(self):
         config = {
             "tts": {
-                "xtts": {
-                    "device": "CUDA",
-                    "language": "zh",
-                    "prewarm": "false",
-                    "lazy_load": "false",
-                    "optimized_inference": "false",
-                    "enable_text_splitting": "true",
-                    "conditioning_cache_size": "99",
-                }
+                "engine": "qwen_vc",
+                "qwen_vc": {
+                    "voice": "gone",
+                    "custom_voices": [
+                        {"voice_id": "kept", "display_name": "Kept"},
+                        {"display_name": "no id"},
+                    ],
+                },
             }
         }
 
         changed = config_manager._ensure_tts_config(config)
 
         assert changed is True
-        assert config["tts"]["xtts"]["device"] == "cuda"
-        assert config["xtts_device"] == "cuda"
-        assert config["tts"]["xtts"]["language"] == "zh-cn"
-        assert config["tts"]["xtts"]["prewarm"] is False
-        assert config["tts"]["xtts"]["lazy_load"] is False
-        assert config["tts"]["xtts"]["optimized_inference"] is False
-        assert config["tts"]["xtts"]["enable_text_splitting"] is True
-        assert config["tts"]["xtts"]["conditioning_cache_size"] == 16
+        stored = config["tts"]["qwen_vc"]["custom_voices"]
+        assert [voice["voice_id"] for voice in stored] == ["kept"]
+        assert config["tts"]["qwen_vc"]["voice"] == "kept"
+
+    def test_ensure_tts_config_reuses_the_qwen_api_key_for_cloning(self):
+        config = {
+            "tts": {
+                "qwen_tts": {"api_key": "sk-shared"},
+                "qwen_vc": {"api_key": ""},
+            }
+        }
+
+        config_manager._ensure_tts_config(config)
+
+        assert config["tts"]["qwen_vc"]["api_key"] == "sk-shared"
 
     def test_ensure_mode_config_adds_simul_mode_defaults(self):
         """Mode config should default to translation with simultaneous presets."""
@@ -472,33 +498,53 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["ui"]["background_image_path"] == ""
 
-    def test_vrc_listen_tail_silence_defaults_to_release_value(self):
-        """Reverse listen tail silence should use the same fast default."""
+    def test_vrc_listen_segmentation_defaults_keep_sentences_whole(self):
+        """A pause inside a sentence must not end the segment.
+
+        0.40 s cut speakers off mid-thought, and the 2.0 s cap force-closed
+        long sentences even when nobody had paused.
+        """
         config = {"audio": {"vad_silence_threshold": 0.65}, "vrc_listen": {}}
 
         changed = config_manager._ensure_vrc_listen_config(config, loaded={})
 
         assert changed is True
-        assert config["vrc_listen"]["tail_silence_s"] == 0.4
-        assert config["vrc_listen"]["latency_profile_version"] == 1
+        assert config["vrc_listen"]["tail_silence_s"] == 0.8
+        assert config["vrc_listen"]["segment_duration_s"] == 5.0
+        assert config["vrc_listen"]["latency_profile_version"] == 2
 
-    def test_vrc_listen_latency_profile_migrates_only_legacy_default(self):
-        legacy = {"vrc_listen": {"tail_silence_s": 0.65}}
-        custom = {"vrc_listen": {"tail_silence_s": 0.8}}
+    def test_vrc_listen_latency_profile_migrates_only_shipped_defaults(self):
+        """Upgrade inherited defaults; never overwrite a deliberate choice."""
+        legacy_v0 = {"vrc_listen": {"tail_silence_s": 0.65}}
+        legacy_v1 = {
+            "vrc_listen": {
+                "tail_silence_s": 0.4,
+                "segment_duration_s": 2.0,
+                "latency_profile_version": 1,
+            }
+        }
+        custom = {
+            "vrc_listen": {
+                "tail_silence_s": 1.5,
+                "segment_duration_s": 3.0,
+                "latency_profile_version": 1,
+            }
+        }
 
-        assert config_manager._ensure_vrc_listen_config(
-            legacy,
-            loaded={"vrc_listen": {"tail_silence_s": 0.65}},
-        )
-        assert config_manager._ensure_vrc_listen_config(
-            custom,
-            loaded={"vrc_listen": {"tail_silence_s": 0.8}},
-        )
+        for config in (legacy_v0, legacy_v1, custom):
+            assert config_manager._ensure_vrc_listen_config(
+                config, loaded={"vrc_listen": dict(config["vrc_listen"])}
+            )
 
-        assert legacy["vrc_listen"]["tail_silence_s"] == 0.4
-        assert custom["vrc_listen"]["tail_silence_s"] == 0.8
-        assert legacy["vrc_listen"]["asr_timeout_s"] == 5.0
-        assert legacy["vrc_listen"]["translation_timeout_s"] == 4.0
+        assert legacy_v0["vrc_listen"]["tail_silence_s"] == 0.8
+        assert legacy_v1["vrc_listen"]["tail_silence_s"] == 0.8
+        assert legacy_v1["vrc_listen"]["segment_duration_s"] == 5.0
+
+        assert custom["vrc_listen"]["tail_silence_s"] == 1.5
+        assert custom["vrc_listen"]["segment_duration_s"] == 3.0
+
+        assert legacy_v0["vrc_listen"]["asr_timeout_s"] == 5.0
+        assert legacy_v0["vrc_listen"]["translation_timeout_s"] == 4.0
 
     def test_vrc_listen_defaults_follow_main_asr(self):
         config = {}
@@ -588,7 +634,7 @@ class TestConfigValidation(unittest.TestCase):
     def test_initial_asr_default_uses_locale_recommendation(self):
         """New configs should use the locale-based ASR default."""
         original_selector = config_manager.select_default_asr_engine
-        config_manager.select_default_asr_engine = lambda: "webspeech"
+        config_manager.select_default_asr_engine = lambda: "edge-stt"
         try:
             config = {"asr": {"engine": "sensevoice-small"}}
             changed = config_manager._apply_initial_asr_default(config)
@@ -596,12 +642,12 @@ class TestConfigValidation(unittest.TestCase):
             config_manager.select_default_asr_engine = original_selector
 
         assert changed is True
-        assert config["asr"]["engine"] == "webspeech"
+        assert config["asr"]["engine"] == "edge-stt"
         assert config["asr"]["engine_source"] == "auto"
 
     def test_user_selected_asr_engine_is_not_overridden(self):
         original_selector = config_manager.select_default_asr_engine
-        config_manager.select_default_asr_engine = lambda: "webspeech"
+        config_manager.select_default_asr_engine = lambda: "edge-stt"
         try:
             config = {
                 "asr": {
@@ -635,10 +681,6 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["auto_fallback"] is True
         assert config["asr"]["device"] == "cpu"
         assert config["asr"]["fallback_engine"] == "sensevoice-small"
-        assert config["asr"]["webspeech"]["language"] == "ja-JP"
-        assert config["asr"]["webspeech"]["embedded_browser"] is True
-        assert config["asr"]["webspeech"]["stale_connection_seconds"] == 8.0
-        assert config["asr"]["webspeech"]["auto_fallback"] is False
         assert config["asr"]["qwen3_asr"]["model"] == "qwen3-asr-flash-2026-02-10"
         assert config["asr"]["qwen3_asr"]["base_url"] == (
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
@@ -652,7 +694,9 @@ class TestConfigValidation(unittest.TestCase):
         assert config["asr"]["whisper"]["model_revision"] == "master"
         assert config["asr"]["whisper"]["language"] == "auto"
         assert config["asr"]["whisper"]["ncpu"] is None
-        assert config["asr"]["gemini_live"]["transcribe_only"] is True
+        assert config["asr"]["edge_stt"]["language"] == "ja-JP"
+        assert config["asr"]["edge_stt"]["reuse_connection"] is True
+        assert config["asr"]["edge_stt"]["max_turns"] == 18
         assert config["asr"]["streaming"] == {
             "chunk_interval_ms": 250,
             "chunk_window_s": 1.6,

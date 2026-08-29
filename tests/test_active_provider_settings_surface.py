@@ -9,7 +9,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel
 
 from src.ui_qt import settings_window as settings_module
-from src.ui_qt.settings.settings_window_tabbed import SettingsWindowTabbed
 from src.ui_qt.settings_window import SettingsWindow
 from src.utils.i18n import tr
 from src.utils.ui_config import get_backend_label
@@ -121,16 +120,14 @@ def _tabbed_provider_config() -> dict:
 
 
 def _patch_dialog_dependencies(monkeypatch) -> None:
-    ready_status = type(
-        "ReadyXTTSStatus",
-        (),
-        {"ready": True, "missing_component_names": ()},
-    )()
     monkeypatch.setattr(settings_module.AudioRecorder, "list_devices", lambda: [])
     monkeypatch.setattr(settings_module, "_list_desktop_output_devices", lambda: [])
     monkeypatch.setattr(settings_module, "find_best_virtual_output_device", lambda: None)
-    monkeypatch.setattr(settings_module, "create_tts_engine", lambda _engine: _DummyTTS())
-    monkeypatch.setattr(settings_module, "xtts_runtime_status", lambda **_kwargs: ready_status)
+    monkeypatch.setattr(
+        settings_module,
+        "create_tts_engine",
+        lambda _engine, config=None: _DummyTTS(),
+    )
     monkeypatch.setattr(
         settings_module,
         "first_missing_required_credential",
@@ -184,42 +181,6 @@ def test_active_settings_surface_exposes_official_and_compatible_paths(
             assert expected_timeout_labels <= rendered_labels, backend
     finally:
         _dispose(dialog, qapp)
-
-
-def test_tabbed_api_models_provider_and_key_edits_beat_stale_quick_setup(qapp):
-    dialog = SettingsWindowTabbed(_tabbed_provider_config(), ui_language="en")
-    try:
-        api = dialog._api_models_tab
-        provider_index = api._provider_combo.findData("openai_compatible")
-        api._provider_combo.setCurrentIndex(provider_index)
-        api._openai_compatible_key_input.setText("new-relay")
-
-        collected = dialog._collect_config()
-
-        assert collected["translation"]["backend"] == "openai_compatible"
-        assert (
-            collected["translation"]["openai_compatible"]["api_key"]
-            == "new-relay"
-        )
-    finally:
-        dialog.reject()
-        dialog.deleteLater()
-        qapp.processEvents()
-
-
-def test_tabbed_api_models_key_edit_beats_stale_quick_setup_key(qapp):
-    dialog = SettingsWindowTabbed(_tabbed_provider_config(), ui_language="en")
-    try:
-        dialog._api_models_tab._openai_key_input.setText("new-openai")
-
-        collected = dialog._collect_config()
-
-        assert collected["translation"]["backend"] == "openai"
-        assert collected["translation"]["openai"]["api_key"] == "new-openai"
-    finally:
-        dialog.reject()
-        dialog.deleteLater()
-        qapp.processEvents()
 
 
 def test_active_official_provider_model_ids_are_editable(

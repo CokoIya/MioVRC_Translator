@@ -71,7 +71,6 @@ LANGUAGE_NEUTRAL_GLOBAL_KEYS = {
     "tts_read_button",
     "vrchat_tab",
     "window_title",
-    "xtts_runtime_component_separator",
 }
 
 

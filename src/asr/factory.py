@@ -123,24 +123,10 @@ def create_asr(config: dict, engine: str | None = None):
             )
         return primary
 
-    if engine == "gemini-live":
-        from src.asr.gemini_live_asr import GeminiLiveASRProvider
-        primary = GeminiLiveASRProvider(config, corrector=corrector)
-        if _auto_fallback_enabled(config):
-            return FallbackASR(
-                primary,
-                fallback_factory=lambda: _create_ready_sensevoice_fallback(
-                    config,
-                    corrector,
-                ),
-                auto_fallback=True,
-            )
-        return primary
-
-    if engine == "webspeech":
-        from src.asr.webspeech_asr import WebSpeechASRProvider
-        primary = WebSpeechASRProvider(config, corrector=corrector)
-        if _provider_auto_fallback_enabled(config, "webspeech", default=False):
+    if engine == "edge-stt":
+        from src.asr.edge_stt_asr import EdgeSTTASRProvider
+        primary = EdgeSTTASRProvider(config, corrector=corrector)
+        if _provider_auto_fallback_enabled(config, "edge-stt", default=False):
             return FallbackASR(
                 primary,
                 fallback_factory=lambda: _create_ready_sensevoice_fallback(

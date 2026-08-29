@@ -169,17 +169,6 @@ _HF_MODEL_FILES: dict[str, list[str]] = {
         "configuration.json",
         "small.en.pb",
     ],
-    "coqui/XTTS-v2": [
-        "model.pth",
-        "config.json",
-        "vocab.json",
-        "dvae.pth",
-        "mel_stats.pth",
-    ],
-    "coqui/xtts_speaker_encoder": [
-        "model.pth",
-        "config.json",
-    ],
     "ku-nlp/deberta-v2-large-japanese-char-wwm": [
         "config.json",
         "special_tokens_map.json",
@@ -206,7 +195,6 @@ _HF_MODEL_FILES: dict[str, list[str]] = {
 
 _HF_MODEL_REVISIONS: dict[str, str] = {
     "iic/SenseVoiceSmall": "70514a3da51f1160f51d18449dab6128bbd4928b",
-    "coqui/XTTS-v2": "6c2b0d75eae4b7047358e3b6bd9325f857d43f77",
     "ku-nlp/deberta-v2-large-japanese-char-wwm": (
         "547b0e8b044fba3f9b84d0ab9f990440bd130c8b"
     ),
@@ -227,13 +215,6 @@ _HF_MODEL_FILE_SHA256: dict[str, dict[str, str]] = {
             "02810a7f8e9e8aee10370a265f7e799728ce25b4c00cdbf4602b303ee395a38e"
         ),
         "model.pt": "833ca2dcfdf8ec91bd4f31cfac36d6124e0c459074d5e909aec9cabe6204a3ea",
-    },
-    "coqui/XTTS-v2": {
-        "model.pth": "c7ea20001c6a0a841c77e252d8409f6a74fb423e79b3206a0771ba5989776187",
-        "config.json": "ef262b1454dd2a77e1461b0b2cd53e19b8a7624cc131b837d36df67356bc75e8",
-        "vocab.json": "928260878a59da8a72a2a5b7687fea29d5106137669d90945430fe17e415304a",
-        "dvae.pth": "b29bc227d410d4991e0a8c09b858f77415013eeb9fba9650258e96095557d97a",
-        "mel_stats.pth": "1f69422a8a8f344c4fca2f0c6b8d41d2151d6615b7321e48e6bb15ae949b119c",
     },
     "ku-nlp/deberta-v2-large-japanese-char-wwm": {
         "config.json": "8f387ab4c6b36e47c7071327c7a42099002781279b00a7e6a7fe88f3da237a3f",

@@ -80,7 +80,6 @@ def test_asr_model_file_lists_use_real_weight_names_not_default_model_bin():
 
 def test_known_models_use_immutable_revisions_and_complete_hash_manifests():
     for model_id in (
-        "coqui/XTTS-v2",
         "ku-nlp/deberta-v2-large-japanese-char-wwm",
         "microsoft/deberta-v3-large",
         "hfl/chinese-roberta-wwm-ext-large",

@@ -1,7 +1,13 @@
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtCore import QPoint, QRect
 
-from src.ui_qt.floating_window import FloatingWindow
+from types import SimpleNamespace
+
+from src.ui_qt.floating_window import (
+    MIN_SIZE,
+    MIN_SIZE_SCALE_CAP,
+    FloatingWindow,
+)
 from src.ui_qt.styles import build_floating_window_styles, build_text_input_styles
 
 
@@ -97,8 +103,118 @@ def test_floating_window_has_close_button_icon(qtbot):
     assert window._close_button.toolTip() == "关闭"
 
 
-def test_floating_window_reuses_text_input_styles():
-    assert build_floating_window_styles("light") == build_text_input_styles("light")
+def test_floating_window_has_its_own_stylesheet():
+    """The overlay no longer borrows the composer's sheet.
+
+    Sharing it sized every control for a text-input window the overlay does
+    not have, which is what made the overlay bulky at small sizes.
+    """
+
+    floating = build_floating_window_styles("light")
+
+    assert floating != build_text_input_styles("light")
+    assert "QFrame#floatingShell" in floating
+    assert "QPushButton#floatingSendButton" in floating
+    assert "QFrame#textInputShell" not in floating
+
+
+def test_floating_bubble_width_follows_its_content(qtbot):
+    """A short reply must not occupy the same slab as a paragraph."""
+
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+    window.resize(900, 420)
+    window.show()
+    qtbot.waitExposed(window)
+
+    window.show_translation("好", source="listen")
+    window.show_translation("这" * 200, source="listen")
+    qtbot.wait(30)
+
+    widths = [
+        widgets["bubble"].sizeHint().width()
+        for widgets in window._history_widgets.values()
+    ]
+
+    assert len(widths) == 2
+    assert widths[0] < widths[1]
+    assert max(widths) <= window._bubble_wraplength()
+
+
+def test_floating_bubble_keeps_the_original_line(qtbot):
+    """The translation leads; the source text stays available underneath."""
+
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+
+    message = SimpleNamespace(
+        source="listen",
+        original_text="こんにちは",
+        translated_text="你好",
+        display_text="こんにちは（你好）",
+        chatbox_text="こんにちは（你好）",
+    )
+
+    assert window.show_message(message) is True
+
+    widgets = next(iter(window._history_widgets.values()))
+
+    assert widgets["label"].text() == "你好"
+    assert widgets["original"] is not None
+    assert widgets["original"].text() == "こんにちは"
+
+
+def test_floating_bubble_omits_a_redundant_original(qtbot):
+    """Untranslated speech must not print the same line twice."""
+
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+
+    message = SimpleNamespace(
+        source="listen",
+        original_text="你好",
+        translated_text="你好",
+        display_text="你好",
+        chatbox_text="你好",
+    )
+    window.show_message(message)
+
+    widgets = next(iter(window._history_widgets.values()))
+
+    assert widgets["original"] is None
+
+
+def test_floating_window_minimum_stays_small_on_scaled_displays(qtbot):
+    """The floor is what the overlay collapses to next to VRChat.
+
+    Scaling it by the full UI scale produced a 558x341 "minimum" on a
+    high-DPI screen, so the floor only follows the display part of the way.
+    """
+
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+
+    assert window.minimumWidth() <= int(MIN_SIZE[0] * MIN_SIZE_SCALE_CAP) + 1
+    assert window.minimumHeight() <= int(MIN_SIZE[1] * MIN_SIZE_SCALE_CAP) + 1
+
+
+def test_floating_send_button_is_visible_before_it_is_usable(qtbot):
+    """Players have to see the button to learn the history can be resent."""
+
+    window = FloatingWindow(None, "zh-CN")
+    qtbot.addWidget(window)
+    window.reveal()
+
+    assert window._send_selected_button.isVisible() is True
+    assert window._send_selected_button.isEnabled() is False
+    assert window._send_selected_button.text() == "发送到VRC"
+    assert window._send_selected_button.toolTip()
+
+    window.show_translation("你好", source="listen")
+    entry_id = next(iter(window._history_widgets))
+    window._select_history_entry(entry_id)
+
+    assert window._send_selected_button.isEnabled() is True
 
 
 def test_floating_window_top_region_starts_drag(qtbot):

@@ -9,7 +9,7 @@ import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QKeyEvent, QPalette
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QKeyEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -35,10 +35,20 @@ from src.utils.ui_config import get_ui_language
 
 logger = logging.getLogger(__name__)
 
-TEXT_INPUT_WINDOW_CONFIG_VERSION = 5
-DEFAULT_GEOMETRY = "520x320"
-DEFAULT_SIZE = (520, 320)
-MIN_SIZE = (360, 220)
+# Bumped so the roomier saved geometry from the old layout is replaced by the
+# composer-sized default instead of preserving all that empty space.
+TEXT_INPUT_WINDOW_CONFIG_VERSION = 6
+DEFAULT_GEOMETRY = "460x210"
+DEFAULT_SIZE = (460, 210)
+MIN_SIZE = (320, 150)
+# A composer for 144 characters does not need to keep a third of the screen.
+# The floor follows the display only part of the way so "minimum" stays small.
+MIN_SIZE_SCALE_CAP = 1.12
+INPUT_MIN_HEIGHT = 64
+# One source of truth for the header/footer control squares.
+HEADER_CONTROL_SIZE = 26
+# VRChat truncates past the chatbox limit, so the counter warns before it bites.
+COUNTER_WARN_RATIO = 0.85
 DEFAULT_OPACITY = 0.88
 MIN_OPACITY = 0.45
 MAX_OPACITY = 1.0
@@ -214,30 +224,43 @@ class TextInputWindow(QDialog):
         self._top_row = QHBoxLayout()
         self._top_row.setSpacing(6)
 
-        self._opacity_label = QLabel(self._opacity_label_text())
-        self._opacity_label.setObjectName("opacityLabel")
+        # The window is frameless, so the header carries its name. Without it
+        # the composer arrives on screen with nothing saying what it is.
+        self._title_label = QLabel(tr(self._ui_lang, "text_input_floating"))
+        self._title_label.setObjectName("textInputTitle")
+        self._title_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        self._top_row.addWidget(self._title_label, 1)
+
+        self._opacity_label = QLabel(f"{int(round(self._opacity * 100))}%")
+        self._opacity_label.setObjectName("textInputCounter")
+        self._opacity_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self._opacity_label.setToolTip(self._opacity_label_text())
         self._top_row.addWidget(self._opacity_label)
 
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(int(MIN_OPACITY * 100), int(MAX_OPACITY * 100))
         self._opacity_slider.setValue(int(round(self._opacity * 100)))
-        self._opacity_slider.setFixedWidth(86)
+        self._opacity_slider.setFixedWidth(64)
         self._opacity_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._opacity_slider.setToolTip(self._opacity_label_text())
         self._opacity_slider.valueChanged.connect(self._on_opacity_change)
         self._top_row.addWidget(self._opacity_slider)
-        self._top_row.addStretch(1)
 
         self._pin_button = QPushButton("")
-        self._pin_button.setObjectName("pinButton")
-        self._pin_button.setFixedSize(30, 30)
-        self._pin_button.setIconSize(QSize(15, 15))
+        self._pin_button.setObjectName("iconButton")
+        self._pin_button.setFixedSize(HEADER_CONTROL_SIZE, HEADER_CONTROL_SIZE)
+        self._pin_button.setIconSize(QSize(14, 14))
         self._pin_button.clicked.connect(self.toggle_topmost)
         self._top_row.addWidget(self._pin_button)
 
         self._close_btn = QPushButton("")
         self._close_btn.setObjectName("iconButton")
-        self._close_btn.setFixedSize(30, 30)
-        self._close_btn.setIconSize(QSize(15, 15))
+        self._close_btn.setFixedSize(HEADER_CONTROL_SIZE, HEADER_CONTROL_SIZE)
+        self._close_btn.setIconSize(QSize(14, 14))
         self._close_btn.clicked.connect(self.close)
         self._top_row.addWidget(self._close_btn)
         self._main_layout.addLayout(self._top_row)
@@ -246,7 +269,7 @@ class TextInputWindow(QDialog):
         self._input_edit.setObjectName("inputTextEdit")
         self._input_edit.setAcceptRichText(False)
         self._input_edit.setPlaceholderText(tr(self._ui_lang, "text_input_placeholder"))
-        self._input_edit.setMinimumHeight(132)
+        self._input_edit.setMinimumHeight(INPUT_MIN_HEIGHT)
         self._input_edit.setText(initial_text)
         self._input_edit.installEventFilter(self)
         self._input_edit.textChanged.connect(self._refresh_actions)
@@ -257,18 +280,26 @@ class TextInputWindow(QDialog):
 
         self._counter_label = QLabel("")
         self._counter_label.setObjectName("textInputCounter")
-        self._bottom_row.addWidget(self._counter_label, 1)
+        self._bottom_row.addWidget(self._counter_label)
+
+        # Enter sends and Shift+Enter breaks the line; nothing said so before.
+        self._key_hint_label = QLabel(tr(self._ui_lang, "text_input_key_hint"))
+        self._key_hint_label.setObjectName("textInputKeyHint")
+        self._key_hint_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        self._bottom_row.addWidget(self._key_hint_label, 1)
 
         self._clear_btn = QPushButton("")
         self._clear_btn.setObjectName("iconButton")
-        self._clear_btn.setFixedSize(30, 30)
-        self._clear_btn.setIconSize(QSize(15, 15))
+        self._clear_btn.setFixedSize(HEADER_CONTROL_SIZE, HEADER_CONTROL_SIZE)
+        self._clear_btn.setIconSize(QSize(14, 14))
         self._clear_btn.clicked.connect(self._on_clear)
         self._bottom_row.addWidget(self._clear_btn)
 
         self._send_btn = QPushButton(tr(self._ui_lang, "text_input_send"))
         self._send_btn.setObjectName("primaryButton")
-        self._send_btn.setIconSize(QSize(15, 15))
+        self._send_btn.setIconSize(QSize(14, 14))
         self._send_btn.clicked.connect(self._on_send_clicked)
         self._send_btn.setDefault(True)
         self._bottom_row.addWidget(self._send_btn)
@@ -311,7 +342,7 @@ class TextInputWindow(QDialog):
         color: str,
         fallback_text: str = "",
     ) -> None:
-        icon = ui_icon(filename, self._scaled(16), color)
+        icon = ui_icon(filename, self._scaled(14), color)
         button.setIcon(icon)
         button.setText(fallback_text if icon.isNull() else "")
 
@@ -331,7 +362,7 @@ class TextInputWindow(QDialog):
         self._close_btn.setToolTip(tr(self._ui_lang, "text_input_close"))
         self._set_button_icon(self._clear_btn, "trash.svg", strong, tr(self._ui_lang, "text_input_clear"))
         self._clear_btn.setToolTip(tr(self._ui_lang, "text_input_clear"))
-        send_icon = ui_icon("send.svg", self._scaled(16), "#ffffff")
+        send_icon = ui_icon("send.svg", self._scaled(14), "#ffffff")
         self._send_btn.setIcon(send_icon if not send_icon.isNull() else QIcon())
 
     def update_language(self, ui_language: str) -> None:
@@ -339,16 +370,61 @@ class TextInputWindow(QDialog):
         self.setWindowTitle(tr(self._ui_lang, "text_input_floating"))
         self._input_edit.setPlaceholderText(tr(self._ui_lang, "text_input_placeholder"))
         self._send_btn.setText(tr(self._ui_lang, "text_input_send"))
-        self._opacity_label.setText(self._opacity_label_text())
+        self._opacity_label.setToolTip(self._opacity_label_text())
+        self._opacity_slider.setToolTip(self._opacity_label_text())
         self._apply_style()
         self._refresh_icons()
         self._refresh_actions()
+        self._refresh_header_labels()
 
     def _opacity_label_text(self) -> str:
         return tr(self._ui_lang, "text_input_opacity", pct=int(round(self._opacity * 100)))
 
     def _pin_text(self) -> str:
         return tr(self._ui_lang, "text_input_pin_on" if self._topmost else "text_input_pin_off")
+
+    def _refresh_header_labels(self) -> None:
+        """Shrink the title before it can push the window controls around."""
+
+        label = getattr(self, "_title_label", None)
+        if label is None:
+            return
+        reserved = (
+            self._scaled(64 + 26 + 26 + 40) + self._opacity_label.sizeHint().width()
+        )
+        available = self.width() - reserved
+        title = tr(self._ui_lang, "text_input_floating")
+        label.setToolTip(title)
+        if available < self._scaled(48):
+            label.setVisible(False)
+            return
+        label.setVisible(True)
+        metrics = QFontMetrics(label.font())
+        label.setText(
+            metrics.elidedText(title, Qt.TextElideMode.ElideRight, available)
+        )
+        hint = getattr(self, "_key_hint_label", None)
+        if hint is None:
+            return
+        hint_text = tr(self._ui_lang, "text_input_key_hint")
+        hint.setToolTip(hint_text)
+        # Every sibling in the footer plus the shell margins and the three
+        # gaps between them; anything left over is what the hint may use.
+        hint_room = (
+            self.width()
+            - self._send_btn.sizeHint().width()
+            - self._clear_btn.sizeHint().width()
+            - self._counter_label.sizeHint().width()
+            - self._scaled(70)
+        )
+        # All or nothing: half a shortcut ("Enter 发送 · Shi…") teaches nobody
+        # anything, and the room it takes is what pushes the row into overlap.
+        needed = QFontMetrics(hint.font()).horizontalAdvance(hint_text)
+        if hint_room < needed:
+            hint.setVisible(False)
+            return
+        hint.setVisible(True)
+        hint.setText(hint_text)
 
     def _on_opacity_change(self, value: int) -> None:
         self._opacity = _as_opacity(float(value) / 100.0)
@@ -386,6 +462,15 @@ class TextInputWindow(QDialog):
         text = self._trim_input_to_limit()
         count = len(text.strip())
         self._counter_label.setText(tr(self._ui_lang, "char_count", count=count))
+        # Past the limit VRChat silently truncates, so the count changes colour
+        # while there is still room to shorten the message.
+        near_limit = count >= int(TEXT_INPUT_CHAR_LIMIT * COUNTER_WARN_RATIO)
+        at_limit = count >= TEXT_INPUT_CHAR_LIMIT
+        state = "full" if at_limit else ("warn" if near_limit else "")
+        if self._counter_label.property("limit") != state:
+            self._counter_label.setProperty("limit", state)
+            self._counter_label.style().unpolish(self._counter_label)
+            self._counter_label.style().polish(self._counter_label)
         self._send_btn.setEnabled(count > 0)
         self._clear_btn.setEnabled(count > 0)
 
@@ -443,25 +528,30 @@ class TextInputWindow(QDialog):
         return max(12, min(22, self._scaled(15) + int(width_adjust)))
 
     def _text_input_scale_styles(self) -> str:
+        control = self._scaled(HEADER_CONTROL_SIZE)
         return f"""
-        QLabel#opacityLabel, QLabel#textInputCounter {{
+        QLabel#textInputTitle {{
+            font-size: {self._scaled(12)}px;
+        }}
+        QLabel#textInputCounter, QLabel#textInputKeyHint {{
             font-size: {self._scaled(11)}px;
         }}
         QTextEdit#inputTextEdit {{
             font-size: {self._input_font_px()}px;
-            padding: {self._scaled(12)}px;
+            padding: {self._scaled(10)}px;
         }}
         QPushButton#primaryButton {{
-            font-size: {self._scaled(14)}px;
-            min-height: {self._scaled(34)}px;
-            padding: 0 {self._scaled(14)}px;
+            font-size: {self._scaled(13)}px;
+            min-height: {control}px;
+            max-height: {control}px;
+            padding: 0 {self._scaled(12)}px;
         }}
-        QPushButton#pinButton, QPushButton#iconButton {{
-            min-width: {self._scaled(30)}px;
-            max-width: {self._scaled(30)}px;
-            min-height: {self._scaled(30)}px;
-            max-height: {self._scaled(30)}px;
-            border-radius: {self._scaled(10)}px;
+        QPushButton#iconButton {{
+            min-width: {control}px;
+            max-width: {control}px;
+            min-height: {control}px;
+            max-height: {control}px;
+            border-radius: {self._scaled(9)}px;
         }}
         """
 
@@ -470,7 +560,11 @@ class TextInputWindow(QDialog):
         if not force and abs(scale - self._last_ui_scale) < 0.03:
             return False
         self._last_ui_scale = scale
-        self.setMinimumSize(self._scaled(MIN_SIZE[0]), self._scaled(MIN_SIZE[1]))
+        floor_scale = min(scale, MIN_SIZE_SCALE_CAP)
+        self.setMinimumSize(
+            int(round(MIN_SIZE[0] * floor_scale)),
+            int(round(MIN_SIZE[1] * floor_scale)),
+        )
         self._root_layout.setContentsMargins(
             self._scaled(10),
             self._scaled(10),
@@ -478,18 +572,18 @@ class TextInputWindow(QDialog):
             self._scaled(10),
         )
         self._main_layout.setContentsMargins(
-            self._scaled(10),
-            self._scaled(10),
-            self._scaled(10),
-            self._scaled(10),
+            self._scaled(9),
+            self._scaled(9),
+            self._scaled(9),
+            self._scaled(9),
         )
-        self._main_layout.setSpacing(self._scaled(8))
+        self._main_layout.setSpacing(self._scaled(7))
         self._top_row.setSpacing(self._scaled(6))
         self._bottom_row.setSpacing(self._scaled(8))
-        self._opacity_slider.setFixedWidth(self._scaled(86))
-        self._input_edit.setMinimumHeight(self._scaled(132))
-        control_size = self._scaled(30)
-        icon_size = self._scaled(15)
+        self._opacity_slider.setFixedWidth(self._scaled(64))
+        self._input_edit.setMinimumHeight(self._scaled(INPUT_MIN_HEIGHT))
+        control_size = self._scaled(HEADER_CONTROL_SIZE)
+        icon_size = self._scaled(14)
         for button in (self._pin_button, self._close_btn, self._clear_btn):
             button.setFixedSize(control_size, control_size)
             button.setIconSize(QSize(icon_size, icon_size))
@@ -499,6 +593,7 @@ class TextInputWindow(QDialog):
             effect.setBlurRadius(self._scaled(28))
             effect.setOffset(0, self._scaled(12))
         self._apply_style()
+        self._refresh_header_labels()
         return True
 
     def _install_interaction_filter(self, widget: QWidget) -> None:
@@ -538,6 +633,7 @@ class TextInputWindow(QDialog):
         super().resizeEvent(event)
         if hasattr(self, "_root_layout"):
             self._apply_scaled_layout()
+        self._refresh_header_labels()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:

@@ -23,8 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.tts import manager as manager_module
 from src.tts.base import BaseTTS, TTSVoice
-from src.tts.gtts_engine import GoogleTTS
-from src.tts.pyttsx3_engine import Pyttsx3TTS
 from src.tts.manager import (
     TTSManager,
     TTSRequest,
@@ -750,25 +748,6 @@ def test_concurrent_repeated_close_cannot_report_quiescent_during_stop_handoff(
     assert engine.close_calls == 1
 
 
-def test_pyttsx3_close_stops_native_driver_once():
-    class FakeNativeEngine:
-        def __init__(self):
-            self.stop_calls = 0
-
-        def stop(self):
-            self.stop_calls += 1
-
-    native = FakeNativeEngine()
-    engine = Pyttsx3TTS.__new__(Pyttsx3TTS)
-    engine._engine = native
-    engine._voices_cache = [object()]
-
-    engine.close()
-    engine.close()
-
-    assert native.stop_calls == 1
-    assert engine._engine is None
-    assert engine._voices_cache is None
 
 
 def test_tts_manager_prewarm_runs_on_synthesis_worker(monkeypatch):
@@ -1601,7 +1580,7 @@ def test_tts_manager_cache_key_includes_runtime_engine_config(monkeypatch):
     )
 
     manager = TTSManager(
-        engine_name="xtts",
+        engine_name="qwen_vc",
         cache_enabled=True,
         allow_fallback=False,
         engine_config={"language": "en", "api_key": "first"},
@@ -3046,16 +3025,6 @@ def test_tts_manager_persists_recovered_virtual_output(monkeypatch):
     assert saved == [(0, "銈广償銉笺偒銉?(MIXLINE)")]
 
 
-def test_google_tts_voice_loading_is_local():
-    """gTTS voice listing should be available without a network voice fetch."""
-    engine = GoogleTTS()
-    if not engine.is_available():
-        pytest.skip("gTTS is not installed")
-
-    voices = engine.get_available_voices()
-
-    assert any(voice.id == "zh-CN" for voice in voices)
-    assert any(voice.id == "en" for voice in voices)
 
 
 

@@ -167,7 +167,7 @@ def test_pipeline_start_keeps_qobject_sender_setup_on_calling_ui_thread():
     window._prompt_for_missing_credential = lambda _scopes: False
     window._t = lambda key: key
     window._set_status = lambda *_args, **_kwargs: None
-    window._listen_session = 0
+    window._runtime_generation = 0
     window._reset_streaming_state = lambda *_args, **_kwargs: None
     window._reset_translation_failure_backoff = lambda *_args, **_kwargs: None
     window._ensure_sender = lambda: sender_threads.append(threading.get_ident())
@@ -785,7 +785,7 @@ def test_background_warmup_never_constructs_local_asr_or_tts(monkeypatch):
         "translation": {"output_format": "original_only"},
         "asr": {"engine": "whisper-large-v3-turbo"},
         "vrc_listen": {"enabled": False},
-        "tts": {"enabled": True, "engine": "xtts"},
+        "tts": {"enabled": True, "engine": "qwen_vc"},
     }
     monkeypatch.setattr(
         "src.ui_qt.main_window.create_asr",
@@ -987,13 +987,13 @@ def test_online_tts_background_manager_is_retained_for_first_use(monkeypatch):
         "translation": {"output_format": "translated_only"},
         "tts": {
             "enabled": True,
-            "engine": "edge",
+            "engine": "qwen_tts",
             "allow_fallback": True,
             "output_device": None,
             "output_device_name": "",
             "output_to_vrchat": False,
             "monitor_enabled": False,
-            "edge": {"voice": "en-US-AriaNeural"},
+            "qwen_tts": {"api_key": "sk-test", "voice": "Cherry"},
         },
         "performance": {
             "tts_cache_max_mb": 24,
@@ -1188,7 +1188,7 @@ def test_main_window_target_language_2_selector_updates_config(qtbot, monkeypatc
     window.destroy()
 
 
-def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch):
+def test_tts_manager_reuses_loaded_voice_clone_until_runtime_config_changes(monkeypatch):
     created = []
     stopped = []
 
@@ -1211,15 +1211,15 @@ def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch
     window._config = {
         "tts": {
             "enabled": True,
-            "engine": "xtts",
+            "engine": "qwen_vc",
             "allow_fallback": False,
             "output_device": None,
             "output_device_name": "",
             "output_to_vrchat": False,
             "monitor_enabled": False,
-            "xtts": {
-                "device": "cpu",
-                "language": "auto",
+            "qwen_vc": {
+                "api_key": "sk-test",
+                "model": "qwen3-tts-vc-2026-01-22",
                 "voice": "sample",
                 "rate": 1.0,
                 "volume": 0.8,
@@ -1235,7 +1235,7 @@ def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch
 
     first = MainWindow._ensure_tts_manager(window)
     second = MainWindow._ensure_tts_manager(window)
-    window._config["tts"]["xtts"]["volume"] = 0.3
+    window._config["tts"]["qwen_vc"]["volume"] = 0.3
     MainWindow._reset_tts_manager_if_runtime_changed(window)
 
     assert first is second
@@ -1243,7 +1243,7 @@ def test_tts_manager_reuses_loaded_xtts_until_runtime_config_changes(monkeypatch
     assert created == [first]
     assert stopped == []
 
-    window._config["tts"]["xtts"]["language"] = "ja"
+    window._config["tts"]["qwen_vc"]["model"] = "qwen3-tts-vc-next"
     MainWindow._reset_tts_manager_if_runtime_changed(window)
 
     assert stopped == [first]
@@ -1368,7 +1368,7 @@ def test_tts_runtime_rebuilds_when_cache_limits_change(monkeypatch):
     assert window._tts_manager is None
 
 
-def test_realtime_session_prewarm_queues_selected_xtts_voice():
+def test_realtime_session_prewarm_queues_selected_cloned_voice():
     calls = []
 
     class FakeManager:
@@ -1378,7 +1378,7 @@ def test_realtime_session_prewarm_queues_selected_xtts_voice():
     window = MainWindow.__new__(MainWindow)
     window._destroying = False
     window._running = True
-    window._listen_session = 7
+    window._runtime_generation = 7
     window._ensure_tts_manager = lambda: FakeManager()
     window._tts_voice_for_engine = lambda _manager: "sample-voice"
 
@@ -1678,7 +1678,7 @@ def test_settings_preload_is_opt_in_and_skips_heavy_tts_engines():
     window._config["performance"]["preload_settings_window"] = True
     assert MainWindow._settings_preload_enabled(window) is True
 
-    window._config["tts"]["engine"] = "xtts"
+    window._config["tts"]["engine"] = "style_bert_vits2"
     assert MainWindow._settings_preload_enabled(window) is False
 
     window._config["tts"]["engine"] = "edge"
@@ -2071,6 +2071,109 @@ def test_mode_wizard_tts_recommendation_updates_config(monkeypatch):
     assert window._config["ui"]["mode_wizard_seen"] is True
 
 
+def _mode_wizard_window(monkeypatch, config):
+    window = MainWindow.__new__(MainWindow)
+    window._config = config
+    window._desktop_capture_enabled = False
+    window._listen_overlay_enabled = False
+    window._mode_manager = type(
+        "_ModeManager",
+        (),
+        {
+            "mode": AppMode.TRANSLATION,
+            "set_mode": lambda self, mode: type(
+                "_Change",
+                (),
+                {"tts_changed": False, "output_device_changed": False, "changed": True},
+            )(),
+        },
+    )()
+
+    monkeypatch.setattr(window, "_set_app_mode", lambda mode, persist: None)
+    monkeypatch.setattr(
+        window,
+        "_ensure_overlay_service",
+        lambda create_backend=True: type(
+            "_OverlayService",
+            (),
+            {"set_enabled": lambda self, enabled, reveal=True: None},
+        )(),
+    )
+    monkeypatch.setattr(window, "_sync_avatar_overlay_state", lambda force=False: None)
+    monkeypatch.setattr(window, "_sync_tts_enabled_from_config", lambda: None)
+    monkeypatch.setattr(window, "_refresh_mode_buttons", lambda: None)
+    monkeypatch.setattr(window, "_refresh_desktop_capture_button", lambda: None)
+    monkeypatch.setattr(window, "_refresh_listen_overlay_button", lambda: None)
+    monkeypatch.setattr(window, "_sync_settings_window_vrc_listen_state", lambda: None)
+    monkeypatch.setattr(window, "_schedule_config_save", lambda: None)
+    monkeypatch.setattr(window, "_set_bottom", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(window, "_t", lambda key, **_kwargs: key)
+    return window
+
+
+@pytest.mark.parametrize("mode", ["listen", "overlay"])
+def test_mode_wizard_listen_modes_keep_own_speech_reaching_vrchat(monkeypatch, mode):
+    """Setting up reverse translation must not stop the player's own output.
+
+    Listening to others is something these modes add on top of speaking, so
+    the wizard turning the chatbox off left players with a silent VRChat and
+    no obvious cause.
+    """
+
+    window = _mode_wizard_window(
+        monkeypatch,
+        {"translation": {}, "vrc_listen": {}, "tts": {}, "ui": {}},
+    )
+
+    MainWindow._apply_mode_wizard_result(window, mode)
+
+    assert window._config["translation"]["send_to_chatbox"] is True
+    assert window._config["vrc_listen"]["enabled"] is True
+
+
+@pytest.mark.parametrize("mode", ["chatbox", "listen", "manual", "overlay", "tts"])
+def test_mode_wizard_preserves_an_explicit_chatbox_choice(monkeypatch, mode):
+    """A player who switched the chatbox off keeps it off through the wizard."""
+
+    window = _mode_wizard_window(
+        monkeypatch,
+        {
+            "translation": {"send_to_chatbox": False},
+            "vrc_listen": {},
+            "tts": {},
+            "ui": {},
+        },
+    )
+
+    MainWindow._apply_mode_wizard_result(window, mode)
+
+    expected = mode in {"chatbox", "manual", "tts"}
+    assert window._config["translation"]["send_to_chatbox"] is expected
+
+
+def test_listen_chatbox_switch_leaves_microphone_output_alone():
+    """The reverse-listen chatbox switch owns exactly one lane.
+
+    Players reported that turning it off silenced every OSC message, so the
+    two flags are pinned as independent at the point they are read.
+    """
+
+    window = MainWindow.__new__(MainWindow)
+    window._config = {
+        "translation": {"send_to_chatbox": True},
+        "vrc_listen": {"send_to_chatbox": False},
+    }
+
+    assert MainWindow._listen_send_to_chatbox_enabled(window) is False
+    assert MainWindow._mic_send_to_chatbox_enabled(window) is True
+
+    window._config["vrc_listen"]["send_to_chatbox"] = True
+    window._config["translation"]["send_to_chatbox"] = False
+
+    assert MainWindow._listen_send_to_chatbox_enabled(window) is True
+    assert MainWindow._mic_send_to_chatbox_enabled(window) is False
+
+
 def test_mode_wizard_open_settings_targets_player_facing_page():
     assert MainWindow._settings_page_for_mode_wizard("chatbox") == "voice"
     assert MainWindow._settings_page_for_mode_wizard("listen") == "vrc_listen"
@@ -2221,7 +2324,7 @@ def test_chatbox_template_removes_empty_second_translation_line():
 def test_realtime_mic_trilingual_output_translates_second_target(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._running = True
-    window._listen_session = 7
+    window._runtime_generation = 7
     window._mic_muted = False
     window._current_tgt_lang = "ja"
     window._current_tgt_lang_2 = "en"
@@ -2276,7 +2379,7 @@ def test_realtime_mic_trilingual_output_translates_second_target(monkeypatch):
 def test_realtime_mic_template_translates_third_target(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._running = True
-    window._listen_session = 9
+    window._runtime_generation = 9
     window._mic_muted = False
     window._current_tgt_lang = "ja"
     window._current_tgt_lang_2 = "en"
@@ -2332,7 +2435,7 @@ def test_realtime_mic_template_translates_third_target(monkeypatch):
 def test_realtime_mic_stale_session_does_not_send_or_update(monkeypatch):
     window = MainWindow.__new__(MainWindow)
     window._running = True
-    window._listen_session = 11
+    window._runtime_generation = 11
     window._mic_muted = False
     window._current_tgt_lang = "ja"
     window._current_tgt_lang_2 = "en"
@@ -2352,7 +2455,7 @@ def test_realtime_mic_stale_session_does_not_send_or_update(monkeypatch):
     class _Translator:
         def translate(self, text, src, tgt, context_source=None):
             window._running = False
-            window._listen_session += 1
+            window._runtime_generation += 1
             return f"{tgt}:{text}"
 
     monkeypatch.setattr("src.ui_qt.main_window.create_translator", lambda _config: _Translator())
@@ -2430,3 +2533,36 @@ def test_original_only_manual_translate_does_not_create_translator(monkeypatch):
     assert finished[0]["output_message"].source == "manual"
     assert finished[0]["output_message"].original_text == "hello"
     assert finished[0]["output_message"].translated_text == "hello"
+
+
+def test_overlay_resend_sends_the_entry_and_not_the_microphone_state():
+    """The overlay's send button owns its own line.
+
+    It used to overwrite only the translation half of the main window's state
+    and then reuse that send path, so VRChat received the player's own last
+    original text paired with the other person's translation, and the main
+    window's own button stayed loaded with the foreign line.
+    """
+
+    window = MainWindow.__new__(MainWindow)
+    window._src_text = "我刚才说的话"
+    window._last_tgt_text = "my own translation"
+    sent: list[str] = []
+    window._send_chatbox_payload = lambda payload, **_kwargs: sent.append(payload)
+    window._send_to_vrc = lambda: pytest.fail("must not reuse the microphone lane")
+
+    MainWindow._resend_history_to_vrc(window, "对方说的话（their line）", "listen")
+
+    assert sent == ["对方说的话（their line）"]
+    assert window._src_text == "我刚才说的话"
+    assert window._last_tgt_text == "my own translation"
+
+
+def test_overlay_resend_ignores_an_empty_entry():
+    window = MainWindow.__new__(MainWindow)
+    sent: list[str] = []
+    window._send_chatbox_payload = lambda payload, **_kwargs: sent.append(payload)
+
+    MainWindow._resend_history_to_vrc(window, "   ", "listen")
+
+    assert sent == []

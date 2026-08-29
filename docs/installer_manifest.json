@@ -1,25 +1,25 @@
 {
-  "version": "v1.3.9.3",
-  "installer_name": "MioTranslator-Setup-v1.3.9.3.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.3.9.3/MioTranslator-Setup-v1.3.9.3.exe",
-  "size_bytes": 464682185,
-  "sha256": "37f119d12f09ace8959de767f481db69cbcc90c41a0c7a78a0216649458a15d9",
+  "version": "v1.4.0",
+  "installer_name": "MioTranslator-Setup-v1.4.0.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.0/MioTranslator-Setup-v1.4.0.exe",
+  "size_bytes": 346472339,
+  "sha256": "f84f06aaadb6fd636825d099ea3beddabe2864569e539bc9d837c4c5a45f28b8",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "826b7de66e490cacbe9f06a1debbd8774156557c47d13771db56330fd7f79787b88c9b26f37fd53338d4e166199f85048bc7ea4e94e81b2387d2e9e07c46f50f",
-  "notes": "v1.3.9.3 makes Unlimited High-Quality Free Translation the default, fixes SenseVoice download progress, adds Grok 4.6, and hardens Qwen TTS result downloads.",
+  "installer_signature": "f10e1ffcc5adf521f1bc82f728dbe853e2692e302e598e458f198e1335d259ff5ff1c19f4b1a23707b7e942db290bf8a95c5d2811633ced0de39bdeba39fdf02",
+  "notes": "v1.4.0 adds direct Edge speech recognition, keeps SenseVoice as an optional local ASR, removes obsolete browser/live-ASR and legacy local TTS paths, and adds Qwen cloud voice enrollment.",
   "notes_i18n": {
-    "zh-CN": "v1.3.9.3 将无限高质免费翻译设为默认，修复 SenseVoice 下载进度，增加 Grok 4.6，并加固 Qwen TTS 音频下载。",
-    "en": "v1.3.9.3 makes Unlimited High-Quality Free Translation the default, fixes SenseVoice download progress, adds Grok 4.6, and hardens Qwen TTS result downloads.",
-    "ja": "v1.3.9.3 は無制限・高品質の無料翻訳を既定にし、SenseVoice のダウンロード進捗を修正し、Grok 4.6 を追加して、Qwen TTS の音声ダウンロードを強化しました。",
-    "ru": "v1.3.9.3 делает безлимитный качественный бесплатный перевод сервисом по умолчанию, исправляет прогресс загрузки SenseVoice, добавляет Grok 4.6 и усиливает защиту загрузки Qwen TTS.",
-    "ko": "v1.3.9.3은 무제한 고품질 무료 번역을 기본으로 설정하고 SenseVoice 다운로드 진행률을 수정하며 Grok 4.6을 추가하고 Qwen TTS 결과 다운로드 보안을 강화합니다."
+    "zh-CN": "v1.4.0 增加直连 Edge 语音识别，保留 SenseVoice 可选本地 ASR，移除过时的浏览器/实时 ASR 与旧本地 TTS 路径，并增加 Qwen 云端声音注册。",
+    "en": "v1.4.0 adds direct Edge speech recognition, keeps SenseVoice as an optional local ASR, removes obsolete browser/live-ASR and legacy local TTS paths, and adds Qwen cloud voice enrollment.",
+    "ja": "v1.4.0 は Edge 音声認識の直接接続を追加し、SenseVoice を任意のローカル ASR として残し、旧式のブラウザー／ライブ ASR とローカル TTS 経路を整理し、Qwen クラウド音声登録を追加しました。",
+    "ru": "v1.4.0 добавляет прямое распознавание речи Edge, оставляет SenseVoice необязательным локальным ASR, удаляет устаревшие браузерные/Live-ASR и локальные TTS-пути и добавляет регистрацию голоса Qwen в облаке.",
+    "ko": "v1.4.0은 Edge 음성 인식 직접 연결을 추가하고 SenseVoice를 선택적 로컬 ASR로 유지하며 오래된 브라우저/Live-ASR 및 로컬 TTS 경로를 정리하고 Qwen 클라우드 음성 등록을 추가합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-08-21T12:55:37+09:00",
+  "published_at": "2026-08-29T17:58:05+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "5f3c6bb546f5d02bd563e043fd84367209189f199d605d71aa64526e874cc2eae9a5aacc408c7ad3576b44458481455e2398f8b63722e0d2f296a7a512624d09"
+  "signature": "ab5a0085c0eb15556442cfd0a6d13902c73478f3060962588e0d2df598a46d77d66bba54f53ca966c22d1eb306092dc21aafe1133f408a45fe61fc5e39fefb0a"
 }

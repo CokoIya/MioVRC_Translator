@@ -78,6 +78,10 @@ from src.ui_qt.realtime_tweaks_panel import RealtimeTweaksPanel
 from src.ui_qt.state_manager import AppState
 from src.tts.error_utils import tts_error_code
 from src.utils import config_manager
+from src.utils.config_manager import (
+    LISTEN_SEGMENT_DURATION_DEFAULT_S,
+    LISTEN_TAIL_SILENCE_DEFAULT_S,
+)
 from src.utils.app_paths import resource_base_dirs
 from src.utils.credential_validation import first_missing_required_credential
 from src.utils.global_hotkey import GlobalHotkey, DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
@@ -171,25 +175,22 @@ UI_DELIVERY_ACK_POLL_S = 0.05
 _TTS_REQUEST_SCOPED_CONFIG_KEYS = frozenset({"voice", "rate", "volume"})
 _ONLINE_TTS_PREWARM_ENGINES = frozenset(
     {
-        "edge",
-        "gtts",
-        "google",
         "voicevox",
-        "aivis",
-        "aivis_speech",
         "mimo",
         "mimo_tts",
         "xiaomi_tts",
         "qwen_tts",
         "qwen3_tts",
         "qwen-tts",
+        # Cloud cloning has no local model, so warming it costs one TLS
+        # handshake rather than a model load.
+        "qwen_vc",
     }
 )
 _ONLINE_ASR_PREWARM_ENGINES = frozenset(
     {
-        "gemini-live",
+        "edge-stt",
         "qwen3-asr",
-        "webspeech",
     }
 )
 _TTS_BACKGROUND_PREWARM_DELAY_MS = 750
@@ -756,6 +757,41 @@ def _asr_runtime_signature(config: dict, engine: str) -> tuple[str, str, str, bo
     return spec.engine, spec.model_id, spec.model_revision, spec.requires_local_model
 
 
+# Reverse-listen settings that cannot change which ASR provider is built:
+# captions, output routing, segmentation, VAD tuning and capture plumbing all
+# sit downstream of recognition. Hashing them threw away an already warmed
+# provider whenever the player touched an unrelated switch, which cost a full
+# reload - a model reload for the local engines.
+#
+# The list is a denylist on purpose: a key added later invalidates the cache
+# until someone confirms it is inert, which fails safe.
+_ASR_SIGNATURE_IRRELEVANT_LISTEN_KEYS = frozenset(
+    {
+        "capture_mode",
+        "denoise_strength",
+        "fallback_to_device_loopback",
+        "latency_profile_version",
+        "loopback_device",
+        "process_preset",
+        "recent_process_names",
+        "segment_duration_s",
+        "self_suppress",
+        "self_suppress_seconds",
+        "send_to_chatbox",
+        "show_overlay",
+        "silero_speech_threshold",
+        "tail_silence_s",
+        "target_language",
+        "target_process_names",
+        "translation_timeout_s",
+        "vad_activation_threshold_s",
+        "vad_min_rms",
+        "vad_speech_ratio",
+        "vad_type",
+    }
+)
+
+
 def _asr_pair_config_signature(config: Mapping[str, Any] | object) -> str:
     """Return a credential-safe digest for retained ASR provider ownership."""
 
@@ -766,7 +802,12 @@ def _asr_pair_config_signature(config: Mapping[str, Any] | object) -> str:
         candidate = config.get("asr", {})
         asr_cfg = candidate if isinstance(candidate, Mapping) else {}
         candidate = config.get("vrc_listen", {})
-        listen_cfg = candidate if isinstance(candidate, Mapping) else {}
+        if isinstance(candidate, Mapping):
+            listen_cfg = {
+                key: value
+                for key, value in candidate.items()
+                if key not in _ASR_SIGNATURE_IRRELEVANT_LISTEN_KEYS
+            }
         try:
             ui_language = get_ui_language(dict(config))
         except Exception:
@@ -1232,7 +1273,7 @@ class MainWindow(QMainWindow):
 
         # --- Runtime state ---
         self._running = False
-        self._listen_session = 0
+        self._runtime_generation = 0
         self._startup_cancel_event = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._recorder: AudioRecorder | None = None
@@ -2411,43 +2452,27 @@ class MainWindow(QMainWindow):
     # Public
     # ----------------------------------------------------------------
     def _create_settings_window(self, *, preload: bool = False, defer_initial_page: bool = False):
-        # Feature flag: Use new tabbed settings window (currently disabled)
-        use_new_settings = False  # Set to True to enable new settings UI
+        from src.ui_qt.settings_window import SettingsWindow
 
-        if use_new_settings:
-            from src.ui_qt.settings import SettingsWindowTabbed
-
-            win = SettingsWindowTabbed(
-                self._config,
-                ui_language=self._ui_lang,
-                parent=self,
-            )
-            win.config_changed.connect(lambda cfg: self._on_config_saved())
-            self._settings_window = win
-            return win
-        else:
-            # Original settings window
-            from src.ui_qt.settings_window import SettingsWindow
-
-            win = SettingsWindow(
-                self,
-                self._config,
-                on_save=self._on_config_saved,
-                on_close=lambda: setattr(self, "_settings_window", None),
-                on_listen_state_changed=self._on_settings_listen_state_changed,
-                on_theme_changed=self._on_settings_theme_changed,
-                on_audio_diagnostics_requested=self._open_audio_diagnostics_window,
-                on_vad_calibration_requested=self._open_vad_calibration_window,
-                on_mode_wizard_requested=self.open_mode_wizard,
-                on_deferred_tts_manager=self._remember_deferred_tts_manager,
-                preload=preload,
-                defer_initial_page=defer_initial_page,
-            )
-            # Connect language change signal for immediate UI refresh
-            win.language_changed.connect(self._on_language_changed)
-            self._settings_window = win
-            self._sync_settings_window_vrc_listen_state()
-            return win
+        win = SettingsWindow(
+            self,
+            self._config,
+            on_save=self._on_config_saved,
+            on_close=lambda: setattr(self, "_settings_window", None),
+            on_listen_state_changed=self._on_settings_listen_state_changed,
+            on_theme_changed=self._on_settings_theme_changed,
+            on_audio_diagnostics_requested=self._open_audio_diagnostics_window,
+            on_vad_calibration_requested=self._open_vad_calibration_window,
+            on_mode_wizard_requested=self.open_mode_wizard,
+            on_deferred_tts_manager=self._remember_deferred_tts_manager,
+            preload=preload,
+            defer_initial_page=defer_initial_page,
+        )
+        # Connect language change signal for immediate UI refresh
+        win.language_changed.connect(self._on_language_changed)
+        self._settings_window = win
+        self._sync_settings_window_vrc_listen_state()
+        return win
 
     def _preload_settings_window(self) -> None:
         if self._destroying or self._settings_window is not None:
@@ -2715,7 +2740,7 @@ class MainWindow(QMainWindow):
             self._do_stop()
         else:
             with self._asr_lifecycle_lock():
-                self._listen_session = getattr(self, "_listen_session", 0) + 1
+                self._runtime_generation = getattr(self, "_runtime_generation", 0) + 1
                 self._running = False
             self._reset_streaming_state()
             self._stop_listen()
@@ -3306,7 +3331,7 @@ class MainWindow(QMainWindow):
             self._start_microphone_capture()
 
     def _set_microphone_asr_capture_enabled(self, enabled: bool) -> None:
-        """Control providers such as WebSpeech that own a separate mic stream."""
+        """Control ASR providers that own a separate microphone stream."""
 
         self._set_asr_provider_capture_enabled(getattr(self, "_asr", None), enabled)
 
@@ -3661,9 +3686,20 @@ class MainWindow(QMainWindow):
         self._dispatch_output_message(message, sinks=("overlay",))
 
     def _resend_history_to_vrc(self, text: str, source: str = "listen") -> None:
-        if text:
-            self._last_tgt_text = text
-            self._send_to_vrc()
+        """Send one overlay entry to VRChat exactly as it was captured.
+
+        The entry already carries the chatbox line built for it. Routing it
+        through the main window's send path instead only replaced the
+        translation half, so the message that reached VRChat paired the
+        player's own last original text with someone else's translation - and
+        it left that foreign line loaded in the main window's send button.
+        """
+
+        del source
+        payload = str(text or "").strip()
+        if not payload:
+            return
+        self._send_chatbox_payload(payload)
 
     def _sync_settings_window_vrc_listen_state(self) -> None:
         win = self._settings_window
@@ -4144,7 +4180,14 @@ class MainWindow(QMainWindow):
             ui_cfg = {}
             self._config["ui"] = ui_cfg
 
-        trans_cfg["send_to_chatbox"] = mode in {"chatbox", "manual", "tts"}
+        # The wizard may switch the primary output on, never off. Listening
+        # to other players is something a mode adds on top of speaking, so
+        # picking it must not silently stop the player's own translations
+        # from reaching VRChat.
+        if mode in {"chatbox", "manual", "tts"}:
+            trans_cfg["send_to_chatbox"] = True
+        else:
+            trans_cfg.setdefault("send_to_chatbox", True)
         vrc_cfg["enabled"] = mode in {"listen", "overlay"}
         vrc_cfg["show_overlay"] = mode in {"listen", "overlay"}
         vrc_cfg.setdefault("send_to_chatbox", True)
@@ -4381,12 +4424,12 @@ class MainWindow(QMainWindow):
         self._start_btn.setEnabled(False)
         self._start_btn.setText(self._t("starting"))
         self._set_status(self._t("starting"), "accent", key="starting")
-        self._listen_session += 1
+        self._runtime_generation += 1
         self._reset_streaming_state()
         self._reset_translation_failure_backoff()
         cancel_event = threading.Event()
         self._startup_cancel_event = cancel_event
-        session = self._listen_session
+        session = self._runtime_generation
         try:
             # OscService is a QObject parented to MainWindow. Keep its
             # construction/signal wiring on the Qt thread; the socket setup is
@@ -4683,7 +4726,7 @@ class MainWindow(QMainWindow):
                 progress_callback=lambda event: self._call_in_ui(
                     lambda e=event, sid=session_id: (
                         self._handle_model_progress(e)
-                        if sid == self._listen_session and not self._destroying
+                        if sid == self._runtime_generation and not self._destroying
                         else None
                     )
                 )
@@ -4693,7 +4736,7 @@ class MainWindow(QMainWindow):
                     progress_callback=lambda event: self._call_in_ui(
                         lambda e=event, sid=session_id: (
                             self._handle_model_progress(e)
-                            if sid == self._listen_session and not self._destroying
+                            if sid == self._runtime_generation and not self._destroying
                             else None
                         )
                     )
@@ -4731,28 +4774,28 @@ class MainWindow(QMainWindow):
                                     self._t("main_desktop_listen_failed"),
                                     "warning",
                                 )
-                                if self._running and sid == self._listen_session
+                                if self._running and sid == self._runtime_generation
                                 else None
                             )
                         )
                         self._call_in_ui(
                             lambda sid=session_id: (
                                 self._refresh_desktop_capture_button()
-                                if self._running and sid == self._listen_session
+                                if self._running and sid == self._runtime_generation
                                 else None
                             )
                         )
                         self._call_in_ui(
                             lambda sid=session_id, detail=str(exc): (
                                 self._schedule_desktop_capture_recovery(detail)
-                                if self._running and sid == self._listen_session
+                                if self._running and sid == self._runtime_generation
                                 else None
                             )
                         )
             self._call_in_ui(
                 lambda sid=session_id: (
                     self._on_started()
-                    if self._running and sid == self._listen_session and not self._destroying
+                    if self._running and sid == self._runtime_generation and not self._destroying
                     else None
                 )
             )
@@ -4776,7 +4819,7 @@ class MainWindow(QMainWindow):
             raise _StartupCancelled()
         if (
             self._destroying
-            or session_id != self._listen_session
+            or session_id != self._runtime_generation
             or (
                 cancel_event is not None
                 and cancel_event is not self._startup_cancel_event
@@ -4793,7 +4836,7 @@ class MainWindow(QMainWindow):
         cancel_event: threading.Event | None = None,
     ) -> None:
         with self._asr_lifecycle_lock():
-            if session_id is not None and session_id != self._listen_session:
+            if session_id is not None and session_id != self._runtime_generation:
                 return
             if cancel_event is not None and cancel_event is not self._startup_cancel_event:
                 return
@@ -4815,7 +4858,7 @@ class MainWindow(QMainWindow):
             startup_cancel_event = getattr(self, "_startup_cancel_event", None)
             if startup_cancel_event is not None:
                 startup_cancel_event.set()
-            self._listen_session = getattr(self, "_listen_session", 0) + 1
+            self._runtime_generation = getattr(self, "_runtime_generation", 0) + 1
             self._running = False
         self._reset_streaming_state()
         self._reset_translation_failure_backoff()
@@ -5046,7 +5089,7 @@ class MainWindow(QMainWindow):
             max_translation_queue_age_s={
                 DESKTOP_SOURCE: MAX_REVERSE_TRANSLATION_QUEUE_AGE_S,
             },
-            thread_name_prefix=f"realtime-{self._listen_session}",
+            thread_name_prefix=f"realtime-{self._runtime_generation}",
         )
         self._realtime_scheduler = scheduler
         try:
@@ -5866,9 +5909,16 @@ class MainWindow(QMainWindow):
     def _listen_segment_duration_s(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
         try:
-            return max(0.5, float(listen_cfg.get("segment_duration_s", 2.0)))
+            return max(
+                0.5,
+                float(
+                    listen_cfg.get(
+                        "segment_duration_s", LISTEN_SEGMENT_DURATION_DEFAULT_S
+                    )
+                ),
+            )
         except (TypeError, ValueError):
-            return 2.0
+            return LISTEN_SEGMENT_DURATION_DEFAULT_S
 
     def _effective_listen_max_segment_s(self, audio_cfg: Mapping[str, Any]) -> float:
         try:
@@ -5880,9 +5930,12 @@ class MainWindow(QMainWindow):
     def _listen_tail_silence_s(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
         try:
-            return max(0.2, float(listen_cfg.get("tail_silence_s", 0.40)))
+            return max(
+                0.2,
+                float(listen_cfg.get("tail_silence_s", LISTEN_TAIL_SILENCE_DEFAULT_S)),
+            )
         except (TypeError, ValueError):
-            return 0.40
+            return LISTEN_TAIL_SILENCE_DEFAULT_S
 
     def _listen_self_suppress_seconds(self) -> float:
         listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config.get("vrc_listen", {}), dict) else {}
@@ -6455,7 +6508,7 @@ class MainWindow(QMainWindow):
         return bool(
             not getattr(self, "_destroying", False)
             and getattr(self, "_running", False)
-            and session_id == getattr(self, "_listen_session", -1)
+            and session_id == getattr(self, "_runtime_generation", -1)
         )
 
     def _realtime_task_active(self, task: RealtimeTask) -> bool:
@@ -6480,7 +6533,7 @@ class MainWindow(QMainWindow):
             self._realtime_source_generations = generations
         generations[source] = int(generations.get(source, 0)) + 1
 
-        session_id = int(getattr(self, "_listen_session", -1))
+        session_id = int(getattr(self, "_runtime_generation", -1))
         store = getattr(self, "_translation_context_store", None)
         if isinstance(store, TranslationContextStore):
             store.clear_source(
@@ -6578,7 +6631,7 @@ class MainWindow(QMainWindow):
             return None
         admission = scheduler.submit(
             source=source,
-            session_id=self._listen_session,
+            session_id=self._runtime_generation,
             provider_key=self._asr_provider_key(payload.asr_provider),
             payload=payload,
             diagnostics=payload.diagnostics,
@@ -6588,7 +6641,7 @@ class MainWindow(QMainWindow):
         )
         if admission.status is AdmissionStatus.FULL:
             logger.warning("Final sentence rejected by backpressure source=%s", source)
-            session_id = self._listen_session
+            session_id = self._runtime_generation
             self._call_in_ui(
                 lambda sid=session_id: (
                     self._set_bottom(self._copy("realtime_queue_full"), "warning")
@@ -6638,7 +6691,7 @@ class MainWindow(QMainWindow):
                 _immutable_audio_snapshot(audio),
                 asr_lang,
                 self._partial_generation,
-                self._listen_session,
+                self._runtime_generation,
                 source,
             ),
         )
@@ -7788,7 +7841,7 @@ class MainWindow(QMainWindow):
     # ASR processing
     # ----------------------------------------------------------------
     def _process_partial_audio_chunk(self, audio, asr_lang, generation: int, session_id: int, source: str) -> None:
-        if not self._running or session_id != self._listen_session:
+        if not self._running or session_id != self._runtime_generation:
             return
         if source == MIC_SOURCE and getattr(self, "_mic_muted", False):
             return
@@ -7804,7 +7857,7 @@ class MainWindow(QMainWindow):
             return
         try:
             text = self._transcribe_for_source(source, audio, asr_lang, is_final=False)
-            if not text or not self._running or session_id != self._listen_session:
+            if not text or not self._running or session_id != self._runtime_generation:
                 return
             if generation != self._partial_generation:
                 return
@@ -8053,7 +8106,7 @@ class MainWindow(QMainWindow):
             friendly = self._format_translation_error(exc)
             self._record_source_translation_failure(DESKTOP_SOURCE, friendly)
             raise
-        if not self._running or session_id != self._listen_session:
+        if not self._running or session_id != self._runtime_generation:
             return
         self._last_listen_result_at = time.monotonic()
         output_message = result.output_message
@@ -8070,7 +8123,7 @@ class MainWindow(QMainWindow):
         request_context: Mapping[str, object] | None = None,
         completion_callback: Callable[[Mapping[str, object]], None] | None = None,
     ) -> bool:
-        if session_id is not None and (not self._running or session_id != self._listen_session):
+        if session_id is not None and (not self._running or session_id != self._runtime_generation):
             return False
         clean = _normalize_chatbox_text(message)
         if not clean:
@@ -8113,7 +8166,7 @@ class MainWindow(QMainWindow):
         return bool(trans_cfg.get("send_to_chatbox", True))
 
     def _process_final_audio_segment(self, audio, asr_lang, selected_src_lang: str | None, session_id: int, source: str) -> None:
-        if not self._running or session_id != self._listen_session:
+        if not self._running or session_id != self._runtime_generation:
             return
         if source == MIC_SOURCE and getattr(self, "_mic_muted", False):
             return
@@ -8125,7 +8178,7 @@ class MainWindow(QMainWindow):
             elif source == DESKTOP_SOURCE:
                 self._call_in_ui(lambda: self._set_floating_listen_status(True))
             text = self._transcribe_for_source(source, audio, asr_lang, is_final=True)
-            if not text or not self._running or session_id != self._listen_session:
+            if not text or not self._running or session_id != self._runtime_generation:
                 return
             if source == DESKTOP_SOURCE:
                 self._process_listen_final_text(text, selected_src_lang, session_id)
@@ -8143,14 +8196,14 @@ class MainWindow(QMainWindow):
                 return
             result, translator = pipeline.translate_plan(plan, self._translator)
             self._translator = translator
-            if not self._running or session_id != self._listen_session:
+            if not self._running or session_id != self._runtime_generation:
                 return
             if result.api_translation_used:
                 self._record_source_translation_success(source)
             output_message = result.output_message
 
             def deliver_outputs() -> None:
-                if not self._running or session_id != self._listen_session:
+                if not self._running or session_id != self._runtime_generation:
                     return
                 if output_message is not None:
                     self._dispatch_output_message(output_message, sinks=("ui", "overlay"))
@@ -8738,7 +8791,7 @@ class MainWindow(QMainWindow):
     # TTS helpers
     # ----------------------------------------------------------------
     def _current_tts_engine(self) -> str:
-        return str(self._tts_config().get("engine", "edge") or "edge").strip() or "edge"
+        return str(self._tts_config().get("engine", "qwen_tts") or "qwen_tts").strip() or "qwen_tts"
 
     def _current_tts_engine_config(self) -> dict:
         tts_cfg = self._tts_config()
@@ -9217,12 +9270,12 @@ class MainWindow(QMainWindow):
         if (
             not bool(tts_cfg.get("enabled", False))
             or not bool(tts_cfg.get("auto_read", True))
-            or engine not in {"xtts", "xtts_v2", "xtts-v2", "xttsts"}
+            or engine != "qwen_vc"
             or not bool(engine_cfg.get("prewarm", True))
             or self._performance_profile() == "low_power"
         ):
             return
-        session_id = self._listen_session
+        session_id = self._runtime_generation
         QTimer.singleShot(
             250,
             lambda sid=session_id: self._prewarm_tts_for_session(sid),
@@ -11010,7 +11063,7 @@ class MainWindow(QMainWindow):
 
     def _set_quick_tts_language(self, value: object) -> None:
         tts_cfg = self._config.setdefault("tts", {})
-        engine = str(tts_cfg.get("engine", "edge") or "edge").strip() or "edge"
+        engine = str(tts_cfg.get("engine", "qwen_tts") or "qwen_tts").strip() or "qwen_tts"
         engine_cfg = tts_cfg.setdefault(engine, {})
         if not isinstance(engine_cfg, dict):
             engine_cfg = {}
@@ -11025,7 +11078,7 @@ class MainWindow(QMainWindow):
 
     def _set_quick_tts_voice(self, value: object) -> None:
         tts_cfg = self._config.setdefault("tts", {})
-        engine = str(tts_cfg.get("engine", "edge") or "edge").strip() or "edge"
+        engine = str(tts_cfg.get("engine", "qwen_tts") or "qwen_tts").strip() or "qwen_tts"
         engine_cfg = tts_cfg.setdefault(engine, {})
         if not isinstance(engine_cfg, dict):
             engine_cfg = {}
@@ -11284,7 +11337,7 @@ class MainWindow(QMainWindow):
             return False
         if self._performance_profile() == "low_power":
             return False
-        return self._current_tts_engine() not in {"style_bert_vits2", "xtts"}
+        return self._current_tts_engine() != "style_bert_vits2"
 
     def _on_language_changed(self, language_code: str) -> None:
         self._apply_ui_language(language_code)

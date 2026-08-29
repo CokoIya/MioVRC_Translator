@@ -221,6 +221,14 @@ def _base(theme: object) -> str:
         font-size: 13px;
         font-weight: 600;
     }}
+    QLabel#warningLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        background: {c["WARNING_SOFT"]};
+        border: 1px solid {c["WARNING_BORDER"]};
+        border-radius: {c["RADIUS_S"]}px;
+        padding: 8px 10px;
+        font-size: 12px;
+    }}
     QLabel#fieldLabel, QLabel#controlLabel {{
         color: {c["TEXT_SECONDARY"]};
         font-size: 13px;
@@ -267,6 +275,63 @@ def _base(theme: object) -> str:
     QProgressBar::chunk {{
         background: {c["ACCENT"]};
         border-radius: 999px;
+    }}
+    /* Non-native file dialogs: their browser widgets are not styled anywhere
+       else, so without these rules the picker renders as a light panel inside
+       a dark window. */
+    QFileDialog {{
+        background: {c["SHELL_BG"]};
+    }}
+    QFileDialog QListView, QFileDialog QTreeView {{
+        background: {c["PANEL_BG"]};
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid {c["PANEL_BORDER"]};
+        border-radius: {c["RADIUS_M"]}px;
+        outline: 0;
+        selection-background-color: {c["ACCENT_SOFT"]};
+        selection-color: {c["TEXT_PRIMARY"]};
+    }}
+    QFileDialog QListView::item, QFileDialog QTreeView::item {{
+        padding: 3px 4px;
+        border-radius: {c["RADIUS_S"]}px;
+    }}
+    QFileDialog QListView::item:hover, QFileDialog QTreeView::item:hover {{
+        background: {c["FIELD_HOVER"]};
+    }}
+    QFileDialog QListView::item:selected, QFileDialog QTreeView::item:selected {{
+        background: {c["ACCENT_SOFT"]};
+        color: {c["TEXT_PRIMARY"]};
+    }}
+    QFileDialog QHeaderView::section {{
+        background: {c["PANEL_ALT_BG"]};
+        color: {c["TEXT_SECONDARY"]};
+        border: 0;
+        border-bottom: 1px solid {c["PANEL_BORDER"]};
+        padding: 5px 8px;
+    }}
+    QFileDialog QToolButton {{
+        background: transparent;
+        color: {c["TEXT_PRIMARY"]};
+        border: 1px solid transparent;
+        border-radius: {c["RADIUS_S"]}px;
+        padding: 4px;
+    }}
+    QFileDialog QToolButton:hover {{
+        background: {c["FIELD_HOVER"]};
+        border-color: {c["PANEL_BORDER"]};
+    }}
+    QFileDialog QToolButton:pressed, QFileDialog QToolButton:checked {{
+        background: {c["PANEL_RAISED"]};
+    }}
+    QFileDialog QToolButton:disabled {{
+        color: {c["TEXT_MUTED"]};
+    }}
+    QFileDialog QLabel {{
+        color: {c["TEXT_SECONDARY"]};
+        background: transparent;
+    }}
+    QFileDialog QFrame {{
+        background: transparent;
     }}
     """
 
@@ -731,6 +796,22 @@ def build_text_input_styles(theme: object) -> str:
         color: {c["TEXT_SECONDARY"]};
         font-size: 11px;
     }}
+    QLabel#textInputTitle {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel#textInputKeyHint {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 11px;
+    }}
+    QLabel#textInputCounter[limit="warn"] {{
+        color: {c["WARNING"]};
+    }}
+    QLabel#textInputCounter[limit="full"] {{
+        color: {c["DANGER"]};
+        font-weight: 700;
+    }}
     QTextEdit#inputTextEdit, QScrollArea#inputTextEdit {{
         background: {c["PANEL_BG"]};
         border: 1px solid {c["FIELD_BORDER"]};
@@ -747,14 +828,6 @@ def build_text_input_styles(theme: object) -> str:
     }}
     QTextEdit#inputTextEdit:focus, QScrollArea#inputTextEdit:focus {{
         border-color: {c["ACCENT"]};
-    }}
-    QPushButton#pinButton {{
-        min-width: 30px;
-        max-width: 30px;
-        min-height: 30px;
-        max-height: 30px;
-        padding: 0;
-        border-radius: 10px;
     }}
     QPushButton#iconButton {{
         min-width: 30px;
@@ -784,4 +857,82 @@ def build_text_input_styles(theme: object) -> str:
 
 
 def build_floating_window_styles(theme: object) -> str:
-    return build_text_input_styles(theme)
+    """Style the reverse-translation overlay as a chat transcript.
+
+    The overlay used to borrow the text-input sheet, which sized every control
+    for a composer the overlay does not have. It now carries its own smaller
+    metrics so the window stays readable when shrunk down beside VRChat.
+    """
+
+    c = theme_tokens(theme)
+    return _base(theme) + f"""
+    QDialog {{
+        background: transparent;
+    }}
+    QFrame#floatingShell {{
+        background: {c["SHELL_BG"]};
+        border: 1px solid {c["SHELL_BORDER"]};
+        border-radius: {c["RADIUS_L"]}px;
+    }}
+    QLabel#floatingStatus {{
+        color: {c["TEXT_SECONDARY"]};
+        font-size: 11px;
+        padding: 0 8px;
+        min-height: 22px;
+        max-height: 22px;
+        border: 1px solid {c["PANEL_BORDER"]};
+        border-radius: 9px;
+        background: {c["PANEL_BG"]};
+    }}
+    QLabel#floatingHint {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 11px;
+    }}
+    QScrollArea#floatingTranscript {{
+        background: transparent;
+        border: 0;
+        padding: 0;
+    }}
+    QScrollArea#floatingTranscript > QWidget,
+    QScrollArea#floatingTranscript QWidget#qt_scrollarea_viewport,
+    QWidget#floatingScrollContent {{
+        background: transparent;
+        border: 0;
+    }}
+    QLabel#bubbleSpeaker {{
+        color: {c["TEXT_MUTED"]};
+        font-size: 10px;
+    }}
+    QPushButton#floatingIconButton {{
+        min-width: 26px;
+        max-width: 26px;
+        min-height: 26px;
+        max-height: 26px;
+        padding: 0;
+        border-radius: 9px;
+    }}
+    QPushButton#floatingIconButton[pinned="true"] {{
+        border-color: {c["ACCENT"]};
+        background: {c["ACCENT_SOFT"]};
+    }}
+    QPushButton#floatingSendButton {{
+        min-height: 26px;
+        padding: 0 10px;
+        border-radius: 9px;
+        font-size: 12px;
+    }}
+    QPushButton#floatingSendButton:disabled {{
+        color: {c["TEXT_MUTED"]};
+    }}
+    QSlider::groove:horizontal {{
+        background: {c["PANEL_BORDER"]};
+        border-radius: 3px;
+        height: 5px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {c["ACCENT"]};
+        border-radius: 5px;
+        width: 10px;
+        margin: -3px 0;
+    }}
+    """

@@ -18,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 from .api_tts_config import (
+    get_cloned_voice_options,
     get_tts_api_voice_options,
     resolve_tts_api_config,
 )
@@ -1414,6 +1415,65 @@ class QwenTTS(_APITTSBase):
             raise RuntimeError(f"Qwen TTS synthesis failed: {exc}") from exc
         finally:
             self._finish_synthesis_diagnostics(succeeded=succeeded)
+
+
+class QwenVoiceCloneTTS(QwenTTS):
+    """Qwen TTS driven by a voice the player cloned from their own recording.
+
+    Synthesis is byte-for-byte the same request as preset-voice Qwen TTS; only
+    the model and the voice id differ, so everything is inherited.  What this
+    subclass adds is resolving the voice list from the player's stored
+    enrollments instead of the built-in catalog.
+    """
+
+    ENGINE_ID = "qwen_vc"
+    ENGINE_LABEL = "Qwen Voice Cloning"
+
+    def __init__(self, config: Mapping[str, object] | None = None) -> None:
+        super().__init__(config)
+        self._cloned_voices = get_cloned_voice_options(
+            config if isinstance(config, Mapping) else {}
+        )
+
+    def is_available(self) -> bool:
+        # A cloned voice is required: without one there is nothing to speak
+        # with, and reporting availability would only defer the failure to the
+        # first utterance in the middle of a conversation.
+        return bool(super().is_available() and self._resolved_default_voice())
+
+    def _resolved_default_voice(self) -> str:
+        if self.default_voice:
+            return self.default_voice
+        if self._cloned_voices:
+            return self._cloned_voices[0][0]
+        return ""
+
+    def get_available_voices(self) -> list[TTSVoice]:
+        return [
+            TTSVoice(
+                id=voice_id,
+                name=name,
+                language=language,
+                gender=gender,
+                locale=locale,
+            )
+            for voice_id, name, language, gender, locale in self._cloned_voices
+        ]
+
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        rate: float = 1.0,
+        volume: float = 1.0,
+    ) -> bytes:
+        resolved_voice = str(voice or "").strip() or self._resolved_default_voice()
+        if not resolved_voice:
+            raise RuntimeError(
+                "Qwen Voice Cloning has no cloned voice yet. Record one in "
+                "Settings before enabling this engine."
+            )
+        return super().synthesize(text, resolved_voice, rate, volume)
 
 
 def _looks_like_audio(content: bytes, content_type: str) -> bool:

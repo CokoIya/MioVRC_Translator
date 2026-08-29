@@ -28,7 +28,7 @@ def run_check() -> bool:
     output_to_vrchat = tts_config.get("output_to_vrchat")
     if output_to_vrchat is None:
         output_to_vrchat = output_device is not None and output_device != -1
-    engine = tts_config.get("engine", "edge")
+    engine = tts_config.get("engine", "qwen_tts")
     resolved_device = resolve_output_device(
         output_device,
         output_device_name,

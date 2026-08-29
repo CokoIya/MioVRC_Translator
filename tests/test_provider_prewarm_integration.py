@@ -9,7 +9,6 @@ import pytest
 from src.asr.base import ASRProvider
 from src.asr.fallback_asr import FallbackASR
 from src.asr.qwen3_asr import Qwen3ASRProvider
-from src.asr.webspeech_asr import WebSpeechASRProvider, _BridgeState
 from src.translators.anthropic_translator import AnthropicTranslator
 from src.translators.base import BaseTranslator
 from src.translators.deepl_translator import DeepLTranslator
@@ -20,9 +19,6 @@ from src.translators.microsoft_edge_translator import MicrosoftEdgeTranslator
 from src.translators.mymemory_translator import MyMemoryTranslator
 from src.translators.openai_translator import OpenAITranslator
 from src.tts.api_tts_engines import MimoTTS, QwenTTS
-from src.tts.edge_tts_engine import EdgeTTS
-from src.tts.gtts_engine import GoogleTTS
-from src.tts.voicevox_compatible_engine import VoicevoxCompatibleTTS
 from src.utils.provider_warmup import ProviderWarmupResult
 
 
@@ -292,40 +288,6 @@ def test_qwen_asr_prewarm_uses_exact_async_client_and_runner(monkeypatch):
     ]
 
 
-def test_webspeech_prewarm_never_opens_browser_or_capture():
-    provider = WebSpeechASRProvider.__new__(WebSpeechASRProvider)
-    provider._lock = threading.RLock()
-    provider._closed = False
-    provider._server = None
-    provider._url = ""
-    provider._browser_opened = False
-    provider._bridge_prewarmed_paused = False
-    provider._state = _BridgeState()
-    provider.auto_open_browser = True
-    opened = []
-
-    def start_server():
-        provider._server = object()
-        provider._url = "http://127.0.0.1:12345/"
-
-    provider._start_server = start_server
-    def open_bridge_page():
-        opened.append(provider._state.capture_status()["capture_enabled"])
-        provider._browser_opened = True
-
-    provider._open_bridge_page = open_bridge_page
-
-    assert provider.prewarm() is True
-    assert provider._server is not None
-    assert provider._state.capture_status() == {"capture_enabled": False}
-    assert provider._browser_opened is False
-    assert opened == []
-
-    provider.load()
-
-    assert provider._state.capture_status() == {"capture_enabled": True}
-    assert provider._browser_opened is True
-    assert opened == [True]
 
 
 @pytest.mark.parametrize(
@@ -386,33 +348,3 @@ def test_api_tts_prewarm_uses_non_inference_head_on_worker_session(
     assert kwargs["timeout_s"] == 3.0
     for header, value in expected_auth.items():
         assert kwargs["headers"][header] == value
-
-
-def test_edge_gtts_and_voicevox_prewarm_never_synthesize(monkeypatch):
-    edge_calls = []
-    edge = EdgeTTS.__new__(EdgeTTS)
-    edge._edge_tts = object()
-    edge._thread_event_loop = lambda: edge_calls.append("loop")
-    edge.get_available_voices = lambda: edge_calls.append("voices") or []
-    edge.prewarm("voice")
-
-    dns_calls = []
-    monkeypatch.setattr(
-        "src.tts.gtts_engine.warmup_dns_origin",
-        lambda url, **kwargs: dns_calls.append((url, kwargs)) or _SUCCESS,
-    )
-    gtts = GoogleTTS.__new__(GoogleTTS)
-    gtts._gtts = object()
-    gtts.prewarm("ja")
-
-    voicevox_calls = []
-    voicevox = VoicevoxCompatibleTTS.__new__(VoicevoxCompatibleTTS)
-    voicevox.ENGINE_LABEL = "VOICEVOX"
-    voicevox.is_available = lambda: voicevox_calls.append("version") or True
-    voicevox.prewarm("1")
-
-    assert edge_calls == ["loop", "voices"]
-    assert dns_calls == [
-        ("https://translate.google.com", {"timeout_s": 2.0})
-    ]
-    assert voicevox_calls == ["version"]

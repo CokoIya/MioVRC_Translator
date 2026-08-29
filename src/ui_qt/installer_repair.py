@@ -22,7 +22,7 @@ def build_runtime_repair_update_info(
     ui_lang: str,
     detail: str = "",
 ) -> UpdateInfo:
-    issue = str(detail or "").strip() or tr(ui_lang, "xtts_runtime_unknown_issue")
+    issue = str(detail or "").strip() or tr(ui_lang, "runtime_repair_unknown_issue")
     current_language = normalize_ui_language(ui_lang)
     localized_notes = dict(update_info.localized_notes or {})
     for language in _SUPPORTED_REPAIR_NOTE_LANGUAGES:
@@ -30,11 +30,11 @@ def build_runtime_repair_update_info(
         localized_issue = (
             issue
             if language == current_language
-            else tr(language, "xtts_runtime_unknown_issue")
+            else tr(language, "runtime_repair_unknown_issue")
         )
         localized_notes[key] = tr(
             language,
-            "xtts_runtime_repair_notes",
+            "runtime_repair_notes",
             detail=localized_issue,
         )
     return replace(
@@ -52,23 +52,23 @@ def show_installer_download_fallback(
     detail: str = "",
     error: str = "",
 ) -> None:
-    issue = str(detail or "").strip() or tr(ui_lang, "xtts_runtime_unknown_issue")
+    issue = str(detail or "").strip() or tr(ui_lang, "runtime_repair_unknown_issue")
     fetch_error = str(error or "").strip()
     if fetch_error:
         logger.warning("Unable to fetch full installer information: %s", fetch_error)
-        message = tr(ui_lang, "xtts_runtime_repair_fetch_failed", detail=issue)
+        message = tr(ui_lang, "runtime_repair_fetch_failed", detail=issue)
     else:
-        message = tr(ui_lang, "xtts_runtime_repair_manual", detail=issue)
+        message = tr(ui_lang, "runtime_repair_manual", detail=issue)
 
     dialog = QMessageBox(parent)
     dialog.setIcon(QMessageBox.Icon.Warning)
-    dialog.setWindowTitle(tr(ui_lang, "xtts_runtime_repair_title"))
+    dialog.setWindowTitle(tr(ui_lang, "runtime_repair_title"))
     dialog.setText(message)
     download_btn = dialog.addButton(
-        tr(ui_lang, "xtts_runtime_download_installer"),
+        tr(ui_lang, "runtime_repair_download_installer"),
         QMessageBox.ButtonRole.AcceptRole,
     )
-    dialog.addButton(tr(ui_lang, "xtts_download_close"), QMessageBox.ButtonRole.RejectRole)
+    dialog.addButton(tr(ui_lang, "runtime_repair_close"), QMessageBox.ButtonRole.RejectRole)
     dialog.exec()
     if dialog.clickedButton() is download_btn:
         QDesktopServices.openUrl(QUrl(MIO_RELEASE_DOWNLOAD_URL))

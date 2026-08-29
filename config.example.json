@@ -57,22 +57,6 @@
       "language": "auto",
       "ncpu": null
     },
-    "webspeech": {
-      "language": "ja-JP",
-      "continuous": true,
-      "interim_results": true,
-      "max_alternatives": 1,
-      "restart_on_end": true,
-      "silence_timeout_ms": 800,
-      "final_timeout_seconds": 4.0,
-      "partial_timeout_seconds": 0.2,
-      "connection_timeout_seconds": 3.0,
-      "stale_connection_seconds": 8.0,
-      "embedded_browser": true,
-      "auto_fallback": false,
-      "auto_open_browser": true,
-      "bridge_port": 0
-    },
     "qwen3_asr": {
       "api_key": "",
       "region": "singapore",
@@ -89,16 +73,6 @@
       "max_retries": 0,
       "max_concurrent_transcriptions": 1
     },
-    "gemini_live": {
-      "api_key": "",
-      "model": "gemini-3.1-flash-live-preview",
-      "language": "ja-JP",
-      "transcribe_only": true,
-      "system_instruction": "You are a speech-to-text engine. Output only the transcription. Do not translate, summarize, explain, or answer.",
-      "timeout_seconds": 20,
-      "use_live_api": true,
-      "live_silence_duration_ms": 600
-    },
     "correction": {
       "enabled": true,
       "official_manifest_url": "https://miovrc.com/dictionaries/asr_dictionary_manifest.json"
@@ -109,6 +83,14 @@
       "ring_buffer_s": 4.0,
       "recent_speech_hold_s": 0.8,
       "partial_stability_hits": 2
+    },
+    "edge_stt": {
+      "language": "ja-JP",
+      "connect_timeout_seconds": 6,
+      "recognition_timeout_seconds": 12,
+      "trailing_silence_seconds": 0.6,
+      "reuse_connection": true,
+      "max_turns": 18
     }
   },
   "translation": {
@@ -282,16 +264,18 @@
     "enabled": false,
     "loopback_device": null,
     "capture_mode": "output_device_loopback",
-    "target_process_names": ["VRChat.exe"],
+    "target_process_names": [
+      "VRChat.exe"
+    ],
     "process_preset": "custom",
     "recent_process_names": [],
     "fallback_to_device_loopback": true,
     "asr_engine": "same_as_main",
     "source_language": "auto",
     "target_language": "zh",
-    "segment_duration_s": 2.0,
-    "tail_silence_s": 0.4,
-    "latency_profile_version": 1,
+    "segment_duration_s": 5.0,
+    "tail_silence_s": 0.8,
+    "latency_profile_version": 2,
     "asr_timeout_s": 5.0,
     "translation_timeout_s": 4.0,
     "self_suppress": false,
@@ -335,33 +319,13 @@
   },
   "tts": {
     "enabled": false,
-    "engine": "edge",
+    "engine": "qwen_tts",
     "auto_read": true,
     "monitor_enabled": false,
     "output_to_vrchat": false,
     "output_device": null,
     "output_device_name": "",
-    "edge": {
-      "voice": "zh-CN-XiaoxiaoNeural",
-      "rate": 1.0,
-      "volume": 0.8
-    },
-    "gtts": {
-      "voice": "zh-CN",
-      "rate": 1.0,
-      "volume": 0.8
-    },
-    "pyttsx3": {
-      "voice": null,
-      "rate": 1.0,
-      "volume": 1.0
-    },
     "voicevox": {
-      "voice": null,
-      "rate": 1.0,
-      "volume": 0.8
-    },
-    "aivis_speech": {
       "voice": null,
       "rate": 1.0,
       "volume": 0.8
@@ -397,21 +361,22 @@
       "device": "cpu",
       "bert_language": "jp"
     },
-    "xtts": {
-      "voice": "custom",
+    "qwen_vc": {
+      "api_key": "",
+      "region": "singapore",
+      "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+      "model": "qwen3-tts-vc-2026-01-22",
+      "voice": "",
       "rate": 1.0,
       "volume": 0.8,
-      "device": "cpu",
-      "language": "auto",
       "prewarm": true,
-      "lazy_load": true,
-      "optimized_inference": true,
-      "conditioning_cache_size": 4,
-      "enable_text_splitting": true,
-      "precision": "auto",
-      "cuda_device_index": 0,
-      "allow_cpu_fallback": true,
-      "cuda_tf32": true
+      "timeout_seconds": 30,
+      "connect_timeout_seconds": 30,
+      "read_timeout_seconds": 30,
+      "wall_timeout_seconds": 45,
+      "max_retries": 0,
+      "custom_voices": [],
+      "upload_consent": false
     }
   },
   "ui": {

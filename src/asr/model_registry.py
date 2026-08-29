@@ -111,14 +111,6 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
         bundled_dir_names=("whisper-small",),
         required_files=("small.en.pb",),
     ),
-    "webspeech": ASRRuntimeSpec(
-        engine="webspeech",
-        label="Web Speech",
-        config_key="webspeech",
-        model_id="webspeech",
-        model_revision="",
-        requires_local_model=False,
-    ),
     "qwen3-asr": ASRRuntimeSpec(
         engine="qwen3-asr",
         label="Qwen3-ASR",
@@ -127,20 +119,19 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
         model_revision="",
         requires_local_model=False,
     ),
-    "gemini-live": ASRRuntimeSpec(
-        engine="gemini-live",
-        label="Gemini Live API",
-        config_key="gemini_live",
-        model_id="gemini-live",
+    "edge-stt": ASRRuntimeSpec(
+        engine="edge-stt",
+        label="Edge Speech",
+        config_key="edge_stt",
+        model_id="edge-stt",
         model_revision="",
         requires_local_model=False,
     ),
 }
 
 USER_SELECTABLE_ASR_ENGINES = (
-    "webspeech",
+    "edge-stt",
     "qwen3-asr",
-    "gemini-live",
     "sensevoice-small",
 )
 LISTEN_SELECTABLE_ASR_ENGINES = (

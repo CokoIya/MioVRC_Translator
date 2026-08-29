@@ -7,88 +7,17 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from .base import BaseTTS
 
 logger = logging.getLogger(__name__)
 
-EdgeTTS: type[Any] | None = None
-GoogleTTS: type[Any] | None = None
-Pyttsx3TTS: type[Any] | None = None
 VoicevoxTTS: type[Any] | None = None
-AivisSpeechTTS: type[Any] | None = None
 MimoTTS: type[Any] | None = None
 QwenTTS: type[Any] | None = None
 StyleBertVits2TTS: type[Any] | None = None
-XTTSTS: type[Any] | None = None
-XTTS_DEFAULT_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
-
-_XTTS_SUPPORTED_LANGUAGES = {
-    "en",
-    "es",
-    "fr",
-    "de",
-    "it",
-    "pt",
-    "pl",
-    "tr",
-    "ru",
-    "nl",
-    "cs",
-    "ar",
-    "zh-cn",
-    "ja",
-    "hu",
-    "ko",
-    "hi",
-}
-_XTTS_LANGUAGE_ALIASES = {
-    "auto": "auto",
-    "automatic": "auto",
-    "detect": "auto",
-    "english": "en",
-    "eng": "en",
-    "en-us": "en",
-    "en-gb": "en",
-    "chinese": "zh-cn",
-    "zh": "zh-cn",
-    "zh-hans": "zh-cn",
-    "zh-sg": "zh-cn",
-    "zh-tw": "zh-cn",
-    "zh-hant": "zh-cn",
-    "cn": "zh-cn",
-    "japanese": "ja",
-    "jp": "ja",
-    "kor": "ko",
-    "kr": "ko",
-    "korean": "ko",
-    "spanish": "es",
-    "french": "fr",
-    "german": "de",
-    "italian": "it",
-    "portuguese": "pt",
-    "pt-br": "pt",
-    "pt-pt": "pt",
-    "polish": "pl",
-    "turkish": "tr",
-    "russian": "ru",
-    "dutch": "nl",
-    "czech": "cs",
-    "arabic": "ar",
-    "hungarian": "hu",
-    "hindi": "hi",
-}
-
-
-def normalize_xtts_language_code(language: object) -> str:
-    text = str(language or "").strip().lower().replace("_", "-")
-    if not text:
-        return "auto"
-    normalized = _XTTS_LANGUAGE_ALIASES.get(text, text)
-    if normalized == "auto" or normalized in _XTTS_SUPPORTED_LANGUAGES:
-        return normalized
-    return "auto"
+QwenVoiceCloneTTS: type[Any] | None = None
 
 
 def _normalize_engine_name(name: str) -> str:
@@ -124,33 +53,6 @@ def _optional_config_bool(value: object) -> bool | None:
     return None
 
 
-def _edge_tts_class() -> type[Any]:
-    global EdgeTTS
-    if EdgeTTS is None:
-        from .edge_tts_engine import EdgeTTS as loaded
-
-        EdgeTTS = loaded
-    return EdgeTTS
-
-
-def _google_tts_class() -> type[Any]:
-    global GoogleTTS
-    if GoogleTTS is None:
-        from .gtts_engine import GoogleTTS as loaded
-
-        GoogleTTS = loaded
-    return GoogleTTS
-
-
-def _pyttsx3_tts_class() -> type[Any]:
-    global Pyttsx3TTS
-    if Pyttsx3TTS is None:
-        from .pyttsx3_engine import Pyttsx3TTS as loaded
-
-        Pyttsx3TTS = loaded
-    return Pyttsx3TTS
-
-
 def _voicevox_tts_class() -> type[Any]:
     global VoicevoxTTS
     if VoicevoxTTS is None:
@@ -158,15 +60,6 @@ def _voicevox_tts_class() -> type[Any]:
 
         VoicevoxTTS = loaded
     return VoicevoxTTS
-
-
-def _aivis_speech_tts_class() -> type[Any]:
-    global AivisSpeechTTS
-    if AivisSpeechTTS is None:
-        from .aivis_speech_engine import AivisSpeechTTS as loaded
-
-        AivisSpeechTTS = loaded
-    return AivisSpeechTTS
 
 
 def _api_tts_classes() -> tuple[type[Any], type[Any]]:
@@ -181,6 +74,15 @@ def _api_tts_classes() -> tuple[type[Any], type[Any]]:
     return MimoTTS, QwenTTS
 
 
+def _qwen_voice_clone_tts_class() -> type[Any]:
+    global QwenVoiceCloneTTS
+    if QwenVoiceCloneTTS is None:
+        from . import api_tts_engines
+
+        QwenVoiceCloneTTS = api_tts_engines.QwenVoiceCloneTTS
+    return QwenVoiceCloneTTS
+
+
 def _style_bert_vits2_tts_class() -> type[Any]:
     global StyleBertVits2TTS
     if StyleBertVits2TTS is None:
@@ -188,21 +90,6 @@ def _style_bert_vits2_tts_class() -> type[Any]:
 
         StyleBertVits2TTS = loaded
     return StyleBertVits2TTS
-
-
-def _xtts_symbols() -> tuple[str, type[Any], Callable[[object], str]]:
-    global XTTS_DEFAULT_MODEL_NAME, XTTSTS, normalize_xtts_language_code
-    if XTTSTS is None:
-        from .xtts_engine import (
-            XTTS_DEFAULT_MODEL_NAME as loaded_model_name,
-            XTTSTS as loaded_xtts,
-            normalize_xtts_language_code as loaded_normalize_language,
-        )
-
-        XTTS_DEFAULT_MODEL_NAME = loaded_model_name
-        XTTSTS = loaded_xtts
-        normalize_xtts_language_code = loaded_normalize_language
-    return XTTS_DEFAULT_MODEL_NAME, XTTSTS, normalize_xtts_language_code
 
 
 def create_tts_engine(
@@ -221,33 +108,6 @@ def create_tts_engine(
     """
     engine_name = _normalize_engine_name(engine_name.lower().strip())
 
-    if engine_name == "edge":
-        EdgeTTS = _edge_tts_class()
-        engine = EdgeTTS()
-        if engine.is_available():
-            logger.info("Created Edge TTS engine")
-            return engine
-        logger.warning("Edge TTS not available")
-        return None
-
-    if engine_name == "gtts" or engine_name == "google":
-        GoogleTTS = _google_tts_class()
-        engine = GoogleTTS()
-        if engine.is_available():
-            logger.info("Created Google TTS engine")
-            return engine
-        logger.warning("Google TTS not available")
-        return None
-
-    if engine_name == "pyttsx3":
-        Pyttsx3TTS = _pyttsx3_tts_class()
-        engine = Pyttsx3TTS()
-        if engine.is_available():
-            logger.info("Created pyttsx3 TTS engine")
-            return engine
-        logger.warning("pyttsx3 not available")
-        return None
-
     if engine_name == "voicevox":
         VoicevoxTTS = _voicevox_tts_class()
         engine = VoicevoxTTS()
@@ -255,15 +115,6 @@ def create_tts_engine(
             logger.info("Created VOICEVOX TTS engine")
             return engine
         logger.warning("VOICEVOX not available")
-        return None
-
-    if engine_name in {"aivis_speech", "aivis"}:
-        AivisSpeechTTS = _aivis_speech_tts_class()
-        engine = AivisSpeechTTS()
-        if engine.is_available():
-            logger.info("Created AivisSpeech TTS engine")
-            return engine
-        logger.warning("AivisSpeech not available")
         return None
 
     if engine_name in {"mimo_tts", "mimo", "xiaomi_tts"}:
@@ -284,6 +135,20 @@ def create_tts_engine(
         logger.warning("Qwen TTS not available")
         return None
 
+    if engine_name in {"qwen_vc", "qwen-vc", "voice_clone", "qwen_voice_clone", "xtts"}:
+        # "xtts" is accepted so a config that still names the removed local
+        # cloning engine resolves to the cloud one instead of failing outright.
+        QwenVoiceCloneTTS = _qwen_voice_clone_tts_class()
+        engine = QwenVoiceCloneTTS(config=config)
+        if engine.is_available():
+            logger.info("Created Qwen voice cloning TTS engine")
+            return engine
+        logger.warning(
+            "Qwen voice cloning not available. Configure an API key and clone "
+            "a voice in Settings first."
+        )
+        return None
+
     if engine_name in {"style_bert_vits2", "stylebertvits2", "sbv2"}:
         StyleBertVits2TTS = _style_bert_vits2_tts_class()
         engine = StyleBertVits2TTS(device=device, bert_language=bert_language)
@@ -298,73 +163,28 @@ def create_tts_engine(
         logger.warning("Style-Bert-VITS2 not available")
         return None
 
-    if engine_name in {"xtts", "xtts_v2", "xtts-v2", "xttsts"}:
-        xtts_default_model_name, XTTSTS, normalize_xtts_language_code = _xtts_symbols()
-        xtts_cfg = config if isinstance(config, dict) else {}
-        xtts_device = str(xtts_cfg.get("device") or device or "cpu").strip().lower()
-        xtts_language = normalize_xtts_language_code(xtts_cfg.get("language"))
-        xtts_model = str(
-            xtts_cfg.get("model_name")
-            or xtts_cfg.get("model")
-            or xtts_default_model_name
-        )
-        try:
-            xtts_cache_size = int(xtts_cfg.get("conditioning_cache_size", 4) or 4)
-        except (TypeError, ValueError):
-            xtts_cache_size = 4
-        engine = XTTSTS(
-            device=xtts_device,
-            model_name=xtts_model,
-            language=xtts_language,
-            lazy_load=_config_bool(xtts_cfg.get("lazy_load"), True),
-            optimized_inference=_config_bool(xtts_cfg.get("optimized_inference"), True),
-            conditioning_cache_size=xtts_cache_size,
-            enable_text_splitting=_config_bool(xtts_cfg.get("enable_text_splitting"), True),
-            precision=str(xtts_cfg.get("precision") or "auto"),
-            cuda_device_index=xtts_cfg.get("cuda_device_index", 0),
-            allow_cpu_fallback=_config_bool(
-                xtts_cfg.get("allow_cpu_fallback"),
-                True,
-            ),
-            cuda_tf32=_config_bool(xtts_cfg.get("cuda_tf32"), True),
-            temperature=xtts_cfg.get("temperature"),
-            length_penalty=xtts_cfg.get("length_penalty"),
-            repetition_penalty=xtts_cfg.get("repetition_penalty"),
-            top_k=xtts_cfg.get("top_k"),
-            top_p=xtts_cfg.get("top_p"),
-            do_sample=_optional_config_bool(xtts_cfg.get("do_sample")),
-            num_beams=xtts_cfg.get("num_beams"),
-        )
-        if engine.is_available():
-            actual_device = getattr(engine, "_device", device)
-            logger.info(
-                "Created XTTS-v2 TTS engine (device=%s)",
-                actual_device,
-            )
-            return engine
-        logger.warning("XTTS-v2 not available. Install the coqui-tts runtime and download the XTTS-v2 model.")
-        return None
-
     logger.error("Unknown TTS engine: %s", engine_name)
     return None
 
 
 def create_tts_engine_with_fallback(
-    preferred: str = "edge",
+    preferred: str = "qwen_tts",
     device: str = "cpu",
     bert_language: str = "jp",
     config: dict | None = None,
 ) -> Optional[BaseTTS]:
-    """Create TTS engine with automatic fallback.
+    """Create the preferred TTS engine.
+
+    Kept for call-site compatibility. Every engine now requires explicit
+    configuration, so there is no usable substitute to fall back to.
 
     Args:
         preferred: Preferred engine name.
         device: Device for Style-Bert-VITS2 ("cpu" or "cuda").
 
     Returns:
-        TTS engine instance, or None if no engine available.
+        TTS engine instance, or None if the engine is unavailable.
     """
-    # Try preferred engine first
     engine = create_tts_engine(
         preferred,
         device=device,
@@ -374,21 +194,12 @@ def create_tts_engine_with_fallback(
     if engine is not None:
         return engine
 
-    # Try fallback engines
-    fallback_order = ["edge", "gtts", "pyttsx3"]
-    if preferred in fallback_order:
-        fallback_order.remove(preferred)
-
-    for engine_name in fallback_order:
-        engine = create_tts_engine(
-            engine_name,
-            device=device,
-            bert_language=bert_language,
-            config=config,
-        )
-        if engine is not None:
-            logger.info("Using fallback TTS engine: %s", engine_name)
-            return engine
-
-    logger.error("No TTS engine available")
+    # Every remaining engine needs the player to supply something first: an
+    # API key, a locally installed server, or a downloaded model. There is no
+    # zero-configuration engine left to silently fall back to, so report the
+    # failure instead of substituting an engine that would also be unusable.
+    logger.error(
+        "TTS engine '%s' is unavailable and no configured fallback exists",
+        preferred,
+    )
     return None

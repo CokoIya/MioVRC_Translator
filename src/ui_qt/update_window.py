@@ -798,16 +798,16 @@ class UpdateWindow(QDialog):
         }
 
     def _dialog_title(self) -> str:
-        return self._t("xtts_runtime_repair_title") if self._repair_mode else self._t("update_title")
+        return self._t("runtime_repair_title") if self._repair_mode else self._t("update_title")
 
     def _download_button_text(self) -> str:
-        return self._t("xtts_runtime_download_installer") if self._repair_mode else self._t("update_now")
+        return self._t("runtime_repair_download_installer") if self._repair_mode else self._t("update_now")
 
     def _ready_description(self) -> str:
-        return self._t("xtts_runtime_repair_ready") if self._repair_mode else self._t("update_ready_desc")
+        return self._t("runtime_repair_ready") if self._repair_mode else self._t("update_ready_desc")
 
     def _install_note(self) -> str:
-        return self._t("xtts_runtime_repair_install_note") if self._repair_mode else self._t("update_install_note")
+        return self._t("runtime_repair_install_note") if self._repair_mode else self._t("update_install_note")
 
     def _ready_note(self) -> str:
         if self._retained_download and not self._repair_mode:

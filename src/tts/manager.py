@@ -68,12 +68,7 @@ _RECOVERABLE_MIXLINE_PORTAUDIO_ERRORS = {-9999, -9996, -9992}
 _SCIPY_RESAMPLE_FALLBACK_LOGGED = False
 _SOXR_RESAMPLE_FALLBACK_LOGGED = False
 _CONCURRENT_SYNTHESIS_ENGINES = {
-    "edge",
-    "gtts",
-    "google",
     "voicevox",
-    "aivis",
-    "aivis_speech",
     "mimo",
     "mimo_tts",
     "xiaomi_tts",
@@ -215,7 +210,7 @@ class TTSManager:
 
     def __init__(
         self,
-        engine_name: str = "edge",
+        engine_name: str = "qwen_tts",
         cache_enabled: bool = True,
         allow_fallback: bool = True,
         output_device: OutputDeviceRef = None,

@@ -298,7 +298,7 @@ def warmup_dns_origin(
     *,
     timeout_s: float = 2.0,
 ) -> ProviderWarmupResult:
-    """Bound DNS preparation for clients, such as gTTS, with no reusable pool."""
+    """Bound DNS preparation for clients with no reusable connection pool."""
 
     started_at = time.monotonic()
     try:

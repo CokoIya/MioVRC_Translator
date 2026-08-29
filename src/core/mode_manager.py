@@ -29,7 +29,7 @@ ModeListener = Callable[["ModeChange"], None]
 
 
 SIMUL_MODE_DEFAULTS = {
-    "tts_backend": "edge",
+    "tts_backend": "qwen_tts",
     "tts_strategy": "queue",
     "vad_silence_ms": 300,
     "show_subtitle": True,

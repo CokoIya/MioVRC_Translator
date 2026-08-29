@@ -152,11 +152,11 @@ def test_inactive_listen_asr_is_skipped_only_in_active_mode():
     config = {
         "asr": {
             "engine": "sensevoice-small",
-            "gemini_live": {"api_key": ""},
+            "qwen3_asr": {"api_key": ""},
         },
         "vrc_listen": {
             "enabled": False,
-            "asr_engine": "gemini-live",
+            "asr_engine": "qwen3-asr",
         },
     }
 
@@ -168,26 +168,26 @@ def test_inactive_listen_asr_is_skipped_only_in_active_mode():
     )
 
     assert len(missing) == 1
-    assert missing[0].provider_id == "gemini-live"
-    assert missing[0].focus_target == "gemini_api_key"
+    assert missing[0].provider_id == "qwen3-asr"
+    assert missing[0].focus_target == "qwen_api_key"
 
 
 def test_enabled_independent_listen_asr_is_checked_with_local_main_asr():
     config = {
         "asr": {
             "engine": "sensevoice-small",
-            "gemini_live": {"api_key": ""},
+            "qwen3_asr": {"api_key": ""},
         },
         "vrc_listen": {
             "enabled": True,
-            "asr_engine": "gemini-live",
+            "asr_engine": "qwen3-asr",
         },
     }
 
     missing = missing_required_credentials(config, scopes="asr")
 
     assert len(missing) == 1
-    assert missing[0].provider_id == "gemini-live"
+    assert missing[0].provider_id == "qwen3-asr"
 
 
 def test_api_tts_requirement_respects_enabled_state():

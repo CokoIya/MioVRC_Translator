@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_RELEASE_VERSION = "1.3.9.3"
-EXPECTED_WINDOWS_NUMERIC_VERSION = "1.3.9.3"
+EXPECTED_RELEASE_VERSION = "1.4.0"
+EXPECTED_WINDOWS_NUMERIC_VERSION = "1.4.0.0"
 
 
 def _read(relative_path: str) -> str:
@@ -53,7 +53,7 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
             installer,
             label="Inno AppNumericVersion",
         ).group(1)
-        == EXPECTED_WINDOWS_NUMERIC_VERSION
+        == EXPECTED_RELEASE_VERSION
     )
 
     resource = _read("windows_version_info.txt")

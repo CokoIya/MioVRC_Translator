@@ -1,4 +1,4 @@
-"""Voice recording and import helper for XTTS-v2."""
+"""Voice recording and import helper for cloud voice cloning."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2024-2026 ここ_Mio and Mio RealTime Translator contributors
 #
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
     QFileDialog,
+    QFrame,
     QMessageBox,
     QProgressBar,
     QLineEdit,
@@ -26,39 +27,67 @@ from PySide6.QtWidgets import (
 )
 
 from src.tts.wav_utils import decode_wav_bytes, encode_pcm16_wav
-from src.tts.xtts_engine import (
-    XTTS_REFERENCE_MAX_CLIPPED_RATIO,
-    XTTS_REFERENCE_MAX_DC_OFFSET,
-    XTTS_REFERENCE_MIN_ACTIVE_SECONDS,
-    XTTS_REFERENCE_MIN_DURATION_SECONDS,
-    XTTS_REFERENCE_MIN_DYNAMIC_RANGE,
-    XTTS_REFERENCE_MIN_PEAK,
-    XTTS_REFERENCE_MIN_RMS,
-    XTTSAudioDecodeError,
-    XTTSAudioDecoderUnavailableError,
-    analyze_xtts_reference_audio_bytes,
-    normalize_xtts_reference_audio_file,
+from src.tts.reference_audio import (
+    REFERENCE_MAX_CLIPPED_RATIO,
+    REFERENCE_MAX_DURATION_SECONDS,
+    REFERENCE_MAX_DC_OFFSET,
+    REFERENCE_MIN_ACTIVE_SECONDS,
+    REFERENCE_MIN_DURATION_SECONDS,
+    REFERENCE_MIN_DYNAMIC_RANGE,
+    REFERENCE_MIN_PEAK,
+    REFERENCE_MIN_RMS,
+    ReferenceAudioDecodeError,
+    ReferenceAudioDecoderUnavailableError,
+    analyze_reference_audio_bytes,
+    normalize_reference_audio_file,
 )
 from src.ui_qt.qt_localization import configure_file_dialog
+from src.ui_qt.theme import resolve_theme, theme_tokens
 from src.utils.i18n import tr
 from src.utils.localization import format_locale_number, format_locale_percent, normalize_ui_language
 
 logger = logging.getLogger(__name__)
 
 
+def _parent_theme(parent: object) -> str:
+    """Best-effort read of the opener's resolved theme."""
+    accessor = getattr(parent, "_current_active_theme", None)
+    if callable(accessor):
+        try:
+            resolved = str(accessor() or "").strip()
+        except Exception:
+            resolved = ""
+        if resolved:
+            return resolved
+    for name in ("_active_theme", "_theme"):
+        value = str(getattr(parent, name, "") or "").strip()
+        if value:
+            return value
+    return "dark"
+
+
 class VoiceRecordingDialog(QDialog):
-    """Dialog for recording or importing voice samples for XTTS-v2."""
+    """Dialog for recording or importing a voice sample to clone."""
 
     voice_recorded = Signal(bytes, str)  # audio_data, voice_name
 
-    def __init__(self, parent=None, input_device: int | None = None, ui_lang: str | None = None):
+    def __init__(
+        self,
+        parent=None,
+        input_device: int | None = None,
+        ui_lang: str | None = None,
+        theme: str | None = None,
+    ):
         super().__init__(parent)
         self._ui_lang = normalize_ui_language(
             ui_lang or str(getattr(parent, "_ui_lang", "") or "").strip() or "en",
             default="en",
         )
+        # Inherit the app theme; the dialog used to hardcode light colors and
+        # rendered as a white panel inside the dark window.
+        self._theme = resolve_theme(theme if theme is not None else _parent_theme(parent))
         self.setWindowTitle(self._t("voice_record_title"))
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(560, 520)
 
         self._recording = False
         self._recorded_audio: Optional[bytes] = None
@@ -72,14 +101,13 @@ class VoiceRecordingDialog(QDialog):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        """Initialize the UI."""
+        """Build the dialog. Styling is driven by the shared theme tokens."""
         layout = QVBoxLayout(self)
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(14)
+        layout.setContentsMargins(28, 24, 28, 24)
 
-        # Title
         self._title_label = QLabel(self._t("voice_record_header"))
-        self._title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self._title_label.setObjectName("voiceRecordTitle")
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_label.setWordWrap(True)
         self._title_label.setSizePolicy(
@@ -88,93 +116,107 @@ class VoiceRecordingDialog(QDialog):
         )
         layout.addWidget(self._title_label)
 
-        # Instructions
         self._instructions_label = QLabel(self._t("voice_record_instructions"))
+        self._instructions_label.setObjectName("voiceRecordHint")
         self._instructions_label.setWordWrap(True)
-        self._instructions_label.setStyleSheet("color: #666; padding: 10px; background: #f5f5f5; border-radius: 5px;")
         layout.addWidget(self._instructions_label)
 
-        # Recording status
+        # The recording leaves the machine, so say so where the player is
+        # actually about to record rather than only on the settings page.
+        self._upload_notice_label = QLabel(self._t("voice_record_upload_notice"))
+        self._upload_notice_label.setObjectName("voiceRecordNotice")
+        self._upload_notice_label.setWordWrap(True)
+        layout.addWidget(self._upload_notice_label)
+
         self._status_label = QLabel(self._t("voice_record_ready"))
+        self._status_label.setObjectName("voiceRecordStatus")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px;")
+        self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
 
-        # Progress bar for recording duration
+        # The bar tracks the recommended window rather than a flat 10 s cap, so
+        # the player can see when the clip is long enough and when it is being
+        # trimmed.
         self._progress_bar = QProgressBar()
-        self._progress_bar.setMaximum(10)  # 10 seconds
+        self._progress_bar.setObjectName("voiceRecordProgress")
+        self._progress_bar.setMaximum(int(REFERENCE_MAX_DURATION_SECONDS))
         self._progress_bar.setValue(0)
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat(self._t("voice_record_seconds_format"))
         self._progress_bar.setVisible(False)
         layout.addWidget(self._progress_bar)
 
-        # Recording controls
+        self._duration_hint_label = QLabel(self._t("voice_record_target_hint"))
+        self._duration_hint_label.setObjectName("voiceRecordSubtle")
+        self._duration_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._duration_hint_label.setWordWrap(True)
+        layout.addWidget(self._duration_hint_label)
+
         recording_layout = QHBoxLayout()
+        recording_layout.setSpacing(10)
 
         self._record_btn = QPushButton("🎤 " + self._t("voice_record_start"))
-        self._record_btn.setFixedHeight(50)
-        self._record_btn.setStyleSheet(
-            "QPushButton { font-size: 14px; background-color: #4CAF50; color: white; border-radius: 5px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-        )
+        self._record_btn.setObjectName("voiceRecordPrimary")
+        self._record_btn.setMinimumHeight(44)
         self._record_btn.clicked.connect(self._toggle_recording)
         recording_layout.addWidget(self._record_btn)
 
-        self._stop_btn = QPushButton("⏹️ " + self._t("voice_record_stop"))
-        self._stop_btn.setFixedHeight(50)
+        self._stop_btn = QPushButton("⏹ " + self._t("voice_record_stop"))
+        self._stop_btn.setObjectName("voiceRecordDanger")
+        self._stop_btn.setMinimumHeight(44)
         self._stop_btn.setEnabled(False)
-        self._stop_btn.setStyleSheet(
-            "QPushButton { font-size: 14px; background-color: #f44336; color: white; border-radius: 5px; }"
-            "QPushButton:hover { background-color: #da190b; }"
-            "QPushButton:disabled { background-color: #cccccc; }"
-        )
         self._stop_btn.clicked.connect(self._stop_recording)
         recording_layout.addWidget(self._stop_btn)
 
         layout.addLayout(recording_layout)
 
-        # Play button
-        self._play_btn = QPushButton("▶️ " + self._t("voice_record_play"))
+        self._play_btn = QPushButton("▶ " + self._t("voice_record_play"))
+        self._play_btn.setObjectName("voiceRecordSecondary")
+        self._play_btn.setMinimumHeight(38)
         self._play_btn.setEnabled(False)
         self._play_btn.clicked.connect(self._play_recording)
         layout.addWidget(self._play_btn)
 
-        # Divider
-        divider = QLabel("─" * 50)
-        divider.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        divider.setStyleSheet("color: #ccc;")
+        divider = QFrame()
+        divider.setObjectName("voiceRecordDivider")
+        divider.setFrameShape(QFrame.Shape.NoFrame)
+        divider.setFixedHeight(1)
         layout.addWidget(divider)
 
-        # Import audio file button
         self._import_btn = QPushButton("📂 " + self._t("voice_record_import_file"))
-        self._import_btn.setFixedHeight(40)
+        self._import_btn.setObjectName("voiceRecordSecondary")
+        self._import_btn.setMinimumHeight(38)
         self._import_btn.clicked.connect(self._import_audio)
         layout.addWidget(self._import_btn)
 
-        # Voice name input
         name_layout = QHBoxLayout()
+        name_layout.setSpacing(10)
         self._name_label = QLabel(self._t("voice_record_name"))
         name_layout.addWidget(self._name_label)
 
         self._name_input = QLineEdit()
+        self._name_input.setObjectName("voiceRecordName")
+        self._name_input.setMinimumHeight(36)
         self._name_input.setPlaceholderText(self._t("voice_record_name_placeholder"))
         self._name_input.setText(self._t("voice_record_default_name"))
         name_layout.addWidget(self._name_input, 1)
 
         layout.addLayout(name_layout)
-
         layout.addStretch()
 
-        # Bottom buttons
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
         button_layout.addStretch()
 
         self._cancel_btn = QPushButton(tr(self._ui_lang, "cancel"))
+        self._cancel_btn.setObjectName("voiceRecordSecondary")
+        self._cancel_btn.setMinimumHeight(38)
         self._cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(self._cancel_btn)
 
         self._save_btn = QPushButton(self._t("voice_record_save"))
+        self._save_btn.setObjectName("voiceRecordPrimary")
+        self._save_btn.setMinimumHeight(38)
         self._save_btn.setEnabled(False)
         self._save_btn.setDefault(True)
         self._save_btn.clicked.connect(self._save_voice)
@@ -182,19 +224,136 @@ class VoiceRecordingDialog(QDialog):
 
         layout.addLayout(button_layout)
 
-        # Timer for recording duration
         self._recording_timer = QTimer(self)
         self._recording_timer.timeout.connect(self._update_recording_duration)
         self._recording_seconds = 0
 
+        self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Paint the dialog from the shared theme tokens."""
+        tokens = theme_tokens(self._theme)
+        self.setStyleSheet(
+            f"""
+            QDialog {{
+                background: {tokens["SHELL_BG"]};
+                color: {tokens["TEXT_PRIMARY"]};
+            }}
+            QLabel {{
+                color: {tokens["TEXT_PRIMARY"]};
+                background: transparent;
+            }}
+            QLabel#voiceRecordTitle {{
+                font-size: 18px;
+                font-weight: bold;
+                color: {tokens["TEXT_PRIMARY"]};
+            }}
+            QLabel#voiceRecordHint {{
+                color: {tokens["TEXT_SECONDARY"]};
+                background: {tokens["PANEL_BG"]};
+                border: 1px solid {tokens["PANEL_BORDER"]};
+                border-radius: {tokens["RADIUS_M"]}px;
+                padding: 10px 12px;
+            }}
+            QLabel#voiceRecordNotice {{
+                color: {tokens["TEXT_SECONDARY"]};
+                background: {tokens["WARNING_SOFT"]};
+                border: 1px solid {tokens["WARNING_BORDER"]};
+                border-radius: {tokens["RADIUS_M"]}px;
+                padding: 10px 12px;
+            }}
+            QLabel#voiceRecordSubtle {{
+                color: {tokens["TEXT_MUTED"]};
+                background: transparent;
+                font-size: 12px;
+                padding: 0px;
+            }}
+            QLabel#voiceRecordStatus {{
+                font-size: 14px;
+                font-weight: bold;
+                color: {tokens["TEXT_PRIMARY"]};
+                padding: 6px;
+            }}
+            QFrame#voiceRecordDivider {{
+                background: {tokens["PANEL_DIVIDER"]};
+                border: none;
+            }}
+            QProgressBar#voiceRecordProgress {{
+                background: {tokens["FIELD_BG"]};
+                border: 1px solid {tokens["FIELD_BORDER"]};
+                border-radius: {tokens["RADIUS_S"]}px;
+                color: {tokens["TEXT_PRIMARY"]};
+                text-align: center;
+                min-height: 20px;
+            }}
+            QProgressBar#voiceRecordProgress::chunk {{
+                background: {tokens["ACCENT"]};
+                border-radius: {tokens["RADIUS_S"]}px;
+            }}
+            QLineEdit#voiceRecordName {{
+                background: {tokens["FIELD_BG"]};
+                border: 1px solid {tokens["FIELD_BORDER"]};
+                border-radius: {tokens["RADIUS_S"]}px;
+                color: {tokens["INPUT_TEXT"]};
+                padding: 6px 10px;
+            }}
+            QLineEdit#voiceRecordName:focus {{
+                border-color: {tokens["FIELD_FOCUS"]};
+            }}
+            QPushButton {{
+                border-radius: {tokens["RADIUS_S"]}px;
+                padding: 8px 16px;
+                font-size: 14px;
+            }}
+            QPushButton#voiceRecordPrimary {{
+                background: {tokens["ACCENT"]};
+                color: {tokens["TEXT_INVERTED"]};
+                border: 1px solid {tokens["ACCENT_BORDER"]};
+            }}
+            QPushButton#voiceRecordPrimary:hover:enabled {{
+                background: {tokens["ACCENT_HOVER"]};
+            }}
+            QPushButton#voiceRecordDanger {{
+                background: {tokens["DANGER"]};
+                color: {tokens["TEXT_INVERTED"]};
+                border: 1px solid {tokens["DANGER_BORDER"]};
+            }}
+            QPushButton#voiceRecordSecondary {{
+                background: {tokens["PANEL_RAISED"]};
+                color: {tokens["TEXT_PRIMARY"]};
+                border: 1px solid {tokens["PANEL_BORDER"]};
+            }}
+            QPushButton#voiceRecordSecondary:hover:enabled {{
+                background: {tokens["FIELD_HOVER"]};
+            }}
+            QPushButton:disabled {{
+                background: {tokens["PANEL_ALT_BG"]};
+                color: {tokens["TEXT_MUTED"]};
+                border: 1px solid {tokens["PANEL_BORDER"]};
+            }}
+            """
+        )
+
+    def refresh_theme(self, theme: str) -> None:
+        self._theme = resolve_theme(theme)
+        self._apply_theme()
+
+    def _refresh_duration_hint(self) -> None:
+        """Tell the player whether the clip is short, on target, or trimmed."""
+        seconds = float(self._recording_seconds)
+        if seconds > REFERENCE_MAX_DURATION_SECONDS:
+            self._duration_hint_label.setText(self._t("voice_record_too_long_hint"))
+        else:
+            self._duration_hint_label.setText(self._t("voice_record_target_hint"))
+
     def _normalize_reference_audio_path_to_bytes(self, source_path: str | Path) -> bytes:
-        with tempfile.TemporaryDirectory(prefix="mio_xtts_ref_") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="mio_voice_ref_") as tmp_dir:
             output_path = Path(tmp_dir) / "reference.wav"
-            normalize_xtts_reference_audio_file(source_path, output_path)
+            normalize_reference_audio_file(source_path, output_path)
             return output_path.read_bytes()
 
     def _normalize_reference_audio_bytes(self, audio_data: bytes) -> bytes:
-        with tempfile.TemporaryDirectory(prefix="mio_xtts_ref_") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="mio_voice_ref_") as tmp_dir:
             source_path = Path(tmp_dir) / "recording.wav"
             source_path.write_bytes(audio_data)
             return self._normalize_reference_audio_path_to_bytes(source_path)
@@ -225,16 +384,16 @@ class VoiceRecordingDialog(QDialog):
         return self._t(self._status_key, **kwargs)
 
     def _localized_quality_problem(self, stats) -> str | None:
-        if stats.duration_seconds < XTTS_REFERENCE_MIN_DURATION_SECONDS:
+        if stats.duration_seconds < REFERENCE_MIN_DURATION_SECONDS:
             return self._t(
                 "voice_record_quality_too_short",
                 duration=self._number(stats.duration_seconds, 1),
             )
         if (
-            stats.peak < XTTS_REFERENCE_MIN_PEAK
-            or stats.rms < XTTS_REFERENCE_MIN_RMS
-            or stats.active_duration_seconds < XTTS_REFERENCE_MIN_ACTIVE_SECONDS
-            or stats.dynamic_range < XTTS_REFERENCE_MIN_DYNAMIC_RANGE
+            stats.peak < REFERENCE_MIN_PEAK
+            or stats.rms < REFERENCE_MIN_RMS
+            or stats.active_duration_seconds < REFERENCE_MIN_ACTIVE_SECONDS
+            or stats.dynamic_range < REFERENCE_MIN_DYNAMIC_RANGE
         ):
             return self._t(
                 "voice_record_quality_quiet",
@@ -242,12 +401,12 @@ class VoiceRecordingDialog(QDialog):
                 rms=self._number(stats.rms, 4),
                 active=self._number(stats.active_duration_seconds, 1),
             )
-        if stats.dc_offset > XTTS_REFERENCE_MAX_DC_OFFSET:
+        if stats.dc_offset > REFERENCE_MAX_DC_OFFSET:
             return self._t(
                 "voice_record_quality_dc_offset",
                 offset=self._number(stats.dc_offset, 3),
             )
-        if stats.clipped_ratio > XTTS_REFERENCE_MAX_CLIPPED_RATIO:
+        if stats.clipped_ratio > REFERENCE_MAX_CLIPPED_RATIO:
             return self._t(
                 "voice_record_quality_clipped",
                 clipped=format_locale_percent(
@@ -259,14 +418,14 @@ class VoiceRecordingDialog(QDialog):
         return None
 
     def _localized_import_error(self, error: BaseException, source_path: str | Path) -> str:
-        if isinstance(error, XTTSAudioDecoderUnavailableError):
+        if isinstance(error, ReferenceAudioDecoderUnavailableError):
             return self._t("voice_record_import_decoder_missing")
-        if isinstance(error, XTTSAudioDecodeError):
+        if isinstance(error, ReferenceAudioDecodeError):
             return self._t("voice_record_import_decode_failed")
         path = Path(source_path)
         try:
             if path.suffix.lower() == ".wav" and path.stat().st_size <= 64 * 1024 * 1024:
-                stats = analyze_xtts_reference_audio_bytes(path.read_bytes())
+                stats = analyze_reference_audio_bytes(path.read_bytes())
                 quality_problem = self._localized_quality_problem(stats)
                 if quality_problem:
                     return quality_problem
@@ -287,8 +446,10 @@ class VoiceRecordingDialog(QDialog):
                 "voice_record_recording" if self._recording else "voice_record_start"
             )
         )
-        self._stop_btn.setText("⏹️ " + self._t("voice_record_stop"))
-        self._play_btn.setText("▶️ " + self._t("voice_record_play"))
+        self._stop_btn.setText("⏹ " + self._t("voice_record_stop"))
+        self._play_btn.setText("▶ " + self._t("voice_record_play"))
+        self._upload_notice_label.setText(self._t("voice_record_upload_notice"))
+        self._refresh_duration_hint()
         self._import_btn.setText("📂 " + self._t("voice_record_import_file"))
         self._name_label.setText(self._t("voice_record_name"))
         self._name_input.setPlaceholderText(self._t("voice_record_name_placeholder"))
@@ -393,9 +554,11 @@ class VoiceRecordingDialog(QDialog):
         """Update recording duration display."""
         self._recording_seconds += 1
         self._progress_bar.setValue(self._recording_seconds)
+        self._refresh_duration_hint()
 
-        if self._recording_seconds >= 30:
-            # Auto-stop after 30 seconds
+        if self._recording_seconds >= REFERENCE_MAX_DURATION_SECONDS:
+            # Anything past the cap is trimmed during normalization, so stop
+            # rather than let the player keep talking into discarded audio.
             self._stop_recording()
             QMessageBox.information(
                 self,
@@ -430,11 +593,11 @@ class VoiceRecordingDialog(QDialog):
                 duration = len(audio_float) / float(self._record_sample_rate)
                 try:
                     self._recorded_audio = self._normalize_reference_audio_bytes(raw_recorded_audio)
-                    stats = analyze_xtts_reference_audio_bytes(self._recorded_audio)
+                    stats = analyze_reference_audio_bytes(self._recorded_audio)
                     quality_problem = None
                 except Exception:
                     self._recorded_audio = raw_recorded_audio
-                    stats = analyze_xtts_reference_audio_bytes(raw_recorded_audio)
+                    stats = analyze_reference_audio_bytes(raw_recorded_audio)
                     quality_problem = self._localized_quality_problem(stats) or self._t(
                         "voice_record_import_failed"
                     )
@@ -488,6 +651,7 @@ class VoiceRecordingDialog(QDialog):
         self._record_btn.setEnabled(True)
         self._stop_btn.setEnabled(False)
         self._progress_bar.setVisible(False)
+        self._refresh_duration_hint()
 
     def _release_audio_resources(self, *, clear_frames: bool = False) -> None:
         """Stop native capture without processing or displaying recording UI."""
@@ -548,7 +712,7 @@ class VoiceRecordingDialog(QDialog):
                 audio_path = files[0]
                 try:
                     self._recorded_audio = self._normalize_reference_audio_path_to_bytes(audio_path)
-                    stats = analyze_xtts_reference_audio_bytes(self._recorded_audio)
+                    stats = analyze_reference_audio_bytes(self._recorded_audio)
 
                     # Get filename as default voice name
                     voice_name = Path(audio_path).stem

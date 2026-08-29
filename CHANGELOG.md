@@ -2,6 +2,18 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.4.0] - 2026-08-29
+
+### Speech recognition and runtime footprint
+
+- Added direct Microsoft Edge speech recognition over WebSocket, removing the browser/Web Speech dependency from the packaged ASR path and allowing the existing desktop loopback listener to send captured audio directly to recognition.
+- Kept SenseVoice as an optional local model while removing obsolete browser/live-ASR and legacy local TTS paths from the active runtime; cloud providers remain opt-in and API keys stay outside the repository.
+
+### Voice and realtime reliability
+
+- Added Qwen cloud voice enrollment/cloning support with local reference-audio validation and safe upload handling.
+- Preserved bounded realtime queues, VAD segmentation, provider lifecycle cleanup, and release-bundle payload verification while tightening the current settings and TTS surface.
+
 ## [1.3.9.3] - 2026-08-21
 
 ### Translation defaults and compatibility

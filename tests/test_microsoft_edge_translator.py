@@ -131,3 +131,77 @@ def test_factory_creates_edge_web_without_api_key():
         assert translator._timeout_s == 5.0
     finally:
         translator.close()
+
+
+class _SequencedSession(_FakeSession):
+    """Return a different response per call so a retry can be observed."""
+
+    def __init__(self, responses):
+        super().__init__(responses[0])
+        self._responses = list(responses)
+
+    def post(self, url: str, **kwargs: object):
+        self.calls.append({"url": url, **kwargs})
+        return self._responses.pop(0) if self._responses else self.response
+
+
+def test_edge_web_retries_with_detection_when_the_source_hint_is_wrong(monkeypatch):
+    """Reverse translation hears whatever language the other player speaks.
+
+    A stale `from` hint makes the endpoint echo the input back untranslated;
+    that must cost one retry, not the whole utterance.
+    """
+
+    korean = "안녕하세요"
+    session = _SequencedSession([
+        _FakeResponse([{"translations": [{"text": korean, "to": "zh-Hans"}]}]),
+        _FakeResponse([{"translations": [{"text": "你好", "to": "zh-Hans"}]}]),
+    ])
+    monkeypatch.setattr(
+        "src.translators.microsoft_edge_translator.requests.Session",
+        lambda: session,
+    )
+
+    translator = MicrosoftEdgeTranslator(max_retries=0)
+    assert translator.translate(korean, "ja", "zh") == "你好"
+
+    assert len(session.calls) == 2
+    # The first attempt declares the configured source...
+    assert session.calls[0]["params"]["from"] == "ja"
+    # ...and the retry drops it so the endpoint detects the real language.
+    assert "from" not in session.calls[1]["params"]
+    assert session.calls[1]["params"]["to"] == "zh-Hans"
+
+
+def test_edge_web_does_not_retry_when_detection_was_already_used(monkeypatch):
+    """Without a source hint there is nothing left to relax, so fail fast."""
+
+    korean = "안녕하세요"
+    session = _FakeSession(
+        _FakeResponse([{"translations": [{"text": korean, "to": "zh-Hans"}]}])
+    )
+    monkeypatch.setattr(
+        "src.translators.microsoft_edge_translator.requests.Session",
+        lambda: session,
+    )
+
+    translator = MicrosoftEdgeTranslator(max_retries=0)
+    with pytest.raises(Exception) as excinfo:
+        translator.translate(korean, "auto", "zh")
+
+    assert "target_language_mismatch" in str(excinfo.value)
+    assert len(session.calls) == 1
+
+
+def test_edge_web_keeps_a_correct_first_answer_without_retrying(monkeypatch):
+    session = _SequencedSession([
+        _FakeResponse([{"translations": [{"text": "你好", "to": "zh-Hans"}]}]),
+    ])
+    monkeypatch.setattr(
+        "src.translators.microsoft_edge_translator.requests.Session",
+        lambda: session,
+    )
+
+    translator = MicrosoftEdgeTranslator(max_retries=0)
+    assert translator.translate("こんにちは", "ja", "zh") == "你好"
+    assert len(session.calls) == 1

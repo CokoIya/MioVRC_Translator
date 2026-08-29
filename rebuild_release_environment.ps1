@@ -138,7 +138,7 @@ try {
     $env:MIO_TRANSLATOR_NO_VENV_RELAUNCH = "1"
     & $releasePython main.py --mio-selftest
     if ($LASTEXITCODE -ne 0) {
-        throw "The rebuilt release environment failed the ASR/XTTS runtime self-test."
+        throw "The rebuilt release environment failed the ASR runtime self-test."
     }
 
     $rebuildSucceeded = $true

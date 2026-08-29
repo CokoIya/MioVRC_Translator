@@ -31,7 +31,7 @@ _PRIMARY_TO_CODE: dict[int, str] = {
 
 # Languages that use SenseVoice (Chinese/Cantonese)
 SENSEVOICE_LANGUAGES = frozenset({"zh", "yue"})
-WEBSPEECH_ENGINE = "webspeech"
+EDGE_STT_ENGINE = "edge-stt"
 SENSEVOICE_ENGINE = "sensevoice-small"
 
 
@@ -63,7 +63,7 @@ def select_default_asr_engine() -> str:
     lang = get_system_language()
     if lang in SENSEVOICE_LANGUAGES:
         return SENSEVOICE_ENGINE
-    return WEBSPEECH_ENGINE
+    return EDGE_STT_ENGINE
 
 
 def is_chinese_system() -> bool:

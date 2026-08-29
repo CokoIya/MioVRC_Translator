@@ -1,3 +1,4 @@
+import copy
 import threading
 
 import pytest
@@ -45,12 +46,12 @@ def test_listen_asr_builds_separate_provider_when_engine_differs(monkeypatch):
             "engine": "qwen3-asr",
             "qwen3_asr": {"model": "qwen3-asr-flash"},
         },
-        "vrc_listen": {"enabled": True, "asr_engine": "webspeech"},
+        "vrc_listen": {"enabled": True, "asr_engine": "edge-stt"},
     }
 
     mic_asr, listen_asr = main_window._create_asr_pair(config)
 
-    assert calls == ["qwen3-asr", "webspeech"]
+    assert calls == ["qwen3-asr", "edge-stt"]
     assert mic_asr is not listen_asr
 
 
@@ -153,13 +154,13 @@ def test_create_asr_pair_closes_main_provider_when_listen_creation_fails(monkeyp
     monkeypatch.setattr(main_window, "create_asr", fake_create_asr)
     config = {
         "asr": {"engine": "qwen3-asr"},
-        "vrc_listen": {"enabled": True, "asr_engine": "webspeech"},
+        "vrc_listen": {"enabled": True, "asr_engine": "edge-stt"},
     }
 
     with pytest.raises(RuntimeError, match="listen provider failed"):
         main_window._create_asr_pair(config)
 
-    assert calls == ["qwen3-asr", "webspeech"]
+    assert calls == ["qwen3-asr", "edge-stt"]
     assert provider.close_calls == 1
 
 
@@ -231,3 +232,71 @@ def test_shared_asr_instance_serializes_both_final_transcriptions_without_droppi
     assert not desktop_thread.is_alive()
     assert results == {"mic": "ok", "desktop": "ok"}
     assert shared.max_active == 1
+
+
+def test_asr_signature_ignores_settings_that_cannot_change_recognition():
+    """Touching a caption or VAD switch must not discard a warmed provider."""
+
+    from src.ui_qt.main_window import _asr_pair_config_signature
+
+    base = {
+        "ui": {"language": "zh-CN"},
+        "asr": {"engine": "sensevoice-small"},
+        "vrc_listen": {
+            "enabled": True,
+            "asr_engine": "follow_main",
+            "source_language": "auto",
+            "asr_timeout_s": 5.0,
+            "show_overlay": True,
+            "send_to_chatbox": True,
+            "tail_silence_s": 0.8,
+            "segment_duration_s": 5.0,
+            "target_language": "zh",
+            "vad_min_rms": 0.02,
+        },
+    }
+    signature = _asr_pair_config_signature(base)
+
+    for key, value in (
+        ("show_overlay", False),
+        ("send_to_chatbox", False),
+        ("tail_silence_s", 1.5),
+        ("segment_duration_s", 2.0),
+        ("target_language", "en"),
+        ("vad_min_rms", 0.05),
+    ):
+        changed = copy.deepcopy(base)
+        changed["vrc_listen"][key] = value
+        assert _asr_pair_config_signature(changed) == signature, key
+
+
+def test_asr_signature_still_reacts_to_recognition_settings():
+    """Anything that picks or configures the recogniser must invalidate."""
+
+    from src.ui_qt.main_window import _asr_pair_config_signature
+
+    base = {
+        "ui": {"language": "zh-CN"},
+        "asr": {"engine": "sensevoice-small"},
+        "vrc_listen": {
+            "enabled": True,
+            "asr_engine": "follow_main",
+            "source_language": "auto",
+            "asr_timeout_s": 5.0,
+        },
+    }
+    signature = _asr_pair_config_signature(base)
+
+    for key, value in (
+        ("enabled", False),
+        ("asr_engine", "edge-stt"),
+        ("source_language", "ja"),
+        ("asr_timeout_s", 9.0),
+    ):
+        changed = copy.deepcopy(base)
+        changed["vrc_listen"][key] = value
+        assert _asr_pair_config_signature(changed) != signature, key
+
+    changed = copy.deepcopy(base)
+    changed["asr"]["engine"] = "whisper-small"
+    assert _asr_pair_config_signature(changed) != signature

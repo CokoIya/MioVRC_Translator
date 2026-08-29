@@ -40,7 +40,7 @@ def _window_for_mute(
     shared_asr = object()
     window._running = True
     window._destroying = False
-    window._listen_session = 7
+    window._runtime_generation = 7
     window._mic_muted = muted
     window._mic_in_speech = False
     window._asr = shared_asr
@@ -217,7 +217,7 @@ def test_mic_mute_drops_already_admitted_final_mic_audio():
         "private mic audio",
         None,
         None,
-        window._listen_session,
+        window._runtime_generation,
         MIC_SOURCE,
     )
 

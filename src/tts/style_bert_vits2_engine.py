@@ -415,7 +415,7 @@ def _configure_style_bert_cpu_runtime() -> None:
 
     ``torch.set_num_threads`` and the OMP/MKL environment variables are global
     to the process. Changing them while merely probing the SBV2 engine used to
-    throttle SenseVoice and XTTS for the rest of the session, even when SBV2
+    throttle SenseVoice for the rest of the session, even when SBV2
     was never selected. Stage-level concurrency already bounds SBV2 synthesis,
     so an individual backend must not silently retune every other model.
     """

@@ -7,7 +7,6 @@ import json
 
 import pytest
 
-from src.tts.aivis_speech_engine import AivisSpeechTTS
 from src.tts.voicevox_compatible_engine import VoicevoxCompatibleTTS
 from src.tts.voicevox_engine import VoicevoxTTS
 
@@ -89,7 +88,6 @@ def test_voicevox_compatible_engine_synthesizes_with_runtime_controls(monkeypatc
 
 def test_local_tts_engines_use_expected_default_ports():
     assert VoicevoxTTS()._base_url == "http://127.0.0.1:50021"
-    assert AivisSpeechTTS()._base_url == "http://127.0.0.1:10101"
 
 
 def test_voicevox_compatible_endpoint_is_limited_to_local_or_private_hosts():

@@ -205,6 +205,11 @@ def test_windows_transient_replace_error_is_retried(monkeypatch, tmp_path):
     sleeps: list[float] = []
 
     def flaky_replace(current_source, current_destination):
+        # release_tool.os is the real os module, so this patch is process-wide.
+        # Background threads left running by other tests also write files
+        # atomically, and counting their replaces made this test flaky.
+        if os.fspath(current_source) != os.fspath(source):
+            return real_replace(current_source, current_destination)
         nonlocal attempts
         attempts += 1
         if attempts < 3:

@@ -1,7 +1,15 @@
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QWidget
 
-from src.ui_qt.text_input_window import TEXT_INPUT_CHAR_LIMIT, TextInputWindow
+from src.ui_qt.text_input_window import (
+    DEFAULT_GEOMETRY,
+    DEFAULT_SIZE,
+    HEADER_CONTROL_SIZE,
+    INPUT_MIN_HEIGHT,
+    MIN_SIZE,
+    TEXT_INPUT_CHAR_LIMIT,
+    TextInputWindow,
+)
 
 
 def test_text_input_window_uses_translated_labels(qtbot, monkeypatch):
@@ -140,6 +148,69 @@ def test_text_input_window_resize_hit_testing_and_scaling(qtbot, monkeypatch):
     monkeypatch.setattr(window, "_ui_scale", lambda: 1.25)
     window._apply_scaled_layout(force=True)
 
-    assert window._pin_button.width() >= 38
-    assert window._pin_button.width() > 30
-    assert window._input_edit.minimumHeight() >= 165
+    # Controls track the display rather than any one pixel size, so assert the
+    # relationship to the base metrics instead of the numbers of a past layout.
+    assert window._pin_button.width() >= int(HEADER_CONTROL_SIZE * 1.25)
+    assert window._pin_button.width() > HEADER_CONTROL_SIZE
+    assert window._input_edit.minimumHeight() >= int(INPUT_MIN_HEIGHT * 1.25)
+
+
+def test_text_input_window_does_not_share_the_overlay_stylesheet():
+    """The composer and the reverse-translation overlay are styled apart.
+
+    They used to share one sheet, so every metric had to suit both windows.
+    """
+
+    from src.ui_qt.styles import build_floating_window_styles, build_text_input_styles
+
+    composer = build_text_input_styles("dark")
+
+    assert composer != build_floating_window_styles("dark")
+    assert "QFrame#textInputShell" in composer
+    assert "QFrame#floatingShell" not in composer
+
+
+def test_text_input_counter_warns_before_vrchat_truncates(qtbot, monkeypatch):
+    """VRChat cuts the message silently, so the count has to speak up first."""
+
+    monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
+    window = TextInputWindow(None, {"ui": {"language": "en"}, "text_input_window": {}})
+    qtbot.addWidget(window)
+
+    window._input_edit.setPlainText("a")
+    assert window._counter_label.property("limit") == ""
+
+    window._input_edit.setPlainText("a" * int(TEXT_INPUT_CHAR_LIMIT * 0.9))
+    assert window._counter_label.property("limit") == "warn"
+
+    window._input_edit.setPlainText("a" * TEXT_INPUT_CHAR_LIMIT)
+    assert window._counter_label.property("limit") == "full"
+
+
+def test_text_input_footer_hides_the_hint_rather_than_overlapping(qtbot, monkeypatch):
+    """Half a shortcut is worth less than the room it costs."""
+
+    monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
+    window = TextInputWindow(None, {"ui": {"language": "zh-CN"}, "text_input_window": {}})
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+
+    window.resize(640, 260)
+    window._refresh_header_labels()
+    assert window._key_hint_label.isVisible() is True
+    full_hint = window._key_hint_label.text()
+
+    window.resize(window.minimumWidth(), window.minimumHeight())
+    window._refresh_header_labels()
+
+    hint = window._key_hint_label
+    assert hint.isVisible() is False or hint.text() == full_hint
+
+
+def test_text_input_window_geometry_default_is_composer_sized():
+    """A 144-character composer should not open a third of the screen."""
+
+    assert DEFAULT_SIZE == (460, 210)
+    assert DEFAULT_GEOMETRY.startswith("460x210")
+    assert MIN_SIZE[0] < 360 and MIN_SIZE[1] < 220

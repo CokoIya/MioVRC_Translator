@@ -801,7 +801,7 @@ def test_restored_repair_installer_keeps_repair_specific_note(
 
     assert restored._view_state == "ready"
     assert restored._sub_label.text() == update_window.tr(
-        "en", "xtts_runtime_repair_install_note"
+        "en", "runtime_repair_install_note"
     )
 
 

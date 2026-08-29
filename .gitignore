@@ -15,6 +15,8 @@ __pycache__/
 .venv311/
 venv311/
 .venv-release311/
+# rebuild_release_environment.ps1 keeps one of these until it succeeds.
+.venv-release311.backup-*/
 .venv-test311/
 .release-metadata-backup-*/
 venv/
@@ -52,3 +54,7 @@ selftest-frozen.stderr.txt
 
 .wrangler/
 .claude/
+# Local coding-agent workspaces and instruction files never belong in releases.
+.agents/
+CLAUDE.md
+CLAUDE.local.md

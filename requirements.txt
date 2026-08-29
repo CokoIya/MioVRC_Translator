@@ -36,7 +36,6 @@ tqdm>=4.66.0,<5.0.0
 # Translation backends
 openai>=1.30.0,<2.0.0        # covers OpenAI / DeepSeek / Qianwen / Custom
 anthropic>=0.28.0,<1.0.0
-google-genai>=1.0.0,<2.0.0
 # Qwen TTS DNS pinning subclasses the TLS-aware adapter hook added in 2.32.2.
 requests>=2.32.2,<3.0.0
 # Use the native Windows/macOS/Linux trust store for provider HTTPS. On
@@ -49,23 +48,18 @@ idna>=3.15,<4.0               # URL/hostname validation security fixes
 msgpack>=1.2.1,<2.0.0         # transitive runtime serialization security fixes
 pyasn1>=0.6.4,<0.7.0          # fixes CVE-2026-59885 and CVE-2026-59886
 
+# Edge speech recognition talks to Microsoft's WebSocket endpoint directly.
+websockets>=14.0,<17.0
+
 # OSC
 python-osc>=1.8.3,<2.0.0
 
 # TTS (Text-to-Speech)
-edge-tts>=7.2.0,<8.0.0       # Microsoft Edge TTS (primary)
-gTTS>=2.3.0,<3.0.0           # Google TTS (works globally)
-pyttsx3>=2.90,<3.0.0         # Offline TTS fallback
-coqui-tts==0.27.5            # XTTS-v2 voice cloning runtime (publishes TTS.api)
-scikit-learn>=1.8.0,<2.0.0   # Coqui XTTS runtime imports sklearn modules at startup
-cutlet>=0.5.2,<0.6.0         # Japanese text preprocessing used by Coqui XTTS
-fugashi>=1.5.2,<2.0.0        # MeCab wrapper required by Coqui/cutlet Japanese phonemizer
-unidic-lite==1.0.8           # Bundled Japanese dictionary for fugashi in packaged builds
-mojimoji>=0.0.13,<0.1.0      # cutlet dependency used during Japanese normalization
-av>=12.0.0                   # PyAV for MP3 decoding (includes FFmpeg libraries)
+scikit-learn>=1.8.0,<2.0.0   # Hard dependency of librosa, which funasr/SenseVoice and transformers require
+av>=12.0.0                   # PyAV for MP3 decoding and reference-audio import (includes FFmpeg libraries)
 style-bert-vits2==2.5.0      # Custom / Hololive local voices (supports Python 3.11+)
 pyworld-prebuilt==0.3.5.post2  # Prebuilt WORLD vocoder required by Style-Bert-VITS2
-transformers>=5.5.0,<6.0.0   # Shared by Style-Bert-VITS2 and Coqui XTTS; security floor
+transformers>=5.5.0,<6.0.0   # Required by Style-Bert-VITS2; security floor
 nltk>=3.10.0,<4.0.0          # Fixes CVE-2026-12243 path traversal in NLTK resource loading
 sentencepiece>=0.2.0,<0.3.0  # English SBV2 DeBERTa tokenizer
 protobuf>=5.0.0,<8.0.0       # SentencePiece model protobuf support

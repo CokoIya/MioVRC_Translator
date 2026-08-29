@@ -53,13 +53,6 @@ PANEL_MIN_SIZE = (440, 380)
 PANEL_MAX_SIZE = (560, 620)
 
 TTS_LANGUAGE_OPTION_KEYS = {
-    "xtts": (
-        ("quick_switch_lang_auto", "auto"),
-        ("quick_switch_lang_chinese", "zh"),
-        ("quick_switch_lang_english", "en"),
-        ("quick_switch_lang_japanese", "ja"),
-        ("quick_switch_lang_korean", "ko"),
-    ),
     "style_bert_vits2": (
         ("quick_switch_bert_japanese", "jp"),
         ("quick_switch_bert_english", "en"),
@@ -81,7 +74,7 @@ def _safe_strength(value: object) -> float:
 
 
 def _tts_engine(config: Mapping[str, object]) -> str:
-    return str(_dict_section(config, "tts").get("engine", "edge") or "edge").strip() or "edge"
+    return str(_dict_section(config, "tts").get("engine", "qwen_tts") or "qwen_tts").strip() or "qwen_tts"
 
 
 def _tts_language(config: Mapping[str, object], engine: str) -> str:
@@ -92,8 +85,6 @@ def _tts_language(config: Mapping[str, object], engine: str) -> str:
         style_cfg = tts_cfg.get("style_bert_vits2", {})
         style_cfg = style_cfg if isinstance(style_cfg, dict) else {}
         return str(style_cfg.get("bert_language", "jp") or "jp")
-    if engine == "xtts":
-        return str(engine_cfg.get("language", "auto") or "auto")
     return ""
 
 
@@ -103,14 +94,6 @@ def _tts_language_entries(ui_language: str, engine: str) -> list[tuple[str, str]
 
 def _voice_entries_for_engine(config: Mapping[str, object], engine: str) -> list[tuple[str, str]]:
     try:
-        if engine == "edge":
-            from src.tts.edge_tts_engine import EDGE_FALLBACK_VOICES
-
-            return [(voice.name, voice.id) for voice in EDGE_FALLBACK_VOICES]
-        if engine == "gtts":
-            from src.tts.gtts_engine import GTTS_LANGUAGE_MAP
-
-            return [(f"Google {lang.upper()}", voice_id) for lang, voice_id in GTTS_LANGUAGE_MAP.items()]
         if engine in {"mimo_tts", "qwen_tts"}:
             from src.tts.api_tts_config import get_tts_api_voice_options
 
@@ -119,10 +102,17 @@ def _voice_entries_for_engine(config: Mapping[str, object], engine: str) -> list
             from src.tts.style_bert_vits2_engine import list_style_bert_vits2_voices
 
             return _voice_entries(list_style_bert_vits2_voices(_tts_language(config, engine)))
-        if engine == "xtts":
-            from src.tts.xtts_engine import list_xtts_reference_voices
+        if engine == "qwen_vc":
+            from src.tts.api_tts_config import get_cloned_voice_options
 
-            return _voice_entries(list_xtts_reference_voices())
+            tts_cfg = config.get("tts", {}) if isinstance(config, Mapping) else {}
+            engine_cfg = tts_cfg.get("qwen_vc", {}) if isinstance(tts_cfg, Mapping) else {}
+            return [
+                (label, voice_id)
+                for voice_id, label, *_rest in get_cloned_voice_options(
+                    engine_cfg if isinstance(engine_cfg, Mapping) else {}
+                )
+            ]
     except Exception:
         logger.debug("Failed to load quick-switch TTS voices for %s", engine, exc_info=True)
     return []

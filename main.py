@@ -249,25 +249,40 @@ def _run_selftest() -> int:
 
     asr_ok, asr_message = validate_runtime_dependencies()
     print(asr_message, file=sys.stdout if asr_ok else sys.stderr)
+    return 0 if asr_ok else 1
 
-    from src.tts.xtts_engine import xtts_packaging_selftest, xtts_runtime_status
 
-    xtts_status = xtts_runtime_status(require_api=True)
-    xtts_packaging_ok, xtts_packaging_message = xtts_packaging_selftest()
-    xtts_ok = xtts_status.ready and xtts_packaging_ok
-    if xtts_status.ready:
-        print("Voice Cloning runtime dependencies are available.", file=sys.stdout)
-    else:
-        components = ", ".join(xtts_status.missing_component_names) or "unknown"
-        print(
-            f"Voice Cloning runtime dependencies are missing: {components}",
-            file=sys.stderr,
-        )
-    print(
-        xtts_packaging_message,
-        file=sys.stdout if xtts_packaging_ok else sys.stderr,
-    )
-    return 0 if asr_ok and xtts_ok else 1
+def _run_import_check() -> int:
+    """Import the modules named in MIO_TRANSLATOR_IMPORT_CHECK and report failures.
+
+    A hidden import can drop out of the bundle without the app failing to
+    start, because the module is only reached once a player picks that engine.
+    tools/verify_release_bundle.py drives this after a build so the gap shows
+    up on the build machine instead of in someone's VRChat session.
+    """
+
+    import importlib
+
+    names = [
+        name.strip()
+        for name in os.environ.get("MIO_TRANSLATOR_IMPORT_CHECK", "").split(",")
+        if name.strip()
+    ]
+    if not names:
+        print("MIO_TRANSLATOR_IMPORT_CHECK is empty", file=sys.stderr)
+        return 1
+    failures = []
+    for name in names:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+    for failure in failures:
+        print(failure, file=sys.stderr)
+    if failures:
+        return 1
+    print(f"import check OK: {len(names)} modules")
+    return 0
 
 
 def _run_setup_mode() -> int:
@@ -486,6 +501,9 @@ def main() -> int:
 
     if os.environ.get("MIO_TRANSLATOR_SELFTEST") == "1" or "--mio-selftest" in sys.argv:
         return _run_selftest()
+
+    if "--mio-import-check" in sys.argv:
+        return _run_import_check()
 
     if "--setup" in sys.argv:
         return _run_setup_mode()
