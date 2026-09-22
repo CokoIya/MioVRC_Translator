@@ -1,2 +1,10 @@
 [tool.pytest.ini_options]
 tmp_path_retention_policy = "none"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/runtime_hooks/*"]
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true

@@ -1,5 +1,27 @@
-from src.utils.catalog_loader import load_catalog_from_data
+from src.utils import ui_config
+from src.utils.catalog_loader import BUILTIN_CATALOG, load_catalog_from_data
 from src.utils.ui_config import TRANSLATION_BACKENDS, TRANSLATION_MODEL_PRESETS
+
+
+def _catalog_view():
+    return (
+        ui_config._catalog_backends(),
+        ui_config._catalog_model_presets(),
+        ui_config._catalog_model_profiles(),
+        ui_config._catalog_region_base_urls(),
+        ui_config._catalog_region_aliases(),
+        ui_config._catalog_default_regions(),
+    )
+
+
+def test_unset_catalog_reads_the_same_tables_as_the_builtin_catalog(monkeypatch):
+    # ui_config starts with no catalog and relies on its fallback tables
+    # being exactly what BUILTIN_CATALOG carries.
+    monkeypatch.setattr(ui_config, "_CATALOG", None)
+    fallback = _catalog_view()
+    monkeypatch.setattr(ui_config, "_CATALOG", BUILTIN_CATALOG)
+
+    assert _catalog_view() == fallback
 
 
 def test_catalog_loader_keeps_builtin_backends_when_remote_is_empty():

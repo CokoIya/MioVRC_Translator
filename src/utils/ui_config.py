@@ -1580,17 +1580,6 @@ TTS_ENGINE_I18N_KEYS = {
     "qwen_tts": "tts_engine_qwen_tts",
     "style_bert_vits2": "tts_engine_style_bert_vits2",
 }
-
-
-def get_tts_engine_label(engine: str, ui_language: str | None = None) -> str:
-    """Return the player-facing name of a speech engine."""
-
-    from src.utils.i18n import tr
-
-    key = TTS_ENGINE_I18N_KEYS.get(engine)
-    if key:
-        return tr(ui_language, key)
-    return TTS_ENGINE_LABELS.get(engine, engine)
 UI_LANGUAGE_LABELS = {code: label for label, code in UI_LANGUAGE_OPTIONS}
 TARGET_LANGUAGE_OPTIONS = ()
 MANUAL_SOURCE_LANGUAGE_OPTIONS = ()
@@ -1947,16 +1936,12 @@ def _localized_option_label(
 # --------------------------------------------------------------------
 
 
-def _load_catalog_module():
-    try:
-        from src.utils.catalog_loader import BUILTIN_CATALOG
-
-        return BUILTIN_CATALOG
-    except Exception:
-        return None
-
-
-_CATALOG = _load_catalog_module()
+# None means the builtin catalog: the accessors below fall back to this
+# module's own tables, which are exactly what catalog_loader.BUILTIN_CATALOG
+# copies. Importing catalog_loader here would be circular (it imports this
+# module), and when catalog_loader was imported first the import failed and
+# silently left the catalog unset anyway.
+_CATALOG = None
 _CATALOG_LOCK = None  # placeholder for future thread-safety needs
 
 

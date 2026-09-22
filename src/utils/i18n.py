@@ -5,6 +5,7 @@ from src.utils.localization import (
     translate_language_catalog,
     validate_language_catalog,
 )
+from src.utils.ui_config import TTS_ENGINE_I18N_KEYS, TTS_ENGINE_LABELS
 
 
 UI_TEXTS: dict[str, dict[str, str]] = {
@@ -2868,3 +2869,12 @@ if _catalog_issues:
 
 def tr(language: str | None, key: str, **kwargs) -> str:
     return translate_language_catalog(UI_TEXTS, language, key, **kwargs)
+
+
+def get_tts_engine_label(engine: str, ui_language: str | None = None) -> str:
+    """Return the player-facing name of a speech engine."""
+
+    key = TTS_ENGINE_I18N_KEYS.get(engine)
+    if key:
+        return tr(ui_language, key)
+    return TTS_ENGINE_LABELS.get(engine, engine)

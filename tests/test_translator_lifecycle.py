@@ -237,6 +237,26 @@ def test_cleanup_thread_total_start_failure_retries_without_blocking_caller(
     assert translator._active_wall_call_count() == 0
 
 
+def test_background_poll_keeps_failed_retry_pending_but_lets_interrupts_through(
+    monkeypatch,
+):
+    sentinel = threading.Thread(target=lambda: None)
+    retries = translator_base._PROVIDER_BACKGROUND_RETRIES
+
+    def failing_retry():
+        raise RuntimeError("retry failed")
+
+    monkeypatch.setitem(retries, sentinel, failing_retry)
+    assert provider_background_work_in_progress() is True
+
+    def interrupted_retry():
+        raise KeyboardInterrupt
+
+    monkeypatch.setitem(retries, sentinel, interrupted_retry)
+    with pytest.raises(KeyboardInterrupt):
+        provider_background_work_in_progress()
+
+
 def test_fallback_translator_closes_primary_and_created_fallbacks_once():
     primary = _Translator()
     fallback = _Translator()

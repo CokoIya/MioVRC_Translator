@@ -191,7 +191,9 @@ def provider_background_work_in_progress() -> bool:
     for retry in retries:
         try:
             retry()
-        except BaseException:
+        except Exception:
+            # A failed retry leaves its sentinel registered, so this poll still
+            # reports work in progress and the next poll tries again.
             pass
 
     with _PROVIDER_BACKGROUND_LOCK:

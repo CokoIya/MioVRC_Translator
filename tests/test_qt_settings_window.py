@@ -2879,10 +2879,11 @@ def test_engine_names_come_from_one_catalog():
     """The settings page and the quick panel must not drift apart.
 
     The quick panel cannot import the settings window, so the names live in
-    ui_config and both read them from there.
+    ui_config and both read them through i18n.get_tts_engine_label.
     """
 
-    from src.utils.ui_config import TTS_ENGINE_I18N_KEYS, get_tts_engine_label
+    from src.utils.i18n import get_tts_engine_label
+    from src.utils.ui_config import TTS_ENGINE_I18N_KEYS
 
     for engine in settings_module.TTS_ENGINE_IDS:
         assert engine in TTS_ENGINE_I18N_KEYS, engine

@@ -6,28 +6,7 @@ import sys
 import uuid
 from typing import Any, Iterable
 
-import sounddevice as sd
-
 logger = logging.getLogger(__name__)
-
-
-def default_output_device_name() -> str | None:
-    try:
-        from .device_inventory import default_output_device_name as inventory_default_name
-
-        resolved = inventory_default_name()
-        if resolved:
-            return resolved
-    except Exception:
-        logger.debug("Central audio inventory default lookup failed", exc_info=True)
-    try:
-        default_out = sd.default.device[1]
-        if default_out is None or int(default_out) < 0:
-            return None
-        name = str(sd.query_devices(int(default_out))["name"]).strip()
-        return name or None
-    except Exception:
-        return None
 
 
 if sys.platform == "win32":
@@ -766,7 +745,11 @@ if sys.platform == "win32":
                 return clean
         return None
 
-    def inspect_process_output_state(process_names: Iterable[str]) -> dict[str, object]:
+    def inspect_process_output_state(
+        process_names: Iterable[str],
+        *,
+        default_output_device: str | None = None,
+    ) -> dict[str, object]:
         names = [str(name).strip() for name in process_names if str(name).strip()]
         process_ids = _list_process_ids(names)
         matches = _device_matches_for_process_ids(process_ids)
@@ -784,7 +767,7 @@ if sys.platform == "win32":
             "process_names": names,
             "process_ids": sorted(process_ids),
             "is_running": bool(process_ids),
-            "default_output_device": default_output_device_name(),
+            "default_output_device": default_output_device,
             "active_device": active_device,
             "has_active_audio_session": any(bool(is_active) for _, is_active in matches),
             "matches": [
@@ -830,13 +813,17 @@ else:
     def detect_process_output_device_name(process_names: Iterable[str]) -> str | None:
         return None
 
-    def inspect_process_output_state(process_names: Iterable[str]) -> dict[str, object]:
+    def inspect_process_output_state(
+        process_names: Iterable[str],
+        *,
+        default_output_device: str | None = None,
+    ) -> dict[str, object]:
         names = [str(name).strip() for name in process_names if str(name).strip()]
         return {
             "process_names": names,
             "process_ids": [],
             "is_running": False,
-            "default_output_device": default_output_device_name(),
+            "default_output_device": default_output_device,
             "active_device": None,
             "has_active_audio_session": False,
             "matches": [],

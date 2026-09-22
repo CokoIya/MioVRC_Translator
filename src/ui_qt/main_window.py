@@ -9,7 +9,6 @@ import queue
 import re
 import threading
 import time
-import unicodedata
 import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -41,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from src.asr.errors import ASRMissingAPIKeyError, ASRNetworkError, ASRTemporaryUnavailableError
 from src.asr.model_registry import ASR_ENGINE_FOLLOW_MAIN, LISTEN_SELECTABLE_ASR_ENGINES, get_asr_runtime_spec, normalize_asr_engine
+from src.core import listen_output_selection
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
 from src.core.mode_manager import AppMode, ModeManager
 from src.core.output_dispatcher import OutputDispatcher, OutputMessage
@@ -239,27 +239,6 @@ DEFAULT_LISTEN_TAIL_SILENCE_S = 0.65
 LISTEN_DIAGNOSTIC_IDLE_S = 15.0
 MIC_DIAGNOSTIC_LOG_INTERVAL_S = 60.0
 MIC_DIGITAL_SILENCE_RECOVERY_S = 60.0
-LISTEN_VIRTUAL_OUTPUT_TOKENS = (
-    "mixline",
-    "mix line",
-    "vb-audio",
-    "voicemeeter",
-    "cable",
-    "sonar",
-    "asio",
-    "vadpro",
-)
-LISTEN_REAL_OUTPUT_HINTS = (
-    "headphone",
-    "headphones",
-    "speaker",
-    "speakers",
-    "realtek",
-    "pico",
-    "quest",
-    "oculus",
-    "usb audio",
-)
 
 MAIN_COPY = {
     "creator_banner_compact": {
@@ -4183,11 +4162,11 @@ class MainWindow(QMainWindow):
         return "custom"
 
     def _vr_dashboard_state(self) -> dict:
+        from src.utils.i18n import get_tts_engine_label
         from src.utils.ui_config import (
             get_backend_config_value,
             get_backend_label,
             get_output_format_options,
-            get_tts_engine_label,
         )
 
         config = getattr(self, "_config", None)
@@ -7595,10 +7574,7 @@ class MainWindow(QMainWindow):
             self._tts_enabled = bool(tts_cfg.get("enabled", False))
         return bool(getattr(self, "_tts_enabled", False))
 
-    @staticmethod
-    def _normalize_audio_device_name(name: str | None) -> str:
-        normalized = unicodedata.normalize("NFKC", str(name or ""))
-        return " ".join(normalized.casefold().split())
+    _normalize_audio_device_name = staticmethod(listen_output_selection.normalize_device_name)
 
     @classmethod
     def _audio_device_identity_parts(cls, name: str | None) -> frozenset[str]:
@@ -7680,24 +7656,20 @@ class MainWindow(QMainWindow):
         return bool(self._desktop_capture_config().get("follow_process_output", False))
 
     def _listen_target_process_names(self) -> list[str]:
-        configured = self._desktop_capture_config().get("target_process_names", ["VRChat.exe"])
-        if isinstance(configured, str):
-            configured = [configured]
-        if not isinstance(configured, list):
-            configured = []
-        names: list[str] = []
-        for name in configured:
-            clean = str(name or "").strip()
-            if clean and clean not in names:
-                names.append(clean)
-        return names or ["VRChat.exe"]
+        return listen_output_selection.target_process_names(self._desktop_capture_config())
 
     def _listen_process_snapshot(self) -> dict[str, object]:
         names = self._listen_target_process_names()
         try:
+            from src.audio.device_inventory import (
+                default_output_device_name as inventory_default_output_device_name,
+            )
             from src.audio.windows_audio import inspect_process_output_state
 
-            snapshot = inspect_process_output_state(names)
+            snapshot = inspect_process_output_state(
+                names,
+                default_output_device=inventory_default_output_device_name(),
+            )
         except Exception:
             logger.debug("Failed to inspect target process output device", exc_info=True)
             snapshot = {
@@ -7711,58 +7683,8 @@ class MainWindow(QMainWindow):
         snapshot["probe_enabled"] = self._listen_process_output_probe_enabled()
         return snapshot
 
-    @staticmethod
-    def _audio_diagnostic_stats_summary(stats: object) -> dict[str, object]:
-        """Keep support telemetry useful without logging device inventories."""
-
-        if not isinstance(stats, dict):
-            return {}
-        allowed = (
-            "running",
-            "worker_alive",
-            "worker_failure_count",
-            "stream_open",
-            "frame_queue_size",
-            "frame_queue_capacity",
-            "frame_queue_high_watermark",
-            "frame_queue_dropped",
-            "stale_frames_discarded",
-            "frames_processed",
-            "segments_emitted",
-            "last_frame_rms",
-            "peak_frame_rms",
-            "total_frames",
-            "non_silent_frames",
-            "capture_rate",
-            "target_rate",
-            "capture_channels",
-            "channels",
-            "vad_in_speech",
-            "vad_speech_ratio",
-            "vad_activation_ratio",
-        )
-        summary = {key: stats[key] for key in allowed if key in stats}
-        summary["has_worker_error"] = bool(stats.get("last_worker_error"))
-        summary["has_capture_error"] = bool(stats.get("last_error"))
-        return summary
-
-    @staticmethod
-    def _process_audio_diagnostic_summary(snapshot: object) -> dict[str, object]:
-        if not isinstance(snapshot, dict):
-            return {}
-        process_ids = snapshot.get("process_ids")
-        matches = snapshot.get("matches")
-        return {
-            "is_running": bool(snapshot.get("is_running")),
-            "process_count": len(process_ids) if isinstance(process_ids, list) else 0,
-            "has_active_audio_session": bool(
-                snapshot.get("has_active_audio_session")
-            ),
-            "matched_device_count": len(matches) if isinstance(matches, list) else 0,
-            "has_default_output": bool(snapshot.get("default_output_device")),
-            "has_active_output": bool(snapshot.get("active_device")),
-            "probe_enabled": bool(snapshot.get("probe_enabled")),
-        }
+    _audio_diagnostic_stats_summary = staticmethod(listen_output_selection.audio_stats_summary)
+    _process_audio_diagnostic_summary = staticmethod(listen_output_selection.process_audio_summary)
 
     def _log_listen_environment(self, stage: str) -> None:
         process_audio = self._listen_process_snapshot()
@@ -7781,43 +7703,22 @@ class MainWindow(QMainWindow):
         )
 
     def _listen_auto_should_avoid_output_device(self, device_name: str | None) -> bool:
-        name = str(device_name or "").strip()
-        if not name:
+        if not str(device_name or "").strip():
             return False
-        tts_cfg = self._tts_config()
-        if not (
-            bool(tts_cfg.get("enabled", False))
-            and bool(tts_cfg.get("output_to_vrchat", False))
-        ):
-            return False
-        tts_device = self._match_desktop_device_name(
-            str(tts_cfg.get("output_device_name") or "").strip()
+        return listen_output_selection.should_avoid_output_device(
+            device_name,
+            self._tts_config(),
+            match_device=self._match_desktop_device_name,
+            names_match=self._desktop_device_names_match,
         )
-        if tts_device is not None and self._desktop_device_names_match(name, tts_device):
-            return True
-        normalized = self._normalize_audio_device_name(name)
-        return "mixline" in normalized or "mix line" in normalized
 
     def _listen_auto_fallback_output_device_name(self, avoided_name: str | None) -> str | None:
-        candidates: list[tuple[int, int, str]] = []
-        for index, name in enumerate(getattr(self, "_desktop_devices", {}) or {}):
-            if self._desktop_device_names_match(name, avoided_name):
-                continue
-            if self._listen_auto_should_avoid_output_device(name):
-                continue
-            normalized = self._normalize_audio_device_name(name)
-            score = 0
-            if any(token in normalized for token in LISTEN_REAL_OUTPUT_HINTS):
-                score += 100
-            if "headphone" in normalized or "headphones" in normalized:
-                score += 20
-            if any(token in normalized for token in LISTEN_VIRTUAL_OUTPUT_TOKENS):
-                score -= 250
-            candidates.append((score, -index, name))
-        if not candidates:
-            return None
-        _score, _order, selected = max(candidates)
-        return selected
+        return listen_output_selection.fallback_output_device_name(
+            getattr(self, "_desktop_devices", {}) or {},
+            avoided_name,
+            names_match=self._desktop_device_names_match,
+            should_avoid=self._listen_auto_should_avoid_output_device,
+        )
 
     def _auto_detect_listen_device_name(self) -> str | None:
         if self._listen_process_output_probe_enabled():

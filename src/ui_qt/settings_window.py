@@ -115,7 +115,7 @@ from src.utils.app_paths import (
 from src.utils.logger import logs_dir
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
 from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
-from src.utils.i18n import tr
+from src.utils.i18n import get_tts_engine_label, tr
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.provider_diagnostics import safe_exception_summary
 from src.utils.qwen_endpoints import (
@@ -128,7 +128,6 @@ from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
-    get_tts_engine_label,
     OUTPUT_FORMAT_OPTIONS,
     UI_FONT_851,
     UI_FONT_SYSTEM,

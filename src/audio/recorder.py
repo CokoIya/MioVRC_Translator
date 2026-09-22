@@ -800,8 +800,8 @@ class AudioRecorder:
             if in_speech != previous_in_speech and self.on_vad_state:
                 try:
                     self.on_vad_state(in_speech)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.exception("AudioRecorder on_vad_state callback failed: %s", exc)
 
             if in_speech:
                 self._was_in_speech = True

@@ -25,12 +25,11 @@ from PySide6.QtWidgets import (
 from src.ui_qt.icon_utils import ui_icon, ui_icon_url
 from src.ui_qt.theme import icon_tint, theme_tokens
 from src.ui_qt.widgets import NoWheelComboBox
-from src.utils.ui_config import get_tts_engine_label
 from src.translators.asr_rewriter import (
     get_asr_rewrite_options,
     normalize_asr_rewrite_style,
 )
-from src.utils.i18n import tr
+from src.utils.i18n import get_tts_engine_label, tr
 from src.utils.localization import format_locale_percent, normalize_ui_language
 from src.utils.ui_config import (
     get_backend_config_value,

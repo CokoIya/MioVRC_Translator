@@ -56,6 +56,58 @@ class AudioRecorderTests(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0].size, 15 * frame.size)
 
+    def test_vad_state_callback_failure_is_logged_and_processing_continues(self):
+        segments = []
+        vad_calls = []
+
+        def failing_vad_state(in_speech):
+            vad_calls.append(in_speech)
+            raise RuntimeError("synthetic VAD state failure")
+
+        recorder = AudioRecorder(
+            segments.append,
+            min_segment_s=0.1,
+            on_vad_state=failing_vad_state,
+        )
+
+        class IdentityDenoiser:
+            @staticmethod
+            def process(frame, *, update_profile):
+                del update_profile
+                return frame
+
+        class ToggleVAD:
+            def __init__(self):
+                self.calls = 0
+                self.in_speech = False
+                self._min_rms = 0.0
+                self._activation_window = collections.deque(maxlen=6)
+
+            def process_frame(self, _pcm):
+                self.calls += 1
+                self.in_speech = self.calls <= 15
+                return self.in_speech
+
+            def reset(self):
+                self.in_speech = False
+                self._activation_window.clear()
+
+        recorder._denoiser = IdentityDenoiser()
+        recorder.vad = ToggleVAD()
+        frame = np.full(480, 0.1, dtype=np.float32)
+        for _index in range(16):
+            recorder._frame_queue.put_nowait(frame.copy())
+        recorder._frame_queue.put_nowait(None)
+
+        with self.assertLogs(recorder_module.logger, level="ERROR") as logs:
+            recorder._process_loop()
+
+        self.assertEqual(vad_calls[:2], [True, False])
+        self.assertEqual(len(segments), 1)
+        self.assertTrue(
+            any("on_vad_state callback failed" in line for line in logs.output)
+        )
+
     def test_stateful_soxr_resampler_reblocks_exact_vad_frames(self):
         if not recorder_module._HAS_SOXR:
             self.skipTest("soxr is unavailable")
