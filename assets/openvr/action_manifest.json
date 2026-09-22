@@ -1,0 +1,98 @@
+{
+  "default_bindings": [
+    {
+      "controller_type": "pico_controller",
+      "binding_url": "binding_pico.json"
+    },
+    {
+      "controller_type": "oculus_touch",
+      "binding_url": "binding_oculus_touch.json"
+    },
+    {
+      "controller_type": "knuckles",
+      "binding_url": "binding_knuckles.json"
+    },
+    {
+      "controller_type": "vive_controller",
+      "binding_url": "binding_vive.json"
+    },
+    {
+      "controller_type": "holographic_controller",
+      "binding_url": "binding_vive.json"
+    },
+    {
+      "controller_type": "generic",
+      "binding_url": "binding_generic.json"
+    }
+  ],
+  "actions": [
+    {
+      "name": "/actions/mio/in/translate_screen",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/hold_trigger",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/hold_grip",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/any_button",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/pointer_left",
+      "type": "pose",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/pointer_right",
+      "type": "pose",
+      "requirement": "optional"
+    }
+  ],
+  "action_sets": [
+    {
+      "name": "/actions/mio",
+      "usage": "leftright"
+    }
+  ],
+  "localization": [
+    {
+      "language_tag": "en_US",
+      "/actions/mio": "Mio Translator",
+      "/actions/mio/in/translate_screen": "Translate what I am looking at",
+      "/actions/mio/in/hold_trigger": "Hold trigger (chord for translate)",
+      "/actions/mio/in/hold_grip": "Hold grip (chord for translate)",
+      "/actions/mio/in/any_button": "Any other button (puts a shown translation away)",
+      "/actions/mio/in/pointer_left": "Left controller tip (aims at the wrist panel)",
+      "/actions/mio/in/pointer_right": "Right controller tip (aims at the wrist panel)"
+    },
+    {
+      "language_tag": "zh_CN",
+      "/actions/mio": "Mio 翻译器",
+      "/actions/mio/in/translate_screen": "翻译我正在看的画面",
+      "/actions/mio/in/hold_trigger": "按住扳机（截图翻译组合键）",
+      "/actions/mio/in/hold_grip": "按住抓握键（截图翻译组合键）",
+      "/actions/mio/in/any_button": "其他任意按键（收起显示中的翻译）",
+      "/actions/mio/in/pointer_left": "左手柄指向（操作手腕面板）",
+      "/actions/mio/in/pointer_right": "右手柄指向（操作手腕面板）"
+    },
+    {
+      "language_tag": "ja_JP",
+      "/actions/mio": "Mio 翻訳",
+      "/actions/mio/in/translate_screen": "見ている画面を翻訳する",
+      "/actions/mio/in/hold_trigger": "トリガー長押し（翻訳の同時押し）",
+      "/actions/mio/in/hold_grip": "グリップ長押し（翻訳の同時押し）",
+      "/actions/mio/in/any_button": "その他のボタン（表示中の翻訳を閉じる）",
+      "/actions/mio/in/pointer_left": "左コントローラーの先端（手首パネルの操作）",
+      "/actions/mio/in/pointer_right": "右コントローラーの先端（手首パネルの操作）"
+    }
+  ]
+}

@@ -115,17 +115,30 @@ try {
         throw "Failed to install the pinned packaging toolchain."
     }
 
+    # The lock is complete (tools\check_release_environment.py proves every
+    # dependency is pinned), so nothing may be resolved on top of it: with
+    # dependency resolution on, rapidocr's metadata pulled the CPU-only
+    # onnxruntime over the locked DirectML build, which shares its package
+    # directory, and the GPU provider silently vanished from the release.
     & $releasePython -m pip --isolated install `
         --disable-pip-version-check `
         --no-cache-dir `
+        --no-deps `
         --index-url https://pypi.org/simple `
         --requirement (Join-Path $repoRoot "requirements.lock.txt")
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to install the locked release dependencies."
     }
 
-    & $releasePython -m pip check
-    if ($LASTEXITCODE -ne 0) {
+    # onnxruntime-directml provides the onnxruntime module, but rapidocr's
+    # metadata names the CPU distribution; that one complaint is expected.
+    $checkOutput = & $releasePython -m pip check 2>&1
+    $checkExit = $LASTEXITCODE
+    $unexpected = @($checkOutput | Where-Object {
+        $_ -and ($_ -notmatch 'rapidocr-onnxruntime .* requires onnxruntime, which is not installed')
+    })
+    if ($checkExit -ne 0 -and $unexpected.Count -gt 0) {
+        $unexpected | ForEach-Object { Write-Host $_ }
         throw "The rebuilt release environment has broken dependencies."
     }
 

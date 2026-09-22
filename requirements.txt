@@ -50,6 +50,35 @@ pyasn1>=0.6.4,<0.7.0          # fixes CVE-2026-59885 and CVE-2026-59886
 # Edge speech recognition talks to Microsoft's WebSocket endpoint directly.
 websockets>=14.0,<17.0
 
+# SteamVR subtitle overlay. Pure Python plus the bundled openvr_api
+# binaries; every one of its own dependencies sits behind an extra we do
+# not use, and the app degrades to the desktop overlay when it is absent.
+openvr>=2.5.1,<3.0.0
+
+# Screenshot translation reads text with the OCR engine Windows already
+# ships, so no model is downloaded and nothing leaves the machine. The
+# namespace-split packages total about 2 MB; the monolithic winsdk is 12.
+winrt-Windows.Media.Ocr>=3.2.0,<4.0.0
+winrt-Windows.Graphics.Imaging>=3.2.0,<4.0.0
+winrt-Windows.Storage.Streams>=3.2.0,<4.0.0
+winrt-Windows.Storage>=3.2.0,<4.0.0
+winrt-Windows.Globalization>=3.2.0,<4.0.0
+winrt-Windows.Foundation>=3.2.0,<4.0.0
+winrt-Windows.Foundation.Collections>=3.2.0,<4.0.0
+winrt-runtime>=3.2.0,<4.0.0
+
+# Bundled screenshot text recognition: PaddleOCR mobile models through ONNX
+# Runtime (already shipped for modelscope). Chinese/English recognition and
+# detection come with the package; Japanese and Korean recognizers live in
+# assets/ocr. Windows OCR above stays as the fallback when this is absent.
+rapidocr_onnxruntime>=1.4.4,<1.5.0
+# The DirectML build replaces the CPU-only onnxruntime: same API, plus the
+# GPU provider the bundled OCR uses. rapidocr's metadata still names the
+# CPU package, so the release check tolerates exactly that one complaint.
+onnxruntime-directml>=1.24.4,<1.25.0
+# opencv-python 5.x drags numpy 2 in, which the rest of the lock cannot take.
+opencv-python>=4.10.0,<5.0.0
+
 # OSC
 python-osc>=1.8.3,<2.0.0
 

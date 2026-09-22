@@ -1,8 +1,14 @@
 ; Mio RealTime Translator の Inno Setup スクリプト
 
 #define AppName "Mio RealTime Translator"
+; A test build (build_beta.ps1) passes /DAppVersion and /DAppNumericVersion;
+; a release takes the values below.
+#ifndef AppVersion
 #define AppVersion "v1.4.1"
+#endif
+#ifndef AppNumericVersion
 #define AppNumericVersion "1.4.1"
+#endif
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"

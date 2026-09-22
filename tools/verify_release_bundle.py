@@ -35,6 +35,9 @@ REQUIRED_PAYLOAD = (
 # unless the source file exists.
 CONDITIONAL_PAYLOAD = {
     "src/audio/models/silero_vad.jit": "_internal/src/audio/models/silero_vad.jit",
+    # The recognizers for scripts the bundled OCR package does not carry.
+    "assets/ocr/japan_PP-OCRv4_rec_mobile.onnx": "_internal/assets/ocr/japan_PP-OCRv4_rec_mobile.onnx",
+    "assets/ocr/korean_PP-OCRv4_rec_mobile.onnx": "_internal/assets/ocr/korean_PP-OCRv4_rec_mobile.onnx",
 }
 
 # The project's own tree, which must never be searched for excluded names:

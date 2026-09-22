@@ -84,12 +84,29 @@ def _sanitize_analysis_binaries(entries) -> TOC:
     return TOC(sanitized)
 
 
+import os as _os
+
+# A test build (build_beta.ps1) stamps its version into the bundle, where
+# src/version.py reads it back, and ships its own Windows version resource.
+# A release sets neither and builds exactly as before.
+_build_version_stamp = _os.environ.get("MIO_BUILD_VERSION_STAMP", "").strip()
+_windows_version_info = (
+    _os.environ.get("MIO_BUILD_VERSION_INFO", "").strip() or "windows_version_info.txt"
+)
+
 datas = [
     ("config.example.json", "."),
     ("LICENSE", "."),
     ("NOTICE", "."),
     ("assets", "assets"),
 ]
+if _build_version_stamp:
+    stamp_path = Path(_build_version_stamp)
+    if stamp_path.name != "mio_build_version.txt" or not stamp_path.is_file():
+        raise SystemExit(
+            f"MIO_BUILD_VERSION_STAMP must point at an existing mio_build_version.txt: {_build_version_stamp}"
+        )
+    datas.append((str(stamp_path), "."))
 
 for optional_data in ("BRANDING.md", "THIRD_PARTY_LICENSES.md"):
     if Path(optional_data).is_file():
@@ -102,6 +119,7 @@ binaries: list = []
 hiddenimports: list = []
 
 for package_name in (
+    "rapidocr_onnxruntime",
     "funasr",
     "modelscope",
     "torch",
@@ -120,6 +138,11 @@ for package_name in (
     "tqdm",
     "editdistance",
     "soundcard",
+    # Ships openvr_api DLLs next to the Python package; a plain hiddenimport
+    # would leave the module importable and the runtime unloadable.
+    "openvr",
+    # Each winrt namespace is its own compiled extension module.
+    "winrt",
     "cffi",
     "pycparser",
     "pydantic",
@@ -215,6 +238,31 @@ hiddenimports += [
     "src.ui_qt.main_window",
     "src.ui_qt.settings_window",
     "src.ui_qt.floating_window",
+    "src.ui_qt.vr_overlay_panel",
+    "src.core.steamvr_overlay",
+    "src.core.screen_capture",
+    "src.core.screen_ocr",
+    "src.core.screenshot_translation",
+    "src.core.in_place_layout",
+    "src.core.steamvr_inplace",
+    "src.core.steamvr_dashboard",
+    "src.core.steamvr_wrist",
+    "src.core.steamvr_autolaunch",
+    "src.core.vr_gesture",
+    "src.ui_qt.vr_dashboard_panel",
+    "src.core.local_ocr",
+    "src.core.vr_eye_capture",
+    "src.core.text_blocks",
+    "src.core.vr_geometry",
+    "src.core.overlay_texture",
+    "cv2",
+    "src.ui_qt.in_place_painter",
+    "src.ui_qt.in_place_overlay_window",
+    "src.core.vr_input",
+    "winrt.windows.media.ocr",
+    "winrt.windows.graphics.imaging",
+    "winrt.windows.storage.streams",
+    "winrt.windows.globalization",
     "src.ui_qt.sponsor_window",
     "src.ui_qt.update_window",
     "src.ui_qt.model_download_dialog",
@@ -311,7 +359,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon="assets/icons/app_icon_mio.ico",
-    version="windows_version_info.txt",
+    version=_windows_version_info,
 )
 coll = COLLECT(
     exe,

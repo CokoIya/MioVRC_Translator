@@ -545,7 +545,7 @@ def test_scheduler_completion_is_applied_as_one_ordered_ui_transaction():
     assert calls == [
         ("dispatch", message, ("ui", "overlay")),
         ("dispatch", message, ("tts",)),
-        ("restore", ("status_speaking", "status_translating")),
+        ("restore", ("status_speaking", "status_recognizing", "status_translating")),
     ]
 
 

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import queue
 import re
 import threading
@@ -38,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.asr.errors import ASRMissingAPIKeyError, ASRTemporaryUnavailableError
+from src.asr.errors import ASRMissingAPIKeyError, ASRNetworkError, ASRTemporaryUnavailableError
 from src.asr.model_registry import ASR_ENGINE_FOLLOW_MAIN, LISTEN_SELECTABLE_ASR_ENGINES, get_asr_runtime_spec, normalize_asr_engine
 from src.core.manual_translation_controller import ManualTranslationController, ManualTranslationRequest
 from src.core.mode_manager import AppMode, ModeManager
@@ -131,7 +132,12 @@ ASR_REWRITE_TASK_QUEUE_MAXSIZE = 4
 ASR_WORKER_CONCURRENCY = 2
 ASR_REWRITE_WORKER_CONCURRENCY = 2
 TRANSLATION_WORKER_CONCURRENCY = 2
-MAX_REALTIME_ASR_QUEUE_AGE_S = 5.0
+# A mic sentence waits this long for a recognizer slot before it is dropped.
+# One sentence behind a recognizer stall (dead socket detected, reconnect,
+# recognise) can wait about five seconds; at five the next sentence was
+# dropped every time and the player saw "please say that again" for speech
+# that had nothing wrong with it.
+MAX_REALTIME_ASR_QUEUE_AGE_S = 8.0
 MAX_REVERSE_ASR_QUEUE_AGE_S = 2.5
 MAX_REVERSE_TRANSLATION_QUEUE_AGE_S = 2.5
 MIC_PRIORITY_BURST = 3
@@ -563,6 +569,34 @@ MAIN_COPY = {
         "ja": "音声認識の待ち時間が長すぎました。もう一度話してください",
         "ru": "Фраза слишком долго ожидала распознавания; повторите её",
         "ko": "음성이 인식 대기열에서 너무 오래 기다렸습니다. 다시 말해 주세요",
+    },
+    "asr_network_timeout": {
+        "zh-CN": "网络超时，这句没识别到；请再说一次",
+        "en": "The network timed out and that sentence was not recognized; please say it again",
+        "ja": "ネットワークがタイムアウトし、この文は認識されませんでした。もう一度話してください",
+        "ru": "Сеть не ответила вовремя, фраза не распознана; повторите её",
+        "ko": "네트워크 시간 초과로 이 문장을 인식하지 못했습니다. 다시 말해 주세요",
+    },
+    "asr_reconnecting": {
+        "zh-CN": "网络慢，正在重连语音识别…",
+        "en": "Slow network; reconnecting speech recognition…",
+        "ja": "ネットワークが遅いため、音声認識に再接続しています…",
+        "ru": "Медленная сеть; переподключение распознавания речи…",
+        "ko": "네트워크가 느려 음성 인식에 다시 연결하는 중…",
+    },
+    "asr_fallback_local": {
+        "zh-CN": "网络不稳，已临时改用本地语音识别；恢复后会自动切回",
+        "en": "The network is unstable; using local speech recognition for now and switching back once it recovers",
+        "ja": "ネットワークが不安定なため、一時的にローカル音声認識に切り替えました。回復すると自動で戻ります",
+        "ru": "Сеть нестабильна; пока используется локальное распознавание, при восстановлении вернёмся обратно",
+        "ko": "네트워크가 불안정해 잠시 로컬 음성 인식을 사용합니다. 복구되면 자동으로 되돌아갑니다",
+    },
+    "asr_primary_back": {
+        "zh-CN": "网络恢复，已切回在线语音识别",
+        "en": "The network is back; switched to online speech recognition again",
+        "ja": "ネットワークが回復したため、オンライン音声認識に戻しました",
+        "ru": "Сеть восстановлена; снова используется онлайн-распознавание",
+        "ko": "네트워크가 복구되어 온라인 음성 인식으로 다시 전환했습니다",
     },
     "translation_queue_expired": {
         "zh-CN": "逆向翻译等待过久，已丢弃该句以恢复实时处理",
@@ -1218,6 +1252,40 @@ def _immutable_audio_snapshot(audio: Any) -> Any:
 # ----------------------------------------------------------------
 # Qt MainWindow with real backend wiring
 # ----------------------------------------------------------------
+# The selection frame goes away on its own if the player never touches it.
+SELECTION_TIMEOUT_MS = 8000
+# The frame only carries laser input, so its depth is about comfort: far
+# enough not to sit on the player's nose, close enough to be sharp.
+SELECTION_FRAME_DEPTH_METERS = 3.0
+# Frames the compositor needs to drop a hidden overlay before its picture is
+# read, and how long to wait for the player to close the SteamVR menu.
+VR_CAPTURE_SETTLE_MS = 90
+VR_CAPTURE_DASHBOARD_WAIT_S = 10.0
+# The headset card stays this long unless a button puts it away first; the
+# player asked for brief. Labels over the desktop window have no controller
+# to dismiss them and are read on a monitor, so they stay longer.
+CARD_SECONDS_DEFAULT = 1.5
+DESKTOP_LABELS_SECONDS = 20.0
+# A card the player never turns toward goes away on its own after this.
+CARD_UNSEEN_LIMIT_SECONDS = 20.0
+# The head is "looking at" the card within this angle of its direction.
+CARD_IN_VIEW_DEGREES = 28.0
+# Edit mode hands the controllers to the subtitle panel; it must end on its
+# own so a forgotten toggle can never leave the game without input.
+VR_EDIT_MODE_SECONDS = 20
+# Poll cadence: relaxed normally, tight while a drag needs to feel attached.
+VR_POLL_INTERVAL_MS = 33
+VR_POLL_INTERVAL_EDIT_MS = 16
+# A translation error is read once and disappears.
+SCREENSHOT_ERROR_SECONDS = 1.0
+VR_EDIT_MODE_AFTER_DRAG_SECONDS = 6
+# SteamVR often starts after Mio does; look again now and then.
+VR_RUNTIME_RETRY_SECONDS = 20
+# Redraw the rectangle no faster than this while dragging; a texture upload
+# per event would saturate the UI thread for no visible gain.
+SELECTION_PUSH_INTERVAL_S = 0.04
+
+
 class MainWindow(QMainWindow):
     sig_status = Signal(str)
     sig_bottom = Signal(str)
@@ -1450,7 +1518,26 @@ class MainWindow(QMainWindow):
         self._copy_source_btn: QPushButton | None = None
         self._copy_result_btn: QPushButton | None = None
         self._send_to_vrc_btn: QPushButton | None = None
+        self._vr_overlay_backend = None
+        self._vr_overlay_timer: QTimer | None = None
+        self._vr_input = None
+        self._vr_hand_panel = None
+        self._screenshot_translator = None
+        self._screenshot_hide_timer: QTimer | None = None
+        self._screenshot_translator_client_instance = None
         self._start_btn: QPushButton | None = None
+        self._vr_label_sheet = None
+        self._vr_selection_frame = None
+        self._desktop_inplace_overlay = None
+        self._selection_timer: QTimer | None = None
+        self._selection_active = False
+        self._selection_last_push = 0.0
+        self._screenshot_hotkey: GlobalHotkey | None = None
+        self._vr_dashboard = None
+        self._vr_edit_timer: QTimer | None = None
+        self._vr_runtime_retry_timer: QTimer | None = None
+        self._pending_screenshot = None
+        self._dashboard_wait_noted = False
         self._mute_btn: QPushButton | None = None
         self._mode_translation_button: QPushButton | None = None
         self._mode_simultaneous_button: QPushButton | None = None
@@ -1564,6 +1651,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(self._startup_update_check_delay_ms(), self._check_for_update)
         self._schedule_settings_preload(2500)
         QTimer.singleShot(0, self._apply_osc_listener_config)
+        # SteamVR features saved in the config used to wait for a toggle;
+        # a player who restarts with them on expects them back.
+        QTimer.singleShot(1500, self._start_vr_runtime_if_configured)
 
         record_startup_stage(
             "ui.post_show_initialization_schedule",
@@ -2750,6 +2840,7 @@ class MainWindow(QMainWindow):
             self._close_osc_sender()
         self._clear_cached_translator()
         self._reset_tts_manager()
+        self._shutdown_vr_overlay()
         service = getattr(self, "_osc_service", None)
         if service is not None:
             try:
@@ -3618,10 +3709,18 @@ class MainWindow(QMainWindow):
         self._set_listen_overlay_enabled(not self._listen_overlay_enabled, persist=True)
 
     def _set_listen_overlay_enabled(self, enabled: bool, *, persist: bool) -> None:
+        """Switch the PC desktop subtitle window on or off.
+
+        This is one of two independent surfaces; the headset has its own
+        switch under ``vr_overlay``. Turning the desktop off must not silence
+        the headset and vice versa.
+        """
+
         self._listen_overlay_enabled = bool(enabled)
         self._config.setdefault("vrc_listen", {})["show_overlay"] = self._listen_overlay_enabled
-        service = self._ensure_overlay_service(create_backend=self._listen_overlay_enabled)
-        service.set_enabled(self._listen_overlay_enabled, reveal=self._listen_overlay_enabled)
+        service = self._ensure_overlay_service(create_backend=False)
+        self._refresh_overlay_backend()
+        service.set_enabled(self._overlay_output_enabled(), reveal=self._listen_overlay_enabled)
         self._sync_avatar_overlay_state(force=True)
         self._refresh_listen_overlay_button()
         self._sync_settings_window_vrc_listen_state()
@@ -3653,11 +3752,1884 @@ class MainWindow(QMainWindow):
         self._refresh_floating_window_status()
         return self._floating_window
 
+    def _vr_overlay_config(self) -> dict:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        if not isinstance(listen_cfg, dict):
+            return {}
+        vr_cfg = listen_cfg.get("vr_overlay", {})
+        return vr_cfg if isinstance(vr_cfg, dict) else {}
+
+    def _vr_overlay_enabled(self) -> bool:
+        return bool(self._vr_overlay_config().get("enabled", False))
+
+    def _vr_dashboard_config(self) -> dict:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        if not isinstance(listen_cfg, dict):
+            return {}
+        dash_cfg = listen_cfg.get("vr_dashboard", {})
+        return dash_cfg if isinstance(dash_cfg, dict) else {}
+
+    def _vr_dashboard_enabled(self) -> bool:
+        # Absent means "never normalised": a bare config in a test, not a
+        # player who wants the tab. Config loading writes the True default.
+        return bool(self._vr_dashboard_config().get("enabled", False))
+
+    def _vr_wrist_config(self) -> dict:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        if not isinstance(listen_cfg, dict):
+            return {}
+        wrist_cfg = listen_cfg.get("vr_wrist", {})
+        return wrist_cfg if isinstance(wrist_cfg, dict) else {}
+
+    def _vr_wrist_enabled(self) -> bool:
+        return bool(self._vr_wrist_config().get("enabled", False))
+
+    def _vr_overlay_config_mutable(self) -> dict:
+        """The headset section of the config, created if missing."""
+
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        vr_cfg = listen_cfg.setdefault("vr_overlay", {})
+        if not isinstance(vr_cfg, dict):
+            vr_cfg = {}
+            listen_cfg["vr_overlay"] = vr_cfg
+        return vr_cfg
+
+    def _vr_runtime_needed(self) -> bool:
+        """SteamVR must be up for headset subtitles, the screenshot button, or the dashboard tab."""
+
+        return (
+            self._vr_overlay_enabled()
+            or self._screenshot_enabled()
+            or self._vr_dashboard_enabled()
+            or self._vr_wrist_enabled()
+        )
+
+    def _overlay_output_enabled(self) -> bool:
+        """Captions have somewhere to go: the desktop window, the headset, or both.
+
+        The headset counts only once its runtime is actually up; a player who
+        switched VR on without SteamVR running has no surface, and the service
+        must say so rather than swallow lines.
+        """
+
+        if bool(getattr(self, "_listen_overlay_enabled", False)):
+            return True
+        backend = getattr(self, "_vr_overlay_backend", None)
+        return (
+            self._vr_overlay_enabled()
+            and backend is not None
+            and bool(getattr(backend, "available", False))
+        )
+
+    def _desktop_overlay_surface(self, *, create: bool = True):
+        """The PC window when its switch is on; otherwise hide any existing one.
+
+        Nothing is created just to be hidden: a player who only ever reads in
+        the headset never gets a desktop window at all.
+        """
+
+        if bool(getattr(self, "_listen_overlay_enabled", False)):
+            if create:
+                return self._ensure_floating_window()
+            return getattr(self, "_floating_window", None)
+        window = getattr(self, "_floating_window", None)
+        if window is not None:
+            try:
+                hider = getattr(window, "hide_from_service", None)
+                if callable(hider):
+                    hider()
+                else:
+                    window.hide()
+            except Exception:
+                logger.debug("Failed to hide the desktop subtitle window", exc_info=True)
+        return None
+
+    def _start_vr_runtime_if_configured(self) -> None:
+        """Bring the headset features back after a restart without a toggle."""
+
+        if getattr(self, "_destroying", False) or not self._vr_runtime_needed():
+            return
+        try:
+            self._refresh_overlay_backend()
+        except Exception:
+            logger.debug("Failed to start the VR runtime at launch", exc_info=True)
+
+    # ------------------------------------------------- runtime retry
+    def _schedule_vr_runtime_retry(self, backend) -> None:
+        """SteamVR was not there; try again later without bothering the player."""
+
+        reason = str(getattr(backend, "unavailable_reason", "") or "")
+        if reason not in {"steamvr_not_running", "headset_not_found"}:
+            return
+        timer = getattr(self, "_vr_runtime_retry_timer", None)
+        if timer is None:
+            try:
+                timer = QTimer(self)
+            except Exception:
+                return
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._start_vr_runtime_if_configured)
+            self._vr_runtime_retry_timer = timer
+        timer.start(VR_RUNTIME_RETRY_SECONDS * 1000)
+
+    def _stop_vr_runtime_retry(self) -> None:
+        timer = getattr(self, "_vr_runtime_retry_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    # ------------------------------------------------- edit mode
+    def _vr_edit_mode_active(self) -> bool:
+        backend = getattr(self, "_vr_overlay_backend", None)
+        return bool(backend is not None and getattr(backend, "edit_mode", False))
+
+    def _toggle_vr_edit_mode(self) -> None:
+        if self._vr_edit_mode_active():
+            self._end_vr_edit_mode()
+        else:
+            self._begin_vr_edit_mode()
+
+    def _begin_vr_edit_mode(self, seconds: int = VR_EDIT_MODE_SECONDS) -> bool:
+        """Let the player drag the subtitle panel with the laser, briefly.
+
+        While this is on the game gets no controller input, so it always ends
+        on a timer, and a drag that finishes only extends it for a moment.
+        """
+
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is None or not getattr(backend, "available", False):
+            return False
+        if bool(self._vr_overlay_config().get("locked", False)):
+            self._set_bottom(self._t("vr_panel_locked"), "warning")
+            return False
+        try:
+            backend.reveal()
+            if not backend.set_edit_mode(True):
+                return False
+        except Exception:
+            logger.debug("Failed to enter VR edit mode", exc_info=True)
+            return False
+        timer = getattr(self, "_vr_edit_timer", None)
+        if timer is None:
+            try:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._end_vr_edit_mode)
+                self._vr_edit_timer = timer
+            except Exception:
+                timer = None
+        if timer is not None:
+            timer.start(max(1, int(seconds)) * 1000)
+        self._set_vr_poll_interval(VR_POLL_INTERVAL_EDIT_MS)
+        self._set_bottom(self._t("vr_edit_mode_on"))
+        self._refresh_vr_dashboard()
+        return True
+
+    def _set_vr_poll_interval(self, milliseconds: int) -> None:
+        timer = getattr(self, "_vr_overlay_timer", None)
+        if timer is None:
+            return
+        try:
+            timer.setInterval(int(milliseconds))
+        except Exception:
+            logger.debug("Failed to change the VR poll interval", exc_info=True)
+
+    def _extend_vr_edit_mode(self, seconds: int) -> None:
+        if not self._vr_edit_mode_active():
+            return
+        timer = getattr(self, "_vr_edit_timer", None)
+        if timer is not None:
+            timer.start(max(1, int(seconds)) * 1000)
+
+    def _end_vr_edit_mode(self, *, quiet: bool = False) -> None:
+        timer = getattr(self, "_vr_edit_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is None or not getattr(backend, "edit_mode", False):
+            return
+        try:
+            backend.set_edit_mode(False)
+            if not self._vr_overlay_enabled():
+                # Revealed only for editing; the player did not ask to see it.
+                backend.hide()
+        except Exception:
+            logger.debug("Failed to leave VR edit mode", exc_info=True)
+        self._set_vr_poll_interval(VR_POLL_INTERVAL_MS)
+        if not quiet:
+            self._set_bottom(self._t("vr_edit_mode_off"))
+            self._refresh_vr_dashboard()
+
+    # ------------------------------------------------- dashboard tab
+    def _ensure_vr_dashboard(self):
+        dashboard = getattr(self, "_vr_dashboard", None)
+        if dashboard is not None:
+            return dashboard
+        if not self._vr_available():
+            return None
+        try:
+            from src.core.steamvr_dashboard import SteamVRDashboard
+            from src.ui_qt.vr_dashboard_panel import VRDashboardPanel
+        except Exception:
+            logger.debug("SteamVR dashboard support is unavailable", exc_info=True)
+            return None
+        language = str(getattr(self, "_ui_lang", "") or "zh-CN")
+        dashboard = SteamVRDashboard(
+            lambda: VRDashboardPanel(language), on_action=self._on_vr_dashboard_action
+        )
+        if not dashboard.start():
+            return None
+        self._vr_dashboard = dashboard
+        dashboard.set_state(self._vr_dashboard_state())
+        dashboard.push()
+        return dashboard
+
+    def _sync_vr_dashboard(self) -> None:
+        if self._vr_dashboard_enabled() and self._vr_available():
+            self._ensure_vr_dashboard()
+        else:
+            self._stop_vr_dashboard()
+
+    def _stop_vr_dashboard(self) -> None:
+        dashboard = getattr(self, "_vr_dashboard", None)
+        self._vr_dashboard = None
+        if dashboard is not None:
+            try:
+                dashboard.stop()
+            except Exception:
+                logger.debug("Failed to stop the dashboard tab", exc_info=True)
+
+    def _refresh_vr_dashboard(self) -> None:
+        state = None
+        dashboard = getattr(self, "_vr_dashboard", None)
+        if dashboard is not None:
+            try:
+                state = self._vr_dashboard_state()
+                dashboard.set_state(state)
+                if dashboard.visible:
+                    dashboard.push()
+            except Exception:
+                logger.debug("Failed to refresh the dashboard tab", exc_info=True)
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        if wrist is not None:
+            try:
+                wrist.set_state(state if state is not None else self._vr_dashboard_state())
+                if wrist.visible:
+                    wrist.push()
+            except Exception:
+                logger.debug("Failed to refresh the wrist panel", exc_info=True)
+
+    # ------------------------------------------------- wrist panel
+    def _ensure_vr_wrist_panel(self):
+        """The dashboard's controls on the back of a hand, shown by twisting the wrist twice."""
+
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        if wrist is not None:
+            return wrist
+        if not self._vr_available():
+            return None
+        try:
+            from src.core.steamvr_wrist import SteamVRWristPanel
+            from src.ui_qt.vr_dashboard_panel import VRDashboardPanel
+        except Exception:
+            logger.debug("Wrist panel support is unavailable", exc_info=True)
+            return None
+        language = str(getattr(self, "_ui_lang", "") or "zh-CN")
+        hand = str(self._vr_wrist_config().get("hand", "left") or "left")
+        wrist = SteamVRWristPanel(
+            lambda: VRDashboardPanel(language), hand=hand, on_action=self._on_vr_dashboard_action
+        )
+        if not wrist.start():
+            logger.info("Wrist panel could not start; see the debug log for the OpenVR error")
+            return None
+        self._vr_wrist_panel = wrist
+        wrist.set_state(self._vr_dashboard_state())
+        return wrist
+
+    def _sync_vr_wrist_panel(self) -> None:
+        if self._vr_wrist_enabled() and self._vr_available():
+            wrist = self._ensure_vr_wrist_panel()
+            if wrist is not None:
+                wrist.set_hand(str(self._vr_wrist_config().get("hand", "left") or "left"))
+        else:
+            self._stop_vr_wrist_panel()
+
+    def _stop_vr_wrist_panel(self) -> None:
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        self._vr_wrist_panel = None
+        if wrist is not None:
+            try:
+                wrist.stop()
+            except Exception:
+                logger.debug("Failed to stop the wrist panel", exc_info=True)
+
+    # ------------------------------------------------- ear gesture
+    def _vr_gesture_enabled(self) -> bool:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        cfg = listen_cfg.get("vr_gesture", {}) if isinstance(listen_cfg, dict) else {}
+        return bool(isinstance(cfg, dict) and cfg.get("enabled", False))
+
+    def _poll_ear_gesture(self, vr_input, backend) -> None:
+        """A controller at the ear: long trigger = start/stop, short = capture."""
+
+        if getattr(self, "_selection_active", False):
+            return
+        gesture = getattr(self, "_ear_gesture", None)
+        if gesture is None:
+            try:
+                from src.core.vr_gesture import EarGesture
+            except Exception:
+                return
+            gesture = EarGesture()
+            self._ear_gesture = gesture
+        module = getattr(backend, "openvr_module", None)
+        near = None
+        if module is not None:
+            try:
+                from src.core.vr_gesture import controller_near_head
+
+                near = controller_near_head(module)
+            except Exception:
+                near = None
+        try:
+            event = gesture.update(
+                near_ear=near,
+                trigger_down=getattr(vr_input, "trigger_down", None),
+                now=time.monotonic(),
+            )
+        except Exception:
+            logger.debug("Ear gesture update failed", exc_info=True)
+            return
+        if event == "short" and self._screenshot_enabled():
+            logger.info("Ear gesture: short press, opening the capture frame")
+            self.trigger_screenshot_translation()
+
+    # ------------------------------------------------- start with SteamVR
+    def _steamvr_autolaunch_wanted(self) -> bool:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        return bool(isinstance(listen_cfg, dict) and listen_cfg.get("steamvr_autolaunch", False))
+
+    def _apply_steamvr_autolaunch(self) -> None:
+        """Tell SteamVR whether to launch Mio with it; only possible while attached."""
+
+        backend = getattr(self, "_vr_overlay_backend", None)
+        module = getattr(backend, "openvr_module", None) if backend is not None else None
+        if module is None:
+            return
+        wanted = self._steamvr_autolaunch_wanted()
+        try:
+            from src.core.steamvr_autolaunch import apply, is_enabled
+
+            current = is_enabled(module)
+            if current is not None and current == wanted:
+                return
+            apply(module, wanted)
+        except Exception:
+            logger.debug("Could not apply the SteamVR auto-launch preference", exc_info=True)
+
+    def _poll_vr_wrist_panel(self, wrist, dashboard) -> None:
+        """Feed the wrist panel the pointing controller's ray and trigger.
+
+        Input is withheld while the selection frame is open (those trigger
+        pulls are the selection) and while the SteamVR menu is up (its own
+        laser owns the trigger then).
+        """
+
+        vr_input = getattr(self, "_vr_input", None)
+        pointer = None
+        reader = getattr(vr_input, "pointer_ray", None) if vr_input is not None else None
+        if callable(reader):
+            try:
+                pointer = reader("left" if wrist.hand == "right" else "right")
+            except Exception:
+                pointer = None
+        allow = not getattr(self, "_selection_active", False) and not (
+            dashboard is not None and getattr(dashboard, "visible", False)
+        )
+        try:
+            if wrist.visible:
+                wrist.set_state(self._vr_dashboard_state())
+            wrist.poll(
+                pointer=pointer,
+                trigger_down=getattr(vr_input, "trigger_down", None),
+                allow_input=allow,
+            )
+        except Exception:
+            # Once at WARNING: a tick that fails every time would otherwise
+            # hide a dead wrist panel behind DEBUG.
+            if not getattr(self, "_wrist_poll_failed", False):
+                self._wrist_poll_failed = True
+                logger.warning("Wrist panel poll failed", exc_info=True)
+            else:
+                logger.debug("Wrist panel poll failed", exc_info=True)
+
+    def _vr_size_key(self) -> str:
+        from src.core.steamvr_overlay import SIZE_PRESETS
+
+        try:
+            width = float(self._vr_overlay_config().get("width_meters", 1.1) or 1.1)
+        except (TypeError, ValueError):
+            width = 1.1
+        for key, meters in SIZE_PRESETS:
+            if abs(width - meters) < 0.05:
+                return key
+        return "custom"
+
+    def _vr_dashboard_state(self) -> dict:
+        from src.utils.ui_config import (
+            get_backend_config_value,
+            get_backend_label,
+            get_output_format_options,
+            get_tts_engine_label,
+        )
+
+        config = getattr(self, "_config", None)
+        config = config if isinstance(config, dict) else {}
+        language = str(getattr(self, "_ui_lang", "") or "zh-CN")
+        trans_cfg = config.get("translation", {})
+        trans_cfg = trans_cfg if isinstance(trans_cfg, dict) else {}
+        backend = normalize_backend(str(trans_cfg.get("backend", "") or ""))
+        try:
+            provider = get_backend_label(backend, language)
+        except Exception:
+            provider = backend
+        try:
+            model = str(get_backend_config_value(trans_cfg, backend, "model") or "")
+        except Exception:
+            model = ""
+        output_format = normalize_output_format(str(trans_cfg.get("output_format", "") or ""))
+        format_label = output_format
+        try:
+            for label, code in get_output_format_options(language):
+                if code == output_format:
+                    format_label = label
+                    break
+        except Exception:
+            pass
+        tts_cfg = config.get("tts", {})
+        tts_cfg = tts_cfg if isinstance(tts_cfg, dict) else {}
+        engine = str(tts_cfg.get("engine", "") or "")
+        try:
+            engine_label = get_tts_engine_label(engine, language) if engine else ""
+        except Exception:
+            engine_label = engine
+        listening = bool(getattr(self, "_running", False))
+        vr_input = getattr(self, "_vr_input", None)
+        return {
+            "listening": listening,
+            "listen_others": bool(getattr(self, "_desktop_capture_enabled", False)),
+            "tts": bool(tts_cfg.get("enabled", False)),
+            "mic_chatbox": bool(trans_cfg.get("send_to_chatbox", True)),
+            "listen_chatbox": bool(self._listen_send_to_chatbox_enabled()),
+            "muted": bool(getattr(self, "_mic_muted", False)),
+            "locked": bool(self._vr_overlay_config().get("locked", False)),
+            "desktop_overlay": bool(getattr(self, "_listen_overlay_enabled", False)),
+            "vr_overlay": self._vr_overlay_enabled(),
+            "vr_size": self._vr_size_key(),
+            "provider": provider,
+            "model": model,
+            "output_format": format_label,
+            "tts_engine": engine_label,
+            "edit_mode": self._vr_edit_mode_active(),
+            "binding_active": bool(getattr(vr_input, "active", False)),
+            "status": self._t("vr_dash_status_listening" if listening else "vr_dash_status_idle"),
+        }
+
+    @staticmethod
+    def _cycle_option(options, current, step: int):
+        codes = [code for code in options if code]
+        if not codes:
+            return None
+        index = codes.index(current) if current in codes else -1
+        return codes[(index + step) % len(codes)]
+
+    def _on_vr_dashboard_action(self, action: str) -> None:
+        """A laser click on the dashboard tab."""
+
+        from src.utils.ui_config import (
+            get_backend_config_value,
+            get_backend_model_options,
+            get_backend_order,
+            get_output_format_options,
+        )
+
+        action = str(action or "")
+        try:
+            if action == "toggle_listen":
+                if getattr(self, "_running", False):
+                    self._do_stop()
+                else:
+                    self._do_start()
+            elif action == "toggle_listen_others":
+                self._set_desktop_capture_enabled(
+                    not bool(getattr(self, "_desktop_capture_enabled", False)), persist=True
+                )
+            elif action == "toggle_tts":
+                self._set_tts_enabled_from_avatar(not bool(self._tts_config().get("enabled", False)))
+            elif action == "toggle_mic_chatbox":
+                trans_cfg = self._config.setdefault("translation", {}) if isinstance(self._config, dict) else {}
+                trans_cfg["send_to_chatbox"] = not bool(trans_cfg.get("send_to_chatbox", True))
+                self._schedule_config_save()
+            elif action == "toggle_listen_chatbox":
+                self._set_listen_send_to_chatbox_enabled(
+                    not self._listen_send_to_chatbox_enabled(), persist=True
+                )
+            elif action == "toggle_mute":
+                self._toggle_mic_mute()
+            elif action == "toggle_lock":
+                vr_cfg = self._vr_overlay_config_mutable()
+                vr_cfg["locked"] = not bool(vr_cfg.get("locked", False))
+                if vr_cfg["locked"] and self._vr_edit_mode_active():
+                    self._end_vr_edit_mode()
+                self.on_vr_overlay_settings_changed()
+                self._sync_settings_window_vr_overlay_controls()
+            elif action == "toggle_desktop_overlay":
+                self._set_listen_overlay_enabled(
+                    not bool(getattr(self, "_listen_overlay_enabled", False)), persist=True
+                )
+            elif action == "toggle_vr_overlay":
+                vr_cfg = self._vr_overlay_config_mutable()
+                vr_cfg["enabled"] = not bool(vr_cfg.get("enabled", False))
+                self.on_vr_overlay_settings_changed()
+                self._sync_settings_window_vr_overlay_controls()
+            elif action.startswith("size:"):
+                from src.core.steamvr_overlay import SIZE_PRESETS
+
+                wanted = action.split(":", 1)[1]
+                for key, meters in SIZE_PRESETS:
+                    if key == wanted:
+                        self._vr_overlay_config_mutable()["width_meters"] = meters
+                        self.on_vr_overlay_settings_changed()
+                        self._sync_settings_window_vr_overlay_controls()
+                        break
+            elif action == "move_panel":
+                self._toggle_vr_edit_mode()
+            elif action == "reset_position":
+                from src.core.steamvr_overlay import DEFAULT_POSITION
+
+                self._vr_overlay_config_mutable()["position"] = list(DEFAULT_POSITION)
+                self.on_vr_overlay_settings_changed()
+            elif action in {"provider_prev", "provider_next"}:
+                trans_cfg = self._config.get("translation", {}) if isinstance(self._config, dict) else {}
+                current = normalize_backend(str(trans_cfg.get("backend", "") or ""))
+                step = 1 if action.endswith("next") else -1
+                chosen = self._cycle_option(list(get_backend_order()), current, step)
+                if chosen:
+                    self._on_quick_switch_changed("translation_provider", chosen)
+            elif action in {"model_prev", "model_next"}:
+                trans_cfg = self._config.get("translation", {}) if isinstance(self._config, dict) else {}
+                backend = normalize_backend(str(trans_cfg.get("backend", "") or ""))
+                current = str(get_backend_config_value(trans_cfg, backend, "model") or "")
+                step = 1 if action.endswith("next") else -1
+                chosen = self._cycle_option(list(get_backend_model_options(backend, current)), current, step)
+                if chosen:
+                    self._on_quick_switch_changed("translation_model", chosen)
+            elif action == "output_format_next":
+                trans_cfg = self._config.get("translation", {}) if isinstance(self._config, dict) else {}
+                current = normalize_output_format(str(trans_cfg.get("output_format", "") or ""))
+                language = str(getattr(self, "_ui_lang", "") or "zh-CN")
+                codes = [code for _label, code in get_output_format_options(language)]
+                chosen = self._cycle_option(codes, current, 1)
+                if chosen:
+                    self._on_quick_switch_changed("output_format", chosen)
+            elif action == "tts_engine_next":
+                engines = list(self._quick_switch_available_engines() or ())
+                tts_cfg = self._tts_config()
+                current = str(tts_cfg.get("engine", "") or "")
+                chosen = self._cycle_option(engines, current, 1)
+                if chosen and chosen != current:
+                    self._on_quick_switch_changed("tts_engine", chosen)
+            elif action == "screenshot":
+                self._run_screenshot_translation(None)
+        except Exception:
+            logger.exception("Dashboard action %s failed", action)
+        self._refresh_vr_dashboard()
+
+    def _sync_settings_window_vr_overlay_controls(self) -> None:
+        win = getattr(self, "_settings_window", None)
+        syncer = getattr(win, "sync_vr_overlay_from_config", None) if win else None
+        if callable(syncer):
+            try:
+                syncer()
+            except Exception:
+                logger.debug("Failed to sync VR controls to settings", exc_info=True)
+
+    def _ensure_vr_overlay_backend(self):
+        """Build the headset backend, or return None when VR is unavailable.
+
+        Import and construction are deferred so a player without SteamVR never
+        loads the runtime, and a failure here must leave the desktop overlay
+        working exactly as before.
+        """
+
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is not None:
+            return backend
+        try:
+            from src.core.steamvr_overlay import SteamVROverlayBackend
+            from src.ui_qt.vr_overlay_panel import VROverlayPanel
+        except Exception:
+            logger.debug("SteamVR overlay support is unavailable", exc_info=True)
+            return None
+
+        vr_cfg = self._vr_overlay_config()
+        opacity = vr_cfg.get("plate_opacity", 0.30)
+        theme = str(getattr(self, "_main_theme", "dark") or "dark")
+
+        backend = SteamVROverlayBackend(
+            lambda: VROverlayPanel(theme=theme, plate_opacity=opacity),
+            width_meters=vr_cfg.get("width_meters", 1.1),
+            position=tuple(vr_cfg.get("position", (0.0, -0.32, -1.5))),
+            on_error=self._on_vr_overlay_error,
+        )
+        backend.set_position_committed_callback(self._persist_vr_overlay_position)
+        self._vr_overlay_backend = backend
+        return backend
+
+    def _on_vr_overlay_error(self, reason: str) -> None:
+        logger.info("VR subtitle overlay unavailable: %s", reason)
+        self._stop_vr_overlay_timer()
+        self._sync_settings_window_vr_overlay_state()
+
+    def _persist_vr_overlay_position(self, position) -> None:
+        """A drag in the headset is a setting change; keep it across restarts."""
+
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            return
+        vr_cfg = listen_cfg.setdefault("vr_overlay", {})
+        if not isinstance(vr_cfg, dict):
+            return
+        vr_cfg["position"] = [float(component) for component in position]
+        self._schedule_config_save()
+        # The player just let go; give them a few seconds to grab again
+        # before the controllers go back to the game.
+        self._extend_vr_edit_mode(VR_EDIT_MODE_AFTER_DRAG_SECONDS)
+
+    def _start_vr_overlay_timer(self) -> None:
+        timer = getattr(self, "_vr_overlay_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            # Fast enough that dragging the panel feels attached to the hand,
+            # slow enough to stay invisible on the UI thread: a poll costs
+            # well under a millisecond.
+            timer.setInterval(VR_POLL_INTERVAL_MS)
+            timer.timeout.connect(self._poll_vr_overlay)
+            self._vr_overlay_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_vr_overlay_timer(self) -> None:
+        timer = getattr(self, "_vr_overlay_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    def _poll_vr_overlay(self) -> None:
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is None or not backend.available:
+            self._stop_vr_overlay_timer()
+            return
+        backend.poll()
+        if self._screenshot_enabled():
+            vr_input = self._ensure_vr_input()
+            if vr_input is not None:
+                vr_input.poll()
+                if getattr(vr_input, "any_button_pressed", False):
+                    self._dismiss_screenshot_result_on_press()
+                if self._vr_gesture_enabled():
+                    self._poll_ear_gesture(vr_input, backend)
+                # Tell the settings page once whether SteamVR ever handed the
+                # button over; it decides which trigger to recommend.
+                active = bool(getattr(vr_input, "active", False))
+                if active != getattr(self, "_vr_binding_reported", None):
+                    self._vr_binding_reported = active
+                    self._sync_settings_window_vr_overlay_state()
+                    self._refresh_vr_dashboard()
+        frame = getattr(self, "_vr_selection_frame", None)
+        if frame is not None and getattr(self, "_selection_active", False):
+            frame.poll()
+            if getattr(frame, "awaiting_release", False):
+                vr_input = getattr(self, "_vr_input", None)
+                if vr_input is not None and getattr(vr_input, "trigger_down", None) is False:
+                    frame.release_arm()
+        dashboard = getattr(self, "_vr_dashboard", None)
+        if dashboard is not None:
+            if dashboard.visible:
+                dashboard.set_state(self._vr_dashboard_state())
+            dashboard.poll()
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        if wrist is not None:
+            self._poll_vr_wrist_panel(wrist, dashboard)
+        self._poll_card_countdown()
+
+    def _shutdown_vr_overlay(self) -> None:
+        self._stop_vr_overlay_timer()
+        self._stop_vr_runtime_retry()
+        self._end_vr_edit_mode(quiet=True)
+        self._stop_vr_dashboard()
+        self._stop_vr_wrist_panel()
+        self._shutdown_screenshot_translation()
+        backend = getattr(self, "_vr_overlay_backend", None)
+        self._vr_overlay_backend = None
+        if backend is not None:
+            try:
+                backend.stop()
+            except Exception:
+                logger.debug("Failed to stop the VR subtitle overlay", exc_info=True)
+
+    # ------------------------------------------------------- screenshot translation
+    def _screenshot_config(self) -> dict:
+        config = getattr(self, "_config", None)
+        listen_cfg = config.get("vrc_listen", {}) if isinstance(config, dict) else {}
+        if not isinstance(listen_cfg, dict):
+            return {}
+        cfg = listen_cfg.get("screenshot_translation", {})
+        return cfg if isinstance(cfg, dict) else {}
+
+    def _screenshot_enabled(self) -> bool:
+        return bool(self._screenshot_config().get("enabled", False))
+
+    def _ensure_screenshot_translator(self):
+        translator = getattr(self, "_screenshot_translator", None)
+        if translator is not None:
+            return translator
+        try:
+            from src.core.screen_capture import Capture, capture_for_translation, crop_capture
+            from src.core.screen_ocr import (
+                available_ocr_languages,
+                pick_ocr_language,
+                recognize_png,
+            )
+            from src.core.screenshot_translation import ScreenshotTranslator
+        except Exception:
+            logger.debug("Screenshot translation is unavailable", exc_info=True)
+            return None
+
+        def capture():
+            if self._vr_available():
+                # Only the compositor's own picture is the headset's view.
+                # VRChat's desktop window is another camera with another
+                # field of view: a frame the player selected in the headset
+                # maps onto nothing in it, so it is never used in VR.
+                eye = self._capture_left_eye()
+                if eye is not None:
+                    return eye
+                return Capture(b"", 0, 0, "vr_eye")
+            prefer = bool(self._screenshot_config().get("prefer_vrchat_window", True))
+            return capture_for_translation(prefer_vrchat=prefer, allow_screen_fallback=True)
+
+        recognize = recognize_png
+        local_ocr = False
+        try:
+            from src.core.local_ocr import local_ocr_available, recognize_png_local
+
+            if local_ocr_available():
+                from src.core.local_ocr import set_gpu_preference
+
+                set_gpu_preference(bool(self._screenshot_config().get("ocr_gpu", True)))
+                recognize = recognize_png_local
+                local_ocr = True
+                self._warm_up_local_ocr()
+        except Exception:
+            logger.debug("Bundled OCR unavailable; using Windows OCR", exc_info=True)
+
+        def ocr_language() -> str:
+            # Read what other players wrote, so the recognizer should match the
+            # language being listened to, not the one being translated into.
+            listen_cfg = self._config.get("vrc_listen", {})
+            source = ""
+            if isinstance(listen_cfg, dict):
+                source = str(listen_cfg.get("source_language", "") or "")
+            if not source or source == "auto":
+                source = str(getattr(self, "_ui_lang", "") or "")
+            if local_ocr:
+                # The bundled engine reads every script it has and only
+                # uses this to break ties, so the plain code is enough.
+                return source
+            return pick_ocr_language(source, available_ocr_languages())
+
+        translator = ScreenshotTranslator(
+            capture=capture,
+            recognize=recognize,
+            translate=self._translate_screenshot_line,
+            ocr_language=ocr_language,
+            on_status=lambda key: self._call_in_ui(
+                lambda k=key: self._on_screenshot_status(k)
+            ),
+            on_result=lambda result: self._call_in_ui(
+                lambda r=result: self._on_screenshot_result(r)
+            ),
+            crop=crop_capture,
+            snapshot_anchor=self._snapshot_head_anchor,
+        )
+        self._screenshot_translator = translator
+        return translator
+
+    def _capture_left_eye(self):
+        """What the left eye sees right now, from the compositor.
+
+        Our own overlays are part of that picture, so the subtitle panel is
+        taken down for the read and put back straight after.
+        """
+
+        backend = getattr(self, "_vr_overlay_backend", None)
+        module = getattr(backend, "openvr_module", None) if backend is not None else None
+        if module is None:
+            return None
+        try:
+            from src.core.vr_eye_capture import capture_left_eye
+        except Exception:
+            logger.debug("Eye capture unavailable", exc_info=True)
+            return None
+        was_visible = bool(getattr(backend, "_visible", False))
+        try:
+            capture = capture_left_eye(module)
+        except Exception:
+            logger.debug("Eye capture failed", exc_info=True)
+            capture = None
+        if capture is None or not capture.ok:
+            logger.info("Headset eye capture returned nothing; the compositor mirror is unavailable")
+        if was_visible:
+            try:
+                backend.reveal()
+            except Exception:
+                logger.debug("Failed to restore the subtitle panel after capture", exc_info=True)
+        return capture
+
+    def _prepare_vr_capture(self) -> None:
+        """Take our overlays out of the picture before the compositor is read.
+
+        Every Mio overlay is part of what the compositor draws: the subtitle
+        board, the card sheet, the hand panel and the wrist panel with its
+        laser. The hand panel was the one that bit: it still showed the
+        previous read's card, the player pointed the box just below a sign,
+        and the card itself was read - so every read came out as "the
+        previous picture".
+        """
+
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is not None and getattr(backend, "_visible", False):
+            try:
+                backend.hide()
+                # Remember it was up so the capture can put it back.
+                backend._visible = True
+            except Exception:
+                logger.debug("Failed to hide the subtitle panel for capture", exc_info=True)
+        self._hide_screenshot_labels()
+        taken_down = ["sheet"]
+        if backend is not None and getattr(backend, "_visible", False):
+            taken_down.append("board")
+        hand = getattr(self, "_vr_hand_panel", None)
+        if hand is not None:
+            try:
+                hand.hide()
+                taken_down.append("hand panel")
+            except Exception:
+                logger.debug("Failed to hide the hand panel for capture", exc_info=True)
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        suspend = getattr(wrist, "suspend", None) if wrist is not None else None
+        if callable(suspend):
+            try:
+                suspend()
+                taken_down.append("wrist panel")
+            except Exception:
+                logger.debug("Failed to suspend the wrist panel for capture", exc_info=True)
+        logger.info("Capture: Mio overlays taken down first (%s)", ", ".join(taken_down))
+
+    def _resume_vr_overlays_after_capture(self) -> None:
+        """Put back what :meth:`_prepare_vr_capture` took down and the read will not replace."""
+
+        wrist = getattr(self, "_vr_wrist_panel", None)
+        resume = getattr(wrist, "resume", None) if wrist is not None else None
+        if callable(resume):
+            try:
+                resume()
+            except Exception:
+                logger.debug("Failed to resume the wrist panel after capture", exc_info=True)
+
+    def _warm_up_local_ocr(self) -> None:
+        """Load the bundled OCR models off the UI thread before the first press.
+
+        Loading takes a couple of seconds; paying it on the first press would
+        look like the button doing nothing.
+        """
+
+        if getattr(self, "_local_ocr_warming", False):
+            return
+        self._local_ocr_warming = True
+
+        def warm() -> None:
+            try:
+                from src.core.local_ocr import shared_local_ocr
+
+                shared_local_ocr().warm_up()
+            except Exception:
+                logger.debug("Bundled OCR warm-up failed", exc_info=True)
+
+        threading.Thread(target=warm, name="local-ocr-warmup", daemon=True).start()
+
+    def _screenshot_translator_client(self):
+        """A translator kept just for screenshot text.
+
+        Screenshot runs are serialised by their own lock, so one client is
+        enough; sharing the realtime pipeline's translator instead would put a
+        button press in the path of live speech.
+        """
+
+        client = getattr(self, "_screenshot_translator_client_instance", None)
+        if client is not None:
+            return client
+        try:
+            client = create_translator(copy.deepcopy(self._config))
+        except Exception:
+            logger.debug("Could not build a screenshot translator", exc_info=True)
+            return None
+        self._screenshot_translator_client_instance = client
+        return client
+
+    def _screenshot_target_language(self) -> str:
+        """The language the player reads in.
+
+        Screen text is something other players wrote, so it goes the same way
+        as their speech: into the reverse-translation target, never into the
+        language the player speaks *to* them (that once translated Japanese
+        signs into Japanese, unchanged).
+        """
+
+        listen_cfg = self._config.get("vrc_listen", {}) if isinstance(self._config, dict) else {}
+        target = ""
+        if isinstance(listen_cfg, dict):
+            target = str(listen_cfg.get("target_language", "") or "").strip()
+        if not target or target == "auto":
+            ui_lang = str(getattr(self, "_ui_lang", "") or "zh-CN")
+            target = "zh" if ui_lang.lower().startswith("zh") else ui_lang.split("-")[0]
+        return target or "zh"
+
+    def _translate_screenshot_line(self, text: str) -> str:
+        """Translate one recognised line with the player's own translation service.
+
+        Raises :class:`TranslationUnavailable` so the pipeline can tell the
+        player *why* nothing came back, instead of quietly showing the
+        original as if it were a translation.
+        """
+
+        from src.core.screenshot_translation import (
+            TranslationUnavailable,
+            classify_translation_error,
+        )
+
+        client = self._screenshot_translator_client()
+        if client is None:
+            raise TranslationUnavailable("unavailable", "no translation provider")
+        target = self._screenshot_target_language()
+        try:
+            return str(
+                client.translate(text, "auto", target, context_source="screenshot") or ""
+            )
+        except TranslationUnavailable:
+            raise
+        except Exception as exc:
+            logger.debug("Screenshot line translation failed", exc_info=True)
+            raise TranslationUnavailable(classify_translation_error(exc), str(exc)) from exc
+
+    def _ensure_vr_hand_panel(self):
+        panel = getattr(self, "_vr_hand_panel", None)
+        if panel is not None:
+            return panel
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is None or not backend.available:
+            return None
+        try:
+            from src.core.steamvr_overlay import SteamVRHandPanel
+            from src.ui_qt.vr_overlay_panel import VRScreenshotPanel
+        except Exception:
+            logger.debug("Screenshot panel unavailable", exc_info=True)
+            return None
+        hand = str(self._screenshot_config().get("hand", "left") or "left")
+        theme = self._main_theme
+        panel = SteamVRHandPanel(
+            lambda: VRScreenshotPanel(theme=theme),
+            hand=hand,
+        )
+        if not panel.start():
+            return None
+        self._vr_hand_panel = panel
+        return panel
+
+    # Spelled out rather than built with an f-string: a literal map is what
+    # lets the localisation checks see these keys, and a typo becomes a missing
+    # entry here instead of a missing translation at runtime.
+    _SCREENSHOT_STATUS_KEYS = {
+        "capturing": "screenshot_status_capturing",
+        "reading": "screenshot_status_reading",
+        "translating": "screenshot_status_translating",
+    }
+    _SCREENSHOT_ERROR_KEYS = {
+        "capture_failed": "screenshot_error_capture_failed",
+        "no_text_found": "screenshot_error_no_text_found",
+        "language_unavailable": "screenshot_error_language_unavailable",
+        "empty_image": "screenshot_error_capture_failed",
+        "ocr_timeout": "screenshot_error_ocr_timeout",
+    }
+    _TRANSLATION_ERROR_KEYS = {
+        "network": "screenshot_error_translation_network",
+        "auth": "screenshot_error_translation_auth",
+        "quota": "screenshot_error_translation_quota",
+        "unavailable": "screenshot_error_translation_unavailable",
+    }
+
+    def _screenshot_error_text(self, result) -> str:
+        error = str(getattr(result, "error", "") or "")
+        source = str(getattr(result, "source", "") or "")
+        if error == "capture_failed" and source == "vr_eye":
+            return self._t("screenshot_error_eye_view")
+        if error == "capture_failed" and source in {"vrchat", "vrchat_missing"}:
+            return self._t("screenshot_error_vrchat_window")
+        if error == "translation_failed":
+            kind = str(getattr(result, "error_kind", "") or "unavailable")
+            return self._t(
+                self._TRANSLATION_ERROR_KEYS.get(kind, "screenshot_error_translation_unavailable")
+            )
+        return self._t(self._SCREENSHOT_ERROR_KEYS.get(error, "screenshot_error_failed"))
+
+    def _screenshot_uses_hand_panel(self) -> bool:
+        """Only the explicit "hand" placement gets the wrist panel.
+
+        With labels over the signs, a second box for progress and errors was
+        one box too many: it sat in the way and its text did not fit.
+        """
+
+        return self._screenshot_placement() == "hand"
+
+    def _show_vr_toast(self, lines) -> bool:
+        """A few centred lines in front of the eyes, on the label sheet itself."""
+
+        if not self._vr_available():
+            return False
+        sheet = self._ensure_vr_label_sheet()
+        if sheet is None:
+            return False
+        try:
+            from src.ui_qt.in_place_painter import render_toast_image
+
+            image = render_toast_image(self._expected_frame_size(), lines)
+            return bool(
+                sheet.show(
+                    image,
+                    image.width(),
+                    image.height(),
+                    None,
+                    depth=self._screenshot_depth(),
+                    fov_scale=self._screenshot_fov_scale(),
+                )
+            )
+        except Exception:
+            logger.debug("Failed to show a VR toast", exc_info=True)
+            return False
+
+    def _on_screenshot_status(self, key: str) -> None:
+        text = self._t(
+            self._SCREENSHOT_STATUS_KEYS.get(str(key), "screenshot_status_capturing")
+        )
+        self._set_bottom(text)
+        if not self._screenshot_uses_hand_panel():
+            self._show_vr_toast(text)
+            return
+        panel = self._ensure_vr_hand_panel()
+        if panel is None:
+            return
+        surface = panel.panel
+        if surface is not None and hasattr(surface, "show_status"):
+            surface.show_status(text)
+            panel.show()
+
+    def _on_screenshot_result(self, result) -> None:
+        queued = getattr(self, "_queued_screenshot_region", None)
+        if queued is not None:
+            # The player drew a newer box while this one was being read:
+            # its picture would only mislead, so it is set aside.
+            self._queued_screenshot_region = None
+            logger.info("Screenshot: earlier read set aside; reading the box drawn meanwhile")
+            self._run_screenshot_translation(queued[0])
+            return
+        logger.info(
+            "Screenshot result: %s, %d lines, picture %dx%d at %s of %dx%d",
+            f"error={getattr(result, 'error', '')}" if getattr(result, "error", "") else "ok",
+            len(getattr(result, "pairs", []) or []),
+            int((getattr(result, "crop_size", (0, 0)) or (0, 0))[0]),
+            int((getattr(result, "crop_size", (0, 0)) or (0, 0))[1]),
+            tuple(getattr(result, "offset", (0, 0)) or (0, 0)),
+            int((getattr(result, "frame_size", (0, 0)) or (0, 0))[0]),
+            int((getattr(result, "frame_size", (0, 0)) or (0, 0))[1]),
+        )
+        use_hand = self._screenshot_uses_hand_panel()
+        panel = self._ensure_vr_hand_panel() if use_hand else None
+        if getattr(result, "error", ""):
+            message = self._screenshot_error_text(result)
+            self._set_bottom(message, "warning")
+            if use_hand:
+                if panel is not None and panel.panel is not None:
+                    panel.panel.show_status(message)
+                    panel.show()
+            else:
+                self._show_vr_toast(message)
+            # An error is read once and goes away; the next press may say it
+            # again if it is still true.
+            self._screenshot_result_visible = True
+            self._schedule_screenshot_hide(seconds=SCREENSHOT_ERROR_SECONDS)
+            return
+
+        pairs = list(getattr(result, "pairs", []))
+        error_kind = str(getattr(result, "error_kind", "") or "")
+        if error_kind:
+            self._set_bottom(
+                self._t(
+                    self._TRANSLATION_ERROR_KEYS.get(
+                        error_kind, "screenshot_error_translation_unavailable"
+                    )
+                ),
+                "warning",
+            )
+        else:
+            self._set_bottom(self._t("screenshot_done", count=len(pairs)))
+        shown = self._screenshot_placement() == "card" and self._show_translation_card(result)
+        if shown:
+            if panel is not None:
+                panel.hide()
+        elif use_hand and panel is not None and panel.panel is not None:
+            self._show_on_hand(panel, result, pairs)
+        elif self._vr_available() and self._show_vr_toast(
+            [f"{original} → {translated}" if translated != original else original for original, translated in pairs]
+        ):
+            # A capture that cannot be placed (a desktop grab, no geometry)
+            # still shows its lines - on the sheet, not in a second box.
+            pass
+        else:
+            self._show_labels_on_desktop(result)
+        self._screenshot_result_visible = True
+        if shown and getattr(self, "_card_world_position", None) is not None:
+            # The card's short life starts when the player looks at it, not
+            # when it appears: a read takes a second or two, and a card that
+            # timed out while they were still aiming was a card never seen.
+            self._card_hide_pending = True
+            self._schedule_screenshot_hide(seconds=CARD_UNSEEN_LIMIT_SECONDS)
+        else:
+            self._schedule_screenshot_hide()
+
+    # ------------------------------------------------- translation card
+    def _translation_card(self, result):
+        """(card image, picture offset in the frame, picture size), or None.
+
+        The card is the read picture with the translated plates on it - the
+        way VRHandsFrame shows a crop. Picture and labels are one image, so
+        nothing has to line up with the world afterwards. A whole-view read
+        is trimmed to the part that had text; the player wants the sign, not
+        the floor around it.
+        """
+
+        if not getattr(result, "placeable", False):
+            return None
+        png = bytes(getattr(result, "png", b"") or b"")
+        if not png:
+            return None
+        try:
+            from PySide6.QtGui import QImage
+
+            from src.core.in_place_layout import text_extent
+            from src.ui_qt.in_place_painter import render_translation_card
+
+            picture = QImage.fromData(png, "PNG")
+            if picture.isNull():
+                return None
+            offset = tuple(getattr(result, "offset", (0, 0)) or (0, 0))
+            lines = list(getattr(result, "lines", []) or [])
+            if not getattr(result, "region", None):
+                x, y, w, h = text_extent(lines, (picture.width(), picture.height()), offset)
+                picture = picture.copy(int(x), int(y), int(w), int(h))
+                offset = (offset[0] + x, offset[1] + y)
+            image = render_translation_card(picture, lines, offset)
+            return image, offset, (picture.width(), picture.height())
+        except Exception:
+            logger.debug("Failed to draw the translation card", exc_info=True)
+            return None
+
+    def _show_translation_card(self, result) -> bool:
+        """Hang the card in the headset along the direction the text was seen in."""
+
+        if not self._vr_available():
+            return False
+        sheet = self._ensure_vr_label_sheet()
+        if sheet is None:
+            return False
+        card = self._translation_card(result)
+        if card is None:
+            return False
+        image, offset, (picture_w, picture_h) = card
+        frame_w, frame_h = getattr(result, "frame_size", (0, 0))
+        if frame_w <= 0 or frame_h <= 0:
+            return False
+        try:
+            from src.core.in_place_layout import card_width_meters
+
+            anchor = getattr(result, "anchor", None)
+            if anchor is None:
+                snapshot = getattr(sheet, "snapshot_head_anchor", None)
+                anchor = snapshot() if callable(snapshot) else None
+            if anchor is None:
+                return False
+            centre = (
+                (offset[0] + picture_w / 2.0) / float(frame_w),
+                (offset[1] + picture_h / 2.0) / float(frame_h),
+            )
+            depth = self._screenshot_depth()
+            width_m = card_width_meters(anchor, picture_w / float(frame_w), depth)
+            shown = bool(
+                sheet.show_card(
+                    image, image.width(), image.height(), anchor, centre, width_m, depth=depth
+                )
+            )
+            # Where the card hangs, so its countdown can wait for a look.
+            rows = getattr(sheet, "last_transform", None)
+            self._card_world_position = (
+                (float(rows[0][3]), float(rows[1][3]), float(rows[2][3])) if shown and rows else None
+            )
+            logger.info(
+                "Translation card %s: %dx%d px, %.2f m wide at %.1f m, centre=(%.2f, %.2f)",
+                "shown" if shown else "NOT shown",
+                image.width(),
+                image.height(),
+                width_m,
+                depth,
+                centre[0],
+                centre[1],
+            )
+            return shown
+        except Exception:
+            logger.info("Failed to show the translation card", exc_info=True)
+            return False
+
+    def _show_on_hand(self, panel, result, pairs) -> None:
+        """The card on the wrist when it can be drawn, the list otherwise."""
+
+        surface = panel.panel
+        shown = False
+        card = self._translation_card(result)
+        if card is not None and hasattr(surface, "show_picture"):
+            try:
+                shown = bool(surface.show_picture(card[0]))
+            except Exception:
+                logger.debug("Failed to show the card on the hand panel", exc_info=True)
+        if not shown:
+            surface.show_lines(pairs)
+        panel.show()
+
+    # ------------------------------------------------- in-place labels
+    def _screenshot_placement(self) -> str:
+        """"card" (the read picture with its translations, in the view) or
+        "hand" (the same on the wrist)."""
+
+        value = str(self._screenshot_config().get("placement", "card") or "").lower()
+        return "hand" if value == "hand" else "card"
+
+    def _screenshot_depth(self) -> float:
+        from src.core.in_place_layout import clamp_depth
+
+        return clamp_depth(self._screenshot_config().get("depth_meters", 1.5))
+
+    def _screenshot_fov_scale(self) -> float:
+        from src.core.in_place_layout import clamp_fov_scale
+
+        return clamp_fov_scale(self._screenshot_config().get("mirror_fov_scale", 1.0))
+
+    def _screenshot_selection_mode(self) -> bool:
+        return bool(self._screenshot_config().get("selection_mode", True))
+
+    def _vr_available(self) -> bool:
+        backend = getattr(self, "_vr_overlay_backend", None)
+        return backend is not None and bool(getattr(backend, "available", False))
+
+    def _ensure_vr_label_sheet(self):
+        sheet = getattr(self, "_vr_label_sheet", None)
+        if sheet is not None:
+            return sheet
+        if not self._vr_available():
+            return None
+        try:
+            from src.core.steamvr_inplace import SteamVRLabelSheet
+        except Exception:
+            logger.debug("In-place label overlay unavailable", exc_info=True)
+            return None
+        sheet = SteamVRLabelSheet()
+        if not sheet.start():
+            return None
+        self._vr_label_sheet = sheet
+        return sheet
+
+    def _ensure_vr_selection_frame(self):
+        frame = getattr(self, "_vr_selection_frame", None)
+        if frame is not None:
+            return frame
+        if not self._vr_available():
+            return None
+        try:
+            from src.core.steamvr_inplace import SteamVRSelectionFrame
+        except Exception:
+            logger.debug("Selection frame overlay unavailable", exc_info=True)
+            return None
+        frame = SteamVRSelectionFrame()
+        if not frame.start():
+            return None
+        frame.on_drag = self._on_selection_drag
+        frame.on_release = self._on_selection_release
+        frame.on_hover = self._on_selection_hover
+        self._vr_selection_frame = frame
+        return frame
+
+    def _ensure_desktop_inplace_overlay(self):
+        overlay = getattr(self, "_desktop_inplace_overlay", None)
+        if overlay is None:
+            from src.ui_qt.in_place_overlay_window import DesktopInPlaceOverlay
+
+            overlay = DesktopInPlaceOverlay()
+            self._desktop_inplace_overlay = overlay
+        return overlay
+
+    def _snapshot_head_anchor(self):
+        """Head pose at capture time; None without a headset."""
+
+        sheet = self._ensure_vr_label_sheet()
+        if sheet is None:
+            return None
+        return sheet.snapshot_head_anchor()
+
+    def _show_labels_on_desktop(self, result) -> bool:
+        """Without a headset, lay the labels over the screen itself."""
+
+        if self._vr_available() or not getattr(result, "placeable", False):
+            return False
+        try:
+            return bool(self._ensure_desktop_inplace_overlay().show_result(result))
+        except Exception:
+            logger.debug("Failed to show desktop labels", exc_info=True)
+            return False
+
+    def _poll_card_countdown(self) -> None:
+        """Start the card's countdown once the head has turned toward it."""
+
+        if not getattr(self, "_card_hide_pending", False):
+            return
+        position = getattr(self, "_card_world_position", None)
+        sheet = getattr(self, "_vr_label_sheet", None)
+        if position is None or sheet is None:
+            self._card_hide_pending = False
+            self._schedule_screenshot_hide()
+            return
+        snapshot = getattr(sheet, "snapshot_head_anchor", None)
+        anchor = snapshot() if callable(snapshot) else None
+        pose = getattr(anchor, "pose", None)
+        if pose is None:
+            return
+        try:
+            head = (float(pose[0][3]), float(pose[1][3]), float(pose[2][3]))
+            forward = (-float(pose[0][2]), -float(pose[1][2]), -float(pose[2][2]))
+            to_card = tuple(position[i] - head[i] for i in range(3))
+            distance = math.sqrt(sum(c * c for c in to_card))
+            if distance < 1e-6:
+                return
+            cosine = sum(forward[i] * to_card[i] for i in range(3)) / distance
+        except (TypeError, ValueError, IndexError):
+            self._card_hide_pending = False
+            self._schedule_screenshot_hide()
+            return
+        if cosine >= math.cos(math.radians(CARD_IN_VIEW_DEGREES)):
+            self._card_hide_pending = False
+            self._schedule_screenshot_hide()
+
+    def _hide_screenshot_labels(self) -> None:
+        self._screenshot_result_visible = False
+        self._card_hide_pending = False
+        self._card_world_position = None
+        sheet = getattr(self, "_vr_label_sheet", None)
+        if sheet is not None:
+            sheet.hide()
+        overlay = getattr(self, "_desktop_inplace_overlay", None)
+        if overlay is not None:
+            overlay.clear()
+
+    # ------------------------------------------------- region selection
+    def _expected_frame_size(self) -> tuple[int, int]:
+        backend = getattr(self, "_vr_overlay_backend", None)
+        module = getattr(backend, "openvr_module", None) if backend is not None else None
+        if module is not None and self._vr_available():
+            try:
+                from src.core.vr_eye_capture import eye_frame_size
+
+                size = eye_frame_size(module)
+                if size:
+                    return size
+            except Exception:
+                logger.debug("Could not read the eye frame size", exc_info=True)
+        try:
+            from src.core.screen_capture import vrchat_frame_size
+
+            return vrchat_frame_size()
+        except Exception:
+            logger.debug("Could not size the selection frame", exc_info=True)
+            return (1920, 1080)
+
+    def _begin_selection(self) -> bool:
+        frame = self._ensure_vr_selection_frame()
+        if frame is None:
+            return False
+        try:
+            from src.core.in_place_layout import pointer_box
+            from src.ui_qt.in_place_painter import render_selection_frame_image
+
+            # The box starts in the middle and jumps to the laser on its
+            # first move over the frame.
+            self._selection_hover_box = pointer_box((0.5, 0.5))
+            image = render_selection_frame_image(
+                self._expected_frame_size(),
+                None,
+                hint=self._t("screenshot_frame_hint"),
+                box=self._selection_hover_box,
+            )
+            vr_input = getattr(self, "_vr_input", None)
+            shown = frame.show(
+                image,
+                image.width(),
+                image.height(),
+                None,
+                depth=SELECTION_FRAME_DEPTH_METERS,
+                fov_scale=self._screenshot_fov_scale(),
+                # Only a trigger that is actually held needs its release
+                # swallowed; a frame opened by a hotkey or OSC starts clean.
+                button_held=bool(getattr(vr_input, "trigger_down", False)),
+            )
+        except Exception:
+            logger.debug("Failed to show the selection frame", exc_info=True)
+            return False
+        if not shown:
+            return False
+        self._selection_active = True
+        self._selection_last_push = 0.0
+        timer = getattr(self, "_selection_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._cancel_selection)
+            self._selection_timer = timer
+        timer.start(SELECTION_TIMEOUT_MS)
+        self._set_bottom(self._t("screenshot_frame_hint"))
+        return True
+
+    def _end_selection(self) -> None:
+        self._selection_active = False
+        timer = getattr(self, "_selection_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        frame = getattr(self, "_vr_selection_frame", None)
+        if frame is not None:
+            frame.hide()
+
+    def _cancel_selection(self) -> None:
+        if getattr(self, "_selection_active", False):
+            self._end_selection()
+
+    def _on_selection_drag(self, start, end) -> None:
+        now = time.monotonic()
+        if now - float(getattr(self, "_selection_last_push", 0.0)) < SELECTION_PUSH_INTERVAL_S:
+            return
+        self._selection_last_push = now
+        frame = getattr(self, "_vr_selection_frame", None)
+        if frame is None:
+            return
+        timer = getattr(self, "_selection_timer", None)
+        if timer is not None:
+            timer.start(SELECTION_TIMEOUT_MS)
+        try:
+            from src.core.in_place_layout import frame_region_from_uv
+            from src.ui_qt.in_place_painter import render_selection_frame_image
+
+            region = frame_region_from_uv(start, end)
+            image = render_selection_frame_image(self._expected_frame_size(), region, hint="")
+            frame.push(image, image.width(), image.height())
+        except Exception:
+            logger.debug("Failed to redraw the selection frame", exc_info=True)
+
+    def _on_selection_hover(self, point) -> None:
+        """The laser moved over the frame: draw the box a click would read."""
+
+        now = time.monotonic()
+        if now - float(getattr(self, "_selection_last_push", 0.0)) < SELECTION_PUSH_INTERVAL_S:
+            return
+        self._selection_last_push = now
+        frame = getattr(self, "_vr_selection_frame", None)
+        if frame is None or not getattr(self, "_selection_active", False):
+            return
+        # Aiming is activity: the frame should not vanish under a player who
+        # is still lining the box up.
+        timer = getattr(self, "_selection_timer", None)
+        if timer is not None:
+            timer.start(SELECTION_TIMEOUT_MS)
+        try:
+            from src.core.in_place_layout import pointer_box
+            from src.ui_qt.in_place_painter import render_selection_frame_image
+
+            box = pointer_box(point)
+            self._selection_hover_box = box
+            image = render_selection_frame_image(self._expected_frame_size(), None, hint="", box=box)
+            frame.push(image, image.width(), image.height())
+        except Exception:
+            logger.debug("Failed to redraw the pointer box", exc_info=True)
+
+    def _on_selection_release(self, start, end) -> None:
+        """A drag reads the drawn rectangle; a click reads the box under the laser."""
+
+        from src.core.in_place_layout import frame_region_from_uv, pointer_box, region_is_a_click
+
+        region = frame_region_from_uv(start, end)
+        if region_is_a_click(region):
+            region = pointer_box(end)
+        self._end_selection()
+        self._run_screenshot_translation(region)
+
+    def _schedule_screenshot_hide(self, *, seconds: float | None = None) -> None:
+        timer = getattr(self, "_screenshot_hide_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._hide_screenshot_panel)
+            self._screenshot_hide_timer = timer
+        if seconds is None:
+            if self._vr_available():
+                try:
+                    seconds = float(
+                        self._screenshot_config().get("auto_hide_seconds", CARD_SECONDS_DEFAULT)
+                    )
+                except (TypeError, ValueError):
+                    seconds = CARD_SECONDS_DEFAULT
+                seconds = max(0.5, min(120.0, seconds))
+            else:
+                seconds = DESKTOP_LABELS_SECONDS
+        timer.start(int(max(0.5, float(seconds)) * 1000))
+
+    def _hide_screenshot_panel(self) -> None:
+        panel = getattr(self, "_vr_hand_panel", None)
+        if panel is not None:
+            panel.hide()
+        self._hide_screenshot_labels()
+
+    def _dismiss_screenshot_result_on_press(self) -> None:
+        """Any controller button puts a shown result away.
+
+        Not while the frame is open - those presses are the selection - and
+        only for a result, not for the progress toast it replaces.
+        """
+
+        if getattr(self, "_selection_active", False):
+            return
+        if not getattr(self, "_screenshot_result_visible", False):
+            return
+        timer = getattr(self, "_screenshot_hide_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._hide_screenshot_panel()
+
+    def trigger_screenshot_translation(self) -> None:
+        """Entry point for the controller button and the desktop hotkey.
+
+        In the headset a press opens the selection frame: a trigger drag on it
+        reads that region, a second press reads the whole view. On the desktop
+        there is no laser, so a press reads the whole view at once.
+        """
+
+        if getattr(self, "_selection_active", False):
+            self._end_selection()
+            self._run_screenshot_translation(None)
+            return
+        if (
+            self._vr_available()
+            and self._screenshot_selection_mode()
+            and self._begin_selection()
+        ):
+            return
+        self._run_screenshot_translation(None)
+
+    def _run_screenshot_translation(self, region) -> None:
+        translator = self._ensure_screenshot_translator()
+        if translator is None:
+            self._set_bottom(self._t("screenshot_error_failed"), "warning")
+            return
+        # Whatever the last press produced goes away when the next one starts.
+        self._hide_screenshot_labels()
+        if not self._vr_available():
+            self._trigger_screenshot_read(translator, region)
+            return
+        # The compositor's picture includes our overlays and the dashboard.
+        # Take ours down, then give the compositor a few frames to drop them
+        # - and if the player pressed this from the SteamVR menu, wait for
+        # them to close it so the menu is not what gets read.
+        self._prepare_vr_capture()
+        self._pending_screenshot = (translator, region, time.monotonic())
+        QTimer.singleShot(VR_CAPTURE_SETTLE_MS, self._start_pending_screenshot)
+
+    def _start_pending_screenshot(self) -> None:
+        pending = getattr(self, "_pending_screenshot", None)
+        if pending is None:
+            return
+        translator, region, since = pending
+        backend = getattr(self, "_vr_overlay_backend", None)
+        visible_check = getattr(backend, "dashboard_visible", None) if backend is not None else None
+        dashboard_up = bool(callable(visible_check) and visible_check())
+        if dashboard_up and time.monotonic() - since < VR_CAPTURE_DASHBOARD_WAIT_S:
+            if not getattr(self, "_dashboard_wait_noted", False):
+                self._dashboard_wait_noted = True
+                self._set_bottom(self._t("screenshot_close_menu_hint"))
+            QTimer.singleShot(VR_CAPTURE_SETTLE_MS, self._start_pending_screenshot)
+            return
+        self._pending_screenshot = None
+        self._dashboard_wait_noted = False
+        # The capture happens inside the trigger, on this thread, so once it
+        # returns the picture has been taken (or the read was queued).
+        try:
+            self._trigger_screenshot_read(translator, region)
+        finally:
+            self._resume_vr_overlays_after_capture()
+
+    def _trigger_screenshot_read(self, translator, region) -> None:
+        """Start a read, or queue the box if the runner is still busy.
+
+        A box drawn while the previous read was still translating used to
+        be dropped without a word, and the earlier read's picture then came
+        up for a box the player never drew - "it shows the last picture".
+        The newest box waits and is read the moment the runner is free.
+        """
+
+        if translator.trigger(region):
+            self._queued_screenshot_region = None
+            return
+        self._queued_screenshot_region = (region,)
+        logger.info("Screenshot: a read is still running; the new box is queued behind it")
+
+    def _ensure_vr_input(self):
+        vr_input = getattr(self, "_vr_input", None)
+        if vr_input is not None:
+            return vr_input
+        try:
+            from src.core.vr_input import VRActionInput
+        except Exception:
+            logger.debug("VR action input unavailable", exc_info=True)
+            return None
+        vr_input = VRActionInput(on_translate=self.trigger_screenshot_translation)
+        if not vr_input.start():
+            logger.info(
+                "Controller binding unavailable: %s", vr_input.unavailable_reason
+            )
+            return None
+        self._vr_input = vr_input
+        return vr_input
+
+    def _shutdown_screenshot_translation(self) -> None:
+        client = getattr(self, "_screenshot_translator_client_instance", None)
+        self._screenshot_translator_client_instance = None
+        if client is not None:
+            _close_provider_quietly(client, label="screenshot translator")
+        timer = getattr(self, "_screenshot_hide_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        vr_input = getattr(self, "_vr_input", None)
+        self._vr_input = None
+        if vr_input is not None:
+            try:
+                vr_input.stop()
+            except Exception:
+                logger.debug("Failed to stop VR action input", exc_info=True)
+        panel = getattr(self, "_vr_hand_panel", None)
+        self._vr_hand_panel = None
+        if panel is not None:
+            try:
+                panel.stop()
+            except Exception:
+                logger.debug("Failed to stop the screenshot panel", exc_info=True)
+        self._cancel_selection()
+        for attr in ("_vr_label_sheet", "_vr_selection_frame"):
+            overlay = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if overlay is not None:
+                try:
+                    overlay.stop()
+                except Exception:
+                    logger.debug("Failed to stop %s", attr, exc_info=True)
+        desktop = getattr(self, "_desktop_inplace_overlay", None)
+        self._desktop_inplace_overlay = None
+        if desktop is not None:
+            try:
+                desktop.clear()
+                desktop.deleteLater()
+            except Exception:
+                logger.debug("Failed to release the desktop label overlay", exc_info=True)
+
+    def _refresh_overlay_backend(self) -> None:
+        """Route captions to the surfaces the player switched on.
+
+        The PC desktop window and the headset panel are independent: either,
+        both or neither may be on. The headset shares one SteamVR connection
+        and one poll timer with the screenshot button, so that runtime stays up
+        while either of those is wanted and goes away only when both are off.
+        """
+
+        desktop = self._desktop_overlay_surface()
+        if not self._vr_runtime_needed():
+            self._shutdown_vr_overlay()
+            service = getattr(self, "_overlay_service", None)
+            if service is not None:
+                service.set_backend(desktop, backend_name="desktop")
+                service.set_enabled(self._overlay_output_enabled(), reveal=False)
+            return
+
+        # The screenshot feature can be on while no subtitle surface exists;
+        # the service must exist either way.
+        service = self._ensure_overlay_service(create_backend=False)
+
+        backend = self._ensure_vr_overlay_backend()
+        if backend is None or not backend.start():
+            service.set_backend(desktop, backend_name="desktop")
+            self._stop_vr_overlay_timer()
+            self._stop_vr_dashboard()
+            self._stop_vr_wrist_panel()
+            service.set_enabled(self._overlay_output_enabled(), reveal=False)
+            self._sync_settings_window_vr_overlay_state()
+            self._schedule_vr_runtime_retry(backend)
+            return
+        self._stop_vr_runtime_retry()
+
+        if self._vr_overlay_enabled():
+            self._apply_vr_overlay_settings()
+            if desktop is not None:
+                from src.core.overlay_service import CompositeOverlayBackend
+
+                service.set_backend(
+                    CompositeOverlayBackend(desktop, backend),
+                    backend_name="desktop+steamvr",
+                )
+            else:
+                service.set_backend(backend, backend_name="steamvr")
+        else:
+            # Runtime stays up for the screenshot button; the subtitle panel
+            # itself must not appear.
+            backend.hide()
+            service.set_backend(desktop, backend_name="desktop")
+
+        service.set_enabled(self._overlay_output_enabled(), reveal=False)
+        self._sync_vr_dashboard()
+        self._sync_vr_wrist_panel()
+        self._apply_steamvr_autolaunch()
+        self._start_vr_overlay_timer()
+        if not self._screenshot_enabled():
+            self._shutdown_screenshot_translation()
+        self._sync_settings_window_vr_overlay_state()
+
+    def _apply_vr_overlay_settings(self) -> None:
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if backend is None:
+            return
+        vr_cfg = self._vr_overlay_config()
+        backend.set_width_meters(vr_cfg.get("width_meters", 1.6))
+        backend.set_position(tuple(vr_cfg.get("position", (0.0, -0.32, -1.5))))
+        setter = getattr(backend, "set_locked", None)
+        if callable(setter):
+            setter(bool(vr_cfg.get("locked", False)))
+        panel = getattr(backend, "_panel", None)
+        setter = getattr(panel, "set_plate_opacity", None)
+        if callable(setter):
+            setter(vr_cfg.get("plate_opacity", 0.30))
+            pusher = getattr(backend, "_push_panel", None)
+            if callable(pusher):
+                pusher()
+
+    def _retheme_vr_panels(self) -> None:
+        """Re-paint the headset panels after the app theme changes."""
+
+        theme = self._main_theme
+        backend = getattr(self, "_vr_overlay_backend", None)
+        panel = getattr(backend, "_panel", None) if backend is not None else None
+        if panel is not None and hasattr(panel, "set_theme"):
+            try:
+                panel.set_theme(theme)
+                pusher = getattr(backend, "_push_panel", None)
+                if callable(pusher):
+                    pusher()
+            except Exception:
+                logger.debug("Failed to re-theme the VR subtitle panel", exc_info=True)
+        hand = getattr(self, "_vr_hand_panel", None)
+        hand_panel = getattr(hand, "panel", None) if hand is not None else None
+        if hand_panel is not None and hasattr(hand_panel, "set_theme"):
+            try:
+                hand_panel.set_theme(theme)
+                if getattr(hand, "visible", False):
+                    hand.push()
+            except Exception:
+                logger.debug("Failed to re-theme the screenshot panel", exc_info=True)
+        dashboard = getattr(self, "_vr_dashboard", None)
+        dash_panel = getattr(dashboard, "panel", None) if dashboard is not None else None
+        if dash_panel is not None and hasattr(dash_panel, "set_language"):
+            try:
+                dash_panel.set_language(str(getattr(self, "_ui_lang", "") or "zh-CN"))
+                dashboard.push()
+            except Exception:
+                logger.debug("Failed to re-language the dashboard panel", exc_info=True)
+
+    def _sync_settings_window_vr_overlay_state(self) -> None:
+        win = getattr(self, "_settings_window", None)
+        syncer = getattr(win, "sync_vr_overlay_state", None) if win else None
+        if not callable(syncer):
+            return
+        backend = getattr(self, "_vr_overlay_backend", None)
+        try:
+            syncer(
+                available=bool(backend is not None and backend.available),
+                reason=str(backend.unavailable_reason) if backend else "",
+            )
+        except Exception:
+            logger.debug("Failed to sync VR overlay state to settings", exc_info=True)
+        binding_syncer = getattr(win, "sync_screenshot_binding_state", None)
+        if callable(binding_syncer):
+            vr_input = getattr(self, "_vr_input", None)
+            bound = None
+            if backend is not None and getattr(backend, "available", False) and vr_input is not None:
+                bound = bool(getattr(vr_input, "active", False))
+            try:
+                binding_syncer(bound=bound)
+            except Exception:
+                logger.debug("Failed to sync binding state to settings", exc_info=True)
+
+    def on_vr_overlay_settings_changed(self) -> None:
+        """Called by the settings page when a VR overlay control changes."""
+
+        self._refresh_overlay_backend()
+        self._apply_vr_overlay_settings()
+        # Show the panel right away so the player can size and place it
+        # before any line arrives; the desktop window is left alone.
+        backend = getattr(self, "_vr_overlay_backend", None)
+        if self._vr_overlay_enabled() and backend is not None and getattr(backend, "available", False):
+            try:
+                backend.reveal()
+            except Exception:
+                logger.debug("Failed to reveal the VR subtitle panel", exc_info=True)
+        self._schedule_config_save()
+
     def _ensure_overlay_service(self, *, create_backend: bool = True) -> OverlayService:
         service = getattr(self, "_overlay_service", None)
         if service is None:
-            backend = self._ensure_floating_window() if create_backend else getattr(self, "_floating_window", None)
-            service = OverlayService(backend, backend_name="desktop")
+            service = OverlayService(getattr(self, "_floating_window", None), backend_name="desktop")
             try:
                 service.setParent(self)
             except Exception:
@@ -3665,9 +5637,15 @@ class MainWindow(QMainWindow):
             service.error.connect(self._on_overlay_service_error)
             self._overlay_service = service
             self._ensure_output_dispatcher().register_sink("overlay", service.show_message)
-        elif create_backend and getattr(self, "_floating_window", None) is None:
-            service.set_backend(self._ensure_floating_window(), backend_name="desktop")
-        service.set_enabled(bool(self._listen_overlay_enabled), reveal=False)
+        if (
+            create_backend
+            and bool(getattr(self, "_listen_overlay_enabled", False))
+            and getattr(self, "_floating_window", None) is None
+        ):
+            # First caption with the desktop switch on: build the window and
+            # let the router decide whether the headset joins it.
+            self._refresh_overlay_backend()
+        service.set_enabled(self._overlay_output_enabled(), reveal=False)
         return service
 
     def _on_overlay_service_error(self, message: str) -> None:
@@ -4211,10 +6189,11 @@ class MainWindow(QMainWindow):
         self._desktop_capture_enabled = bool(vrc_cfg.get("enabled", False))
         self._listen_overlay_enabled = bool(vrc_cfg.get("show_overlay", False))
         if self._listen_overlay_enabled or getattr(self, "_overlay_service", None) is not None:
-            self._ensure_overlay_service(create_backend=self._listen_overlay_enabled).set_enabled(
-                self._listen_overlay_enabled,
+            self._ensure_overlay_service(create_backend=False).set_enabled(
+                self._overlay_output_enabled(),
                 reveal=False,
             )
+            self._desktop_overlay_surface(create=False)
         self._sync_avatar_overlay_state(force=True)
         self._sync_tts_enabled_from_config()
         self._refresh_mode_buttons()
@@ -4749,6 +6728,9 @@ class MainWindow(QMainWindow):
                 self._raise_if_cancelled(session_id, cancel_event)
                 self._asr = mic_asr
                 self._listen_asr = listen_asr
+                self._attach_asr_link_events(mic_asr)
+                if listen_asr is not mic_asr:
+                    self._attach_asr_link_events(listen_asr)
                 installed = True
                 self._refresh_asr_transcribe_locks()
                 self._set_microphone_asr_capture_enabled(
@@ -6718,7 +8700,7 @@ class MainWindow(QMainWindow):
         if task.source == MIC_SOURCE:
             self._call_in_ui(
                 lambda sid=task.session_id: (
-                    self._set_runtime_status("status_translating", "accent")
+                    self._set_runtime_status("status_recognizing", "accent")
                     if self._realtime_session_active(sid)
                     else None
                 )
@@ -7649,15 +9631,16 @@ class MainWindow(QMainWindow):
             if completion.asr_error is not None:
                 asr_error = completion.asr_error
                 credential_error = isinstance(asr_error, ASRMissingAPIKeyError)
-                message_key = (
-                    "asr_credential_failure"
-                    if credential_error
-                    else (
-                        "asr_queue_expired"
-                        if bool(getattr(completion, "stale_asr", False))
-                        else "asr_temporary_failure"
-                    )
-                )
+                if credential_error:
+                    message_key = "asr_credential_failure"
+                elif bool(getattr(completion, "stale_asr", False)):
+                    message_key = "asr_queue_expired"
+                elif isinstance(asr_error, ASRNetworkError):
+                    # Say what happened: a player watching "translating" for
+                    # seconds and then nothing asked for the word "timeout".
+                    message_key = "asr_network_timeout"
+                else:
+                    message_key = "asr_temporary_failure"
                 message = self._copy(message_key)
                 logger.warning(
                     "Realtime ASR terminal failure source=%s sequence=%d error_type=%s "
@@ -7835,7 +9818,7 @@ class MainWindow(QMainWindow):
         if not self._realtime_session_active(session_id):
             return
         if source == MIC_SOURCE:
-            self._restore_runtime_status("status_speaking", "status_translating")
+            self._restore_runtime_status("status_speaking", "status_recognizing", "status_translating")
         else:
             self._restore_floating_window_waiting_if_idle()
 
@@ -7881,6 +9864,53 @@ class MainWindow(QMainWindow):
         if source == DESKTOP_SOURCE and listen_asr is not None:
             return listen_asr
         return getattr(self, "_asr", None)
+
+    # ------------------------------------------------- ASR link events
+    def _attach_asr_link_events(self, provider) -> None:
+        """Hear about network trouble from the recognizer, on whatever thread it happens."""
+
+        if provider is None:
+            return
+        if hasattr(provider, "on_switch"):
+            try:
+                provider.on_switch = self._on_asr_fallback_switch
+            except Exception:
+                logger.debug("Could not attach the fallback switch listener", exc_info=True)
+        edge = provider
+        primary = getattr(provider, "primary", None)
+        if primary is not None and hasattr(primary, "on_event"):
+            edge = primary
+        if hasattr(edge, "on_event"):
+            try:
+                edge.on_event = self._on_asr_link_event
+            except Exception:
+                logger.debug("Could not attach the link event listener", exc_info=True)
+
+    def _on_asr_link_event(self, kind: str, details) -> None:
+        kind = str(kind or "")
+        if kind == "reconnecting":
+            logger.info("Speech recognition link: reconnecting (%s)", dict(details or {}).get("reason", ""))
+            self._call_in_ui(
+                lambda: self._set_bottom(self._copy("asr_reconnecting"), "warning", key="asr_reconnecting")
+            )
+        elif kind == "recovered":
+            self._call_in_ui(self._clear_asr_link_notice)
+
+    def _clear_asr_link_notice(self) -> None:
+        if getattr(self, "_bottom_key", None) == "asr_reconnecting":
+            self._set_bottom("", key="")
+
+    def _on_asr_fallback_switch(self, mode: str, reason: str) -> None:
+        if mode == "fallback":
+            logger.warning("Speech recognition moved to the local fallback: %s", reason)
+            self._call_in_ui(
+                lambda: self._set_bottom(self._copy("asr_fallback_local"), "warning", key="asr_fallback_local")
+            )
+        elif mode == "primary":
+            logger.info("Speech recognition is back on the online provider")
+            self._call_in_ui(
+                lambda: self._set_bottom(self._copy("asr_primary_back"), "success", key="asr_primary_back")
+            )
 
     def _asr_streaming_settings(self) -> dict[str, int | float]:
         """Return defensive, runtime-safe partial-ASR cadence settings."""
@@ -8176,7 +10206,7 @@ class MainWindow(QMainWindow):
             return
         try:
             if source == MIC_SOURCE:
-                self._call_in_ui(lambda: self._set_runtime_status("status_translating", "accent"))
+                self._call_in_ui(lambda: self._set_runtime_status("status_recognizing", "accent"))
             elif source == DESKTOP_SOURCE:
                 self._call_in_ui(lambda: self._set_floating_listen_status(True))
             text = self._transcribe_for_source(source, audio, asr_lang, is_final=True)
@@ -8267,7 +10297,7 @@ class MainWindow(QMainWindow):
             if source == MIC_SOURCE:
                 self._mic_in_speech = False
                 self._call_in_ui(
-                    lambda: self._restore_runtime_status("status_speaking", "status_translating")
+                    lambda: self._restore_runtime_status("status_speaking", "status_recognizing", "status_translating")
                 )
             elif source == DESKTOP_SOURCE:
                 self._call_in_ui(self._restore_floating_window_waiting_if_idle)
@@ -8716,7 +10746,10 @@ class MainWindow(QMainWindow):
         # socket. Treat either inbound feature as enabling the listener so an
         # otherwise contradictory settings combination cannot silently break
         # synchronization.
-        if not (listener_enabled or sync_mute_self or allow_avatar_control):
+        # Screenshot labels in the headset need VRChat's world-space head
+        # pose, which only arrives over the listener.
+        tracking_wanted = self._vr_runtime_needed() and self._screenshot_enabled()
+        if not (listener_enabled or sync_mute_self or allow_avatar_control or tracking_wanted):
             service.stop_listener()
             return
         try:
@@ -8741,6 +10774,7 @@ class MainWindow(QMainWindow):
             "listen": f"{prefix}ToggleListen",
             "tts": f"{prefix}ToggleTts",
             "overlay": f"{prefix}ToggleOverlay",
+            "screenshot": f"{prefix}Screenshot",
         }
         return {key: str(params.get(key, value) or value).strip() for key, value in defaults.items()}
 
@@ -8776,6 +10810,10 @@ class MainWindow(QMainWindow):
         elif param_name == controls.get("overlay"):
             if desired != bool(self._listen_overlay_enabled):
                 self._set_listen_overlay_enabled(desired, persist=True)
+        elif param_name == controls.get("screenshot"):
+            # A momentary avatar button: act on the press, ignore the release.
+            if desired:
+                self.trigger_screenshot_translation()
 
     def _set_tts_enabled_from_avatar(self, enabled: bool) -> None:
         tts_cfg = self._tts_config()
@@ -10072,9 +12110,11 @@ class MainWindow(QMainWindow):
         hotkeys = (
             getattr(self, "_text_input_hotkey", None),
             getattr(self, "_mic_mute_hotkey", None),
+            getattr(self, "_screenshot_hotkey", None),
         )
         self._text_input_hotkey = None
         self._mic_mute_hotkey = None
+        self._screenshot_hotkey = None
         for hk in hotkeys:
             if hk:
                 try:
@@ -10113,6 +12153,22 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("Failed to register text input hotkey: %s", e)
 
+        from src.utils.global_hotkey import DEFAULT_SCREENSHOT_HOTKEY
+
+        hotkey_cfg.setdefault("screenshot_translate", DEFAULT_SCREENSHOT_HOTKEY)
+        screenshot_hotkey = str(hotkey_cfg.get("screenshot_translate", "") or "").strip()
+        if screenshot_hotkey:
+            try:
+                self._screenshot_hotkey = GlobalHotkey(
+                    screenshot_hotkey,
+                    lambda: self._call_in_ui(self.trigger_screenshot_translation),
+                    name="screenshot-translate",
+                    hotkey_id=3,
+                )
+                self._screenshot_hotkey.start(wait_for_ready=False)
+            except Exception as e:
+                logger.warning("Failed to register screenshot hotkey: %s", e)
+
     def _on_config_saved(self) -> None:
         was_running = self._running
         startup_thread = getattr(self, "_startup_thread", None)
@@ -10146,7 +12202,7 @@ class MainWindow(QMainWindow):
         )
         overlay_service = getattr(self, "_overlay_service", None)
         if overlay_service is not None:
-            overlay_service.set_enabled(self._listen_overlay_enabled, reveal=False)
+            overlay_service.set_enabled(self._overlay_output_enabled(), reveal=False)
         self._mode_manager = ModeManager(self._config)
         mode_change = self._mode_manager.apply_current_mode()
         self._sync_tts_enabled_from_config()
@@ -10162,6 +12218,7 @@ class MainWindow(QMainWindow):
         self._close_osc_sender()
         self._apply_osc_listener_config()
         self._reload_theme_style()
+        self._retheme_vr_panels()
         if self._text_input_window is not None:
             try:
                 self._text_input_window.refresh_theme()

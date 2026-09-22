@@ -32,6 +32,7 @@ from src.utils.ui_language_detection import bootstrap_ui_language
 from src.utils.locale_detect import select_default_asr_engine
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.global_hotkey import (
+    DEFAULT_SCREENSHOT_HOTKEY,
     DEFAULT_MIC_MUTE_HOTKEY,
     DEFAULT_TEXT_INPUT_HOTKEY,
     HotkeyError,
@@ -112,6 +113,89 @@ _DEFAULT_LISTEN_TAIL_SILENCE_S = 0.80
 # not paused, so a low cap chops long sentences apart regardless of the
 # silence threshold.
 _DEFAULT_LISTEN_SEGMENT_DURATION_S = 5.0
+# The headset panel: a metre-ish wide, slightly below the eye line, and a
+# plate faint enough to see the world through while its text stays opaque.
+_DEFAULT_VR_WIDTH_METERS = 1.6
+_DEFAULT_VR_PLATE_OPACITY = 0.50
+_DEFAULT_VR_POSITION = [0.0, -0.32, -1.5]
+# Screenshot translation: a controller button captures the view, Windows
+# reads it, and the result lands on the other hand. Off by default because it
+# binds a physical button the player may already use for something else.
+_SCREENSHOT_DEFAULTS = {
+    "enabled": False,
+    "hand": "left",
+    "prefer_vrchat_window": True,
+    # Run the bundled OCR on the GPU through DirectML when the runtime has
+    # it; off means the CPU, which is slower but never surprises a driver.
+    "ocr_gpu": True,
+    # How long the translation card stays in the headset. The player wanted it
+    # brief, with any button putting it away sooner; desktop labels keep their
+    # own longer stay, since a keyboard has no such button.
+    "auto_hide_seconds": 1.5,
+    # Where the result goes: a card in the view showing the read picture with
+    # its translations ("card") or the hand panel ("hand"). The former
+    # "in_place" value (labels pinned over the world) migrates to the card:
+    # a flat sheet at one depth parts from the text as soon as the head
+    # moves, and the player gave it up.
+    "placement": "card",
+    # Press opens a frame to drag a region on; off means one press reads all.
+    "selection_mode": True,
+    # How far in front of the eyes the card floats; the mirror scale is a
+    # legacy trim for the in-place mode.
+    "depth_meters": 1.5,
+    "mirror_fov_scale": 1.0,
+}
+
+_VR_OVERLAY_DEFAULTS = {
+    "enabled": False,
+    "width_meters": _DEFAULT_VR_WIDTH_METERS,
+    "plate_opacity": _DEFAULT_VR_PLATE_OPACITY,
+    "position": list(_DEFAULT_VR_POSITION),
+    # A locked panel cannot be dragged, on purpose or by accident.
+    "locked": False,
+}
+
+# The Mio tab in the SteamVR dashboard. On by default: it costs nothing when
+# SteamVR is not running and is the safe way to reach Mio with a headset on.
+_VR_DASHBOARD_DEFAULTS = {
+    "enabled": True,
+}
+
+# The same controls on the back of a hand, shown by raising it. On by
+# default: it is invisible until the gesture and never takes the controllers.
+_VR_WRIST_DEFAULTS = {
+    "enabled": True,
+    "hand": "left",
+}
+
+# The status line in the headset's corner and the controller-at-the-ear
+# gesture: both on by default, both harmless when SteamVR is not running.
+_VR_GESTURE_DEFAULTS = {
+    "enabled": True,
+}
+
+
+def _normalize_vr_position(value: object) -> list[float]:
+    """Keep a saved panel position inside arm's reach and out of the face."""
+
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return list(_DEFAULT_VR_POSITION)
+    try:
+        x, y, z = (float(component) for component in value)
+    except (TypeError, ValueError):
+        return list(_DEFAULT_VR_POSITION)
+    if any(component != component for component in (x, y, z)):
+        return list(_DEFAULT_VR_POSITION)
+    if abs(x) < 1e-6 and abs(z) < 1e-6:
+        return [0.0, max(-2.0, min(2.0, y)), -1.5]
+    # The panel lives on a cylinder around the head and may sit beside or
+    # behind the player; only the distance and the height are bounded.
+    from src.core.vr_geometry import snap_to_sphere
+
+    snapped = snap_to_sphere((x, y, z))
+    if all(abs(a - b) < 1e-6 for a, b in zip(snapped, (x, y, z))):
+        return [x, y, z]
+    return [float(component) for component in snapped]
 _LISTEN_LATENCY_PROFILE_VERSION = 2
 # Public aliases: the UI layer needs the same fallbacks this module
 # writes, otherwise a missing key silently restores the old timing.
@@ -823,6 +907,124 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "fallback_to_device_loopback": True,
     }
 
+    # Subtitles inside the headset. Off by default: it needs SteamVR running,
+    # and a player without a headset should never pay for the attempt.
+    vr_cfg = vrc_cfg.get("vr_overlay")
+    if not isinstance(vr_cfg, dict):
+        vr_cfg = {}
+        vrc_cfg["vr_overlay"] = vr_cfg
+        changed = True
+    for key, value in _VR_OVERLAY_DEFAULTS.items():
+        if key not in vr_cfg:
+            vr_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(vr_cfg, "enabled", False):
+        changed = True
+    if _coerce_bool_config(vr_cfg, "locked", False):
+        changed = True
+    if _coerce_float_range_config(
+        vr_cfg, "width_meters", _DEFAULT_VR_WIDTH_METERS, 0.3, 4.0
+    ):
+        changed = True
+    if _coerce_float_range_config(
+        vr_cfg, "plate_opacity", _DEFAULT_VR_PLATE_OPACITY, 0.0, 0.95
+    ):
+        changed = True
+    position = vr_cfg.get("position")
+    normalized_position = _normalize_vr_position(position)
+    if position != normalized_position:
+        vr_cfg["position"] = normalized_position
+        changed = True
+
+    dash_cfg = vrc_cfg.get("vr_dashboard")
+    if not isinstance(dash_cfg, dict):
+        dash_cfg = {}
+        vrc_cfg["vr_dashboard"] = dash_cfg
+        changed = True
+    for key, value in _VR_DASHBOARD_DEFAULTS.items():
+        if key not in dash_cfg:
+            dash_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(dash_cfg, "enabled", True):
+        changed = True
+
+    wrist_cfg = vrc_cfg.get("vr_wrist")
+    if not isinstance(wrist_cfg, dict):
+        wrist_cfg = {}
+        vrc_cfg["vr_wrist"] = wrist_cfg
+        changed = True
+    for key, value in _VR_WRIST_DEFAULTS.items():
+        if key not in wrist_cfg:
+            wrist_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(wrist_cfg, "enabled", True):
+        changed = True
+    wrist_hand = str(wrist_cfg.get("hand", "left") or "left").strip().lower()
+    if wrist_hand not in {"left", "right"}:
+        wrist_hand = "left"
+    if wrist_cfg.get("hand") != wrist_hand:
+        wrist_cfg["hand"] = wrist_hand
+        changed = True
+
+    # The headset status line was removed; a saved config that still
+    # carries its section loses it rather than keeping a dead switch.
+    if vrc_cfg.pop("vr_status", None) is not None:
+        changed = True
+    for section, section_defaults in (("vr_gesture", _VR_GESTURE_DEFAULTS),):
+        section_cfg = vrc_cfg.get(section)
+        if not isinstance(section_cfg, dict):
+            section_cfg = {}
+            vrc_cfg[section] = section_cfg
+            changed = True
+        for key, value in section_defaults.items():
+            if key not in section_cfg:
+                section_cfg[key] = value
+                changed = True
+        if _coerce_bool_config(section_cfg, "enabled", True):
+            changed = True
+    # SteamVR launching Mio is opt-in: off unless the player asked.
+    if "steamvr_autolaunch" not in vrc_cfg:
+        vrc_cfg["steamvr_autolaunch"] = False
+        changed = True
+    if _coerce_bool_config(vrc_cfg, "steamvr_autolaunch", False):
+        changed = True
+
+    shot_cfg = vrc_cfg.get("screenshot_translation")
+    if not isinstance(shot_cfg, dict):
+        shot_cfg = {}
+        vrc_cfg["screenshot_translation"] = shot_cfg
+        changed = True
+    for key, value in _SCREENSHOT_DEFAULTS.items():
+        if key not in shot_cfg:
+            shot_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(shot_cfg, "enabled", False):
+        changed = True
+    if _coerce_bool_config(shot_cfg, "prefer_vrchat_window", True):
+        changed = True
+    if _coerce_bool_config(shot_cfg, "ocr_gpu", True):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "auto_hide_seconds", 1.5, 0.5, 120.0):
+        changed = True
+    hand = str(shot_cfg.get("hand", "left") or "left").strip().lower()
+    if hand not in {"left", "right"}:
+        hand = "left"
+    if shot_cfg.get("hand") != hand:
+        shot_cfg["hand"] = hand
+        changed = True
+    placement = str(shot_cfg.get("placement", "card") or "card").strip().lower()
+    if placement not in {"card", "hand"}:
+        placement = "card"
+    if shot_cfg.get("placement") != placement:
+        shot_cfg["placement"] = placement
+        changed = True
+    if _coerce_bool_config(shot_cfg, "selection_mode", True):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "depth_meters", 1.5, 0.8, 5.0):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "mirror_fov_scale", 1.0, 0.5, 1.6):
+        changed = True
+
     for key, value in defaults.items():
         if key not in vrc_cfg:
             vrc_cfg[key] = value
@@ -1356,6 +1558,31 @@ def _ensure_qwen_translation_backend_config(
         default_region=default_region,
         prefer_auto_backend=prefer_auto_backend,
     )
+
+
+def _ensure_screenshot_hotkey_config(config: dict) -> bool:
+    """The desktop hotkey for screenshot translation; empty means off."""
+
+    hotkey_cfg = config.get("hotkeys")
+    if not isinstance(hotkey_cfg, dict):
+        return False
+    if "screenshot_translate" not in hotkey_cfg:
+        hotkey_cfg["screenshot_translate"] = DEFAULT_SCREENSHOT_HOTKEY
+        return True
+    raw = str(hotkey_cfg.get("screenshot_translate", "") or "").strip()
+    if not raw:
+        if hotkey_cfg.get("screenshot_translate") != "":
+            hotkey_cfg["screenshot_translate"] = ""
+            return True
+        return False
+    try:
+        normalized = normalize_hotkey(raw)
+    except Exception:
+        normalized = DEFAULT_SCREENSHOT_HOTKEY
+    if hotkey_cfg.get("screenshot_translate") != normalized:
+        hotkey_cfg["screenshot_translate"] = normalized
+        return True
+    return False
 
 
 def _ensure_hotkey_config(config: dict) -> bool:
@@ -1994,6 +2221,12 @@ def _ensure_asr_config(config: dict) -> bool:
         # the session on its own.
         "reuse_connection": True,
         "max_turns": 18,
+        # When the route to the service fails, recognition moves to the
+        # bundled local model and comes back once the service answers again.
+        "auto_fallback": True,
+        # Connect through the machine's proxy (browser settings) instead of
+        # directly; some players' direct route to the service is the bad one.
+        "use_system_proxy": False,
     }
     for key, value in edge_stt_defaults.items():
         if key not in edge_stt_cfg:
@@ -2523,6 +2756,8 @@ def load_config() -> dict:
         config_changed = True
     if _ensure_text_input_window_config(merged):
         config_changed = True
+    if _ensure_screenshot_hotkey_config(merged):
+        changed = True
     if _ensure_hotkey_config(merged):
         config_changed = True
     if _apply_startup_asr_default(merged):

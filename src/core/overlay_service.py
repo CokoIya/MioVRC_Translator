@@ -119,3 +119,44 @@ class OverlayService(QObject):
     def _emit_error(self, exc: Exception) -> None:
         logger.warning("Overlay backend failed: %s", exc, exc_info=True)
         self.error.emit(str(exc) or exc.__class__.__name__)
+
+
+class CompositeOverlayBackend:
+    """Fans subtitle output out to several overlays at once.
+
+    Turning the headset panel on is additive: a player in VR may still have the
+    desktop window open on a monitor for someone else in the room, and losing
+    it the moment VR is enabled reads as a bug. A failure in one backend must
+    not stop the others from showing the line.
+    """
+
+    def __init__(self, *backends: OverlayBackend) -> None:
+        self._backends = [backend for backend in backends if backend is not None]
+
+    @property
+    def backends(self) -> list[OverlayBackend]:
+        return list(self._backends)
+
+    def _each(self, action, label: str) -> list:
+        results = []
+        for backend in self._backends:
+            try:
+                results.append(action(backend))
+            except Exception:
+                logger.debug("Overlay backend %s failed", label, exc_info=True)
+        return results
+
+    def show_message(self, message: OutputMessage) -> bool | None:
+        shown = self._each(lambda backend: backend.show_message(message), "show_message")
+        return any(bool(result) for result in shown)
+
+    def set_listen_status(self, listening: bool) -> None:
+        self._each(
+            lambda backend: backend.set_listen_status(listening), "set_listen_status"
+        )
+
+    def reveal(self) -> None:
+        self._each(lambda backend: backend.reveal(), "reveal")
+
+    def hide(self) -> None:
+        self._each(lambda backend: backend.hide(), "hide")

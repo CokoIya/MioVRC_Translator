@@ -394,13 +394,59 @@ class FloatingWindow(QDialog):
             maximum = bar.maximum()
             if maximum <= 0:
                 return True
-            return bar.value() >= maximum - max(12, int(bar.pageStep() * 0.04))
+            # Generous on purpose: a reader who is within a row or two of
+            # the end is following the conversation, not studying history.
+            return bar.value() >= maximum - max(48, int(bar.pageStep() * 0.3))
         except Exception:
             return True
 
     def _schedule_scroll_to_bottom(self) -> None:
+        self._follow_latest = True
+        self._wire_scroll_follow()
         self._pending_scroll_timer.stop()
         self._pending_scroll_timer.start(16)
+
+    def _wire_scroll_follow(self) -> None:
+        if getattr(self, "_scroll_follow_wired", False):
+            return
+        self._scroll_follow_wired = True
+        try:
+            bar = self._scroll_area.verticalScrollBar()
+            bar.rangeChanged.connect(self._on_scroll_range_changed)
+            bar.valueChanged.connect(self._on_scroll_value_changed)
+        except Exception:
+            logger.debug("Could not watch the scroll bar", exc_info=True)
+
+    def _set_scroll_value(self, value: int) -> None:
+        bar = self._scroll_area.verticalScrollBar()
+        self._scrolling_programmatically = True
+        try:
+            bar.setValue(value)
+        finally:
+            self._scrolling_programmatically = False
+
+    def _on_scroll_range_changed(self, _minimum: int, maximum: int) -> None:
+        """Rows report their height a moment after they are added.
+
+        A scroll taken before that landed one row short, and the next
+        message then found the view "not at the bottom" and stopped
+        following - the player had to drag down to the newest line by hand.
+        While the reader is following, the range moving means the bottom
+        moved, so go there again.
+        """
+
+        if getattr(self, "_follow_latest", False):
+            try:
+                self._set_scroll_value(maximum)
+            except Exception:
+                logger.debug("Scroll follow failed", exc_info=True)
+
+    def _on_scroll_value_changed(self, _value: int) -> None:
+        """The reader moved the view themselves: follow only from the bottom."""
+
+        if getattr(self, "_scrolling_programmatically", False):
+            return
+        self._follow_latest = self._is_near_bottom()
 
     def _opacity_label_text(self) -> str:
         return tr(self._ui_lang, "text_input_opacity", pct=int(round(self._opacity * 100)))
@@ -647,6 +693,7 @@ class FloatingWindow(QDialog):
         self._layout_refresh_timer.stop()
         self._update_wraplengths()
         should_scroll = (not self._visible) or self._is_near_bottom()
+        self._follow_latest = should_scroll
         self._clear_history_widgets()
 
         if self._selected_entry() is None:
@@ -857,8 +904,7 @@ class FloatingWindow(QDialog):
         self._on_resend(self._entry_payload(entry), self._entry_source(entry))
 
     def _scroll_to_bottom(self) -> None:
-        bar = self._scroll_area.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        self._set_scroll_value(self._scroll_area.verticalScrollBar().maximum())
 
     def update_language(self, ui_language: str) -> None:
         self._ui_lang = normalize_ui_language(ui_language)
@@ -935,6 +981,8 @@ class FloatingWindow(QDialog):
         if not message:
             return
         should_scroll = (not self._visible) or self._is_near_bottom()
+        # A reader who scrolled up stops being followed until they return.
+        self._follow_latest = should_scroll
         evicted_id: int | None = None
         if len(self._history) == MAX_HISTORY and self._history:
             evicted_id = int(self._history[0].get("id", 0))

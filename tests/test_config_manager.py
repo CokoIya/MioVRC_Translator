@@ -2112,3 +2112,45 @@ class TestModelCatalogCurrency:
         config_manager._ensure_translation_config(config)
 
         assert config["translation"]["zhipu"]["model"] == "glm-private-relay-build"
+
+
+class TestVROverlayConfig:
+    def test_a_fresh_install_leaves_the_headset_panel_off(self):
+        """It needs SteamVR running; nobody should pay for an attempt."""
+
+        config: dict = {}
+        config_manager._ensure_vrc_listen_config(config, loaded={})
+        vr_cfg = config["vrc_listen"]["vr_overlay"]
+
+        assert vr_cfg["enabled"] is False
+        assert vr_cfg["width_meters"] == pytest.approx(1.6)
+        assert vr_cfg["plate_opacity"] == pytest.approx(0.50)
+        assert vr_cfg["position"] == [0.0, -0.32, -1.5]
+
+    def test_a_panel_saved_inside_the_players_face_is_pushed_back(self):
+        config = {"vrc_listen": {"vr_overlay": {"position": [0.0, 0.0, 0.0]}}}
+        config_manager._ensure_vrc_listen_config(config, loaded=config)
+
+        assert config["vrc_listen"]["vr_overlay"]["position"][2] <= -0.4
+
+    def test_a_corrupt_position_falls_back_rather_than_crashing(self):
+        config = {"vrc_listen": {"vr_overlay": {"position": "somewhere"}}}
+        config_manager._ensure_vrc_listen_config(config, loaded=config)
+
+        assert config["vrc_listen"]["vr_overlay"]["position"] == [0.0, -0.32, -1.5]
+
+    @pytest.mark.parametrize("key", ["width_meters", "plate_opacity"])
+    def test_out_of_range_values_are_repaired(self, key):
+        config = {"vrc_listen": {"vr_overlay": {key: 999.0}}}
+        config_manager._ensure_vrc_listen_config(config, loaded=config)
+
+        value = config["vrc_listen"]["vr_overlay"][key]
+        assert 0.0 <= value <= 4.0
+
+    def test_a_players_own_position_is_preserved(self):
+        """A drag in the headset must survive the next launch."""
+
+        config = {"vrc_listen": {"vr_overlay": {"position": [0.5, -0.1, -2.0]}}}
+        config_manager._ensure_vrc_listen_config(config, loaded=config)
+
+        assert config["vrc_listen"]["vr_overlay"]["position"] == [0.5, -0.1, -2.0]

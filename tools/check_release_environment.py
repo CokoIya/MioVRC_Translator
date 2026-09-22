@@ -58,6 +58,10 @@ REQUIRED_MODULES = (
     "g2p_en",
     "nltk",
     "defusedxml",
+    "openvr",
+    "winrt.windows.media.ocr",
+    "rapidocr_onnxruntime",
+    "cv2",
     "pyworld",
 )
 
@@ -83,6 +87,21 @@ BUILD_ONLY_LOCK_PINS = {
     "onnxruntime",
     "flatbuffers",
 }
+
+# Distributions that ship the same import package under another name: a pin
+# on one satisfies metadata that names the other. rapidocr's metadata asks for
+# the CPU-only onnxruntime; the lock ships the DirectML build of it instead.
+EQUIVALENT_DISTRIBUTIONS = {
+    "onnxruntime": ("onnxruntime-directml", "onnxruntime-gpu"),
+}
+
+
+def dependency_is_pinned(name: str, locked_names: set[str]) -> bool:
+    canonical = canonicalize_name(name)
+    if canonical in locked_names:
+        return True
+    return any(alias in locked_names for alias in EQUIVALENT_DISTRIBUTIONS.get(canonical, ()))
+
 
 # Dependency markers are evaluated for the machine the release is built on.
 _LOCK_MARKER_ENVIRONMENT = {
@@ -270,11 +289,63 @@ def _unpinned_lock_dependencies(
                 continue
             if dependency.marker is not None and not dependency.marker.evaluate():
                 continue
-            if canonicalize_name(dependency.name) not in locked_names:
+            if not dependency_is_pinned(dependency.name, locked_names):
                 errors.add(
                     f"{dependency.name} required by {requirement.name} is not pinned"
                 )
     return sorted(errors)
+
+
+def _conflicting_runtime_distributions(
+    lock_path: Path = ROOT / "requirements.lock.txt",
+) -> list[str]:
+    """Two distributions of one package must never both be installed.
+
+    onnxruntime and onnxruntime-directml unpack into the same directory, so
+    whichever pip installed last owns the files while both stay registered.
+    A rebuild once ended with the CPU-only build's files under the DirectML
+    build's name, and GPU text recognition quietly disappeared.
+    """
+
+    locked_names = {
+        canonicalize_name(requirement.name)
+        for requirement in _iter_requirements(lock_path)
+        if requirement.marker is None or requirement.marker.evaluate()
+    }
+    errors: list[str] = []
+    for base, aliases in EQUIVALENT_DISTRIBUTIONS.items():
+        present = [
+            name
+            for name in (base, *aliases)
+            if _distribution_installed(name)
+        ]
+        if len(present) > 1:
+            errors.append(
+                f"{' and '.join(present)} are installed together and overwrite each other; "
+                f"keep only the locked one"
+            )
+        if "onnxruntime-directml" in locked_names and base == "onnxruntime":
+            try:
+                import onnxruntime
+
+                providers = list(onnxruntime.get_available_providers())
+            except Exception as exc:
+                errors.append(f"onnxruntime import failed: {exc}")
+                continue
+            if "DmlExecutionProvider" not in providers:
+                errors.append(
+                    "onnxruntime-directml is locked but the installed onnxruntime "
+                    f"({onnxruntime.__version__}) has no DmlExecutionProvider: {providers}"
+                )
+    return errors
+
+
+def _distribution_installed(name: str) -> bool:
+    try:
+        metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return False
+    return True
 
 
 def _missing_modules() -> list[str]:
@@ -336,6 +407,7 @@ def main() -> int:
         lock_errors = _lock_mismatches()
         lock_dependency_errors = _unpinned_lock_dependencies()
         lock_dependency_errors += _orphaned_lock_pins()
+        lock_dependency_errors += _conflicting_runtime_distributions()
     except (OSError, RuntimeError) as exc:
         print(f"Release dependency metadata is invalid: {exc}", file=sys.stderr)
         return 1

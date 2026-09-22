@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TEXT_INPUT_HOTKEY = "Alt+X"
 DEFAULT_MIC_MUTE_HOTKEY = "Alt+C"
+# Screenshot translation from the desktop; the headset uses a controller
+# button instead. Empty disables it.
+DEFAULT_SCREENSHOT_HOTKEY = "Alt+T"
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002

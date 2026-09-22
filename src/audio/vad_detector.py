@@ -49,6 +49,55 @@ def silero_vad_model_available() -> bool:
         return False
 
 
+# Past the target length a sentence is not cut mid-word any more: it ends at
+# the next breath (this much silence) or, if no breath comes, at the hard
+# limit. A player speaking a long sentence saw it chopped into pieces at
+# exactly the target length.
+DEFAULT_SOFT_END_SILENCE_S = 0.2
+HARD_MAX_SPEECH_FACTOR = 2.5
+HARD_MAX_SPEECH_CEILING_S = 30.0
+
+
+def _frames(seconds: float, frame_duration_ms: int) -> int:
+    return max(1, int(float(seconds) * 1000 / frame_duration_ms))
+
+
+def hard_max_speech_seconds(
+    max_speech_s: float | None, hard_max_speech_s: float | None = None
+) -> float | None:
+    """The absolute segment limit: explicit, or a multiple of the target length."""
+
+    if hard_max_speech_s and hard_max_speech_s > 0:
+        return float(hard_max_speech_s)
+    if not max_speech_s or max_speech_s <= 0:
+        return None
+    return min(
+        HARD_MAX_SPEECH_CEILING_S,
+        max(float(max_speech_s), float(max_speech_s) * HARD_MAX_SPEECH_FACTOR),
+    )
+
+
+def _speech_frame_ends_segment(detector, voiced: bool) -> bool:
+    """Count one in-speech frame and say whether the segment ends on it."""
+
+    detector._speech_frames += 1
+    if voiced:
+        detector._trailing_silence = 0
+    else:
+        detector._trailing_silence += 1
+    hard = detector._hard_max_speech_frames
+    if hard is not None and detector._speech_frames >= hard:
+        return True
+    soft = detector._max_speech_frames
+    if (
+        soft is not None
+        and detector._speech_frames >= soft
+        and detector._trailing_silence >= detector._soft_silence_frames
+    ):
+        return True
+    return detector._trailing_silence >= detector._silence_frames
+
+
 class VADDetector:
     def __init__(
         self,
@@ -61,6 +110,8 @@ class VADDetector:
         min_rms: float = 0.012,
         max_speech_s: float = 6.0,
         use_envelope_follower: bool = True,
+        soft_end_silence_s: float = DEFAULT_SOFT_END_SILENCE_S,
+        hard_max_speech_s: float | None = None,
     ):
         if sample_rate not in (8000, 16000, 32000, 48000):
             raise ValueError(
@@ -85,6 +136,11 @@ class VADDetector:
             max(1, int(max_speech_s * 1000 / frame_duration_ms))
             if max_speech_s and max_speech_s > 0
             else None
+        )
+        self._soft_silence_frames = _frames(soft_end_silence_s, frame_duration_ms)
+        hard_limit = hard_max_speech_seconds(max_speech_s, hard_max_speech_s)
+        self._hard_max_speech_frames = (
+            _frames(hard_limit, frame_duration_ms) if hard_limit else None
         )
         self._trailing_silence = 0
         self._speech_frames = 0
@@ -111,20 +167,8 @@ class VADDetector:
         self._activation_window.append(voiced)
 
         if self.in_speech:
-            self._speech_frames += 1
-            # Force-close very long speech segments so the queue can drain.
-            if (
-                self._max_speech_frames is not None
-                and self._speech_frames >= self._max_speech_frames
-            ):
+            if _speech_frame_ends_segment(self, voiced):
                 self._finish_speech()
-                return False
-            if voiced:
-                self._trailing_silence = 0
-            else:
-                self._trailing_silence += 1
-                if self._trailing_silence >= self._silence_frames:
-                    self._finish_speech()
             return self.in_speech
 
         # Start speech only when the activation window is stable enough.
@@ -210,6 +254,8 @@ class SileroVADDetector:
         max_speech_s: float = 6.0,
         speech_threshold: float = 0.5,
         use_envelope_follower: bool = True,
+        soft_end_silence_s: float = DEFAULT_SOFT_END_SILENCE_S,
+        hard_max_speech_s: float | None = None,
     ):
         if sample_rate != 16000:
             raise ValueError("SileroVADDetector only supports sample_rate=16000")
@@ -229,6 +275,8 @@ class SileroVADDetector:
             "min_rms": min_rms,
             "max_speech_s": max_speech_s,
             "use_envelope_follower": use_envelope_follower,
+            "soft_end_silence_s": soft_end_silence_s,
+            "hard_max_speech_s": hard_max_speech_s,
         }
 
         activation_frames = max(1, int(activation_threshold_s * 1000 / frame_duration_ms))
@@ -239,6 +287,11 @@ class SileroVADDetector:
             max(1, int(max_speech_s * 1000 / frame_duration_ms))
             if max_speech_s and max_speech_s > 0
             else None
+        )
+        self._soft_silence_frames = _frames(soft_end_silence_s, frame_duration_ms)
+        hard_limit = hard_max_speech_seconds(max_speech_s, hard_max_speech_s)
+        self._hard_max_speech_frames = (
+            _frames(hard_limit, frame_duration_ms) if hard_limit else None
         )
 
         self._trailing_silence = 0
@@ -447,19 +500,8 @@ class SileroVADDetector:
         self._activation_window.append(voiced)
 
         if self.in_speech:
-            self._speech_frames += 1
-            if (
-                self._max_speech_frames is not None
-                and self._speech_frames >= self._max_speech_frames
-            ):
+            if _speech_frame_ends_segment(self, voiced):
                 self._finish_speech()
-                return
-            if voiced:
-                self._trailing_silence = 0
-            else:
-                self._trailing_silence += 1
-                if self._trailing_silence >= self._silence_frames:
-                    self._finish_speech()
             return
 
         ratio = sum(self._activation_window) / len(self._activation_window)

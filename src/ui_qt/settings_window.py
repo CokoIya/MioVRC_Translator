@@ -959,7 +959,7 @@ QT_SETTINGS_COPY = {
     "max_segment": {"zh-CN": "最长收音长度（秒）", "en": "Max Segment s", "ja": "最長セグメント s"},
     "partial_min_speech": {"zh-CN": "最短说话长度（秒）", "en": "Partial Min Speech s", "ja": "部分最短音声 s"},
     "vrc_listen_enabled": {"zh-CN": "听别人说话并翻译", "en": "Enable reverse translation", "ja": "逆翻訳を有効化"},
-    "vrc_listen_overlay": {"zh-CN": "显示悬浮窗", "en": "Show overlay", "ja": "オーバーレイ表示"},
+    "vrc_listen_overlay": {"zh-CN": "PC 桌面悬浮窗", "en": "Desktop floating window", "ja": "PC デスクトップの字幕ウィンドウ"},
     "vrc_listen_send": {"zh-CN": "发送到聊天框", "en": "Send to chatbox", "ja": "チャットへ送信"},
     "vrc_listen_device": {"zh-CN": "桌面音频设备", "en": "Desktop Audio Device", "ja": "デスクトップ音声デバイス"},
     "vrc_listen_device_default": {"zh-CN": "自动检测 VRChat 输出设备", "en": "Auto Detect VRChat Output", "ja": "VRChat 出力を自動検出"},
@@ -1930,7 +1930,7 @@ _SETTINGS_RU_KO_COPY = {
     "vad": {"ru": "VAD", "ko": "VAD"},
     "vad_seconds": {"ru": "Тишина в конце (с)", "ko": "문장 끝 무음(초)"},
     "vrc_listen_enabled": {"ru": "Включить обратный перевод", "ko": "역번역 켜기"},
-    "vrc_listen_overlay": {"ru": "Показывать окно", "ko": "오버레이 표시"},
+    "vrc_listen_overlay": {"ru": "Окно субтитров на рабочем столе", "ko": "PC 데스크톱 자막 창"},
     "vrc_listen_send": {"ru": "Отправлять в Chatbox", "ko": "Chatbox로 전송"},
     "vrc_listen_device": {"ru": "Устройство вывода VRChat", "ko": "VRChat 출력 장치"},
     "vrc_listen_device_default": {"ru": "Авто: системный вывод", "ko": "자동: 시스템 기본 출력"},
@@ -2460,6 +2460,517 @@ QT_SETTINGS_COPY.update({
         "ru": "\u26a0 Edge Speech распознаёт всё услышанное только на выбранном языке. Обратный перевод слышит других игроков, поэтому речь на другом языке вернётся бессмысленной транслитерацией. Если языки вокруг разные, используйте Qwen3-ASR или SenseVoice.",
         "ko": "\u26a0 Edge 음성 인식은 들리는 모든 소리를 선택한 언어로 인식합니다. 역번역은 다른 플레이어의 말을 다루므로 다른 언어로 말하면 음차된 의미 없는 문자열이 됩니다. 주변 언어가 일정하지 않다면 Qwen3-ASR 또는 SenseVoice를 사용하세요.",
     },
+    "screenshot_section": {
+        "zh-CN": "截图翻译",
+        "en": "Screenshot translation",
+        "ja": "スクリーンショット翻訳",
+        "ru": "Перевод по скриншоту",
+        "ko": "스크린샷 번역",
+    },
+    "screenshot_guide": {
+        "zh-CN": "在 VR 里按住扳机和侧面的抓握键不放，再按一下 B（右手）或 Y（左手），眼前会出现一个取景框：用扳机在框里划出要翻译的范围，松手就翻译；再按一次 B/Y 则翻译整个画面。要按住两个键再按，是为了平时玩游戏按到 B/Y 不会误触发。译文以黑底白字覆盖在原文位置。按键可以在 SteamVR 的「控制器设置 → 管理绑定」里改。桌面上也可以用下面的快捷键直接翻译整个画面。",
+        "en": "In VR, hold the trigger and the side grip, then press B (right hand) or Y (left hand): a frame appears in front of you. Drag the trigger across it to mark what to translate and let go to translate it; press B/Y again to translate the whole view. The two held buttons keep an ordinary B/Y press in the game from opening the frame by accident. Translations are laid over the original text in white on black. The buttons can be changed in SteamVR under Controller Settings, Manage Bindings. On the desktop, the hotkey below translates the whole view directly.",
+        "ja": "VR ではトリガーと側面のグリップを押したまま B（右手）または Y（左手）を押すと、目の前に枠が出ます。トリガーを押しながら翻訳したい範囲を囲み、離すと翻訳されます。もう一度 B/Y を押すと画面全体を翻訳します。二つのボタンを押したままにするのは、ゲーム中に B/Y を押しただけで枠が開かないようにするためです。訳文は黒地に白文字で元の文字の上に重ねて表示されます。ボタンは SteamVR の「コントローラー設定 → バインドの管理」で変更できます。デスクトップでは下のホットキーで画面全体をそのまま翻訳できます。",
+        "ru": "В VR удерживайте триггер и боковую кнопку захвата, затем нажмите B (правая рука) или Y (левая): перед вами появится рамка. Выделите триггером область для перевода и отпустите; нажмите B/Y ещё раз, чтобы перевести весь экран. Две удерживаемые кнопки нужны, чтобы обычное нажатие B/Y в игре не открывало рамку случайно. Перевод накладывается поверх исходного текста белым на чёрном. Кнопки можно изменить в SteamVR в разделе управления привязками. На рабочем столе горячая клавиша ниже сразу переводит весь экран.",
+        "ko": "VR에서는 트리거와 측면 그립을 누른 채 B(오른손) 또는 Y(왼손)를 누르면 눈앞에 프레임이 나타납니다. 트리거를 누른 채 번역할 범위를 드래그하고 놓으면 번역되며, B/Y를 다시 누르면 화면 전체를 번역합니다. 두 버튼을 누른 채 눌러야 하는 것은 게임 중 B/Y를 눌렀을 때 프레임이 잘못 열리지 않게 하기 위해서입니다. 번역문은 검은 배경 흰 글씨로 원문 위에 덮어 표시됩니다. 버튼은 SteamVR의 컨트롤러 설정에서 바꿀 수 있습니다. 데스크톱에서는 아래 단축키로 화면 전체를 바로 번역합니다.",
+    },
+    "screenshot_enabled": {
+        "zh-CN": "启用截图翻译",
+        "en": "Enable screenshot translation",
+        "ja": "スクリーンショット翻訳を有効にする",
+        "ru": "Включить перевод по скриншоту",
+        "ko": "스크린샷 번역 사용",
+    },
+    "screenshot_hand": {
+        "zh-CN": "结果显示在",
+        "en": "Show the result on",
+        "ja": "結果を表示する手",
+        "ru": "Показывать результат на",
+        "ko": "결과를 표시할 손",
+    },
+    "screenshot_hand_left": {
+        "zh-CN": "左手",
+        "en": "Left hand",
+        "ja": "左手",
+        "ru": "Левой руке",
+        "ko": "왼손",
+    },
+    "screenshot_hand_right": {
+        "zh-CN": "右手",
+        "en": "Right hand",
+        "ja": "右手",
+        "ru": "Правой руке",
+        "ko": "오른손",
+    },
+    "screenshot_placement": {
+        "zh-CN": "结果显示方式",
+        "en": "Show the result",
+        "ja": "結果の表示方法",
+        "ru": "Показ результата",
+        "ko": "결과 표시 방식",
+    },
+    "screenshot_placement_card": {
+        "zh-CN": "翻译卡片（截图加译文，显示在原文方向）",
+        "en": "A translation card (the picture with its translations)",
+        "ja": "翻訳カード（写した画像に訳文を重ねて表示）",
+        "ru": "Карточка перевода (снимок с переводом)",
+        "ko": "번역 카드(찍은 화면에 번역을 얹어 표시)",
+    },
+    "screenshot_placement_hand": {
+        "zh-CN": "显示在手柄面板上",
+        "en": "On the hand panel",
+        "ja": "手のパネルに表示",
+        "ru": "На панели у руки",
+        "ko": "손 패널에 표시",
+    },
+    "screenshot_selection_mode": {
+        "zh-CN": "按键后先用扳机框选范围",
+        "en": "Frame a region with the trigger first",
+        "ja": "ボタンの後にトリガーで範囲を囲む",
+        "ru": "Сначала выделять область триггером",
+        "ko": "버튼 후 트리거로 범위 선택",
+    },
+    "screenshot_depth": {
+        "zh-CN": "翻译卡片距离",
+        "en": "Card distance",
+        "ja": "カードの距離",
+        "ru": "Расстояние до карточки",
+        "ko": "카드 거리",
+    },
+    "screenshot_depth_value": {
+        "zh-CN": "{value} 米",
+        "en": "{value} m",
+        "ja": "{value} m",
+        "ru": "{value} м",
+        "ko": "{value} m",
+    },
+    "screenshot_hotkey": {
+        "zh-CN": "桌面截图翻译快捷键",
+        "en": "Desktop screenshot hotkey",
+        "ja": "デスクトップ用ホットキー",
+        "ru": "Горячая клавиша (рабочий стол)",
+        "ko": "데스크톱 단축키",
+    },
+    "screenshot_local_ocr_ready": {
+        "zh-CN": "✓ 内置文字识别已就绪：中文、英文、日文、韩文可以混合识别，不需要安装 Windows 语言包。",
+        "en": "\u2713 Built-in text recognition is ready: Chinese, English, Japanese and Korean can be read together, with no Windows language pack needed.",
+        "ja": "\u2713 内蔵の文字認識が使用可能です。中国語・英語・日本語・韓国語を混在したまま読み取れ、Windows の言語パックは不要です。",
+        "ru": "\u2713 Встроенное распознавание текста готово: китайский, английский, японский и корейский читаются вместе, языковые пакеты Windows не нужны.",
+        "ko": "\u2713 내장 문자 인식이 준비되었습니다. 중국어·영어·일본어·한국어를 함께 인식하며 Windows 언어 팩이 필요 없습니다.",
+    },
+    "screenshot_languages": {
+        "zh-CN": "Windows 已安装的文字识别语言：{languages}。要识别别的语言，请在 Windows 设置里为该语言添加「光学字符识别」可选功能。",
+        "en": "Text recognition languages installed in Windows: {languages}. To read another language, add its Optical Character Recognition optional feature in Windows Settings.",
+        "ja": "Windows にインストールされている文字認識言語：{languages}。他の言語を読み取るには、Windows の設定でその言語の「光学式文字認識」機能を追加してください。",
+        "ru": "Языки распознавания текста, установленные в Windows: {languages}. Чтобы читать другой язык, добавьте для него компонент оптического распознавания в параметрах Windows.",
+        "ko": "Windows에 설치된 문자 인식 언어: {languages}. 다른 언어를 읽으려면 Windows 설정에서 해당 언어의 광학 문자 인식 기능을 추가하세요.",
+    },
+    "screenshot_runtime_missing": {
+        "zh-CN": "⚠ 这个安装里缺少文字识别组件（winrt），截图翻译无法工作。请重新安装程序，或从源码运行时重建运行环境。",
+        "en": "⚠ This install is missing the text recognition component (winrt), so screenshot translation cannot work. Reinstall the app, or rebuild the environment when running from source.",
+        "ja": "⚠ このインストールには文字認識コンポーネント（winrt）がなく、スクリーンショット翻訳は動作しません。アプリを再インストールするか、ソースから実行している場合は環境を再構築してください。",
+        "ru": "⚠ В этой установке нет компонента распознавания текста (winrt), поэтому перевод по скриншоту не работает. Переустановите приложение или пересоберите окружение при запуске из исходников.",
+        "ko": "⚠ 이 설치에는 문자 인식 구성 요소(winrt)가 없어 스크린샷 번역이 작동하지 않습니다. 앱을 다시 설치하거나, 소스에서 실행 중이라면 환경을 다시 빌드하세요.",
+    },
+    "screenshot_no_languages": {
+        "zh-CN": "⚠ Windows 没有安装任何文字识别语言，截图翻译无法工作。请在 Windows 设置 → 语言 → 可选功能里添加「光学字符识别」。",
+        "en": "\u26a0 Windows has no text recognition language installed, so screenshot translation cannot work. Add Optical Character Recognition under Windows Settings, Language, Optional features.",
+        "ja": "\u26a0 Windows に文字認識言語がインストールされていないため、スクリーンショット翻訳は動作しません。Windows の設定の言語のオプション機能から「光学式文字認識」を追加してください。",
+        "ru": "\u26a0 В Windows не установлен ни один язык распознавания текста, поэтому перевод по скриншоту не работает. Добавьте оптическое распознавание в параметрах языка Windows.",
+        "ko": "\u26a0 Windows에 문자 인식 언어가 설치되어 있지 않아 스크린샷 번역이 작동하지 않습니다. Windows 설정의 언어 선택적 기능에서 광학 문자 인식을 추가하세요.",
+    },
+    "vr_overlay_section": {
+        "zh-CN": "VR 头显字幕",
+        "en": "Headset subtitles",
+        "ja": "VR ヘッドセット字幕",
+        "ru": "Субтитры в шлеме",
+        "ko": "VR 헤드셋 자막",
+    },
+    "vr_overlay_guide": {
+        "zh-CN": "把反向翻译的字幕直接显示在 VR 头显里，戴着头显也能看。需要先启动 SteamVR。这个开关和上面的「PC 桌面悬浮窗」互不影响：可以只开其中一个，也可以两边同时显示。用手柄激光指向字幕板、按住扳机不放即可拖动位置，松手自动保存。",
+        "en": "Shows the reverse-translation subtitles inside the headset, so they are readable with the visor on. SteamVR has to be running. This switch is independent of the desktop floating window above: use either one alone, or both at once. Point a controller at the panel and hold the trigger to drag it; letting go saves the position.",
+        "ja": "逆翻訳の字幕をVRヘッドセット内に直接表示します。ヘッドセットを着けたままでも読めます。SteamVR の起動が必要です。このスイッチは上の「PC デスクトップの字幕ウィンドウ」とは独立しており、片方だけでも両方同時でも使えます。コントローラーで字幕板を指してトリガーを長押しすると移動でき、離すと位置が保存されます。",
+        "ru": "Показывает субтитры обратного перевода прямо в шлеме, чтобы их было видно в VR. SteamVR должен быть запущен. Этот переключатель не зависит от окна на рабочем столе выше: можно включить только одно из них или оба сразу. Наведите контроллер на панель и удерживайте триггер, чтобы перетащить её; после отпускания позиция сохраняется.",
+        "ko": "역번역 자막을 VR 헤드셋 안에 직접 표시하여 헤드셋을 쓴 채로도 읽을 수 있습니다. SteamVR이 실행 중이어야 합니다. 이 스위치는 위의 「PC 데스크톱 자막 창」과 독립적이며, 하나만 켜거나 둘 다 동시에 켤 수 있습니다. 컨트롤러로 자막판을 가리키고 트리거를 길게 누르면 이동할 수 있으며, 놓으면 위치가 저장됩니다.",
+    },
+    "vr_overlay_enabled": {
+        "zh-CN": "在 VR 头显中显示",
+        "en": "Show in the headset",
+        "ja": "VR ヘッドセットに表示",
+        "ru": "Показывать в шлеме",
+        "ko": "헤드셋에 표시",
+    },
+    "vr_overlay_width": {
+        "zh-CN": "字幕板宽度",
+        "en": "Panel width",
+        "ja": "字幕板の幅",
+        "ru": "Ширина панели",
+        "ko": "자막판 너비",
+    },
+    "vr_overlay_width_value": {
+        "zh-CN": "{value} 米",
+        "en": "{value} m",
+        "ja": "{value} m",
+        "ru": "{value} м",
+        "ko": "{value} m",
+    },
+    "vr_overlay_opacity": {
+        "zh-CN": "底板不透明度",
+        "en": "Plate opacity",
+        "ja": "背景の不透明度",
+        "ru": "Непрозрачность подложки",
+        "ko": "배경 불투명도",
+    },
+    "vr_overlay_opacity_hint": {
+        "zh-CN": "只影响字幕后面的底板，文字始终保持不透明，压得再低也不会影响阅读。",
+        "en": "Affects only the plate behind the subtitles. The text always stays fully opaque, so lowering this never costs readability.",
+        "ja": "字幕の背景だけに影響します。文字は常に不透明なままなので、下げても読みやすさは損なわれません。",
+        "ru": "Влияет только на подложку за субтитрами. Текст всегда остаётся непрозрачным, поэтому читаемость не страдает.",
+        "ko": "자막 뒤 배경에만 적용됩니다. 글자는 항상 불투명하게 유지되므로 낮춰도 가독성이 떨어지지 않습니다.",
+    },
+    "vr_overlay_distance": {
+        "zh-CN": "字幕板距离",
+        "en": "Panel distance",
+        "ja": "字幕板の距離",
+        "ru": "Расстояние до панели",
+        "ko": "자막판 거리",
+    },
+    "vr_overlay_yaw": {
+        "zh-CN": "左右角度",
+        "en": "Left / right angle",
+        "ja": "左右の角度",
+        "ru": "Угол влево / вправо",
+        "ko": "좌우 각도",
+    },
+    "vr_overlay_pitch": {
+        "zh-CN": "上下角度",
+        "en": "Up / down angle",
+        "ja": "上下の角度",
+        "ru": "Угол вверх / вниз",
+        "ko": "상하 각도",
+    },
+    "vr_overlay_angle_value": {
+        "zh-CN": "{value}°",
+        "en": "{value}°",
+        "ja": "{value}°",
+        "ru": "{value}°",
+        "ko": "{value}°",
+    },
+    "vr_overlay_geometry_hint": {
+        "zh-CN": "字幕板围绕头部放置：距离是离头的米数，角度是相对正前方的偏转。在头显里用扳机拖动后，这里的数值会跟着变。",
+        "en": "The panel sits around your head: distance in metres from it, angles relative to straight ahead. Dragging the panel in the headset updates these numbers.",
+        "ja": "字幕板は頭の周りに置かれます。距離は頭からのメートル、角度は正面からのずれです。ヘッドセット内でドラッグするとここの値も変わります。",
+        "ru": "Панель располагается вокруг головы: расстояние в метрах от неё, углы относительно направления прямо. Перетаскивание в шлеме обновляет эти значения.",
+        "ko": "자막판은 머리를 중심으로 배치됩니다. 거리는 머리로부터의 미터, 각도는 정면 기준의 편차입니다. 헤드셋에서 드래그하면 이 값도 함께 바뀝니다.",
+    },
+    "vr_overlay_size_presets": {
+        "zh-CN": "字幕板大小预设",
+        "en": "Panel size presets",
+        "ja": "字幕板のサイズ",
+        "ru": "Размер панели",
+        "ko": "자막판 크기",
+    },
+    "vr_overlay_size_small": {
+        "zh-CN": "小",
+        "en": "Small",
+        "ja": "小",
+        "ru": "Мелкий",
+        "ko": "작게",
+    },
+    "vr_overlay_size_medium": {
+        "zh-CN": "中",
+        "en": "Medium",
+        "ja": "中",
+        "ru": "Средний",
+        "ko": "보통",
+    },
+    "vr_overlay_size_large": {
+        "zh-CN": "大",
+        "en": "Large",
+        "ja": "大",
+        "ru": "Крупный",
+        "ko": "크게",
+    },
+    "vr_overlay_size_xlarge": {
+        "zh-CN": "特大",
+        "en": "Huge",
+        "ja": "特大",
+        "ru": "Огромный",
+        "ko": "아주 크게",
+    },
+    "vr_overlay_move_button": {
+        "zh-CN": "在 VR 里移动字幕板（进入编辑模式 20 秒）",
+        "en": "Move the panel in VR (edit mode for 20 s)",
+        "ja": "VR で字幕板を移動する（20 秒間の編集モード）",
+        "ru": "Переместить панель в VR (режим правки на 20 с)",
+        "ko": "VR에서 자막판 이동(20초 편집 모드)",
+    },
+    "vr_overlay_move_hint": {
+        "zh-CN": "平时字幕板不会截取手柄操作，游戏照常玩。只有在编辑模式里，用手柄指向字幕板、按住扳机才能拖动；松手或超时后手柄自动交还给游戏。在 SteamVR 菜单的 Mio 面板里也有这个按钮。",
+        "en": "Normally the panel never takes the controllers, so the game plays as usual. Only in edit mode can you point at the panel and hold the trigger to drag it; letting go or timing out hands the controllers back. The same button is on the Mio tab in the SteamVR menu.",
+        "ja": "通常、字幕板はコントローラーの操作を奪わないため、ゲームはそのまま遊べます。編集モードの間だけ、字幕板を指してトリガーを押したまま動かせます。離すか時間切れになるとコントローラーはゲームに戻ります。SteamVR メニューの Mio タブにも同じボタンがあります。",
+        "ru": "Обычно панель не перехватывает контроллеры, и игра идёт как обычно. Только в режиме правки можно навести на панель и, удерживая триггер, перетащить её; после отпускания или по таймауту контроллеры возвращаются игре. Та же кнопка есть на вкладке Mio в меню SteamVR.",
+        "ko": "평소에는 자막판이 컨트롤러 입력을 가로채지 않아 게임을 그대로 즐길 수 있습니다. 편집 모드에서만 자막판을 가리키고 트리거를 누른 채 드래그할 수 있으며, 놓거나 시간이 지나면 컨트롤러가 게임으로 돌아갑니다. SteamVR 메뉴의 Mio 탭에도 같은 버튼이 있습니다.",
+    },
+    "vr_overlay_locked": {
+        "zh-CN": "锁定字幕板位置",
+        "en": "Lock the panel in place",
+        "ja": "字幕板の位置を固定",
+        "ru": "Закрепить панель на месте",
+        "ko": "자막판 위치 잠금",
+    },
+    "vr_overlay_locked_hint": {
+        "zh-CN": "锁定后不会进入编辑模式，这里和头显里的“移动”按钮都不再起作用；距离和角度滑块仍可用。SteamVR 菜单的 Mio 面板和手腕面板上也有同样的开关。",
+        "en": "While locked, edit mode cannot start: the move button here and in the headset does nothing, though the distance and angle sliders still work. The same switch is on the Mio tab and the wrist panel.",
+        "ja": "固定中は編集モードに入れず、ここやヘッドセット内の移動ボタンは効きません。距離と角度のスライダーは使えます。SteamVR メニューの Mio タブと手首パネルにも同じスイッチがあります。",
+        "ru": "Пока панель закреплена, режим правки не включается: кнопка перемещения здесь и в шлеме не действует, но ползунки расстояния и углов работают. Тот же переключатель есть во вкладке Mio и на панели на запястье.",
+        "ko": "잠금 상태에서는 편집 모드로 들어갈 수 없어 여기와 헤드셋의 이동 버튼이 동작하지 않지만, 거리와 각도 슬라이더는 계속 사용할 수 있습니다. SteamVR 메뉴의 Mio 탭과 손목 패널에도 같은 스위치가 있습니다.",
+    },
+    "vr_dashboard_enabled": {
+        "zh-CN": "在 SteamVR 菜单里显示 Mio 面板",
+        "en": "Show a Mio tab in the SteamVR menu",
+        "ja": "SteamVR メニューに Mio タブを表示",
+        "ru": "Показывать вкладку Mio в меню SteamVR",
+        "ko": "SteamVR 메뉴에 Mio 탭 표시",
+    },
+    "vr_dashboard_hint": {
+        "zh-CN": "按手柄的菜单键打开 SteamVR 菜单，在底栏点 Mio 图标：可以开始/停止监听、切换翻译服务和朗读模型、调整字幕板大小和位置、触发截图翻译，不用摘头显。",
+        "en": "Open the SteamVR menu with the controller's menu button and pick the Mio icon in the bar: start or stop listening, switch services and voice engines, size and move the panel, and trigger screenshot translation without taking the headset off.",
+        "ja": "コントローラーのメニューボタンで SteamVR メニューを開き、下のバーで Mio アイコンを選びます。ヘッドセットを外さずに、リスニングの開始／停止、サービスや読み上げエンジンの切替、字幕板のサイズと位置、スクリーンショット翻訳の起動ができます。",
+        "ru": "Откройте меню SteamVR кнопкой меню на контроллере и выберите значок Mio на панели: запуск и остановка прослушивания, смена сервисов и озвучки, размер и положение панели, перевод по скриншоту — не снимая шлем.",
+        "ko": "컨트롤러의 메뉴 버튼으로 SteamVR 메뉴를 열고 하단 바에서 Mio 아이콘을 선택하세요. 헤드셋을 벗지 않고 듣기 시작/중지, 서비스와 음성 엔진 전환, 자막판 크기와 위치 조정, 스크린샷 번역 실행이 가능합니다.",
+    },
+    "vr_wrist_enabled": {
+        "zh-CN": "手腕控制面板（扭两下手腕显示或隐藏）",
+        "en": "Wrist control panel (twist the wrist twice to show or hide)",
+        "ja": "手首コントロールパネル（手首を2回ひねって表示／非表示）",
+        "ru": "Панель на запястье (дважды поверните запястье, чтобы показать или скрыть)",
+        "ko": "손목 제어 패널(손목을 두 번 비틀어 표시/숨김)",
+    },
+    "vr_wrist_hand": {
+        "zh-CN": "面板戴在哪只手",
+        "en": "Wrist panel hand",
+        "ja": "パネルを付ける手",
+        "ru": "Рука для панели",
+        "ko": "패널을 붙일 손",
+    },
+    "edge_stt_fallback_enabled": {
+        "zh-CN": "网络故障时自动改用本地识别（SenseVoice）",
+        "en": "Fall back to local recognition (SenseVoice) when the network fails",
+        "ja": "ネットワーク障害時はローカル認識（SenseVoice）に自動で切り替える",
+        "ru": "При сбое сети переключаться на локальное распознавание (SenseVoice)",
+        "ko": "네트워크 장애 시 로컬 인식(SenseVoice)으로 자동 전환",
+    },
+    "edge_stt_fallback_hint": {
+        "zh-CN": "Edge 语音识别连不上或超时时，从这一句起改用本机的 SenseVoice 模型继续识别；每两分钟试一次 Edge，恢复后自动切回。需要已下载本地模型。",
+        "en": "When Edge Speech cannot be reached or times out, recognition continues on the bundled SenseVoice model from that sentence on; Edge is tried again every two minutes and takes over once it answers. Needs the local model downloaded.",
+        "ja": "Edge 音声認識に接続できない、または応答しない場合、その文から内蔵の SenseVoice モデルで認識を続けます。2 分ごとに Edge を試し、応答すれば自動で戻ります。ローカルモデルのダウンロードが必要です。",
+        "ru": "Если Edge Speech недоступен или не отвечает, распознавание с этой фразы продолжается на встроенной модели SenseVoice; Edge проверяется каждые две минуты и возвращается, как только ответит. Нужна скачанная локальная модель.",
+        "ko": "Edge 음성 인식에 연결할 수 없거나 시간이 초과되면 그 문장부터 내장 SenseVoice 모델로 인식을 이어갑니다. 2분마다 Edge를 다시 시도해 응답하면 자동으로 되돌아갑니다. 로컬 모델이 다운로드되어 있어야 합니다.",
+    },
+    "edge_stt_use_system_proxy": {
+        "zh-CN": "通过系统代理连接 Edge 语音识别",
+        "en": "Connect to Edge Speech through the system proxy",
+        "ja": "システムプロキシ経由で Edge 音声認識に接続",
+        "ru": "Подключаться к Edge Speech через системный прокси",
+        "ko": "시스템 프록시를 통해 Edge 음성 인식에 연결",
+    },
+    "edge_stt_use_system_proxy_hint": {
+        "zh-CN": "默认直连。如果你的浏览器要走代理才能顺畅使用微软服务，打开后 Mio 会走同一个代理（读取 Windows 的代理设置，仅支持 HTTP 代理）。",
+        "en": "Direct by default. If Microsoft services only work smoothly through your browser's proxy, turn this on and Mio uses the same one (Windows proxy settings, HTTP proxies only).",
+        "ja": "既定では直接接続します。ブラウザがプロキシ経由でしか Microsoft のサービスを快適に使えない場合はオンにすると、Mio も同じプロキシを使います（Windows のプロキシ設定、HTTP プロキシのみ）。",
+        "ru": "По умолчанию прямое подключение. Если сервисы Microsoft хорошо работают только через прокси браузера, включите: Mio возьмёт тот же прокси (настройки Windows, только HTTP-прокси).",
+        "ko": "기본은 직접 연결입니다. 브라우저의 프록시를 통해야 Microsoft 서비스가 원활하다면 켜 두세요. Mio가 같은 프록시를 사용합니다(Windows 프록시 설정, HTTP 프록시만).",
+    },
+    "edge_stt_link_test": {
+        "zh-CN": "测试语音识别线路",
+        "en": "Test the speech link",
+        "ja": "音声認識の回線をテスト",
+        "ru": "Проверить канал распознавания",
+        "ko": "음성 인식 회선 테스트",
+    },
+    "edge_stt_link_test_running": {
+        "zh-CN": "测试中…",
+        "en": "Testing…",
+        "ja": "テスト中…",
+        "ru": "Проверка…",
+        "ko": "테스트 중…",
+    },
+    "edge_stt_link_result": {
+        "zh-CN": "连接 {connect} ms，首包 {first} ms，第二句 {second} ms：{verdict}",
+        "en": "Connect {connect} ms, first answer {first} ms, second turn {second} ms: {verdict}",
+        "ja": "接続 {connect} ms、初応答 {first} ms、2 回目 {second} ms：{verdict}",
+        "ru": "Подключение {connect} мс, первый ответ {first} мс, второй запрос {second} мс: {verdict}",
+        "ko": "연결 {connect} ms, 첫 응답 {first} ms, 두 번째 {second} ms: {verdict}",
+    },
+    "edge_stt_link_good": {
+        "zh-CN": "线路正常",
+        "en": "the link is fine",
+        "ja": "回線は良好です",
+        "ru": "канал в порядке",
+        "ko": "회선 정상",
+    },
+    "edge_stt_link_slow": {
+        "zh-CN": "线路偏慢，识别会有明显延迟",
+        "en": "the link is slow; recognition will lag noticeably",
+        "ja": "回線が遅く、認識に目立つ遅延が出ます",
+        "ru": "канал медленный; распознавание будет заметно запаздывать",
+        "ko": "회선이 느려 인식이 눈에 띄게 지연됩니다",
+    },
+    "edge_stt_link_unstable": {
+        "zh-CN": "线路不稳定，建议打开本地识别回退或系统代理",
+        "en": "the link is unstable; turn on the local fallback or the system proxy",
+        "ja": "回線が不安定です。ローカル認識への切り替えかシステムプロキシをオンにしてください",
+        "ru": "канал нестабилен; включите локальное распознавание или системный прокси",
+        "ko": "회선이 불안정합니다. 로컬 인식 대체나 시스템 프록시를 켜 보세요",
+    },
+    "edge_stt_link_failed": {
+        "zh-CN": "连接失败：{error}",
+        "en": "Connection failed: {error}",
+        "ja": "接続に失敗しました：{error}",
+        "ru": "Не удалось подключиться: {error}",
+        "ko": "연결 실패: {error}",
+    },
+    "screenshot_auto_hide": {
+        "zh-CN": "翻译显示时长",
+        "en": "How long the translation stays",
+        "ja": "翻訳の表示時間",
+        "ru": "Время показа перевода",
+        "ko": "번역 표시 시간",
+    },
+    "screenshot_auto_hide_value": {
+        "zh-CN": "{value} 秒",
+        "en": "{value} s",
+        "ja": "{value} 秒",
+        "ru": "{value} с",
+        "ko": "{value}초",
+    },
+    "screenshot_auto_hide_hint": {
+        "zh-CN": "从看到卡片那一刻开始计时；按任意手柄键可随时收起。",
+        "en": "Counted from the moment you look at the card; any controller button puts it away sooner.",
+        "ja": "カードを見た時点から数えます。コントローラーのどのボタンでもすぐに閉じられます。",
+        "ru": "Отсчёт идёт с момента, когда вы посмотрели на карточку; любая кнопка контроллера уберёт её раньше.",
+        "ko": "카드를 본 순간부터 계산하며, 컨트롤러의 아무 버튼이나 누르면 바로 사라집니다.",
+    },
+    "max_segment_hint": {
+        "zh-CN": "到达这个长度后，会在下一次换气处断句，而不是硬切；最长不超过它的 2.5 倍。",
+        "en": "Past this length the sentence ends at the next breath instead of being cut mid-word, up to 2.5 times this value.",
+        "ja": "この長さを超えると、途中で切らずに次の息継ぎで文を区切ります（最長でこの値の 2.5 倍まで）。",
+        "ru": "После этой длины фраза завершается на ближайшем вдохе, а не обрывается на полуслове; максимум в 2,5 раза больше.",
+        "ko": "이 길이를 넘으면 단어 중간에서 끊지 않고 다음 숨 고르기에서 문장을 나눕니다(최대 2.5배까지).",
+    },
+    "vr_wrist_hint": {
+        "zh-CN": "面板像手表一样挂在所选手柄的手腕上方：快速扭两下手腕就会出现，再扭两下收起。用另一只手柄指着它（有蓝色激光和光标）扣扳机即可操作，内容和 SteamVR 菜单里的 Mio 面板一致，游戏不会失去手柄。",
+        "en": "The panel sits over the wrist of the chosen controller like a watch: twist that wrist twice quickly to show it, twice more to put it away. Point the other controller at it (a blue laser and a dot show where you aim) and pull the trigger. Same controls as the Mio tab in the SteamVR menu, and the game keeps the controllers.",
+        "ja": "パネルは選んだコントローラーの手首の上に腕時計のように付きます。手首を素早く2回ひねると表示され、もう2回で消えます。もう一方のコントローラーで指して（青いレーザーと点が狙いを示します）トリガーを引いて操作します。SteamVR メニューの Mio タブと同じ内容で、ゲームの操作は奪いません。",
+        "ru": "Панель сидит над запястьем выбранного контроллера, как часы: дважды быстро поверните запястье, чтобы показать её, и ещё дважды, чтобы убрать. Наведите другой контроллер (синий луч и точка показывают, куда вы целитесь) и нажмите триггер. Те же элементы, что во вкладке Mio меню SteamVR; игра не теряет контроллеры.",
+        "ko": "패널은 선택한 컨트롤러의 손목 위에 손목시계처럼 붙습니다. 손목을 빠르게 두 번 비틀면 나타나고, 다시 두 번 비틀면 사라집니다. 다른 컨트롤러로 가리키고(파란 레이저와 점이 조준 위치를 표시) 트리거를 당겨 조작합니다. SteamVR 메뉴의 Mio 탭과 같은 내용이며 게임은 컨트롤러를 계속 사용합니다.",
+    },
+    "screenshot_ocr_gpu": {
+        "zh-CN": "文字识别使用显卡加速",
+        "en": "Run text recognition on the GPU",
+        "ja": "文字認識に GPU を使う",
+        "ru": "Распознавание текста на GPU",
+        "ko": "문자 인식에 GPU 사용",
+    },
+    "screenshot_ocr_gpu_hint": {
+        "zh-CN": "通过 DirectML 使用任何 DirectX 12 显卡，识别整个视野快两倍以上；首次识别会多等一两秒预热。显卡不支持时自动回到 CPU。",
+        "en": "Uses any DirectX 12 GPU through DirectML: reading the whole view is more than twice as fast, and the first read warms up for a second or two. Falls back to the CPU when the GPU refuses.",
+        "ja": "DirectML 経由で DirectX 12 対応の GPU を使い、視野全体の読み取りが 2 倍以上速くなります。初回は 1〜2 秒のウォームアップがあります。GPU が使えない場合は CPU に戻ります。",
+        "ru": "Через DirectML используется любая видеокарта с DirectX 12: чтение всего обзора более чем вдвое быстрее, первый запуск прогревается секунду-две. Если GPU недоступен, используется CPU.",
+        "ko": "DirectML로 DirectX 12 GPU를 사용해 전체 시야 인식이 두 배 이상 빨라집니다. 첫 인식은 1~2초 예열이 필요합니다. GPU를 쓸 수 없으면 CPU로 돌아갑니다.",
+    },
+    "vr_gesture_enabled": {
+        "zh-CN": "手柄贴耳手势",
+        "en": "Controller-at-the-ear gesture",
+        "ja": "コントローラーを耳に当てるジェスチャー",
+        "ru": "Жест «контроллер у уха»",
+        "ko": "컨트롤러를 귀에 대는 제스처",
+    },
+    "vr_gesture_hint": {
+        "zh-CN": "把任一手柄举到耳边：长按扳机约 1 秒开始或停止监听，短按扳机打开截图翻译取景框。不依赖 B/Y 键绑定，PICO 等绑定不生效的头显也能用。",
+        "en": "Hold either controller up to your ear: a long trigger pull (about 1 s) starts or stops listening, a short pull opens the screenshot frame. Needs no B/Y binding, so it works on headsets whose bindings never activate.",
+        "ja": "どちらかのコントローラーを耳元に上げ、トリガーを約 1 秒長押しでリスニングの開始／停止、短く引くとスクリーンショット枠を開きます。B/Y のバインドに依存しないため、バインドが有効にならないヘッドセットでも使えます。",
+        "ru": "Поднесите любой контроллер к уху: долгое нажатие триггера (около 1 с) запускает или останавливает прослушивание, короткое открывает рамку скриншота. Не зависит от привязки B/Y.",
+        "ko": "컨트롤러를 귀 옆으로 올리고 트리거를 약 1초 길게 당기면 듣기 시작/중지, 짧게 당기면 스크린샷 프레임이 열립니다. B/Y 바인딩이 필요 없어 바인딩이 안 되는 헤드셋에서도 됩니다.",
+    },
+    "steamvr_autolaunch_enabled": {
+        "zh-CN": "随 SteamVR 启动（由 SteamVR 拉起 Mio）",
+        "en": "Start with SteamVR (SteamVR launches Mio)",
+        "ja": "SteamVR と一緒に起動（SteamVR が Mio を起動）",
+        "ru": "Запускать вместе со SteamVR (SteamVR запускает Mio)",
+        "ko": "SteamVR과 함께 시작(SteamVR이 Mio를 실행)",
+    },
+    "steamvr_autolaunch_hint": {
+        "zh-CN": "勾选后会把 Mio 登记为 SteamVR 的覆盖层应用，SteamVR 启动时自动拉起 Mio。需要 SteamVR 正在运行时勾选才会生效；Mio 自己永远不会去启动 SteamVR。",
+        "en": "Registers Mio as a SteamVR overlay app so SteamVR starts it along with itself. Takes effect while SteamVR is running; Mio itself never launches SteamVR.",
+        "ja": "Mio を SteamVR のオーバーレイアプリとして登録し、SteamVR の起動時に Mio も起動します。SteamVR が動作中に切り替えたときに有効になります。Mio 自身が SteamVR を起動することはありません。",
+        "ru": "Регистрирует Mio как оверлей-приложение SteamVR, и SteamVR запускает его вместе с собой. Применяется, пока SteamVR запущен; сам Mio никогда не запускает SteamVR.",
+        "ko": "Mio를 SteamVR 오버레이 앱으로 등록해 SteamVR이 시작될 때 Mio도 함께 실행합니다. SteamVR이 실행 중일 때 켜야 적용되며, Mio가 SteamVR을 실행하는 일은 없습니다.",
+    },
+    "screenshot_binding_active": {
+        "zh-CN": "✓ SteamVR 已把手柄按键交给 Mio：按住扳机和抓握键，再按右手 B / 左手 Y 即可触发。",
+        "en": "\u2713 SteamVR is delivering the controller buttons to Mio: hold the trigger and grip, then press B (right) or Y (left).",
+        "ja": "\u2713 SteamVR がコントローラーのボタンを Mio に渡しています：トリガーとグリップを押したまま右 B / 左 Y で起動できます。",
+        "ru": "\u2713 SteamVR передаёт кнопки контроллера в Mio: удерживайте триггер и захват, затем нажмите B (правая) или Y (левая).",
+        "ko": "\u2713 SteamVR이 컨트롤러 버튼을 Mio에 전달하고 있습니다: 트리거와 그립을 누른 채 오른손 B / 왼손 Y 를 누르세요.",
+    },
+    "screenshot_binding_inactive": {
+        "zh-CN": "⚠ SteamVR 没有把手柄按键交给 Mio（部分头显驱动不给第三方覆盖层按键）。可以改用 SteamVR 菜单里 Mio 面板的按钮、桌面快捷键，或角色菜单里的 OSC 参数触发。",
+        "en": "\u26a0 SteamVR is not delivering the controller button to Mio (some headset drivers give third-party overlays no buttons). Use the button on the Mio tab in the SteamVR menu, the desktop hotkey, or the OSC parameter from your avatar menu instead.",
+        "ja": "\u26a0 SteamVR がコントローラーのボタンを Mio に渡していません（一部のヘッドセットドライバーはサードパーティのオーバーレイにボタンを渡しません）。SteamVR メニューの Mio タブのボタン、デスクトップのホットキー、またはアバターメニューの OSC パラメータをお使いください。",
+        "ru": "\u26a0 SteamVR не передаёт кнопку контроллера в Mio (некоторые драйверы шлемов не дают кнопок сторонним оверлеям). Используйте кнопку на вкладке Mio в меню SteamVR, горячую клавишу на рабочем столе или OSC-параметр из меню аватара.",
+        "ko": "\u26a0 SteamVR이 컨트롤러 버튼을 Mio에 전달하지 않습니다(일부 헤드셋 드라이버는 타사 오버레이에 버튼을 주지 않습니다). SteamVR 메뉴의 Mio 탭 버튼, 데스크톱 단축키 또는 아바타 메뉴의 OSC 매개변수를 사용하세요.",
+    },
+    "osc_param_toggle_screenshot": {
+        "zh-CN": "角色里“截图翻译”的名字",
+        "en": "Screenshot Trigger Param",
+        "ja": "スクリーンショット翻訳パラメータ",
+        "ru": "Параметр перевода по скриншоту",
+        "ko": "스크린샷 번역 매개변수",
+    },
+    "vr_overlay_reset_position": {
+        "zh-CN": "把字幕板放回正前方",
+        "en": "Reset panel position",
+        "ja": "字幕板を正面に戻す",
+        "ru": "Вернуть панель вперёд",
+        "ko": "자막판을 정면으로 되돌리기",
+    },
+    "vr_overlay_status_not_running": {
+        "zh-CN": "⚠ SteamVR 没有运行。启动 SteamVR 后字幕会自动出现在头显里。",
+        "en": "\u26a0 SteamVR is not running. Start it and the subtitles will appear in the headset.",
+        "ja": "\u26a0 SteamVR が起動していません。起動すると字幕がヘッドセットに表示されます。",
+        "ru": "\u26a0 SteamVR не запущен. Запустите его, и субтитры появятся в шлеме.",
+        "ko": "\u26a0 SteamVR이 실행되고 있지 않습니다. 실행하면 자막이 헤드셋에 표시됩니다.",
+    },
+    "vr_overlay_status_not_installed": {
+        "zh-CN": "⚠ 没有找到 SteamVR。请先安装 SteamVR 再打开这个开关。",
+        "en": "\u26a0 SteamVR was not found. Install it before turning this on.",
+        "ja": "\u26a0 SteamVR が見つかりません。インストールしてからオンにしてください。",
+        "ru": "\u26a0 SteamVR не найден. Установите его, прежде чем включать эту настройку.",
+        "ko": "\u26a0 SteamVR을 찾을 수 없습니다. 설치한 뒤에 켜 주세요.",
+    },
+    "vr_overlay_status_no_headset": {
+        "zh-CN": "⚠ 没有检测到头显。请先连接头显。",
+        "en": "\u26a0 No headset detected. Connect one first.",
+        "ja": "\u26a0 ヘッドセットが検出されません。接続してください。",
+        "ru": "\u26a0 Шлем не обнаружен. Сначала подключите его.",
+        "ko": "\u26a0 헤드셋이 감지되지 않았습니다. 먼저 연결해 주세요.",
+    },
+    "vr_overlay_status_missing_runtime": {
+        "zh-CN": "⚠ 这个安装里缺少 VR 组件（openvr），头显显示无法启动。请重新安装程序，或从源码运行时重建运行环境。",
+        "en": "⚠ This install is missing the VR component (openvr), so the headset panel cannot start. Reinstall the app, or rebuild the environment when running from source.",
+        "ja": "⚠ このインストールには VR コンポーネント（openvr）がなく、ヘッドセット表示を開始できません。アプリを再インストールするか、ソースから実行している場合は環境を再構築してください。",
+        "ru": "⚠ В этой установке нет VR-компонента (openvr), поэтому панель в шлеме не запускается. Переустановите приложение или пересоберите окружение при запуске из исходников.",
+        "ko": "⚠ 이 설치에는 VR 구성 요소(openvr)가 없어 헤드셋 표시를 시작할 수 없습니다. 앱을 다시 설치하거나, 소스에서 실행 중이라면 환경을 다시 빌드하세요.",
+    },
+    "vr_overlay_status_failed": {
+        "zh-CN": "⚠ 无法在头显中显示字幕。桌面悬浮窗不受影响，仍然正常工作。",
+        "en": "\u26a0 The headset panel could not start. The desktop overlay is unaffected and still works.",
+        "ja": "\u26a0 ヘッドセットへの表示を開始できませんでした。デスクトップの字幕は影響を受けず、通常どおり動作します。",
+        "ru": "\u26a0 Не удалось запустить панель в шлеме. Субтитры на рабочем столе продолжают работать.",
+        "ko": "\u26a0 헤드셋 표시를 시작할 수 없습니다. 데스크톱 자막은 영향을 받지 않고 정상 작동합니다.",
+    },
     "voice_clone_region_fallback": {
         "zh-CN": "你的 Qwen TTS 使用的服务区域不提供声音克隆接口，克隆已改用「{region}」区域。请在上方为该区域单独填写 API Key——不同区域的密钥不能通用。",
         "en": "Your Qwen TTS service region does not offer voice cloning, so cloning uses the \u201c{region}\u201d region instead. Enter an API key for that region above; keys are not shared across regions.",
@@ -2918,6 +3429,7 @@ class SettingsWindow(QDialog):
     update_check_failed = Signal(str)
     tts_test_finished = Signal(int, bool, str)
     translation_connection_test_finished = Signal(int, bool, object)
+    edge_link_test_finished = Signal(int, object)
     ui_callback_requested = Signal()
 
     def __init__(
@@ -3056,6 +3568,31 @@ class SettingsWindow(QDialog):
         self._vrc_listen_src_var = _StrVar()
         self._vrc_listen_tgt_var = _StrVar()
         self._mic_send_to_chatbox_var = _BoolVar(True)
+        self._vr_overlay_enabled_var = _BoolVar(False)
+        self._vr_overlay_locked_var = _BoolVar(False)
+        self._edge_fallback_var = _BoolVar(True)
+        self._edge_proxy_var = _BoolVar(False)
+        self._edge_link_test_generation = 0
+        self._edge_link_testing = False
+        self._edge_link_test_btn: QPushButton | None = None
+        self._edge_link_result_label: QLabel | None = None
+        self._vr_dashboard_enabled_var = _BoolVar(True)
+        self._vr_wrist_enabled_var = _BoolVar(True)
+        self._vr_wrist_hand_var = _StrVar("")
+        self._vr_gesture_enabled_var = _BoolVar(True)
+        self._steamvr_autolaunch_var = _BoolVar(False)
+        self._ocr_gpu_var = _BoolVar(True)
+        self._vr_overlay_distance = 1.5
+        self._vr_overlay_yaw = 0.0
+        self._vr_overlay_pitch = -12.0
+        self._osc_toggle_screenshot_var = _StrVar()
+        self._screenshot_enabled_var = _BoolVar(False)
+        self._screenshot_hand_var = _StrVar("")
+        self._screenshot_placement_var = _StrVar("")
+        self._screenshot_selection_var = _BoolVar(True)
+        self._screenshot_hotkey_var = _StrVar()
+        self._screenshot_depth = 1.5
+        self._screenshot_auto_hide = 1.5
         self._text_input_hotkey_var = _StrVar()
         self._mic_mute_hotkey_var = _StrVar()
         self._output_format_var = _StrVar()
@@ -3205,6 +3742,7 @@ class SettingsWindow(QDialog):
         self.translation_connection_test_finished.connect(
             self._finish_translation_connection_test
         )
+        self.edge_link_test_finished.connect(self._finish_edge_link_test)
         self.ui_callback_requested.connect(self._drain_ui_callback_queue)
         if self._preloaded:
             QTimer.singleShot(120, self._prebuild_next_page)
@@ -3254,6 +3792,9 @@ class SettingsWindow(QDialog):
         asr_cfg = cfg.get("asr", {}) if isinstance(cfg.get("asr", {}), dict) else {}
         audio_cfg = cfg.get("audio", {}) if isinstance(cfg.get("audio", {}), dict) else {}
         streaming_cfg = asr_cfg.get("streaming", {}) if isinstance(asr_cfg.get("streaming", {}), dict) else {}
+        edge_cfg = asr_cfg.get("edge_stt", {}) if isinstance(asr_cfg.get("edge_stt", {}), dict) else {}
+        self._edge_fallback_var.set(bool(edge_cfg.get("auto_fallback", True)))
+        self._edge_proxy_var.set(bool(edge_cfg.get("use_system_proxy", False)))
         tts_cfg = cfg.get("tts", {}) if isinstance(cfg.get("tts", {}), dict) else {}
         vrc_cfg = cfg.get("vrc_listen", {}) if isinstance(cfg.get("vrc_listen", {}), dict) else {}
         hotkey_cfg = cfg.get("hotkeys", {}) if isinstance(cfg.get("hotkeys", {}), dict) else {}
@@ -3396,6 +3937,74 @@ class SettingsWindow(QDialog):
         self._vrc_listen_enabled_var.set(bool(vrc_cfg.get("enabled", False)))
         self._vrc_listen_overlay_var.set(bool(vrc_cfg.get("show_overlay", False)))
         self._vrc_listen_send_var.set(bool(vrc_cfg.get("send_to_chatbox", True)))
+        vr_cfg = vrc_cfg.get("vr_overlay", {})
+        if not isinstance(vr_cfg, dict):
+            vr_cfg = {}
+        self._vr_overlay_enabled_var.set(bool(vr_cfg.get("enabled", False)))
+        self._vr_overlay_locked_var.set(bool(vr_cfg.get("locked", False)))
+        dash_cfg = vrc_cfg.get("vr_dashboard", {})
+        if not isinstance(dash_cfg, dict):
+            dash_cfg = {}
+        self._vr_dashboard_enabled_var.set(bool(dash_cfg.get("enabled", True)))
+        self._vr_overlay_width = float(vr_cfg.get("width_meters", 1.6) or 1.6)
+        self._vr_overlay_opacity = float(vr_cfg.get("plate_opacity", 0.50) or 0.50)
+        self._load_vr_geometry(vr_cfg.get("position"))
+        for attr, section in (("_vr_gesture_enabled_var", "vr_gesture"),):
+            section_cfg = vrc_cfg.get(section, {})
+            if not isinstance(section_cfg, dict):
+                section_cfg = {}
+            getattr(self, attr).set(bool(section_cfg.get("enabled", True)))
+        self._steamvr_autolaunch_var.set(bool(vrc_cfg.get("steamvr_autolaunch", False)))
+        shot_cfg = vrc_cfg.get("screenshot_translation", {})
+        if not isinstance(shot_cfg, dict):
+            shot_cfg = {}
+        self._screenshot_enabled_var.set(bool(shot_cfg.get("enabled", False)))
+        self._screenshot_hand_codes = {
+            self._copy("screenshot_hand_left"): "left",
+            self._copy("screenshot_hand_right"): "right",
+        }
+        hand = str(shot_cfg.get("hand", "left") or "left")
+        self._screenshot_hand_var.set(
+            self._label_for_code(
+                [(label, code) for label, code in self._screenshot_hand_codes.items()],
+                hand,
+            )
+        )
+        self._screenshot_placement_codes = {
+            self._copy("screenshot_placement_card"): "card",
+            self._copy("screenshot_placement_hand"): "hand",
+        }
+        placement = str(shot_cfg.get("placement", "card") or "card")
+        if placement not in self._screenshot_placement_codes.values():
+            # The world-pinned labels are kept only for those who set them
+            # by hand; the page offers the card and the hand.
+            placement = "card"
+        self._screenshot_placement_var.set(
+            self._label_for_code(
+                [(label, code) for label, code in self._screenshot_placement_codes.items()],
+                placement,
+            )
+        )
+        self._screenshot_selection_var.set(bool(shot_cfg.get("selection_mode", True)))
+        self._ocr_gpu_var.set(bool(shot_cfg.get("ocr_gpu", True)))
+        wrist_cfg = vrc_cfg.get("vr_wrist", {})
+        if not isinstance(wrist_cfg, dict):
+            wrist_cfg = {}
+        self._vr_wrist_enabled_var.set(bool(wrist_cfg.get("enabled", True)))
+        self._vr_wrist_hand_var.set(
+            self._label_for_code(
+                [(label, code) for label, code in self._screenshot_hand_codes.items()],
+                str(wrist_cfg.get("hand", "left") or "left"),
+            )
+        )
+        try:
+            self._screenshot_depth = float(shot_cfg.get("depth_meters", 1.5) or 1.5)
+        except (TypeError, ValueError):
+            self._screenshot_depth = 1.5
+        try:
+            self._screenshot_auto_hide = max(0.5, min(120.0, float(shot_cfg.get("auto_hide_seconds", 1.5) or 1.5)))
+        except (TypeError, ValueError):
+            self._screenshot_auto_hide = 1.5
         self._listen_self_suppress_var.set(bool(vrc_cfg.get("self_suppress", False)))
         self._listen_self_suppress_seconds_var.set(self._format_numeric_input(vrc_cfg.get("self_suppress_seconds", 0.65)))
         self._listen_segment_duration_var.set(
@@ -3440,9 +4049,12 @@ class SettingsWindow(QDialog):
             )
         )
 
-        from src.utils.global_hotkey import DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
+        from src.utils.global_hotkey import DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_SCREENSHOT_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
         self._text_input_hotkey_var.set(str(text_input_cfg.get("hotkey", DEFAULT_TEXT_INPUT_HOTKEY) or ""))
         self._mic_mute_hotkey_var.set(str(hotkey_cfg.get("mic_mute", DEFAULT_MIC_MUTE_HOTKEY) or ""))
+        self._screenshot_hotkey_var.set(
+            str(hotkey_cfg.get("screenshot_translate", DEFAULT_SCREENSHOT_HOTKEY) or "")
+        )
         self._roleplay_enabled_var.set(str(social_cfg.get("mode", "standard")) == "roleplay")
         preset = str(social_cfg.get("persona_preset", "custom") or "custom")
         if preset not in ROLEPLAY_PRESETS:
@@ -3482,6 +4094,7 @@ class SettingsWindow(QDialog):
         self._osc_toggle_listen_var.set(str(control_params.get("listen", f"{prefix}ToggleListen") or f"{prefix}ToggleListen"))
         self._osc_toggle_tts_var.set(str(control_params.get("tts", f"{prefix}ToggleTts") or f"{prefix}ToggleTts"))
         self._osc_toggle_overlay_var.set(str(control_params.get("overlay", f"{prefix}ToggleOverlay") or f"{prefix}ToggleOverlay"))
+        self._osc_toggle_screenshot_var.set(str(control_params.get("screenshot", f"{prefix}Screenshot") or f"{prefix}Screenshot"))
 
         self._avatar_sync_enabled_var.set(bool(avatar_cfg.get("enabled", False)))
         self._avatar_translating_var.set(str(avatar_params.get("translating", "MioTranslating") or "MioTranslating"))
@@ -5084,6 +5697,10 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("vad_min_rms"), self._line_edit("vad_min_rms", self._vad_min_rms_var, 160))
         self._row_layout(layout, self._copy("min_segment"), self._line_edit("min_segment", self._min_segment_var, 160))
         self._row_layout(layout, self._copy("max_segment"), self._line_edit("max_segment", self._max_segment_var, 160))
+        segment_hint = QLabel(self._copy("max_segment_hint"))
+        segment_hint.setObjectName("hintLabel")
+        segment_hint.setWordWrap(True)
+        layout.addWidget(segment_hint)
         self._row_layout(layout, self._copy("partial_min_speech"), self._line_edit("partial_min_speech", self._partial_min_speech_var, 160))
 
         # Audio Diagnostics Tools
@@ -5128,6 +5745,8 @@ class SettingsWindow(QDialog):
         self._vrc_listen_send_check = self._check("vrc_send", self._vrc_listen_send_var)
         self._vrc_listen_send_check.toggled.connect(lambda value: self._emit_listen_state(send_to_chatbox=value))
         self._row_layout(layout, self._copy("vrc_listen_send"), self._vrc_listen_send_check)
+
+        self._build_vr_overlay_section(layout)
 
         # Desktop Audio & ASR Section
         self._section_title(layout, self._copy("audio_device_asr_section"))
@@ -5179,6 +5798,713 @@ class SettingsWindow(QDialog):
         diag_row.addWidget(self._icon_button(self._copy("open_listen_calibration"), "settings.svg", lambda: self._request_vad_calibration("vrc_listen"), width=168))
         diag_row.addStretch(1)
         layout.addLayout(diag_row)
+
+    def _build_vr_overlay_section(self, layout: QVBoxLayout) -> None:
+        """Subtitles inside the headset, with the sizing controls next to them."""
+
+        self._section_title(layout, self._copy("vr_overlay_section"))
+
+        guide = QLabel(self._copy("vr_overlay_guide"))
+        guide.setObjectName("hintLabel")
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
+
+        self._vr_overlay_check = self._check("vr_overlay", self._vr_overlay_enabled_var)
+        self._vr_overlay_check.toggled.connect(self._on_vr_overlay_toggled)
+        self._row_layout(layout, self._copy("vr_overlay_enabled"), self._vr_overlay_check)
+
+        self._vr_overlay_status_label = QLabel("")
+        self._vr_overlay_status_label.setObjectName("warningLabel")
+        self._vr_overlay_status_label.setWordWrap(True)
+        self._vr_overlay_status_label.setVisible(False)
+        layout.addWidget(self._vr_overlay_status_label)
+
+        width_row = QHBoxLayout()
+        width_row.setSpacing(10)
+        width_label = QLabel(self._copy("vr_overlay_width"))
+        width_label.setObjectName("fieldLabel")
+        width_label.setMinimumWidth(170)
+        width_row.addWidget(width_label)
+        self._vr_width_slider = QSlider()
+        self._vr_width_slider.setOrientation(Qt.Orientation.Horizontal)
+        self._vr_width_slider.setRange(30, 400)
+        self._vr_width_slider.setValue(int(round(self._vr_overlay_width * 100)))
+        self._vr_width_slider.valueChanged.connect(self._on_vr_width_changed)
+        width_row.addWidget(self._vr_width_slider, 1)
+        self._vr_width_value = QLabel("")
+        width_row.addWidget(self._vr_width_value)
+        layout.addLayout(width_row)
+
+        opacity_row = QHBoxLayout()
+        opacity_row.setSpacing(10)
+        opacity_label = QLabel(self._copy("vr_overlay_opacity"))
+        opacity_label.setObjectName("fieldLabel")
+        opacity_label.setMinimumWidth(170)
+        opacity_row.addWidget(opacity_label)
+        self._vr_opacity_slider = QSlider()
+        self._vr_opacity_slider.setOrientation(Qt.Orientation.Horizontal)
+        self._vr_opacity_slider.setRange(0, 95)
+        self._vr_opacity_slider.setValue(int(round(self._vr_overlay_opacity * 100)))
+        self._vr_opacity_slider.valueChanged.connect(self._on_vr_opacity_changed)
+        opacity_row.addWidget(self._vr_opacity_slider, 1)
+        self._vr_opacity_value = QLabel("")
+        opacity_row.addWidget(self._vr_opacity_value)
+        layout.addLayout(opacity_row)
+
+        opacity_hint = QLabel(self._copy("vr_overlay_opacity_hint"))
+        opacity_hint.setObjectName("hintLabel")
+        opacity_hint.setWordWrap(True)
+        layout.addWidget(opacity_hint)
+
+        for attr, label_key, minimum, maximum, handler in (
+            ("distance", "vr_overlay_distance", 50, 500, self._on_vr_distance_changed),
+            ("yaw", "vr_overlay_yaw", -90, 90, self._on_vr_yaw_changed),
+            ("pitch", "vr_overlay_pitch", -60, 60, self._on_vr_pitch_changed),
+        ):
+            geometry_row = QHBoxLayout()
+            geometry_row.setSpacing(10)
+            geometry_label = QLabel(self._copy(label_key))
+            geometry_label.setObjectName("fieldLabel")
+            geometry_label.setMinimumWidth(170)
+            geometry_row.addWidget(geometry_label)
+            slider = QSlider()
+            slider.setOrientation(Qt.Orientation.Horizontal)
+            slider.setRange(minimum, maximum)
+            slider.setValue(self._vr_geometry_slider_value(attr))
+            slider.valueChanged.connect(handler)
+            geometry_row.addWidget(slider, 1)
+            value_label = QLabel("")
+            geometry_row.addWidget(value_label)
+            layout.addLayout(geometry_row)
+            setattr(self, f"_vr_{attr}_slider", slider)
+            setattr(self, f"_vr_{attr}_value", value_label)
+        geometry_hint = QLabel(self._copy("vr_overlay_geometry_hint"))
+        geometry_hint.setObjectName("hintLabel")
+        geometry_hint.setWordWrap(True)
+        layout.addWidget(geometry_hint)
+
+        reset_row = QHBoxLayout()
+        reset_row.setSpacing(10)
+        reset_row.addStretch(1)
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(10)
+        preset_label = QLabel(self._copy("vr_overlay_size_presets"))
+        preset_label.setObjectName("fieldLabel")
+        preset_label.setMinimumWidth(170)
+        preset_row.addWidget(preset_label)
+        self._vr_preset_buttons = {}
+        for key, label_key in (
+            ("small", "vr_overlay_size_small"),
+            ("medium", "vr_overlay_size_medium"),
+            ("large", "vr_overlay_size_large"),
+            ("xlarge", "vr_overlay_size_xlarge"),
+        ):
+            button = QPushButton(self._copy(label_key))
+            button.setObjectName("secondaryButton")
+            button.setMinimumHeight(32)
+            button.clicked.connect(lambda _checked=False, k=key: self._on_vr_size_preset(k))
+            preset_row.addWidget(button, 1)
+            self._vr_preset_buttons[key] = button
+        layout.addLayout(preset_row)
+
+        self._vr_move_button = QPushButton(self._copy("vr_overlay_move_button"))
+        self._vr_move_button.setObjectName("secondaryButton")
+        self._vr_move_button.setMinimumHeight(32)
+        self._vr_move_button.clicked.connect(self._on_vr_move_panel)
+        layout.addWidget(self._vr_move_button)
+        move_hint = QLabel(self._copy("vr_overlay_move_hint"))
+        move_hint.setObjectName("hintLabel")
+        move_hint.setWordWrap(True)
+        layout.addWidget(move_hint)
+
+        self._vr_overlay_locked_check = self._check("vr_overlay_locked", self._vr_overlay_locked_var)
+        self._vr_overlay_locked_check.toggled.connect(self._on_vr_overlay_locked_toggled)
+        self._row_layout(layout, self._copy("vr_overlay_locked"), self._vr_overlay_locked_check)
+        locked_hint = QLabel(self._copy("vr_overlay_locked_hint"))
+        locked_hint.setObjectName("hintLabel")
+        locked_hint.setWordWrap(True)
+        layout.addWidget(locked_hint)
+
+        self._vr_dashboard_check = self._check("vr_dashboard", self._vr_dashboard_enabled_var)
+        self._vr_dashboard_check.toggled.connect(self._on_vr_dashboard_toggled)
+        self._row_layout(layout, self._copy("vr_dashboard_enabled"), self._vr_dashboard_check)
+        dash_hint = QLabel(self._copy("vr_dashboard_hint"))
+        dash_hint.setObjectName("hintLabel")
+        dash_hint.setWordWrap(True)
+        layout.addWidget(dash_hint)
+
+        self._vr_wrist_check = self._check("vr_wrist", self._vr_wrist_enabled_var)
+        self._vr_wrist_check.toggled.connect(self._on_vr_wrist_toggled)
+        self._row_layout(layout, self._copy("vr_wrist_enabled"), self._vr_wrist_check)
+        self._vr_wrist_hand_combo = self._combo(
+            "vr_wrist_hand",
+            self._vr_wrist_hand_var,
+            list(self._screenshot_hand_codes.keys()),
+            self._on_vr_wrist_hand_changed,
+        )
+        self._row_layout(layout, self._copy("vr_wrist_hand"), self._vr_wrist_hand_combo)
+        wrist_hint = QLabel(self._copy("vr_wrist_hint"))
+        wrist_hint.setObjectName("hintLabel")
+        wrist_hint.setWordWrap(True)
+        layout.addWidget(wrist_hint)
+
+        self._vr_gesture_check = self._check("vr_gesture", self._vr_gesture_enabled_var)
+        self._vr_gesture_check.toggled.connect(self._on_vr_gesture_toggled)
+        self._row_layout(layout, self._copy("vr_gesture_enabled"), self._vr_gesture_check)
+        gesture_hint = QLabel(self._copy("vr_gesture_hint"))
+        gesture_hint.setObjectName("hintLabel")
+        gesture_hint.setWordWrap(True)
+        layout.addWidget(gesture_hint)
+
+        self._steamvr_autolaunch_check = self._check("steamvr_autolaunch", self._steamvr_autolaunch_var)
+        self._steamvr_autolaunch_check.toggled.connect(self._on_steamvr_autolaunch_toggled)
+        self._row_layout(
+            layout, self._copy("steamvr_autolaunch_enabled"), self._steamvr_autolaunch_check
+        )
+        autolaunch_hint = QLabel(self._copy("steamvr_autolaunch_hint"))
+        autolaunch_hint.setObjectName("hintLabel")
+        autolaunch_hint.setWordWrap(True)
+        layout.addWidget(autolaunch_hint)
+
+        self._vr_reset_button = QPushButton(self._copy("vr_overlay_reset_position"))
+        self._vr_reset_button.setObjectName("secondaryButton")
+        self._vr_reset_button.clicked.connect(self._on_vr_reset_position)
+        reset_row.addWidget(self._vr_reset_button)
+        layout.addLayout(reset_row)
+
+        self._build_screenshot_section(layout)
+
+        self._refresh_vr_overlay_labels()
+        self._refresh_vr_overlay_controls()
+
+    def _build_screenshot_section(self, layout: QVBoxLayout) -> None:
+        """Translate what is on screen with one controller button."""
+
+        self._section_title(layout, self._copy("screenshot_section"))
+
+        guide = QLabel(self._copy("screenshot_guide"))
+        guide.setObjectName("hintLabel")
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
+
+        self._screenshot_check = self._check(
+            "screenshot_enabled", self._screenshot_enabled_var
+        )
+        self._screenshot_check.toggled.connect(self._on_screenshot_toggled)
+        self._row_layout(
+            layout, self._copy("screenshot_enabled"), self._screenshot_check
+        )
+
+        self._screenshot_hand_combo = self._combo(
+            "screenshot_hand",
+            self._screenshot_hand_var,
+            list(self._screenshot_hand_codes.keys()),
+            self._on_screenshot_hand_changed,
+        )
+        self._row_layout(
+            layout, self._copy("screenshot_hand"), self._screenshot_hand_combo
+        )
+
+        self._screenshot_placement_combo = self._combo(
+            "screenshot_placement",
+            self._screenshot_placement_var,
+            list(self._screenshot_placement_codes.keys()),
+            self._on_screenshot_placement_changed,
+        )
+        self._row_layout(
+            layout, self._copy("screenshot_placement"), self._screenshot_placement_combo
+        )
+
+        self._screenshot_selection_check = self._check(
+            "screenshot_selection", self._screenshot_selection_var
+        )
+        self._screenshot_selection_check.toggled.connect(self._on_screenshot_selection_toggled)
+        self._row_layout(
+            layout, self._copy("screenshot_selection_mode"), self._screenshot_selection_check
+        )
+
+        self._ocr_gpu_check = self._check("screenshot_ocr_gpu", self._ocr_gpu_var)
+        self._ocr_gpu_check.toggled.connect(self._on_ocr_gpu_toggled)
+        self._row_layout(layout, self._copy("screenshot_ocr_gpu"), self._ocr_gpu_check)
+        gpu_hint = QLabel(self._copy("screenshot_ocr_gpu_hint"))
+        gpu_hint.setObjectName("hintLabel")
+        gpu_hint.setWordWrap(True)
+        layout.addWidget(gpu_hint)
+
+        depth_row = QHBoxLayout()
+        depth_row.setSpacing(10)
+        depth_label = QLabel(self._copy("screenshot_depth"))
+        depth_label.setObjectName("fieldLabel")
+        depth_label.setMinimumWidth(170)
+        depth_row.addWidget(depth_label)
+        self._screenshot_depth_slider = QSlider()
+        self._screenshot_depth_slider.setOrientation(Qt.Orientation.Horizontal)
+        self._screenshot_depth_slider.setRange(80, 500)
+        self._screenshot_depth_slider.setValue(int(round(self._screenshot_depth * 100)))
+        self._screenshot_depth_slider.valueChanged.connect(self._on_screenshot_depth_changed)
+        depth_row.addWidget(self._screenshot_depth_slider, 1)
+        self._screenshot_depth_value = QLabel("")
+        depth_row.addWidget(self._screenshot_depth_value)
+        layout.addLayout(depth_row)
+
+        hide_row = QHBoxLayout()
+        hide_row.setSpacing(10)
+        hide_label = QLabel(self._copy("screenshot_auto_hide"))
+        hide_label.setObjectName("fieldLabel")
+        hide_label.setMinimumWidth(170)
+        hide_row.addWidget(hide_label)
+        self._screenshot_auto_hide_slider = QSlider()
+        self._screenshot_auto_hide_slider.setOrientation(Qt.Orientation.Horizontal)
+        # Tenths of a second, half a second to a minute.
+        self._screenshot_auto_hide_slider.setRange(5, 600)
+        self._screenshot_auto_hide_slider.setValue(int(round(self._screenshot_auto_hide * 10)))
+        self._screenshot_auto_hide_slider.valueChanged.connect(self._on_screenshot_auto_hide_changed)
+        hide_row.addWidget(self._screenshot_auto_hide_slider, 1)
+        self._screenshot_auto_hide_value = QLabel("")
+        hide_row.addWidget(self._screenshot_auto_hide_value)
+        layout.addLayout(hide_row)
+        hide_hint = QLabel(self._copy("screenshot_auto_hide_hint"))
+        hide_hint.setObjectName("hintLabel")
+        hide_hint.setWordWrap(True)
+        layout.addWidget(hide_hint)
+
+        self._row_layout(
+            layout,
+            self._copy("screenshot_hotkey"),
+            self._line_edit("screenshot_hk", self._screenshot_hotkey_var, 220),
+        )
+        self._refresh_screenshot_labels()
+
+        status = QLabel(self._screenshot_language_text())
+        status.setObjectName("hintLabel")
+        status.setWordWrap(True)
+        self._screenshot_language_label = status
+        layout.addWidget(status)
+
+        binding = QLabel("")
+        binding.setObjectName("hintLabel")
+        binding.setWordWrap(True)
+        binding.setVisible(False)
+        self._screenshot_binding_label = binding
+        layout.addWidget(binding)
+
+        self._refresh_screenshot_controls()
+
+    def _screenshot_language_text(self) -> str:
+        """Say which recognizers Windows has, because it decides what works."""
+
+        try:
+            from src.core.local_ocr import local_ocr_available
+
+            if local_ocr_available():
+                return self._copy("screenshot_local_ocr_ready")
+        except Exception:
+            pass
+        try:
+            from src.core.screen_ocr import available_ocr_languages, ocr_runtime_available
+
+            if not ocr_runtime_available():
+                return self._copy("screenshot_runtime_missing")
+            languages = available_ocr_languages()
+        except Exception:
+            languages = []
+        if not languages:
+            return self._copy("screenshot_no_languages")
+        return self._copy("screenshot_languages", languages=", ".join(languages))
+
+    def _refresh_screenshot_controls(self) -> None:
+        enabled = self._screenshot_enabled_var.value()
+        for widget in (
+            getattr(self, "_screenshot_hand_combo", None),
+            getattr(self, "_screenshot_placement_combo", None),
+            getattr(self, "_screenshot_selection_check", None),
+            getattr(self, "_screenshot_depth_slider", None),
+            getattr(self, "_ocr_gpu_check", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(enabled)
+
+    def _refresh_screenshot_labels(self) -> None:
+        depth_value = getattr(self, "_screenshot_depth_value", None)
+        if depth_value is not None:
+            depth_value.setText(
+                self._copy(
+                    "screenshot_depth_value",
+                    value=format_locale_number(
+                        self._screenshot_depth, self._ui_lang, decimals=1
+                    ),
+                )
+            )
+        hide_value = getattr(self, "_screenshot_auto_hide_value", None)
+        if hide_value is not None:
+            hide_value.setText(
+                self._copy(
+                    "screenshot_auto_hide_value",
+                    value=format_locale_number(
+                        self._screenshot_auto_hide, self._ui_lang, decimals=1
+                    ),
+                )
+            )
+
+    def _on_screenshot_placement_changed(self, _label: str) -> None:
+        code = self._screenshot_placement_codes.get(
+            self._screenshot_placement_var.value(), "card"
+        )
+        self._screenshot_config()["placement"] = code
+        self._notify_vr_overlay_changed()
+
+    def _on_screenshot_selection_toggled(self, enabled: bool) -> None:
+        self._screenshot_config()["selection_mode"] = bool(enabled)
+        self._notify_vr_overlay_changed()
+
+    def _on_ocr_gpu_toggled(self, enabled: bool) -> None:
+        self._screenshot_config()["ocr_gpu"] = bool(enabled)
+        try:
+            from src.core.local_ocr import set_gpu_preference
+
+            set_gpu_preference(bool(enabled))
+        except Exception:
+            logger.debug("Could not apply the OCR GPU preference", exc_info=True)
+        self._notify_vr_overlay_changed()
+
+    def _on_screenshot_depth_changed(self, value: int) -> None:
+        self._screenshot_depth = max(0.8, min(5.0, float(value) / 100.0))
+        self._screenshot_config()["depth_meters"] = self._screenshot_depth
+        self._refresh_screenshot_labels()
+        self._notify_vr_overlay_changed()
+
+    def _on_screenshot_auto_hide_changed(self, value: int) -> None:
+        self._screenshot_auto_hide = max(0.5, min(120.0, float(value) / 10.0))
+        self._screenshot_config()["auto_hide_seconds"] = self._screenshot_auto_hide
+        self._refresh_screenshot_labels()
+        self._notify_vr_overlay_changed()
+
+    def _screenshot_config(self) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        cfg = listen_cfg.setdefault("screenshot_translation", {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+            listen_cfg["screenshot_translation"] = cfg
+        return cfg
+
+    def _on_screenshot_toggled(self, enabled: bool) -> None:
+        self._screenshot_config()["enabled"] = bool(enabled)
+        self._refresh_screenshot_controls()
+        self._notify_vr_overlay_changed()
+
+    def _on_screenshot_hand_changed(self, _label: str) -> None:
+        code = self._screenshot_hand_codes.get(self._screenshot_hand_var.value(), "left")
+        self._screenshot_config()["hand"] = code
+        self._notify_vr_overlay_changed()
+
+    # ------------------------------------------------------------ VR handlers
+    def _vr_overlay_config(self) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        vr_cfg = listen_cfg.setdefault("vr_overlay", {})
+        if not isinstance(vr_cfg, dict):
+            vr_cfg = {}
+            listen_cfg["vr_overlay"] = vr_cfg
+        return vr_cfg
+
+    def _notify_vr_overlay_changed(self) -> None:
+        owner = self._owner_window()
+        notifier = getattr(owner, "on_vr_overlay_settings_changed", None)
+        if callable(notifier):
+            try:
+                notifier()
+            except Exception:
+                logger.debug("VR overlay change notification failed", exc_info=True)
+
+    def _owner_window(self):
+        return self.parent()
+
+    def _refresh_vr_overlay_labels(self) -> None:
+        self._vr_width_value.setText(
+            self._copy(
+                "vr_overlay_width_value",
+                value=format_locale_number(
+                    self._vr_overlay_width, self._ui_lang, decimals=2
+                ),
+            )
+        )
+        self._vr_opacity_value.setText(
+            format_locale_percent(self._vr_overlay_opacity * 100, self._ui_lang)
+        )
+        distance_value = getattr(self, "_vr_distance_value", None)
+        if distance_value is not None:
+            distance_value.setText(
+                self._copy(
+                    "vr_overlay_width_value",
+                    value=format_locale_number(self._vr_overlay_distance, self._ui_lang, decimals=1),
+                )
+            )
+        for attr, degrees in (("yaw", self._vr_overlay_yaw), ("pitch", self._vr_overlay_pitch)):
+            value_label = getattr(self, f"_vr_{attr}_value", None)
+            if value_label is not None:
+                value_label.setText(
+                    self._copy(
+                        "vr_overlay_angle_value",
+                        value=format_locale_number(degrees, self._ui_lang, decimals=0),
+                    )
+                )
+
+    def _refresh_vr_overlay_controls(self) -> None:
+        enabled = self._vr_overlay_enabled_var.value()
+        for widget in (
+            getattr(self, "_vr_width_slider", None),
+            getattr(self, "_vr_opacity_slider", None),
+            getattr(self, "_vr_distance_slider", None),
+            getattr(self, "_vr_yaw_slider", None),
+            getattr(self, "_vr_pitch_slider", None),
+            getattr(self, "_vr_reset_button", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(enabled)
+        move_button = getattr(self, "_vr_move_button", None)
+        if move_button is not None:
+            # A locked panel is not dragged: the button would only refuse.
+            move_button.setEnabled(enabled and not self._vr_overlay_locked_var.value())
+
+    def _on_vr_overlay_toggled(self, enabled: bool) -> None:
+        self._vr_overlay_config()["enabled"] = bool(enabled)
+        self._refresh_vr_overlay_controls()
+        if not enabled:
+            self._vr_overlay_status_label.setVisible(False)
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_overlay_locked_toggled(self, locked: bool) -> None:
+        self._vr_overlay_config()["locked"] = bool(locked)
+        self._refresh_vr_overlay_controls()
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_width_changed(self, value: int) -> None:
+        self._vr_overlay_width = max(0.3, min(4.0, float(value) / 100.0))
+        self._vr_overlay_config()["width_meters"] = self._vr_overlay_width
+        self._refresh_vr_overlay_labels()
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_opacity_changed(self, value: int) -> None:
+        self._vr_overlay_opacity = max(0.0, min(0.95, float(value) / 100.0))
+        self._vr_overlay_config()["plate_opacity"] = self._vr_overlay_opacity
+        self._refresh_vr_overlay_labels()
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_reset_position(self) -> None:
+        self._vr_overlay_config()["position"] = [0.0, -0.32, -1.5]
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_size_preset(self, key: str) -> None:
+        from src.core.steamvr_overlay import SIZE_PRESETS
+
+        for preset_key, meters in SIZE_PRESETS:
+            if preset_key == key:
+                slider = getattr(self, "_vr_width_slider", None)
+                if slider is not None:
+                    # The slider handler stores the value and notifies.
+                    slider.setValue(int(round(meters * 100)))
+                else:
+                    self._vr_overlay_width = meters
+                    self._vr_overlay_config()["width_meters"] = meters
+                    self._refresh_vr_overlay_labels()
+                    self._notify_vr_overlay_changed()
+                return
+
+    def _on_vr_move_panel(self) -> None:
+        owner = self._owner_window()
+        starter = getattr(owner, "_begin_vr_edit_mode", None)
+        if callable(starter):
+            try:
+                starter()
+            except Exception:
+                logger.debug("Failed to start VR edit mode from settings", exc_info=True)
+
+    def _vr_dashboard_config(self) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        dash_cfg = listen_cfg.setdefault("vr_dashboard", {})
+        if not isinstance(dash_cfg, dict):
+            dash_cfg = {}
+            listen_cfg["vr_dashboard"] = dash_cfg
+        return dash_cfg
+
+    def _on_vr_dashboard_toggled(self, enabled: bool) -> None:
+        self._vr_dashboard_config()["enabled"] = bool(enabled)
+        self._notify_vr_overlay_changed()
+
+    def _vr_wrist_config(self) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        wrist_cfg = listen_cfg.setdefault("vr_wrist", {})
+        if not isinstance(wrist_cfg, dict):
+            wrist_cfg = {}
+            listen_cfg["vr_wrist"] = wrist_cfg
+        return wrist_cfg
+
+    def _on_vr_wrist_toggled(self, enabled: bool) -> None:
+        self._vr_wrist_config()["enabled"] = bool(enabled)
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_wrist_hand_changed(self, _label: str) -> None:
+        code = self._screenshot_hand_codes.get(self._vr_wrist_hand_var.value(), "left")
+        self._vr_wrist_config()["hand"] = code
+        self._notify_vr_overlay_changed()
+
+    def _vrc_section_config(self, section: str) -> dict:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        cfg = listen_cfg.setdefault(section, {})
+        if not isinstance(cfg, dict):
+            cfg = {}
+            listen_cfg[section] = cfg
+        return cfg
+
+    def _on_vr_gesture_toggled(self, enabled: bool) -> None:
+        self._vrc_section_config("vr_gesture")["enabled"] = bool(enabled)
+        self._notify_vr_overlay_changed()
+
+    def _on_steamvr_autolaunch_toggled(self, enabled: bool) -> None:
+        listen_cfg = self._config.setdefault("vrc_listen", {})
+        if not isinstance(listen_cfg, dict):
+            listen_cfg = {}
+            self._config["vrc_listen"] = listen_cfg
+        listen_cfg["steamvr_autolaunch"] = bool(enabled)
+        self._notify_vr_overlay_changed()
+
+    # ------------------------------------------------ panel geometry
+    def _load_vr_geometry(self, position: object) -> None:
+        from src.core.vr_geometry import angles_of
+
+        try:
+            x, y, z = (float(v) for v in position)  # type: ignore[union-attr]
+            yaw, pitch, radius = angles_of((x, y, z))
+        except (TypeError, ValueError):
+            yaw, pitch, radius = 0.0, -12.0, 1.5
+        self._vr_overlay_yaw = yaw
+        self._vr_overlay_pitch = pitch
+        self._vr_overlay_distance = radius
+
+    def _vr_geometry_slider_value(self, attr: str) -> int:
+        if attr == "distance":
+            return int(round(self._vr_overlay_distance * 100))
+        if attr == "yaw":
+            return int(round(self._vr_overlay_yaw))
+        return int(round(self._vr_overlay_pitch))
+
+    def _write_vr_position(self) -> None:
+        from src.core.vr_geometry import position_from_angles
+
+        position = position_from_angles(
+            self._vr_overlay_yaw, self._vr_overlay_pitch, self._vr_overlay_distance
+        )
+        self._vr_overlay_config()["position"] = [float(v) for v in position]
+        self._refresh_vr_overlay_labels()
+        self._notify_vr_overlay_changed()
+
+    def _on_vr_distance_changed(self, value: int) -> None:
+        self._vr_overlay_distance = max(0.5, min(5.0, float(value) / 100.0))
+        self._write_vr_position()
+
+    def _on_vr_yaw_changed(self, value: int) -> None:
+        self._vr_overlay_yaw = max(-90.0, min(90.0, float(value)))
+        self._write_vr_position()
+
+    def _on_vr_pitch_changed(self, value: int) -> None:
+        self._vr_overlay_pitch = max(-60.0, min(60.0, float(value)))
+        self._write_vr_position()
+
+    def _sync_vr_geometry_sliders(self) -> None:
+        for attr in ("distance", "yaw", "pitch"):
+            slider = getattr(self, f"_vr_{attr}_slider", None)
+            if slider is None:
+                continue
+            blocked = slider.blockSignals(True)
+            slider.setValue(self._vr_geometry_slider_value(attr))
+            slider.blockSignals(blocked)
+
+    def sync_vr_overlay_from_config(self) -> None:
+        """Reflect changes made from the headset (dashboard tab) in the controls."""
+
+        vr_cfg = self._vr_overlay_config()
+        enabled = bool(vr_cfg.get("enabled", False))
+        self._vr_overlay_enabled_var.set(enabled)
+        check = getattr(self, "_vr_overlay_check", None)
+        if check is not None:
+            blocked = check.blockSignals(True)
+            check.setChecked(enabled)
+            check.blockSignals(blocked)
+        locked = bool(vr_cfg.get("locked", False))
+        self._vr_overlay_locked_var.set(locked)
+        check = getattr(self, "_vr_overlay_locked_check", None)
+        if check is not None:
+            blocked = check.blockSignals(True)
+            check.setChecked(locked)
+            check.blockSignals(blocked)
+        try:
+            self._vr_overlay_width = float(
+                vr_cfg.get("width_meters", self._vr_overlay_width) or self._vr_overlay_width
+            )
+        except (TypeError, ValueError):
+            pass
+        slider = getattr(self, "_vr_width_slider", None)
+        if slider is not None:
+            blocked = slider.blockSignals(True)
+            slider.setValue(int(round(self._vr_overlay_width * 100)))
+            slider.blockSignals(blocked)
+        # A drag in the headset moved the panel: the angle sliders follow.
+        self._load_vr_geometry(vr_cfg.get("position"))
+        self._sync_vr_geometry_sliders()
+        self._refresh_vr_overlay_labels()
+        self._refresh_vr_overlay_controls()
+
+    def sync_screenshot_binding_state(self, *, bound: bool | None) -> None:
+        """Say whether SteamVR is delivering the controller button at all.
+
+        None means the runtime is not up, so there is nothing to report.
+        """
+
+        label = getattr(self, "_screenshot_binding_label", None)
+        if label is None:
+            return
+        if bound is None or not self._screenshot_enabled_var.value():
+            label.setVisible(False)
+            return
+        label.setText(
+            self._copy("screenshot_binding_active" if bound else "screenshot_binding_inactive")
+        )
+        label.setVisible(True)
+
+    def sync_vr_overlay_state(self, *, available: bool, reason: str = "") -> None:
+        """Show why the headset panel is not up, when it is not."""
+
+        label = getattr(self, "_vr_overlay_status_label", None)
+        if label is None:
+            return
+        if available or not self._vr_overlay_enabled_var.value():
+            label.setVisible(False)
+            return
+        reason = str(reason or "")
+        if reason.startswith("openvr import failed"):
+            key = "vr_overlay_status_missing_runtime"
+        else:
+            key = {
+                "steamvr_not_running": "vr_overlay_status_not_running",
+                "steamvr_not_installed": "vr_overlay_status_not_installed",
+                "headset_not_found": "vr_overlay_status_no_headset",
+            }.get(reason, "vr_overlay_status_failed")
+        label.setText(self._copy(key))
+        label.setVisible(True)
 
     def _build_translation_page(self, layout: QVBoxLayout) -> None:
         """Translation Settings Page - ONLY languages and output format (NO API config)"""
@@ -5405,6 +6731,7 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("osc_param_toggle_listen"), self._line_edit("osc_toggle_listen", self._osc_toggle_listen_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_tts"), self._line_edit("osc_toggle_tts", self._osc_toggle_tts_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_overlay"), self._line_edit("osc_toggle_overlay", self._osc_toggle_overlay_var, 260))
+        self._row_layout(layout, self._copy("osc_param_toggle_screenshot"), self._line_edit("osc_toggle_screenshot", self._osc_toggle_screenshot_var, 260))
 
         self._section_title(layout, self._copy("avatar_section"))
         self._build_switch_row(layout, self._copy("avatar_sync_enabled"), self._avatar_sync_enabled_var)
@@ -5701,6 +7028,7 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("osc_param_toggle_listen"), self._line_edit("osc_toggle_listen", self._osc_toggle_listen_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_tts"), self._line_edit("osc_toggle_tts", self._osc_toggle_tts_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_overlay"), self._line_edit("osc_toggle_overlay", self._osc_toggle_overlay_var, 260))
+        self._row_layout(layout, self._copy("osc_param_toggle_screenshot"), self._line_edit("osc_toggle_screenshot", self._osc_toggle_screenshot_var, 260))
 
         # Hotkeys Section
         self._section_title(layout, self._copy("global_hotkeys_section"))
@@ -6587,6 +7915,111 @@ class SettingsWindow(QDialog):
         note.setObjectName("hintLabel")
         note.setWordWrap(True)
         self._asr_provider_layout.addWidget(note)
+
+        fallback_check = self._check("edge_stt_fallback", self._edge_fallback_var)
+        self._row_layout(
+            self._asr_provider_layout, self._copy("edge_stt_fallback_enabled"), fallback_check
+        )
+        fallback_hint = QLabel(self._copy("edge_stt_fallback_hint"))
+        fallback_hint.setObjectName("hintLabel")
+        fallback_hint.setWordWrap(True)
+        self._asr_provider_layout.addWidget(fallback_hint)
+
+        proxy_check = self._check("edge_stt_proxy", self._edge_proxy_var)
+        self._row_layout(
+            self._asr_provider_layout, self._copy("edge_stt_use_system_proxy"), proxy_check
+        )
+        proxy_hint = QLabel(self._copy("edge_stt_use_system_proxy_hint"))
+        proxy_hint.setObjectName("hintLabel")
+        proxy_hint.setWordWrap(True)
+        self._asr_provider_layout.addWidget(proxy_hint)
+
+        test_btn = QPushButton(self._copy("edge_stt_link_test"))
+        test_btn.setObjectName("secondaryButton")
+        test_btn.setMinimumHeight(32)
+        test_btn.setEnabled(not self._edge_link_testing)
+        test_btn.clicked.connect(self._test_edge_stt_link)
+        self._asr_provider_layout.addWidget(test_btn)
+        self._edge_link_test_btn = test_btn
+        result_label = QLabel("")
+        result_label.setObjectName("hintLabel")
+        result_label.setWordWrap(True)
+        result_label.setVisible(False)
+        self._asr_provider_layout.addWidget(result_label)
+        self._edge_link_result_label = result_label
+
+    def _edge_link_test_config(self) -> dict:
+        """The Edge section as the page shows it now, unsaved switches included."""
+
+        import copy as _copy_module
+
+        asr_cfg = self._config.get("asr", {}) if isinstance(self._config, dict) else {}
+        edge_cfg = asr_cfg.get("edge_stt", {}) if isinstance(asr_cfg, dict) else {}
+        edge_cfg = _copy_module.deepcopy(edge_cfg) if isinstance(edge_cfg, dict) else {}
+        edge_cfg["use_system_proxy"] = self._edge_proxy_var.value()
+        language = asr_cfg.get("language") if isinstance(asr_cfg, dict) else None
+        return {"asr": {"language": language, "edge_stt": edge_cfg}}
+
+    def _test_edge_stt_link(self) -> None:
+        """Measure the route to the speech service off the UI thread."""
+
+        if self._edge_link_testing:
+            return
+        snapshot = self._edge_link_test_config()
+        self._edge_link_testing = True
+        self._edge_link_test_generation += 1
+        generation = self._edge_link_test_generation
+        button = self._edge_link_test_btn
+        if button is not None:
+            button.setEnabled(False)
+            button.setText(self._copy("edge_stt_link_test_running"))
+        label = self._edge_link_result_label
+        if label is not None:
+            label.setVisible(False)
+
+        def worker() -> None:
+            try:
+                from src.asr.edge_stt_asr import diagnose_link
+
+                result = diagnose_link(snapshot)
+            except Exception as exc:  # the probe never raises, but the import might
+                result = {"verdict": "failed", "error": str(exc) or type(exc).__name__}
+            self.edge_link_test_finished.emit(generation, result)
+
+        threading.Thread(target=worker, name="edge-stt-link-test", daemon=True).start()
+
+    def _finish_edge_link_test(self, generation: int, result: object) -> None:
+        if generation != self._edge_link_test_generation:
+            return
+        self._edge_link_testing = False
+        button = self._edge_link_test_btn
+        if button is not None:
+            button.setEnabled(True)
+            button.setText(self._copy("edge_stt_link_test"))
+        label = self._edge_link_result_label
+        if label is None:
+            return
+        outcome = result if isinstance(result, dict) else {}
+        verdict = str(outcome.get("verdict", "failed"))
+        if verdict == "failed":
+            text = self._copy("edge_stt_link_failed", error=str(outcome.get("error", "")))
+        else:
+            def _ms(value: object) -> str:
+                try:
+                    return f"{float(value):.0f}"
+                except (TypeError, ValueError):
+                    return "?"
+
+            text = self._copy(
+                "edge_stt_link_result",
+                connect=_ms(outcome.get("connect_ms")),
+                first=_ms(outcome.get("first_message_ms")),
+                second=_ms(outcome.get("second_turn_ms")),
+                verdict=self._copy(f"edge_stt_link_{verdict}"),
+            )
+        logger.info("Edge STT link test: %s", outcome)
+        label.setText(text)
+        label.setVisible(True)
 
     def _refresh_qwen_model_hint(self, _label: str | None = None) -> None:
         if self._qwen_model_hint_label is None:
@@ -9093,6 +10526,10 @@ class SettingsWindow(QDialog):
         trans_cfg["chatbox_template"] = self._chatbox_template_var.value().strip()
         asr_code = self._asr_codes.get(self._asr_engine_var.value(), DEFAULT_ASR_ENGINE)
         asr_cfg["engine"] = asr_code
+        edge_cfg = asr_cfg.setdefault("edge_stt", {})
+        if isinstance(edge_cfg, dict):
+            edge_cfg["auto_fallback"] = self._edge_fallback_var.value()
+            edge_cfg["use_system_proxy"] = self._edge_proxy_var.value()
         asr_cfg["device"] = (
             self._asr_device_codes.get(self._asr_device_var.value(), "cpu")
             if self._is_local_asr_engine(asr_code)
@@ -9257,6 +10694,18 @@ class SettingsWindow(QDialog):
         vrc_cfg["enabled"] = self._vrc_listen_enabled_var.value()
         vrc_cfg["show_overlay"] = self._vrc_listen_overlay_var.value()
         vrc_cfg["send_to_chatbox"] = self._vrc_listen_send_var.value()
+        vr_cfg = vrc_cfg.setdefault("vr_overlay", {})
+        if isinstance(vr_cfg, dict):
+            vr_cfg["enabled"] = self._vr_overlay_enabled_var.value()
+            vr_cfg["locked"] = self._vr_overlay_locked_var.value()
+            vr_cfg["width_meters"] = self._vr_overlay_width
+            vr_cfg["plate_opacity"] = self._vr_overlay_opacity
+        shot_cfg = vrc_cfg.setdefault("screenshot_translation", {})
+        if isinstance(shot_cfg, dict):
+            shot_cfg["enabled"] = self._screenshot_enabled_var.value()
+            shot_cfg["hand"] = self._screenshot_hand_codes.get(
+                self._screenshot_hand_var.value(), "left"
+            )
         loopback_device = self._loopback_device_var.value().strip()
         if loopback_device in {self._copy("vrc_listen_device_default"), self._copy("vrc_listen_device_missing")}:
             loopback_device = ""
@@ -9295,6 +10744,7 @@ class SettingsWindow(QDialog):
         control_params["listen"] = self._osc_toggle_listen_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleListen"
         control_params["tts"] = self._osc_toggle_tts_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleTts"
         control_params["overlay"] = self._osc_toggle_overlay_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleOverlay"
+        control_params["screenshot"] = self._osc_toggle_screenshot_var.value().strip() or f"{osc_cfg['control_prefix']}Screenshot"
         avatar_cfg = osc_cfg.get("avatar_sync")
         if not isinstance(avatar_cfg, dict):
             avatar_cfg = {}
@@ -9329,6 +10779,20 @@ class SettingsWindow(QDialog):
                 self,
                 self._copy("hotkey_error"),
                 self._copy("hotkey_invalid", field=self._copy("text_input_hotkey")),
+            )
+            return
+
+        screenshot_hotkey = self._screenshot_hotkey_var.value().strip()
+        try:
+            hotkey_cfg["screenshot_translate"] = (
+                normalize_hotkey(screenshot_hotkey) if screenshot_hotkey else ""
+            )
+        except HotkeyError as exc:
+            logger.warning("Invalid screenshot hotkey: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("hotkey_error"),
+                self._copy("hotkey_invalid", field=self._copy("screenshot_hotkey")),
             )
             return
 

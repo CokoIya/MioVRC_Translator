@@ -98,7 +98,11 @@ def _provider_auto_fallback_enabled(
     asr_cfg = config.get("asr", {})
     if not isinstance(asr_cfg, dict):
         return bool(default)
-    provider_cfg = asr_cfg.get(provider_key, {})
+    # Provider sections are stored with underscores ("edge_stt"); the
+    # hyphenated engine id is accepted for configs written by hand.
+    provider_cfg = asr_cfg.get(provider_key)
+    if not isinstance(provider_cfg, dict):
+        provider_cfg = asr_cfg.get(provider_key.replace("_", "-"))
     if not isinstance(provider_cfg, dict):
         return bool(default)
     return bool(provider_cfg.get("auto_fallback", default))
@@ -126,7 +130,10 @@ def create_asr(config: dict, engine: str | None = None):
     if engine == "edge-stt":
         from src.asr.edge_stt_asr import EdgeSTTASRProvider
         primary = EdgeSTTASRProvider(config, corrector=corrector)
-        if _provider_auto_fallback_enabled(config, "edge-stt", default=False):
+        # On by default: a route that drops the Edge socket must not leave
+        # the player without recognition. The key used to be read under a
+        # hyphenated name nothing ever wrote, so the switch could never turn on.
+        if _provider_auto_fallback_enabled(config, "edge_stt", default=True):
             return FallbackASR(
                 primary,
                 fallback_factory=lambda: _create_ready_sensevoice_fallback(

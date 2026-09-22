@@ -667,7 +667,10 @@ def test_post_show_initialization_is_one_shot(monkeypatch):
         "mic-watch:2500",
         "settings:2500",
     ]
-    assert [delay for delay, _callback in scheduled] == [100, 1200, 2000, 0]
+    assert [delay for delay, _callback in scheduled] == [100, 1200, 2000, 0, 1500]
+    # The SteamVR bring-up is the last one: saved headset features must not
+    # wait for the player to flip a switch after a restart.
+    assert scheduled[-1][1] == window._start_vr_runtime_if_configured
 
 
 def test_background_provider_initialization_is_one_shot(monkeypatch):

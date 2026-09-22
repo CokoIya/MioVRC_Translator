@@ -6,6 +6,7 @@ import hashlib
 import json
 import struct
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -474,6 +475,110 @@ def test_end_of_stream_marker_is_sent_after_the_audio(monkeypatch):
     assert protocol.parse_message(audio_frames[-1])[1] == ""
     # ...and it must come after real samples, not replace them.
     assert any(protocol.parse_message(m)[1] for m in audio_frames[:-1])
+    provider.close()
+
+
+class _MuteSocket(_FakeSocket):
+    """Accepts everything and never answers: a connection dead on the far side."""
+
+    def send(self, message):
+        self.sent.append(message)
+
+
+def test_a_socket_that_never_answers_is_replaced_within_the_stall_window(monkeypatch):
+    """A player's log showed each silently dead socket costing the whole
+    recognition timeout plus a retry; now it costs the stall window."""
+
+    sockets = [_MuteSocket([]), _FakeSocket(["recovered"])]
+    provider = EdgeSTTASRProvider(
+        {"asr": {"edge_stt": {"language": "ja-JP", "first_message_timeout_seconds": 0.2}}}
+    )
+    monkeypatch.setattr(provider, "_connect_module", lambda: lambda *a, **k: sockets.pop(0))
+
+    started = time.monotonic()
+    assert provider.transcribe(_audio(), 16000) == "recovered"
+
+    assert time.monotonic() - started < 2.0
+    assert not sockets
+    provider.close()
+
+
+def test_a_turn_that_answered_and_then_hung_is_not_retried(monkeypatch):
+    """Silence after turn.start is a slow service, not a dead socket: a second
+    full wait would only double the player's silence."""
+
+    class _HalfSocket(_FakeSocket):
+        def send(self, message):
+            self.sent.append(message)
+            if protocol.parse_message(message)[0] == "speech.context":
+                self._inbox.append(
+                    protocol.text_message("turn.start", {"context": {"serviceTag": "t"}})
+                )
+
+    opened: list = []
+
+    def connect(*_a, **_k):
+        opened.append(_HalfSocket([]))
+        return opened[-1]
+
+    provider = EdgeSTTASRProvider(
+        {"asr": {"edge_stt": {"language": "ja-JP", "recognition_timeout_seconds": 0.6}}}
+    )
+    monkeypatch.setattr(provider, "_connect_module", lambda: connect)
+
+    started = time.monotonic()
+    with pytest.raises(ASRNetworkError):
+        provider.transcribe(_audio(seconds=0.5), 16000)
+
+    assert 0.5 < time.monotonic() - started < 2.0
+    assert len(opened) == 1
+    provider.close()
+
+
+def test_an_idle_socket_is_reopened_before_the_next_utterance(monkeypatch):
+    sockets = [_FakeSocket(["one"]), _FakeSocket(["two"])]
+    provider = EdgeSTTASRProvider(
+        {"asr": {"edge_stt": {"language": "ja-JP", "reuse_idle_seconds": 0.2}}}
+    )
+    monkeypatch.setattr(provider, "_connect_module", lambda: lambda *a, **k: sockets.pop(0))
+
+    assert provider.transcribe(_audio(), 16000) == "one"
+    time.sleep(0.3)
+    assert provider.transcribe(_audio(), 16000) == "two"
+
+    assert not sockets
+    provider.close()
+
+
+def test_the_turn_budget_follows_the_clip_length():
+    provider = EdgeSTTASRProvider({"asr": {"edge_stt": {"language": "ja-JP"}}})
+
+    assert provider._turn_timeout(1.0) == pytest.approx(6.0)
+    assert provider._turn_timeout(30.0) == pytest.approx(12.0)
+
+
+def test_cancellation_interrupts_the_wait_for_an_answer(monkeypatch):
+    """Cancel used to be noticed only after the whole recognition timeout,
+    which is what kept pipeline restarts waiting on a hung worker."""
+
+    provider = _provider(monkeypatch, _MuteSocket([]))
+    provider.first_message_timeout_seconds = 30.0
+    error: list[BaseException] = []
+
+    def run():
+        try:
+            provider.transcribe(_audio(), 16000)
+        except BaseException as exc:  # noqa: BLE001 - recorded for the assertion
+            error.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    time.sleep(0.2)
+    provider.cancel_pending_requests()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert error and isinstance(error[0], ASRProviderError)
     provider.close()
 
 

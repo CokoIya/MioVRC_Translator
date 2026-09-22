@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import Optional
 
@@ -20,6 +21,10 @@ from src.asr.errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How long recognition stays on the local fallback before the primary gets
+# one utterance to prove the network is back.
+DEFAULT_PRIMARY_RETRY_SECONDS = 120.0
 
 _FALLBACK_ERRORS = (
     ASRMissingAPIKeyError,
@@ -42,6 +47,8 @@ class FallbackASR(ASRProvider):
         *,
         fallback_factory: Callable[[], ASRProvider] | None = None,
         auto_fallback: bool = True,
+        primary_retry_seconds: float = DEFAULT_PRIMARY_RETRY_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if fallback is None and fallback_factory is None:
             raise ValueError("FallbackASR requires a fallback provider or factory")
@@ -52,6 +59,49 @@ class FallbackASR(ASRProvider):
         self._using_fallback = False
         self._lock = threading.RLock()
         self._closed = False
+        # A network that failed a minute ago may be fine now: while on the
+        # fallback, the primary gets one utterance to prove itself every
+        # ``primary_retry_seconds``; before this the fallback lasted the whole
+        # session and a player stayed on local recognition for hours.
+        self.primary_retry_seconds = max(0.0, float(primary_retry_seconds))
+        self._clock = clock
+        self._primary_retry_at = 0.0
+        # Told when recognition moves: ("fallback", why) and ("primary", "").
+        self.on_switch: Callable[[str, str], None] | None = None
+
+    @property
+    def using_fallback(self) -> bool:
+        return self._using_fallback
+
+    def _notify_switch(self, mode: str, reason: str) -> None:
+        callback = self.on_switch
+        if callback is None:
+            return
+        try:
+            callback(mode, reason)
+        except Exception:
+            logger.debug("ASR fallback switch callback failed", exc_info=True)
+
+    def _pick_active(self) -> tuple[ASRProvider, bool]:
+        """The provider to try now, and whether it is the primary on probation."""
+
+        if not self._using_fallback:
+            return self.primary, False
+        if self.primary_retry_seconds > 0 and self._clock() >= self._primary_retry_at:
+            self._primary_retry_at = self._clock() + self.primary_retry_seconds
+            return self.primary, True
+        return self._ensure_fallback(), False
+
+    def _restore_primary(self) -> None:
+        with self._lock:
+            if not self._using_fallback:
+                return
+            self._using_fallback = False
+        logger.info(
+            "ASR provider %s answered again; back from the local fallback",
+            getattr(self.primary, "provider_id", "primary"),
+        )
+        self._notify_switch("primary", "")
 
     @property
     def provider_id(self) -> str:
@@ -139,7 +189,8 @@ class FallbackASR(ASRProvider):
                 fallback_exc,
             )
             raise exc from fallback_exc
-        if not self._using_fallback:
+        first_time = not self._using_fallback
+        if first_time:
             logger.warning(
                 "ASR provider %s failed; falling back to %s: %s",
                 getattr(self.primary, "provider_id", "primary"),
@@ -147,6 +198,9 @@ class FallbackASR(ASRProvider):
                 exc,
             )
         self._using_fallback = True
+        self._primary_retry_at = self._clock() + self.primary_retry_seconds
+        if first_time:
+            self._notify_switch("fallback", str(exc).strip() or exc.__class__.__name__)
         if progress_callback is not None:
             progress_callback(
                 {
@@ -192,9 +246,9 @@ class FallbackASR(ASRProvider):
         with self._lock:
             if self._closed:
                 raise RuntimeError("Fallback ASR provider is closed")
-            active = self._ensure_fallback() if self._using_fallback else self.primary
+            active, probation = self._pick_active()
         try:
-            return active.transcribe(
+            text = active.transcribe(
                 audio,
                 sample_rate=sample_rate,
                 language=language,
@@ -212,6 +266,9 @@ class FallbackASR(ASRProvider):
             )
         except ASRError:
             raise
+        if probation:
+            self._restore_primary()
+        return text
 
     def transcribe_realtime(
         self,
@@ -226,7 +283,7 @@ class FallbackASR(ASRProvider):
         with self._lock:
             if self._closed:
                 raise RuntimeError("Fallback ASR provider is closed")
-            active = self._ensure_fallback() if self._using_fallback else self.primary
+            active, probation = self._pick_active()
 
         def recognize(provider: ASRProvider) -> str:
             method = getattr(provider, "transcribe_realtime", None)
@@ -247,7 +304,7 @@ class FallbackASR(ASRProvider):
             )
 
         try:
-            return recognize(active)
+            text = recognize(active)
         except _FALLBACK_ERRORS as exc:
             with self._lock:
                 self._activate_fallback(exc)
@@ -255,6 +312,9 @@ class FallbackASR(ASRProvider):
             return recognize(fallback)
         except ASRError:
             raise
+        if probation:
+            self._restore_primary()
+        return text
 
     def close(self) -> None:
         with self._lock:

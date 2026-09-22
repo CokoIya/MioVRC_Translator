@@ -726,6 +726,7 @@ def test_final_mic_segment_reports_translating_status():
     window._translating = False
     window._t = lambda key, **_kwargs: {
         "status_running": "监听中...",
+        "status_recognizing": "识别中...",
         "status_translating": "翻译中...",
     }.get(key, key)
 
@@ -753,7 +754,9 @@ def test_final_mic_segment_reports_translating_status():
         MIC_SOURCE,
     )
 
-    assert status_events[0] == ("status_translating", "翻译中...", "accent")
+    # Recognition and translation are told apart now: a recognizer stall
+    # used to read as "translating forever".
+    assert status_events[0] == ("status_recognizing", "识别中...", "accent")
     assert status_events[-1] == ("status_running", "监听中...", "accent")
 
 
