@@ -124,6 +124,43 @@ tests including the repository-manifest assertion, and repeat every static
 gate. Smoke-install into an isolated directory, run the installed executable's
 `--mio-selftest`, and uninstall it before publication.
 
+## VR smoke check
+
+The unit tests replace OpenVR with fakes, so the real OpenGL texture upload
+and the compositor eye capture are covered only by this manual check. With
+SteamVR already running (the headset can sit on the desk), run:
+
+```powershell
+.\.venv\Scripts\python.exe tools\manual_checks\vr_smoke.py
+```
+
+It never starts SteamVR (exit code 2 when it is not running) and uses its own
+overlay key, so Mio may stay open. All three checks must report `PASS`;
+`INCONCLUSIVE` on the eye check means the compositor was idle - wake the
+headset and run it again.
+
+## Hot-fixing the Edge speech identity without a release
+
+Microsoft's free speech recognizer checks a client token, a Chromium version
+and an extension origin. When it starts rejecting Mio, publish new values in
+the signed section of `docs/catalog.json` instead of shipping an installer:
+
+```powershell
+$env:MIO_RELEASE_SIGNING_SEED_FILE = 'X:\secure\mio-release-ed25519-v2.seed.hex'
+.\.venv-release311\Scripts\python.exe tools\release\sign_catalog.py `
+  --edge-stt-token <32 hex> `
+  --edge-stt-chromium-version <a.b.c.d> `
+  --edge-stt-origin chrome-extension://<32 letters a-p>
+Remove-Item Env:MIO_RELEASE_SIGNING_SEED_FILE
+.\.venv-release311\Scripts\python.exe tools\release\sign_catalog.py --verify
+```
+
+Commit and push `docs/catalog.json`; installs pick it up on their next catalog
+refresh (after start-up) and apply it from the cache on later starts. Only the
+signed section can change these values, and a section that does not verify is
+ignored. `--clear-edge-stt` returns every install to the values built into its
+release.
+
 ## Diff, commit, tag, and publication
 
 Review the complete diff and staged files. Exclude player logs, configuration,

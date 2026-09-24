@@ -455,6 +455,8 @@ class TestDashboardTab:
             monkeypatch, subtitles=True, screenshot=False, dashboard=True
         )
         window._config["translation"] = {"backend": "bing"}
+        # Posting others' speech is off by default now; start from on.
+        window._config.setdefault("vrc_listen", {})["send_to_chatbox"] = True
         saves: list[str] = []
         monkeypatch.setattr(window, "_schedule_config_save", lambda: saves.append("save"))
         monkeypatch.setattr(window, "_sync_settings_window_vrc_listen_state", lambda: None)

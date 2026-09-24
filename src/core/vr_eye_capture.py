@@ -3,7 +3,7 @@
 #
 # This file is part of Mio RealTime Translator.
 
-"""Read the picture SteamVR is showing the left eye, straight from the compositor.
+"""Read the picture SteamVR is showing one eye, straight from the compositor.
 
 Capturing VRChat's desktop window was the wrong source for a headset: that
 window is a separate camera with its own field of view, so labels placed by
@@ -183,8 +183,28 @@ def wait_for_fresh_frame(
             return (current - start) if current is not None else 0
 
 
+VIEW_EYES = ("left", "right")
+DEFAULT_VIEW_EYE = "right"
+
+
+def normalize_view_eye(value: object) -> str:
+    """The eye a read is taken from: the player's dominant one.
+
+    A frame held between the hands at arm's length covers a different part
+    of a far sign for each eye; what the player sees inside it is what the
+    dominant eye sees. Most people are right-eyed, as VRHandsFrame assumes.
+    """
+
+    eye = str(value or "").strip().lower()
+    return eye if eye in VIEW_EYES else DEFAULT_VIEW_EYE
+
+
+def eye_index(openvr_module: Any, eye: str) -> Any:
+    return openvr_module.Eye_Right if normalize_view_eye(eye) == "right" else openvr_module.Eye_Left
+
+
 class VREyeCapture:
-    """Owns a D3D11 device and a staging texture; reads the left eye on demand."""
+    """Owns a D3D11 device and a staging texture; reads an eye on demand."""
 
     def __init__(self) -> None:
         self._device: c_void_p | None = None
@@ -250,8 +270,8 @@ class VREyeCapture:
         return staging
 
     # ------------------------------------------------------------ capture
-    def capture(self, openvr_module: Any) -> EyeFrame | None:
-        """Read the left eye now. Needs an initialised OpenVR runtime."""
+    def capture(self, openvr_module: Any, eye: str = DEFAULT_VIEW_EYE) -> EyeFrame | None:
+        """Read ``eye`` now. Needs an initialised OpenVR runtime."""
 
         with self._lock:
             if not self._ensure_device():
@@ -263,7 +283,7 @@ class VREyeCapture:
             try:
                 compositor = openvr_module.VRCompositor()
                 error = compositor.function_table.getMirrorTextureD3D11(
-                    openvr_module.Eye_Left, self._device, byref(srv)
+                    eye_index(openvr_module, eye), self._device, byref(srv)
                 )
                 if error != 0 or not srv.value:
                     logger.debug("getMirrorTextureD3D11 failed: %s", error)
@@ -305,11 +325,14 @@ class VREyeCapture:
                 finally:
                     _method(self._context, _SLOT_CONTEXT_UNMAP, None, c_void_p, c_uint)(self._context, staging, 0)
                 try:
-                    tangents = tuple(float(v) for v in openvr_module.VRSystem().getProjectionRaw(openvr_module.Eye_Left))
+                    tangents = tuple(
+                        float(v) for v in openvr_module.VRSystem().getProjectionRaw(eye_index(openvr_module, eye))
+                    )
                 except Exception:
                     tangents = None
                 logger.info(
-                    "Eye frame %dx%d read in %.0f ms after %s new compositor frames",
+                    "Eye frame (%s) %dx%d read in %.0f ms after %s new compositor frames",
+                    normalize_view_eye(eye),
                     width,
                     height,
                     (time.perf_counter() - started) * 1000.0,
@@ -357,14 +380,14 @@ def eye_frame_size(openvr_module: Any) -> tuple[int, int] | None:
     return (width, height)
 
 
-def capture_left_eye(openvr_module: Any):
-    """The left eye as a :class:`src.core.screen_capture.Capture`, or an empty one."""
+def capture_eye(openvr_module: Any, eye: str = DEFAULT_VIEW_EYE):
+    """One eye as a :class:`src.core.screen_capture.Capture`, or an empty one."""
 
     from PySide6.QtGui import QImage
 
     from src.core.screen_capture import Capture, encode_image
 
-    frame = shared_eye_capture().capture(openvr_module)
+    frame = shared_eye_capture().capture(openvr_module, eye)
     if frame is None:
         return Capture(b"", 0, 0, "vr_eye")
     fmt = QImage.Format.Format_ARGB32 if frame.bgra else QImage.Format.Format_RGBA8888

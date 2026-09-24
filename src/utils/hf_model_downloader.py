@@ -165,10 +165,6 @@ _HF_MODEL_FILES: dict[str, list[str]] = {
         "configuration.json",
         "model.pt",
     ],
-    "iic/speech_whisper-small_asr_english": [
-        "configuration.json",
-        "small.en.pb",
-    ],
     "ku-nlp/deberta-v2-large-japanese-char-wwm": [
         "config.json",
         "special_tokens_map.json",

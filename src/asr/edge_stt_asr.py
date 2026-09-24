@@ -26,9 +26,9 @@ import numpy as np
 from src.asr.asr_cleaner import clean_asr_text
 from src.asr.base import ASRProvider, ProgressCallback
 from src.asr.edge_stt_protocol import (
-    WSS_HEADERS,
     binary_message,
     build_recognition_url,
+    wss_headers,
     bytes_to_offset_ticks,
     parse_json_body,
     parse_message,
@@ -410,7 +410,7 @@ class EdgeSTTASRProvider(ASRProvider):
         try:
             ws = connect(
                 url,
-                additional_headers=WSS_HEADERS,
+                additional_headers=wss_headers(),
                 open_timeout=self.connect_timeout_seconds,
                 close_timeout=1.0,
                 max_size=None,

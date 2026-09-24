@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.asr.hf_model_downloader import (
+from src.utils.hf_model_downloader import (
     DownloadProgress,
     DownloadState,
     get_downloader,
@@ -123,10 +123,6 @@ _ENGINE_TEXT_KEYS = {
     "sensevoice-small": (
         "model_download_sensevoice_description",
         "model_download_sensevoice_size",
-    ),
-    "whisper-large-v3-turbo": (
-        "model_download_whisper_description",
-        "model_download_whisper_size",
     ),
 }
 

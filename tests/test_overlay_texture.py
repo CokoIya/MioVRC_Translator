@@ -112,3 +112,30 @@ class TestCanvasSizes:
         assert MAX_PANEL_HEIGHT <= PANEL_CANVAS[1]
         assert SCREENSHOT_PANEL_SIZE[0] <= HAND_CANVAS[0]
         assert MAX_PANEL_HEIGHT <= HAND_CANVAS[1]
+
+
+def test_picture_fraction_maps_through_a_letterboxed_picture():
+    from src.core.overlay_texture import OverlayTextureUploader
+
+    uploader = OverlayTextureUploader(None, None, None, canvas=(1000, 1000))
+    uploader._last_path = "gl"
+    uploader._drawn = (1000, 500)  # a wide picture centred on a square texture
+
+    assert uploader.picture_fraction(0.5, 0.5) == (0.5, 0.5)
+    assert uploader.picture_fraction(0.0, 0.25) == (0.0, 0.0)
+    assert uploader.picture_fraction(1.0, 0.75) == (1.0, 1.0)
+    # The top margin is not picture.
+    assert uploader.picture_fraction(0.5, 0.1)[1] < 0.0
+
+
+def test_picture_fraction_is_identity_when_nothing_was_letterboxed():
+    from src.core.overlay_texture import OverlayTextureUploader
+
+    uploader = OverlayTextureUploader(None, None, None, canvas=(800, 600))
+    uploader._last_path = "gl"
+    uploader._drawn = (800, 600)
+    assert uploader.picture_fraction(0.3, 0.7) == (0.3, 0.7)
+
+    uploader._last_path = "raw"
+    uploader._drawn = (400, 600)
+    assert uploader.picture_fraction(0.3, 0.7) == (0.3, 0.7)

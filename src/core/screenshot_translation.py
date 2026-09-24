@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 
 from src.core.in_place_layout import PlacedLine
-from src.core.text_blocks import box_corners, group_lines_into_blocks
+from src.core.text_blocks import box_corners, group_lines_into_blocks, merge_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,9 @@ class ScreenshotTranslation:
     png: bytes = b""
     offset: tuple[int, int] = (0, 0)
     crop_size: tuple[int, int] = (0, 0)
+    # What 2D codes (QR) in the picture said; each also comes back as a pair
+    # so every place that shows text shows them.
+    codes: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -403,6 +406,8 @@ class ScreenshotTranslator:
         on_result: Callable[[ScreenshotTranslation], None] | None = None,
         crop: Callable[[object, Sequence[float]], object] | None = None,
         snapshot_anchor: Callable[[], object] | None = None,
+        merge_blocks: Callable[[], bool] | None = None,
+        decode_codes: Callable[[bytes], list[str]] | None = None,
     ) -> None:
         self._capture = capture
         self._recognize = recognize
@@ -412,6 +417,9 @@ class ScreenshotTranslator:
         self._on_result = on_result
         self._crop = crop
         self._snapshot_anchor = snapshot_anchor
+        # Asked each run, so a setting changed meanwhile applies at once.
+        self._merge_blocks = merge_blocks
+        self._decode_codes = decode_codes
         self._busy = threading.Lock()
         self._running = False
 
@@ -490,6 +498,23 @@ class ScreenshotTranslator:
         )
         thread.start()
         return True
+
+    def _wants_merged_blocks(self) -> bool:
+        if not callable(self._merge_blocks):
+            return False
+        try:
+            return bool(self._merge_blocks())
+        except Exception:
+            return False
+
+    def _codes_in(self, png: bytes) -> list[str]:
+        if not callable(self._decode_codes):
+            return []
+        try:
+            return [str(code) for code in (self._decode_codes(png) or []) if str(code or "").strip()]
+        except Exception:
+            logger.debug("2D code scan failed", exc_info=True)
+            return []
 
     def _translate_texts(self, texts: Sequence[str]) -> dict[str, tuple[str, Exception | None]]:
         """Translate each distinct text once, a few at a time.
@@ -590,12 +615,23 @@ class ScreenshotTranslator:
                 self._finish(frame.result(error=error, ocr_ms=ocr_ms))
                 return
 
+            codes = self._codes_in(png)
             lines = list(getattr(recognized, "lines", []) or [])
             if frame.target is not None:
                 png, frame, lines = self._snap_to_lines(png, frame, lines)
             limit = MAX_REGION_LINES if frame.region else MAX_TRANSLATED_LINES
             originals = worthwhile_blocks(lines, limit)
+            if len(originals) > 1 and frame.region and self._wants_merged_blocks():
+                merged = merge_blocks(originals)
+                originals = [merged] if merged is not None else originals
             if not originals:
+                if codes:
+                    self._finish(
+                        frame.result(
+                            pairs=[(code, code) for code in codes], codes=codes, ocr_ms=ocr_ms, png=png
+                        )
+                    )
+                    return
                 self._finish(frame.result(error="no_text_found", ocr_ms=ocr_ms))
                 return
 
@@ -639,6 +675,7 @@ class ScreenshotTranslator:
                 translate_ms,
             )
 
+            pairs.extend((code, code) for code in codes)
             if not pairs and failure_kind:
                 self._finish(
                     frame.result(
@@ -657,6 +694,7 @@ class ScreenshotTranslator:
                     ocr_ms=ocr_ms,
                     translate_ms=translate_ms,
                     png=png,
+                    codes=codes,
                 )
             )
         except Exception:

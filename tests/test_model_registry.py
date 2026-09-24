@@ -1,7 +1,6 @@
 from src.asr.model_registry import (
     LISTEN_SELECTABLE_ASR_ENGINES,
     USER_SELECTABLE_ASR_ENGINES,
-    WHISPER_ASR_DEFAULT_MODEL,
     get_asr_runtime_spec,
     get_qwen3_asr_base_url,
     normalize_qwen3_asr_region,
@@ -80,15 +79,9 @@ def test_sensevoice_spec_is_pinned_and_all_required_files_are_hashed():
     assert set(dict(spec.required_file_sizes)) == set(spec.required_files)
 
 
-def test_whisper_asr_spec_remains_internal_but_is_not_user_selectable():
-    config = {"asr": {"engine": "whisper-large-v3-turbo"}}
+def test_retired_whisper_backend_is_gone_from_the_registry():
+    from src.asr.model_registry import ASR_ENGINE_SPECS
 
-    spec = get_asr_runtime_spec(config)
-
-    assert spec.engine == "whisper-large-v3-turbo"
-    assert spec.model_id == WHISPER_ASR_DEFAULT_MODEL
-    assert spec.model_revision == "master"
-    assert spec.requires_local_model is True
-    assert spec.required_files == ("small.en.pb",)
+    assert "whisper-large-v3-turbo" not in ASR_ENGINE_SPECS
     assert "whisper-large-v3-turbo" not in USER_SELECTABLE_ASR_ENGINES
     assert "whisper-large-v3-turbo" not in LISTEN_SELECTABLE_ASR_ENGINES

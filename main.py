@@ -551,6 +551,12 @@ def main() -> int:
         if cached:
             set_catalog(catalog_loader.load_catalog_from_data(cached))
             logger.info("Translation catalog loaded from cache")
+            try:
+                from src.utils.signed_catalog import apply_signed_catalog
+
+                apply_signed_catalog(cached)
+            except Exception:
+                logger.exception("Could not apply the signed catalog section")
 
     with startup_stage("startup.config_manager_import"):
         from src.utils import config_manager

@@ -428,6 +428,10 @@ def test_validator_rejects_non_transformational_output_shapes(
         ("Of course I want to join.", "当然，我想加入。"),
         ("Sure, I can help you.", "当然，我可以帮你。"),
         ("I think this avatar is cute.", "我觉得这个虚拟形象很可爱。"),
+        # そちら is also "that way", and 君 after a name is an honorific; a
+        # first-person sentence translated with them is not a perspective shift.
+        ("我先去那边等着。", "先にそちらで待ってます。"),
+        ("我和小明一起去。", "小明君と一緒に行く。"),
     ),
 )
 def test_validator_preserves_player_authored_reply_like_phrases(

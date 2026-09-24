@@ -1,0 +1,665 @@
+<title>Mio beta3 操作手册</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap">
+<style>
+:root {
+  --paper: #f5f7f9;
+  --surface: #ffffff;
+  --ink: #18202c;
+  --ink-soft: #4a5566;
+  --rule: #d9dfe6;
+  --accent: #0a8fae;
+  --accent-soft: #e2f4f8;
+  --shown: #1f9d57;
+  --shown-soft: #e3f5ea;
+  --warn: #a25a00;
+  --warn-soft: #fbf0df;
+  --frame-ready: #ffffff;
+  --frame-ready-edge: #9aa6b4;
+  --frame-reading: #40e0ff;
+  --frame-shown: #50e080;
+  --sign: #e8ecf0;
+  --sign-line: #b8c2cd;
+  --key-bg: #eef1f4;
+  --key-edge: #c4ccd5;
+  --serif: "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+  --sans: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #11161d;
+    --surface: #182029;
+    --ink: #e6ebf1;
+    --ink-soft: #a3aebb;
+    --rule: #2b3643;
+    --accent: #4fcfe8;
+    --accent-soft: #15313a;
+    --shown: #5fd88f;
+    --shown-soft: #163224;
+    --warn: #f0b060;
+    --warn-soft: #3a2a14;
+    --frame-ready-edge: #ffffff;
+    --sign: #1f2833;
+    --sign-line: #3a4757;
+    --key-bg: #222c37;
+    --key-edge: #3a4757;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #11161d;
+  --surface: #182029;
+  --ink: #e6ebf1;
+  --ink-soft: #a3aebb;
+  --rule: #2b3643;
+  --accent: #4fcfe8;
+  --accent-soft: #15313a;
+  --shown: #5fd88f;
+  --shown-soft: #163224;
+  --warn: #f0b060;
+  --warn-soft: #3a2a14;
+  --frame-ready-edge: #ffffff;
+  --sign: #1f2833;
+  --sign-line: #3a4757;
+  --key-bg: #222c37;
+  --key-edge: #3a4757;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.75;
+  padding-inline: 20px;
+  padding-block: 0 64px;
+}
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 40px;
+}
+@media (min-width: 960px) {
+  .wrap { grid-template-columns: 200px minmax(0, 1fr); }
+  nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; }
+}
+main { min-width: 0; max-width: 720px; }
+
+header.masthead {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-block: 48px 32px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 36px;
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin: 0 0 12px;
+}
+h1 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(30px, 5vw, 44px);
+  line-height: 1.25;
+  margin: 0 0 14px;
+  text-wrap: balance;
+}
+.lede { color: var(--ink-soft); font-size: 17px; max-width: 62ch; margin: 0; }
+
+h2 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: 25px;
+  line-height: 1.35;
+  margin: 56px 0 14px;
+  padding-top: 8px;
+  text-wrap: balance;
+  scroll-margin-top: 20px;
+}
+h2:first-child { margin-top: 0; }
+h3 {
+  font-size: 17.5px;
+  font-weight: 700;
+  margin: 30px 0 8px;
+  text-wrap: balance;
+}
+p { margin: 0 0 14px; }
+ul, ol { margin: 0 0 16px; padding-left: 1.4em; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--ink-soft); }
+strong { font-weight: 700; }
+a { color: var(--accent); }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+nav.toc { font-size: 14px; }
+nav.toc p {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin: 0 0 8px;
+}
+nav.toc ol { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+nav.toc a {
+  display: block;
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding: 4px 10px;
+  border-left: 2px solid var(--rule);
+}
+nav.toc a:hover { color: var(--ink); border-left-color: var(--accent); }
+@media (max-width: 959px) {
+  nav.toc { border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; background: var(--surface); }
+  nav.toc ol { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px 12px; }
+}
+
+kbd, .key {
+  font-family: var(--sans);
+  font-size: 0.86em;
+  font-weight: 500;
+  background: var(--key-bg);
+  border: 1px solid var(--key-edge);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--key-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+.ui { font-weight: 500; color: var(--ink); background: linear-gradient(transparent 62%, var(--accent-soft) 62%); padding: 0 1px; }
+
+.note {
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin: 18px 0;
+  background: var(--accent-soft);
+  font-size: 15px;
+}
+.note.warn { background: var(--warn-soft); }
+.note > :last-child { margin-bottom: 0; }
+.note b { color: var(--accent); }
+.note.warn b { color: var(--warn); }
+
+.steps { counter-reset: step; list-style: none; padding: 0; display: grid; gap: 14px; margin: 18px 0 24px; }
+.steps > li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  margin: 0;
+}
+.steps > li::before {
+  content: counter(step);
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 14px;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+  color: var(--accent);
+}
+.steps > li > div > :last-child { margin-bottom: 0; }
+
+figure { margin: 22px 0 26px; }
+.frame-figure {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 18px;
+}
+.frame-figure svg { width: 100%; height: auto; display: block; }
+figcaption { font-size: 13.5px; color: var(--ink-soft); margin-top: 10px; }
+.svg-sign { fill: var(--sign); }
+.svg-line { fill: var(--sign-line); }
+.svg-frame { fill: none; stroke: var(--frame-shown); stroke-width: 3; }
+.svg-bracket { fill: none; stroke: var(--frame-shown); stroke-width: 7; stroke-linecap: round; }
+.svg-plate { fill: #0b1018; opacity: 0.9; }
+.svg-plate-text { fill: #ffffff; font-family: var(--sans); font-size: 15px; font-weight: 500; }
+.svg-hand { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+.svg-label { fill: var(--ink); font-family: var(--sans); font-size: 13px; }
+.svg-label-soft { fill: var(--ink-soft); font-family: var(--sans); font-size: 12px; }
+.svg-bar-track { fill: var(--sign-line); opacity: 0.5; }
+.svg-bar { fill: var(--frame-reading); }
+
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 16px 0 22px; }
+.state {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+.swatch { width: 22px; height: 22px; border-radius: 5px; border: 3px solid; background: transparent; margin-top: 1px; }
+.swatch.ready { border-color: var(--frame-ready); box-shadow: 0 0 0 1px var(--frame-ready-edge); }
+.swatch.reading { border-color: var(--frame-reading); }
+.swatch.shown { border-color: var(--frame-shown); }
+.state b { display: block; font-size: 15px; }
+
+.table-wrap { overflow-x: auto; margin: 16px 0 24px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+tr:last-child td { border-bottom: none; }
+th {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  white-space: nowrap;
+}
+td:first-child { font-weight: 500; min-width: 9em; }
+td.mono, th.mono { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+
+.btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 16px; }
+.pbtn {
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: #242b38;
+  color: #f2f4f7;
+  border: 1px solid #3a4354;
+}
+.pbtn.danger { background: #9c3a3a; border-color: #b85050; }
+
+.news { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 18px 0 8px; }
+.news div {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+.news b { display: block; font-size: 15.5px; margin-bottom: 4px; }
+.news .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--accent); display: block; margin-bottom: 6px; }
+
+details {
+  border-top: 1px solid var(--rule);
+  padding: 12px 0;
+}
+details:last-of-type { border-bottom: 1px solid var(--rule); }
+summary { cursor: pointer; font-weight: 500; list-style: none; display: flex; gap: 10px; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "+"; font-family: var(--mono); color: var(--accent); width: 1em; flex: none; }
+details[open] summary::before { content: "−"; }
+details > div { padding: 8px 0 0 1.6em; color: var(--ink-soft); font-size: 15px; }
+details > div > :last-child { margin-bottom: 0; }
+
+footer.colophon {
+  max-width: 1080px;
+  margin: 64px auto 0;
+  border-top: 1px solid var(--rule);
+  padding-top: 18px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<header class="masthead">
+  <p class="eyebrow">Mio RealTime Translator · v1.4.2_beta3 · 测试版</p>
+  <h1>新操作手册</h1>
+  <p class="lede">这一版把头显里的“看字翻译”换成了和 VRHandsFrame 一样的玩法：两只手在面前比一个框，框住的字就地翻译，翻译还能留成面板拿在手里。聊天框、麦克风和设置也修了不少问题。这份手册只讲 beta3 新增和改变的操作。</p>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="目录">
+    <p>目录</p>
+    <ol>
+      <li><a href="#news">这版改了什么</a></li>
+      <li><a href="#setup">更新后先做的事</a></li>
+      <li><a href="#frame">双手取景翻译</a></li>
+      <li><a href="#panels">翻译面板</a></li>
+      <li><a href="#wrist">手腕面板</a></li>
+      <li><a href="#controls">按键、声音与说话</a></li>
+      <li><a href="#chatbox">聊天框与麦克风</a></li>
+      <li><a href="#pc">电脑端的变化</a></li>
+      <li><a href="#osc">角色菜单参数</a></li>
+      <li><a href="#settings">设置在哪里</a></li>
+      <li><a href="#faq">常见问题</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <div class="note warn">
+      <p><b>这是测试版。</b>它不会通过自动更新推送，只发给受邀的测试玩家。用下来有任何问题，请把问题描述和日志文件一起发给作者。日志在 <code>%LOCALAPPDATA%\Mio RealTime Translator\logs\mio.log</code>（把这行粘贴到文件管理器的地址栏就能打开）。</p>
+    </div>
+
+    <h2 id="news">这版改了什么</h2>
+    <div class="news">
+      <div><span class="tag">VR</span><b>双手取景翻译</b>两手比框，保持不动就把框里的字翻译好，直接显示在原文的位置。</div>
+      <div><span class="tag">VR</span><b>翻译面板</b>翻译可以留成面板挂在原处，一直保留到你关掉；能拿起来移动、缩放、复制、发聊天框。</div>
+      <div><span class="tag">VR</span><b>翻译记录</b>手腕面板里能找回这次读过的所有内容，收藏的不会被挤掉。</div>
+      <div><span class="tag">VR</span><b>不再误操作游戏</b>取景、指着面板时，扳机和握把不会同时触发游戏里的抓取或开枪。</div>
+      <div><span class="tag">VR</span><b>振动和提示音</b>手势认出、开始识别、出结果、点按钮都有振动和短提示音，可以换成自己的声音。</div>
+      <div><span class="tag">聊天框</span><b>长句分页发送</b>长的译文不再被截断，会分成最多 4 页依次发出；翻译时头上显示“正在输入”。</div>
+      <div><span class="tag">麦克风</span><b>静音更可靠</b>说完马上静音，刚说的那句也会正常翻译；静音时状态栏会写明“麦克风已静音”。</div>
+      <div><span class="tag">电脑端</span><b>保存设置不打断</b>改主题、快捷键或头显设置时，不会再重启监听、打断正在说的话。</div>
+    </div>
+
+    <h2 id="setup">更新后先做的事</h2>
+    <p>直接覆盖安装即可，原来的设置会保留。进 VR 之前，建议按顺序检查下面几项：</p>
+    <ol class="steps">
+      <li><div>
+        <p><strong>打开截图翻译和双手取景。</strong>在电脑上打开 <span class="ui">设置 → 听别人说话</span>，往下找到 <span class="ui">截图翻译</span> 一节，勾选 <span class="ui">启用截图翻译</span>。<span class="ui">双手取景翻译</span> 默认已经勾上。在头显里也能开：手腕面板 → <span class="ui">翻译记录</span> 页 → <span class="ui">双手取景</span>。</p>
+      </div></li>
+      <li><div>
+        <p><strong>确认主视眼。</strong>现在按主视眼的画面计算框住的范围，默认是右眼。如果你是左眼主视，请在 <span class="ui">主视眼（读取哪只眼的画面）</span> 里改成左眼。选错了，读到的字会和你框住的地方偏开一截。</p>
+        <p>判断方法：两眼睁开，用手指对准远处的一个点，然后轮流闭上一只眼。闭上后指尖仍然对准那个点的那只眼，就是主视眼。</p>
+      </div></li>
+      <li><div>
+        <p><strong>如果你改过 Mio 的手柄绑定，先改回默认。</strong>这版新增了好几个手柄动作。SteamVR 会一直沿用你保存过的旧绑定，新动作不会出现，“不误操作游戏”也会失效。打开 SteamVR 设置 → 控制器 → 管理控制器绑定，选 Mio，然后换回默认绑定。没改过绑定的玩家不用管这一步。</p>
+      </div></li>
+      <li><div>
+        <p><strong>第一次戴上头显时看一眼说明。</strong>头显第一次戴上时，面前会出现一块操作说明面板。看完点 <span class="ui">关闭</span>，之后可以在手腕面板 → <span class="ui">翻译记录</span> → <span class="ui">操作说明</span> 里再打开。</p>
+      </div></li>
+    </ol>
+
+    <h2 id="frame">双手取景翻译</h2>
+    <p>用来读告示、菜单、世界里的说明文字等。整个过程不用按任何按钮：比框、停住、看译文。</p>
+
+    <figure class="frame-figure">
+      <svg viewBox="0 0 560 300" role="img" aria-label="示意图：左手在左上角、右手在右下角握住握把，两手之间出现一个绿色边框，框内的原文被黑底译文覆盖，底部有一条表示保持不动进度的青色条。">
+        <rect class="svg-sign" x="40" y="28" width="480" height="236" rx="10"/>
+        <rect class="svg-line" x="72" y="56" width="300" height="12" rx="3"/>
+        <rect class="svg-line" x="72" y="80" width="360" height="12" rx="3"/>
+        <rect class="svg-line" x="72" y="104" width="250" height="12" rx="3"/>
+        <rect class="svg-line" x="72" y="206" width="330" height="12" rx="3"/>
+        <rect class="svg-line" x="72" y="230" width="210" height="12" rx="3"/>
+        <rect class="svg-plate" x="150" y="138" width="262" height="30" rx="5"/>
+        <text class="svg-plate-text" x="164" y="159">周五 21:00 在这里集合</text>
+        <rect class="svg-frame" x="128" y="120" width="306" height="74" rx="8"/>
+        <path class="svg-bracket" d="M131 145 V123 H153 M431 169 V191 H409"/>
+        <path class="svg-bracket" d="M409 123 H431 V145 M153 191 H131 V169"/>
+        <rect class="svg-bar-track" x="200" y="182" width="162" height="5" rx="2.5"/>
+        <rect class="svg-bar" x="200" y="182" width="112" height="5" rx="2.5"/>
+        <circle class="svg-hand" cx="120" cy="112" r="15"/>
+        <text class="svg-label" x="92" y="286">左手</text>
+        <circle class="svg-hand" cx="442" cy="202" r="15"/>
+        <text class="svg-label" x="454" y="286">右手</text>
+        <path d="M110 128 L102 272" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+        <path d="M452 218 L466 272" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="3 3" fill="none"/>
+        <text class="svg-label-soft" x="150" y="286">两手都按住握把，放在要读的字的对角</text>
+      </svg>
+      <figcaption>两只手放在对角，框就出现在两手之间。框底部的青色条表示“保持不动”的进度，走满就开始识别。</figcaption>
+    </figure>
+
+    <h3>基本操作</h3>
+    <ol class="steps">
+      <li><div><p><strong>两手都按住握把</strong>（侧面那颗键），放在要读的文字的<strong>对角</strong>，比如左手在左上、右手在右下。两手要在身前、手臂自然伸出的距离，两手相距十几厘米以上。</p></div></li>
+      <li><div><p>约 0.3 秒后<strong>框就会出现</strong>，同时手柄轻振、有“叮”的一声。框会跟着手移动，这时可以调整框的大小和位置。</p></div></li>
+      <li><div><p><strong>保持不动约 0.6 秒</strong>，框底部的进度条走满后开始识别。几秒内译文会出现在<strong>框里、原文的位置上</strong>，默认按原文的字色和底色来画。</p></div></li>
+      <li><div><p>想把这次翻译留下来，就在框还在的时候<strong>扣一下扳机</strong>（任意一只手），它会变成一块面板挂在原处。只是看一眼的话，<strong>松开握把</strong>框就消失了。</p></div></li>
+    </ol>
+
+    <h3>框的颜色</h3>
+    <div class="states">
+      <div class="state"><span class="swatch ready"></span><div><b>白色</b>手势已认出，正在对准。保持不动时，底部进度条会走。</div></div>
+      <div class="state"><span class="swatch reading"></span><div><b>青色</b>正在识别和翻译，请保持框的位置。</div></div>
+      <div class="state"><span class="swatch shown"></span><div><b>绿色</b>译文已显示在框里。手一移开，译文就会清掉，重新对准。</div></div>
+    </div>
+
+    <h3>更多用法</h3>
+    <ul>
+      <li><strong>框大了或小了：</strong>取景时推摇杆，向上放大、向下缩小（0.4 到 3 倍）。取景期间推摇杆不会让角色走动。</li>
+      <li><strong>框里没找到字：</strong>框里会提示“画面上没有找到可以识别的文字”，并且不会反复识别同一个地方。稍微挪一下框，就会重新识别。</li>
+      <li><strong>识别到一半就松手了：</strong>结果会以翻译卡片的形式短暂显示，同时存进翻译记录，之后可以从手腕面板找回。</li>
+      <li><strong>读到二维码：</strong>框里会提示二维码的内容。扣扳机把它留成面板，面板上会多一个 <span class="ui">打开链接</span> 按钮，链接在电脑的浏览器里打开。只会打开 http / https 网址，其他内容一律不会打开。</li>
+      <li><strong>姿势总是认不出来：</strong>在设置里把 <span class="ui">手势灵敏度</span> 调高，或者打开 <span class="ui">快速模式</span>。开了快速模式后，<strong>双手同时按住扳机和握把</strong>就会直接出现框，不用摆对角，框太小时会自动放大。出框后松开扳机、只按住握把就能移动，再扣一下扳机就把结果留成面板。</li>
+      <li><strong>不想自动翻译：</strong>关闭 <span class="ui">取景后保持不动自动翻译</span>，之后要在取景时扣扳机才会翻译。</li>
+      <li><strong>拿着东西举到面前时误出框：</strong>把灵敏度调低；或者在手腕面板 → <span class="ui">翻译记录</span> 页点 <span class="ui">双手取景</span> 临时关掉。</li>
+    </ul>
+
+    <h3>其他开始翻译的方式（仍然可用）</h3>
+    <ul>
+      <li>按住扳机和握把，再按 <kbd>B</kbd>（右手）或 <kbd>Y</kbd>（左手），会打开取景框：激光点一下，就翻译绿框里的内容；拖动可以自己框选范围；再按一次 B / Y 翻译整个画面。</li>
+      <li>把手柄举到耳边，短按一下扳机，也会打开取景框。</li>
+      <li>手腕面板或 SteamVR 菜单里的 <span class="ui">翻译整个画面</span>。</li>
+      <li>电脑上按 <kbd>Alt</kbd>+<kbd>T</kbd>（桌面截图翻译快捷键）。</li>
+    </ul>
+
+    <h2 id="panels">翻译面板</h2>
+    <p>留下来的翻译会变成一块面板，挂在原文的位置，一直保留到你关闭它，不会自己消失。同时最多挂 4 块，再开新的时，最早的那块会被收起（它仍然在翻译记录里）。</p>
+    <div class="note"><p><b>用 B/Y 或贴耳手势翻译的结果现在也默认是面板。</b>如果你更喜欢以前那种看一眼就消失的卡片，把 <span class="ui">结果显示方式</span> 改成 <span class="ui">翻译卡片</span>。</p></div>
+
+    <h3>面板上的按钮</h3>
+    <p>用另一只手柄指着面板（会出现激光和光标），扣扳机点按钮。手柄的按键绑定暂时没生效时，把光标停在按钮上约 1 秒也算点击，光标外会有一圈进度。</p>
+    <div class="btnrow" aria-hidden="true">
+      <span class="pbtn">打开链接</span><span class="pbtn">文字 / 图片</span><span class="pbtn">原文 / 译文</span><span class="pbtn">A-</span><span class="pbtn">A+</span><span class="pbtn">◀</span><span class="pbtn">▶</span><span class="pbtn">复制</span><span class="pbtn">发聊天框</span><span class="pbtn">收藏</span><span class="pbtn danger">关闭</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>按钮</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>文字 / 图片</td><td>在“截图加译文”和纯文字列表之间切换。文字模式下才会出现字号 A- / A+ 和翻页 ◀ ▶。</td></tr>
+          <tr><td>原文 / 译文</td><td>切换显示原文还是译文。在图片模式下，切到原文会显示没有覆盖译文的原图。</td></tr>
+          <tr><td>复制</td><td>把当前显示的那一面（原文或译文）复制到电脑的剪贴板。</td></tr>
+          <tr><td>发聊天框</td><td>把译文发到 VRChat 聊天框，太长会自动分页。发送成功或失败都会有提示。</td></tr>
+          <tr><td>收藏</td><td>收藏后，这条记录不会被新的记录挤掉。手腕面板的记录列表里会显示 ★。</td></tr>
+          <tr><td>打开链接</td><td>只在识别到二维码网址时出现，在电脑浏览器里打开。</td></tr>
+          <tr><td>关闭</td><td>收起这块面板。翻译记录里仍然保留，可以再打开。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>设置里开着 <span class="ui">激光停在按钮上时显示说明</span> 时，指着某个按钮，面板标题栏会显示这个按钮是做什么的。</p>
+
+    <h3>移动、缩放和双手操作</h3>
+    <ul>
+      <li><strong>移动：</strong>指着面板按住握把，面板会跟着手走，而且始终朝向你。松开握把就放下了。</li>
+      <li><strong>缩放：</strong>一只手拿着面板时，另一只手也握住它，双手拉开就放大，合拢就缩小。</li>
+      <li><strong>双手拿着时扣扳机：</strong>默认左手扳机翻上一页，右手扳机翻下一页，已经是最后一页时右手扳机直接关闭面板。左右手分别做什么可以在设置里改。</li>
+      <li><strong>单手拿着时扣同一只手的扳机：</strong>把所有面板收拢到面前，排成一排。</li>
+    </ul>
+
+    <h2 id="wrist">手腕面板和 SteamVR 菜单</h2>
+    <p>手腕面板默认在<strong>左手</strong>，<strong>快速扭两下手腕</strong>出现，再扭两下收起。用另一只手柄的激光点按钮。设置里的 <span class="ui">手腕面板出现方式</span> 还可以选 <span class="ui">抬起手腕看向手背（像看手表）</span> 或 <span class="ui">一直显示</span>。SteamVR 菜单里的 Mio 标签页和手腕面板是同一套按钮。</p>
+    <p>主页面的 <span class="ui">截图翻译</span> 一栏新增了两个按钮：<span class="ui">双手取景</span>（开关双手取景）和 <span class="ui">翻译记录（n）</span>。点翻译记录进入第二页：</p>
+    <ul>
+      <li><span class="ui">收拢面板</span>：把所有打开的面板排到你面前。</li>
+      <li><span class="ui">关闭全部面板</span>：一次收起所有面板。</li>
+      <li><span class="ui">操作说明</span>：重新打开首次使用时的说明面板。</li>
+      <li><strong>记录列表</strong>：本次运行中读过的内容，最新的在上，收藏的排在最前。点一条就在面前打开成面板，点右边的 ☆ 收藏。记录只在这次运行期间保留，关闭 Mio 后就清空，不会保存到硬盘。</li>
+      <li><span class="ui">◀ 返回</span>：回到主页面。</li>
+    </ul>
+
+    <h2 id="controls">按键、声音与说话</h2>
+
+    <h3>取景和操作面板时不会误触游戏</h3>
+    <p>摆取景手势时，两只手的握把和扳机不会传给 VRChat，所以不会抓起东西或开枪。激光指着面板、拿着面板、点手腕面板时，只接管正在用的那只手。其他时候游戏照常收到所有按键。这项功能需要 SteamVR 已经启用 Mio 的按键绑定，可以在设置里关闭（<span class="ui">取景和操作面板时不把扳机、握把交给游戏</span>）。</p>
+
+    <h3>扳机和握把的手感</h3>
+    <ul>
+      <li><span class="ui">扳机按到多深算按下</span> 默认 50%，<span class="ui">握把握到多紧算按下</span> 默认 40%。Index 手柄如果要用力捏握把才能保持取景框，把握把的值调低；误触多就调高。</li>
+      <li>读不出按压力度的手柄（比如 Vive 手柄的握把）仍然按“按下 / 松开”判断，滑块对它们不起作用。</li>
+      <li>和游戏按键冲突时，可以勾 <span class="ui">扳机和握把对调</span>。</li>
+    </ul>
+
+    <h3>快捷动作</h3>
+    <ul>
+      <li><strong>Quest / Rift 手柄：</strong>连续轻点拇指托（摇杆旁边放拇指的平面）4 下，开关双手取景。次数和要执行的动作都能在设置里改，也可以设成收拢面板或关闭全部面板。</li>
+      <li><strong>其他手柄：</strong>在 SteamVR 绑定页里给 <span class="ui">开关双手取景</span>、<span class="ui">把面板收拢到面前</span>、<span class="ui">关闭全部面板</span> 各指定一个按键。默认都不绑定，因为常用的按键都被游戏占了。</li>
+    </ul>
+
+    <h3>按住说话</h3>
+    <p>勾选 <span class="ui">按住手柄键说话（松开即静音）</span>，然后点 <span class="ui">打开 SteamVR 按键绑定</span>，给“按住说话”选一个按键。之后 Mio 只在你按住这个键时收音，松开就静音。按住和松开时各有一声短提示。开启后，VRChat 里的麦克风静音状态不会再同步到 Mio，以免两边互相打架。</p>
+
+    <h3>振动和提示音</h3>
+    <p>取景框出现、开始识别、出结果、留成面板、点按钮、切换开关时，手柄都会振动并发出短提示音。振动、提示音、音量都能分别关掉或调节。</p>
+    <p>想换成自己的声音：点 <span class="ui">打开自定义提示音文件夹</span>，把同名的 WAV 文件放进去就行。可以替换的文件：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="mono">文件名</th><th>什么时候响</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ready.wav</td><td>取景框出现</td></tr>
+          <tr><td class="mono">done.wav</td><td>翻译结果出来</td></tr>
+          <tr><td class="mono">shutter.wav</td><td>留成面板</td></tr>
+          <tr><td class="mono">error.wav</td><td>没读到字、识别或翻译失败</td></tr>
+          <tr><td class="mono">click.wav</td><td>点按钮</td></tr>
+          <tr><td class="mono">toggle.wav</td><td>手腕面板出现或收起，切换开关</td></tr>
+          <tr><td class="mono">talk_on.wav / talk_off.wav</td><td>按下 / 松开“按住说话”</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>只支持 WAV 格式，自定义声音不受音量滑块控制。</p>
+
+    <h3>头显字幕板</h3>
+    <ul>
+      <li>新增 <span class="ui">字幕字号</span>，可以单独放大或缩小字幕板上的字。</li>
+      <li>译文前面会加上形状标记：<strong>●</strong> 表示你自己说的，<strong>◆</strong> 表示别人说的。不用靠颜色也能分清，色弱玩家也不会看混。不需要的话可以关闭 <span class="ui">译文前加形状标记</span>。</li>
+    </ul>
+
+    <h2 id="chatbox">聊天框与麦克风</h2>
+    <ul>
+      <li><strong>长句分页：</strong>超出聊天框长度的内容不再被截断，会在句号、逗号或空格处断开，分成最多 4 页，每页间隔约 2.5 秒发出。</li>
+      <li><strong>“正在输入”气泡：</strong>你的话在识别和翻译的时候，头上会显示正在输入，发出后自动消失。</li>
+      <li><strong>停止时清空聊天框：</strong>停止监听时，如果聊天框里是 Mio 发的内容，会把它清掉。你自己用 VRChat 键盘打的字不会被清掉。</li>
+      <li><strong>别人的话默认不发到公共聊天框：</strong>新安装时 <span class="ui">别人的话→Chatbox</span> 默认关闭，避免把别人说的话用你的名字公开发出去。老玩家保持原来的设置不变，可以在手腕面板上随时切换。</li>
+      <li><strong>说完马上静音，最后一句也会翻译：</strong>以前刚说完就静音，这句话会被吞掉，现在会正常翻译并发出。静音期间说的话仍然不会被收录。</li>
+      <li><strong>静音状态看得清：</strong>静音时，主界面和手腕面板会显示“正在听（麦克风已静音）”，不会再显示成正在听。</li>
+      <li><strong>安静的房间里麦克风不再反复重启。</strong></li>
+    </ul>
+
+    <h2 id="pc">电脑端的变化</h2>
+    <ul>
+      <li><strong>保存设置不再打断：</strong>只有改了识别、翻译服务、音频这些监听要用的设置才会重启监听。改主题、快捷键、头显设置时，正在说的话不受影响。</li>
+      <li><strong>自动断句校准更方便：</strong>不用先开始监听也能校准，校准时说的测试语音也不会被翻译发出去。</li>
+      <li><strong>Claude 翻译恢复可用</strong>，在设置里选择并填写 API Key 就能用。</li>
+      <li><strong>免费翻译互相备用：</strong>用微软 Edge、Google、MyMemory 这类免账号的网页翻译时，其中一个连不上，会自动改用另外两个。连续失败的那个会先歇两分钟，不再每句都卡着等它超时。</li>
+      <li><strong>本地 Whisper 识别已移除。</strong>原来选了 Whisper 的，会自动换成本地 SenseVoice。</li>
+      <li><strong>使用模式向导：</strong>选择 <span class="ui">VR 头显字幕</span> 时，会同时打开头显字幕板、截图翻译和双手取景。</li>
+      <li><strong>听别人说话的翻译目标：</strong>新安装时，默认翻译成界面语言，而不是一律中文。</li>
+    </ul>
+
+    <h2 id="osc">角色菜单参数（OSC）</h2>
+    <p>在设置里开启 <span class="ui">允许角色菜单控制 Mio</span> 后，把这些参数加进角色的 Expression 菜单，就能在游戏里直接控制 Mio。本次新增或修复的项目已经标出。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="mono">参数</th><th>类型</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">MioToggleMic</td><td>Bool</td><td>麦克风开 / 关。<strong>改动：</strong>关 = 静音，不会再把听别人说话一起停掉。</td></tr>
+          <tr><td class="mono">MioToggleListen</td><td>Bool</td><td>听别人说话 开 / 关</td></tr>
+          <tr><td class="mono">MioToggleTts</td><td>Bool</td><td>同传语音 开 / 关</td></tr>
+          <tr><td class="mono">MioToggleOverlay</td><td>Bool</td><td>电脑上的悬浮字幕 开 / 关</td></tr>
+          <tr><td class="mono">MioToggleVrOverlay</td><td>Bool</td><td><strong>新增</strong>：头显字幕板 开 / 关</td></tr>
+          <tr><td class="mono">MioFrameGesture</td><td>Bool</td><td><strong>新增</strong>：双手取景 开 / 关</td></tr>
+          <tr><td class="mono">MioScreenshot</td><td>Bool</td><td><strong>新增</strong>：按下时截图翻译一次</td></tr>
+          <tr><td class="mono">MioTargetLanguage</td><td>Int</td><td><strong>新增</strong>：切换翻译目标语言（从 1 开始的序号，0 表示不变）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>开启 <span class="ui">把 Mio 状态发给角色</span> 后，Mio 会把以下状态写回角色，可以用来做动画：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="mono">参数</th><th>什么时候为 True / 值是什么</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">MioTranslating</td><td>正在翻译。<strong>修复：</strong>以前从来不会变成 True。</td></tr>
+          <tr><td class="mono">MioSpeaking</td><td>正在说话</td></tr>
+          <tr><td class="mono">MioMuted</td><td>麦克风已静音</td></tr>
+          <tr><td class="mono">MioError</td><td>出错</td></tr>
+          <tr><td class="mono">MioTargetLanguage</td><td>当前的翻译目标语言。<strong>修复：</strong>开始监听时会发送。</td></tr>
+          <tr><td class="mono">MioOverlayActive</td><td>悬浮字幕开着</td></tr>
+          <tr><td class="mono">MioFraming</td><td><strong>新增</strong>：正在双手取景</td></tr>
+          <tr><td class="mono">MioPanelHeld</td><td><strong>新增</strong>：正拿着翻译面板</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="settings">设置在哪里</h2>
+    <p>本手册提到的头显相关设置都在电脑上的 <span class="ui">设置 → 听别人说话</span> 页，往下分成三节：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>设置里的一节</th><th>这版新增的选项</th></tr></thead>
+        <tbody>
+          <tr><td>VR 头显字幕</td><td>字幕字号、形状标记、手腕面板出现方式、振动 / 提示音 / 音量、按住说话、打开 SteamVR 按键绑定、不把扳机握把交给游戏、扳机 / 握把力度、扳机和握把对调、拇指托、打开自定义提示音文件夹</td></tr>
+          <tr><td>头显里的翻译面板</td><td>面板配色（默认 / 深色 / 浅色）、背景不透明度、按钮说明、标题显示时间、面板宽度、双手拿着时左右扳机的作用、单手扳机收拢面板</td></tr>
+          <tr><td>截图翻译</td><td>双手取景翻译、保持不动自动翻译、保持不动的时间、主视眼、手势灵敏度、框出现前保持、松手后框保留、快速模式、摇杆缩放、译文使用原文颜色、只识别不翻译、忽略换行、自动复制到剪贴板、识别二维码、结果显示方式（面板 / 卡片 / 手柄面板）</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="faq">常见问题</h2>
+    <details>
+      <summary>摆了手势但框不出来</summary>
+      <div>
+        <p>按顺序检查：</p>
+        <ul>
+          <li><span class="ui">启用截图翻译</span> 和 <span class="ui">双手取景翻译</span> 是否都勾上了。</li>
+          <li>两只手是不是都按住了握把，并且放在对角（不是左右并排，也不是上下叠着）。</li>
+          <li>手离脸不要太近，也不要伸到最远，手臂自然伸出就好。</li>
+          <li>SteamVR 是否启用了 Mio 的手柄绑定。设置页里会显示绑定状态；如果改过绑定，请换回默认。</li>
+        </ul>
+        <p>还是不行的话，把 <span class="ui">手势灵敏度</span> 调高，或者打开 <span class="ui">快速模式</span>。</p>
+      </div>
+    </details>
+    <details>
+      <summary>框住的地方和读到的字对不上，总偏一点</summary>
+      <div><p>多半是主视眼选错了。把 <span class="ui">主视眼</span> 换到另一只眼再试。</p></div>
+    </details>
+    <details>
+      <summary>取景时角色还是抓起了东西 / 开了枪</summary>
+      <div><p>先确认 <span class="ui">取景和操作面板时不把扳机、握把交给游戏</span> 是勾上的，并且用的是 Mio 的默认绑定。改过绑定的，新动作不会生效，这项功能也会一起失效。PICO 等手柄如果一直显示“绑定未生效”，这项功能用不了，请把情况反馈给作者。</p></div>
+    </details>
+    <details>
+      <summary>按钮点不动</summary>
+      <div><p>把激光光标停在按钮上约 1 秒，也会点击（光标外圈会走一圈进度）。这是给扳机绑定还没生效的情况准备的。</p></div>
+    </details>
+    <details>
+      <summary>译文的颜色看不清</summary>
+      <div><p>渐变底色、带花纹的告示上，颜色可能推测不准。可以关闭 <span class="ui">译文使用原文的颜色</span>，改回统一的白字黑底。</p></div>
+    </details>
+    <details>
+      <summary>面板太多、挡住视线</summary>
+      <div><p>在手腕面板 → <span class="ui">翻译记录</span> 页点 <span class="ui">关闭全部面板</span>，或者点 <span class="ui">收拢面板</span> 把它们排到面前再一块块关。关掉的面板在记录里都还在。</p></div>
+    </details>
+    <details>
+      <summary>截图时会不会把 Mio 自己的面板也截进去</summary>
+      <div><p>不会。每次识别前，字幕板、取景框、面板、手腕面板和激光都会先暂时隐藏，截完再恢复。</p></div>
+    </details>
+    <details>
+      <summary>Mio 会自己启动 SteamVR 吗</summary>
+      <div><p>不会。SteamVR 运行时 Mio 会自动接上。想让 SteamVR 启动时顺便打开 Mio，勾选 <span class="ui">随 SteamVR 启动</span>。</p></div>
+    </details>
+    <details>
+      <summary>还需要实测的部分</summary>
+      <div>
+        <p>下面这些已经写好，但作者还没有在所有头显上逐一验证，特别欢迎反馈：</p>
+        <ul>
+          <li>取景期间不把按键交给游戏，在各家手柄上是否都生效</li>
+          <li>Index 握把力度、Touch 拇指托、各手柄摇杆的绑定是否都能读到</li>
+          <li>默认的手势灵敏度、保持不动的时间是否合适</li>
+          <li>面板抓取、双手缩放的手感</li>
+          <li>“抬起手腕看向手背”这种出现方式的角度是否合适</li>
+        </ul>
+      </div>
+    </details>
+  </main>
+</div>
+
+<footer class="colophon">
+  Mio RealTime Translator v1.4.2_beta3 测试版 · 官方版本永久免费，请只从官网 miovrc.com 或作者直接发放的渠道获取。
+</footer>

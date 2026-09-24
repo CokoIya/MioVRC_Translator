@@ -47,7 +47,7 @@ class _FakeSession:
 def test_deepl_translator_posts_form_payload(monkeypatch):
     session = _FakeSession(_FakeResponse({"translations": [{"text": "Hello!"}]}))
     monkeypatch.setattr(
-        "src.translators.deepl_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -73,7 +73,7 @@ def test_deepl_translator_posts_form_payload(monkeypatch):
 def test_libretranslate_translator_posts_json_payload(monkeypatch):
     session = _FakeSession(_FakeResponse({"translatedText": "Hello!"}))
     monkeypatch.setattr(
-        "src.translators.libretranslate_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -98,7 +98,7 @@ def test_libretranslate_translator_posts_json_payload(monkeypatch):
 def test_google_web_translator_gets_public_endpoint(monkeypatch):
     session = _FakeSession(_FakeResponse([[["Bonjour", "Hello", None, None, 10]], None, "en"]))
     monkeypatch.setattr(
-        "src.translators.google_web_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -138,7 +138,7 @@ def test_mymemory_translator_gets_no_key_endpoint_and_cleans_tm_artifacts(monkey
         )
     )
     monkeypatch.setattr(
-        "src.translators.mymemory_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -214,6 +214,7 @@ def test_translation_factory_creates_free_translation_backends(monkeypatch):
             {
                 "translation": {
                     "backend": "google_web",
+                    "auto_free_fallback": False,
                     "google_web": {"timeout_s": 6, "max_retries": 0},
                 }
             }
@@ -225,6 +226,7 @@ def test_translation_factory_creates_free_translation_backends(monkeypatch):
             {
                 "translation": {
                     "backend": "mymemory",
+                    "auto_free_fallback": False,
                     "mymemory": {"contact_email": "", "timeout_s": 6, "max_retries": 0},
                 }
             }
@@ -284,7 +286,7 @@ def test_requests_translator_closes_sessions_owned_by_multiple_workers(monkeypat
         return session
 
     monkeypatch.setattr(
-        "src.translators.google_web_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         session_factory,
     )
     translator = GoogleWebTranslator(max_retries=0)

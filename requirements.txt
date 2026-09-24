@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # UI
-PySide6>=6.8.0,<7.0.0
+PySide6>=6.9.0,<7.0.0   # QImage.flipped() (overlay_texture) needs Qt 6.9
 Pillow>=12.3.0,<13.0.0
 
 # Audio
@@ -35,6 +35,9 @@ tqdm>=4.66.0,<5.0.0
 
 # Translation backends
 openai>=1.30.0,<2.0.0        # covers OpenAI / DeepSeek / Qianwen / Custom
+# Claude translation backend. Stay on the 0.x line: 1.x moved to httpx2, and
+# the translator shares the httpx transport hooks with the other providers.
+anthropic>=0.117.0,<1.0.0
 # Qwen TTS DNS pinning subclasses the TLS-aware adapter hook added in 2.32.2.
 requests>=2.32.2,<3.0.0
 # Use the native Windows/macOS/Linux trust store for provider HTTPS. On

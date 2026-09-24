@@ -83,7 +83,6 @@ def test_backend_labels_localize_qualifiers_without_changing_backend_codes():
     assert get_backend_label("openai_compatible", "zh-CN") == "GPT 兼容服务"
     assert get_backend_label("local_ai", "ja") == "ローカル AI"
     assert get_backend_label("deepl", "ru") == "DeepL (бесплатный тариф)"
-    # Disabled legacy Claude selections normalize to the default Bing backend.
-    assert get_backend_label("anthropic_compatible", "ko") == "Bing 번역(무료)"
+    assert get_backend_label("anthropic_compatible", "ko") == "Claude 호환 서비스"
     assert get_backend_label("microsoft_edge_web", "zh-CN") == "Bing翻译(免费)"
     assert get_backend_label("openai_compatible") == "GPT Compatible"

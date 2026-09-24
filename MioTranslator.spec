@@ -193,7 +193,6 @@ hiddenimports += [
     "src.asr.text_corrections",
     "src.asr.fallback_asr",
     "src.asr.sensevoice_asr",
-    "src.asr.whisper_asr",
     "src.asr.model_manager",
     "src.asr.qwen3_asr",
     "src.asr.edge_stt_asr",
@@ -224,12 +223,13 @@ hiddenimports += [
     "pypinyin",
     "cn2an",
     "src.asr.sensevoice_model_manager",
-    "src.asr.hf_model_downloader",
+    "src.utils.hf_model_downloader",
     "src.audio.device_inventory",
     "src.audio.desktop_recorder",
     "src.audio.recorder",
     "src.audio.windows_audio",
     "src.utils.locale_detect",
+    "src.utils.signed_catalog",
     "PySide6",
     "PySide6.QtCore",
     "PySide6.QtGui",
@@ -259,6 +259,15 @@ hiddenimports += [
     "src.ui_qt.in_place_painter",
     "src.ui_qt.in_place_overlay_window",
     "src.core.vr_input",
+    # The headset side, VRHandsFrame style: the two-hand frame, kept result
+    # panels, the reads history and the vibration/sound cues.
+    "src.core.vr_frame_gesture",
+    "src.core.steamvr_frame",
+    "src.core.vr_result_panels",
+    "src.core.vr_history",
+    "src.core.vr_feedback",
+    "src.ui_qt.vr_result_panel",
+    "src.core.qr_codes",
     "winrt.windows.media.ocr",
     "winrt.windows.graphics.imaging",
     "winrt.windows.storage.streams",
@@ -275,11 +284,6 @@ hiddenimports = filter_hiddenimports(hiddenimports)
 
 excludes = [
     "torchvision",
-    # Claude/Anthropic is disabled for this release. Keep a stale SDK or
-    # legacy translator module out of the frozen bundle even if present in a
-    # developer environment.
-    "anthropic",
-    "anthropic.*",
     # Recognition no longer runs in a browser page, so the whole Qt
     # WebEngine stack (a ~195 MB core DLL plus resource packs) is dead
     # weight in the bundle.

@@ -94,7 +94,7 @@ def test_catalog_loader_cannot_restore_removed_gpt_or_claude_models():
         {
             "translation_backends": {
                 "openai": {"model": "gpt-5.4-mini"},
-                "anthropic": {"model": "claude-opus-4-8"},
+                "anthropic": {"model": "claude-sonnet-4-20250514"},
             },
             "translation_model_presets": {
                 "openai": ["gpt-5.4-mini", "gpt-5.6-sol"],
@@ -113,12 +113,14 @@ def test_catalog_loader_cannot_restore_removed_gpt_or_claude_models():
     )
 
     assert catalog.translation_backends["openai"]["model"] == "gpt-5.6-sol"
-    assert catalog.translation_backends["anthropic"]["model"] == "claude-sonnet-4-6"
+    # A retired id cannot come back through the catalog; served families can.
+    assert catalog.translation_backends["anthropic"]["model"] == "claude-opus-5"
     assert catalog.translation_model_presets["openai"] == ("gpt-5.6-sol",)
     assert catalog.translation_model_presets["openai_compatible"] == (
         "gpt-5.6-terra",
     )
     assert catalog.translation_model_presets["anthropic"] == (
+        "claude-opus-4-8",
         "claude-sonnet-5",
     )
     assert catalog.translation_model_presets["anthropic_compatible"] == (

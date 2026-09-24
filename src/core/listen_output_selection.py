@@ -169,3 +169,46 @@ def process_audio_summary(snapshot: object) -> dict[str, object]:
         "has_active_output": bool(snapshot.get("active_device")),
         "probe_enabled": bool(snapshot.get("probe_enabled")),
     }
+
+
+SPEECH_IN_PROGRESS = "speech_in_progress"
+SEGMENTS_WITHOUT_RESULT = "segments_without_result"
+
+
+def capture_idle_state(
+    stats: Mapping[str, object],
+    *,
+    now: float,
+    idle_anchor: float,
+    recent_s: float,
+    present_state: str,
+    absent_state: str,
+) -> str:
+    """Name what a capture that produced nothing for a while is doing.
+
+    ``present_state`` (the suspicious case, logged as a warning) is reserved
+    for audio that is there while the recorder neither sits inside a sentence
+    nor emitted any segment since ``idle_anchor``. A sentence still being
+    spoken, or segments that recognition turned into no text (music, noise),
+    are ordinary and get their own names.
+    """
+
+    last_non_silent_at = _as_float(stats.get("last_non_silent_at"))
+    if not (last_non_silent_at > 0 and (now - last_non_silent_at) < recent_s):
+        return absent_state
+    if bool(stats.get("vad_in_speech")):
+        return SPEECH_IN_PROGRESS
+    timing = stats.get("last_segment_timing")
+    emitted_at = (
+        _as_float(timing.get("segment_emitted_at")) if isinstance(timing, Mapping) else 0.0
+    )
+    if emitted_at > 0 and emitted_at > idle_anchor:
+        return SEGMENTS_WITHOUT_RESULT
+    return present_state
+
+
+def _as_float(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

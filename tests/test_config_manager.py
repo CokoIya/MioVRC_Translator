@@ -689,13 +689,7 @@ class TestConfigValidation(unittest.TestCase):
         )
         assert config["asr"]["qwen3_asr"]["hard_timeout_seconds"] == 12
         assert config["asr"]["qwen3_asr"]["max_concurrent_transcriptions"] == 1
-        assert (
-            config["asr"]["whisper"]["model_id"]
-            == "iic/speech_whisper-small_asr_english"
-        )
-        assert config["asr"]["whisper"]["model_revision"] == "master"
-        assert config["asr"]["whisper"]["language"] == "auto"
-        assert config["asr"]["whisper"]["ncpu"] is None
+        assert "whisper" not in config["asr"]
         assert config["asr"]["edge_stt"]["language"] == "ja-JP"
         assert config["asr"]["edge_stt"]["reuse_connection"] is True
         assert config["asr"]["edge_stt"]["max_turns"] == 18
@@ -738,12 +732,7 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["asr"]["engine"] == "sensevoice-small"
-        assert (
-            config["asr"]["whisper"]["model_id"]
-            == "iic/speech_whisper-small_asr_english"
-        )
-        assert config["asr"]["whisper"]["model_revision"] == "master"
-        assert config["asr"]["whisper"]["language"] == "auto"
+        assert "whisper" not in config["asr"]
 
     def test_ensure_asr_config_migrates_legacy_whisper_default(self):
         config = {
@@ -760,10 +749,8 @@ class TestConfigValidation(unittest.TestCase):
 
         assert changed is True
         assert config["asr"]["engine"] == "sensevoice-small"
-        assert (
-            config["asr"]["whisper"]["model_id"]
-            == "iic/speech_whisper-small_asr_english"
-        )
+        # The retired backend's saved section is dropped with the engine.
+        assert "whisper" not in config["asr"]
 
     def test_ensure_asr_config_preserves_gpu_device(self):
         config = {"asr": {"engine": "whisper-large-v3-turbo", "device": "cuda"}}
@@ -1354,10 +1341,10 @@ class TestConfigValidation(unittest.TestCase):
             TRANSLATION_BACKENDS["nvidia"]["model"]
             == "nvidia/nemotron-3-nano-30b-a3b"
         )
-        assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert TRANSLATION_BACKENDS["anthropic"]["model"] == "claude-opus-5"
         assert TRANSLATION_BACKENDS["openai_compatible"]["model"] == "gpt-5.6-sol"
         assert (
-            TRANSLATION_BACKENDS["anthropic_compatible"]["model"] == "claude-sonnet-4-6"
+            TRANSLATION_BACKENDS["anthropic_compatible"]["model"] == "claude-opus-5"
         )
         assert TRANSLATION_BACKENDS["hunyuan"]["model"] == "hunyuan-turbos-latest"
         assert "gpt-5.6-sol" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
@@ -1365,6 +1352,7 @@ class TestConfigValidation(unittest.TestCase):
         assert "gpt-5.6-luna" in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.5" not in TRANSLATION_MODEL_PRESETS["openai_compatible"]
         assert "gpt-5.4-mini" not in TRANSLATION_MODEL_PRESETS["openai_compatible"]
+        assert "claude-opus-5" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert "claude-sonnet-5" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert "claude-sonnet-4-6" in TRANSLATION_MODEL_PRESETS["anthropic_compatible"]
         assert (
@@ -1585,7 +1573,7 @@ class TestConfigValidation(unittest.TestCase):
                 "backend": "openai_compatible",
                 "openai": {"model": "gpt-5.4"},
                 "openai_compatible": {"model": "gpt-5.4-mini"},
-                "anthropic": {"model": "claude-opus-4-8"},
+                "anthropic": {"model": "claude-opus-4-1-20250805"},
                 "anthropic_compatible": {"model": "claude-opus-4-1-20250805"},
             }
         }
@@ -1598,7 +1586,7 @@ class TestConfigValidation(unittest.TestCase):
         assert changed is True
         assert config["translation"]["openai"]["model"] == "gpt-5.6-sol"
         assert config["translation"]["openai_compatible"]["model"] == "gpt-5.4-mini"
-        assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert config["translation"]["anthropic"]["model"] == "claude-opus-5"
         assert (
             config["translation"]["anthropic_compatible"]["model"]
             == "claude-opus-4-1-20250805"
@@ -1688,7 +1676,7 @@ class TestConfigValidation(unittest.TestCase):
         )
 
         assert changed is True
-        assert config["translation"]["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert config["translation"]["anthropic"]["model"] == "claude-opus-5"
 
     def test_current_openai_gpt41_model_is_preserved(self):
         """GPT-4.1 is still an official option and should not be auto-migrated."""

@@ -213,18 +213,43 @@ class TestShowCard:
 
 
 class TestPlacementConfig:
-    def test_the_default_placement_is_the_card_and_legacy_values_survive(self):
+    def test_the_default_placement_is_the_panel_and_legacy_values_survive(self):
         from src.utils.config_manager import _ensure_vrc_listen_config
 
         config = {"vrc_listen": {"screenshot_translation": {}}}
         _ensure_vrc_listen_config(config)
-        assert config["vrc_listen"]["screenshot_translation"]["placement"] == "card"
+        shot = config["vrc_listen"]["screenshot_translation"]
+        assert shot["placement"] == "panel"
+        assert shot["frame_gesture"] is True
+        assert shot["auto_translate"] is True
+        assert shot["still_seconds"] == 0.6
 
-        # The world-pinned labels were given up; their old value becomes the card.
-        for value, expected in (("hand", "hand"), ("in_place", "card"), ("nonsense", "card")):
+        # The world-pinned labels were given up; their old value becomes the panel.
+        for value, expected in (("hand", "hand"), ("in_place", "panel"), ("nonsense", "panel")):
             config = {"vrc_listen": {"screenshot_translation": {"placement": value}}}
             _ensure_vrc_listen_config(config)
             assert config["vrc_listen"]["screenshot_translation"]["placement"] == expected
+
+    def test_a_card_saved_as_the_old_default_moves_to_the_panel_once(self):
+        from src.utils.config_manager import _ensure_vrc_listen_config
+
+        config = {"vrc_listen": {"screenshot_translation": {"placement": "card"}}}
+        _ensure_vrc_listen_config(config)
+        shot = config["vrc_listen"]["screenshot_translation"]
+        assert shot["placement"] == "panel"
+        assert shot["display_version"] == 2
+
+        # Chosen again after the move, the card stays.
+        shot["placement"] = "card"
+        _ensure_vrc_listen_config(config)
+        assert shot["placement"] == "card"
+
+    def test_the_hand_is_never_moved(self):
+        from src.utils.config_manager import _ensure_vrc_listen_config
+
+        config = {"vrc_listen": {"screenshot_translation": {"placement": "hand"}}}
+        _ensure_vrc_listen_config(config)
+        assert config["vrc_listen"]["screenshot_translation"]["placement"] == "hand"
 
 
 class TestNeverLaunchingSteamVR:

@@ -39,6 +39,7 @@ from src.utils.global_hotkey import (
     normalize_hotkey,
 )
 from src.utils.ui_config import (
+    ANTHROPIC_MODEL_ID_PREFIXES,
     DEFAULT_ASR_ENGINE,
     DISABLED_TRANSLATION_BACKENDS,
     SUPPORTED_MANUAL_SOURCE_LANGUAGE_CODES,
@@ -73,9 +74,6 @@ from src.asr.model_registry import (
     QWEN3_ASR_DEFAULT_REGION,
     QWEN3_ASR_LEGACY_MODEL_IDS,
     QWEN3_ASR_REGION_BASE_URLS,
-    WHISPER_ASR_DEFAULT_MODEL,
-    WHISPER_ASR_LEGACY_DEFAULT_MODELS,
-    WHISPER_ASR_DEFAULT_REVISION,
     get_asr_engine_spec,
     get_qwen3_asr_base_url,
     normalize_qwen3_asr_region,
@@ -132,12 +130,40 @@ _SCREENSHOT_DEFAULTS = {
     # brief, with any button putting it away sooner; desktop labels keep their
     # own longer stay, since a keyboard has no such button.
     "auto_hide_seconds": 1.5,
-    # Where the result goes: a card in the view showing the read picture with
-    # its translations ("card") or the hand panel ("hand"). The former
-    # "in_place" value (labels pinned over the world) migrates to the card:
+    # Where the result goes: a panel hung where the text was, kept until it
+    # is closed ("panel", VRHandsFrame's way), the same picture briefly
+    # ("card", gone on any button) or the hand panel ("hand"). The former
+    # "in_place" value (labels pinned over the world) migrates to the panel:
     # a flat sheet at one depth parts from the text as soon as the head
     # moves, and the player gave it up.
-    "placement": "card",
+    "placement": "panel",
+    # The two-hand frame: hold both grips with the hands at opposite corners
+    # of a sign. Held still for ``still_seconds`` it reads what it covers
+    # into the frame (``auto_translate``); a trigger pull keeps it as a panel.
+    "frame_gesture": True,
+    "auto_translate": True,
+    "still_seconds": 0.6,
+    # Whose view a read is taken from: the dominant eye (most people are
+    # right-eyed). A frame between the hands covers a different part of a
+    # far sign for each eye.
+    "view_eye": "right",
+    # How readily a pose counts as a frame (0 strict .. 1 lenient), how long
+    # it must be held before the frame appears and how long it survives a
+    # flicker; quick mode opens one with trigger + grip on both hands.
+    "gesture_sensitivity": 0.5,
+    # Translations drawn in the sign's own colours instead of white on black.
+    "match_colors": True,
+    # Read the text only (no translation); translate a framed notice as one
+    # paragraph; copy each read to the clipboard; read QR codes too; scale
+    # the frame with the stick while framing.
+    "recognize_only": False,
+    "ignore_line_breaks": False,
+    "auto_copy": False,
+    "scan_codes": True,
+    "stick_scaling": True,
+    "frame_arm_seconds": 0.3,
+    "frame_release_seconds": 0.25,
+    "quick_frame": False,
     # Press opens a frame to drag a region on; off means one press reads all.
     "selection_mode": True,
     # How far in front of the eyes the card floats; the mirror scale is a
@@ -153,6 +179,10 @@ _VR_OVERLAY_DEFAULTS = {
     "position": list(_DEFAULT_VR_POSITION),
     # A locked panel cannot be dragged, on purpose or by accident.
     "locked": False,
+    # Text size on the board, and the small shapes that say whose line it
+    # is without relying on colour.
+    "font_scale": 1.0,
+    "speaker_marks": True,
 }
 
 # The Mio tab in the SteamVR dashboard. On by default: it costs nothing when
@@ -166,7 +196,52 @@ _VR_DASHBOARD_DEFAULTS = {
 _VR_WRIST_DEFAULTS = {
     "enabled": True,
     "hand": "left",
+    # "twist" (roll the wrist twice), "look" (raise it and look, like a
+    # watch) or "always".
+    "show_mode": "twist",
 }
+
+# Buzz and a short sound for each step in the headset: the frame is ready,
+# it is reading, the result is in, a button was clicked.
+_VR_FEEDBACK_DEFAULTS = {
+    "haptics": True,
+    "sounds": True,
+    "volume": 0.5,
+}
+
+# Trigger and grip while Mio uses them: kept from the game (VRHandsFrame
+# does the same), counted as held past these pull values, optionally swapped.
+_VR_CONTROLS_DEFAULTS = {
+    "block_game_input": True,
+    "trigger_threshold": 0.5,
+    "grip_threshold": 0.4,
+    "swap_trigger_grip": False,
+    # Tapping the Touch thumb rest this many times in a row runs this.
+    "thumbrest_taps": 4,
+    "thumbrest_action": "frame_gesture",
+}
+_THUMBREST_ACTIONS = {"frame_gesture", "gather", "close_panels", "none"}
+
+# The kept panels: colour preset, background opacity, button tooltips, the
+# time in the title, the width of a panel that has no frame to match, and
+# what a trigger does while both hands hold a panel.
+_VR_PANELS_DEFAULTS = {
+    "color_preset": "default",
+    "opacity": 1.0,
+    "tooltips": True,
+    "show_time": True,
+    "default_width": 0.42,
+    "two_hand_left": "page_prev",
+    "two_hand_right": "next_or_close",
+    "same_hand_gather": True,
+}
+_PANEL_PRESETS = {"default", "dark", "light"}
+_TWO_HAND_ACTIONS = {"none", "page_prev", "page_next", "next_or_close", "close", "pin", "copy", "chatbox"}
+
+# The card was the default display until the panel took its place. A config
+# saved before then still says "card" because it was the default, not
+# because the player chose it; this marks configs already moved over.
+_SCREENSHOT_DISPLAY_VERSION = 2
 
 # The status line in the headset's corner and the controller-at-the-ear
 # gesture: both on by default, both harmless when SteamVR is not running.
@@ -226,7 +301,7 @@ _DEFAULT_OPENAI_MODEL = str(
     _catalog_backends().get("openai", {}).get("model", "gpt-5.6-sol")
 )
 _DEFAULT_ANTHROPIC_MODEL = str(
-    _catalog_backends().get("anthropic", {}).get("model", "claude-sonnet-4-6")
+    _catalog_backends().get("anthropic", {}).get("model", "claude-opus-5")
 )
 _APP_MODE_VALUES = {"translation", "simultaneous"}
 _PERFORMANCE_PROFILE_VALUES = {"balanced", "low_power"}
@@ -376,7 +451,6 @@ _ASR_CONFIG_KEYS = frozenset(
         "sensevoice",
         "streaming",
         "user_selected_engine",
-        "whisper",
     }
 )
 
@@ -726,6 +800,28 @@ def _base_language_from_ui_language(language: object) -> str:
     return "en"
 
 
+def _apply_first_run_listen_language(config: dict) -> bool:
+    """A new install translates other players into the language its UI speaks.
+
+    The UI language is only known once it has been bootstrapped from the OS,
+    after the listen section was filled from the example config, so this
+    runs then and only for a new (or unrecoverable) configuration.
+    """
+
+    ui_cfg = config.get("ui", {})
+    vrc_cfg = config.get("vrc_listen", {})
+    if not isinstance(ui_cfg, dict) or not isinstance(vrc_cfg, dict):
+        return False
+    raw = ui_cfg.get("language")
+    if not str(raw or "").strip():
+        return False
+    wanted = _normalize_translation_target_language(_base_language_from_ui_language(raw))
+    if wanted is None or vrc_cfg.get("target_language") == wanted:
+        return False
+    vrc_cfg["target_language"] = wanted
+    return True
+
+
 def _default_translation_language_pair(ui_language: object) -> tuple[str, str]:
     source_language = _base_language_from_ui_language(ui_language)
     target_language = "ja" if source_language == "zh" else "zh"
@@ -880,12 +976,24 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         config["vrc_listen"] = vrc_cfg
         changed = True
 
+    # What other players say is translated into the player's own language:
+    # the one the UI speaks. It used to be Chinese for everyone, so a Japanese
+    # player's listen window (and screenshot cards) came out in Chinese.
+    ui_cfg = config.get("ui", {})
+    raw_ui_language = ui_cfg.get("language") if isinstance(ui_cfg, dict) else None
+    listen_target_default = (
+        _base_language_from_ui_language(raw_ui_language)
+        if str(raw_ui_language or "").strip()
+        else "zh"
+    )
+    if _normalize_translation_target_language(listen_target_default) is None:
+        listen_target_default = "zh"
     defaults = {
         "enabled": False,
         "loopback_device": None,
         "asr_engine": ASR_ENGINE_FOLLOW_MAIN,
         "source_language": "auto",
-        "target_language": "zh",
+        "target_language": listen_target_default,
         "segment_duration_s": _DEFAULT_LISTEN_SEGMENT_DURATION_S,
         "tail_silence_s": _DEFAULT_LISTEN_TAIL_SILENCE_S,
         "asr_timeout_s": 5.0,
@@ -893,7 +1001,9 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "self_suppress": False,
         "self_suppress_seconds": 0.65,
         "show_overlay": False,
-        "send_to_chatbox": True,
+        # Others' translated speech stays with the player; posting it to the
+        # public chatbox under the player's name is an explicit choice.
+        "send_to_chatbox": False,
         "vad_speech_ratio": _DEFAULT_LISTEN_VAD_SPEECH_RATIO,
         "vad_activation_threshold_s": _DEFAULT_LISTEN_VAD_ACTIVATION_THRESHOLD_S,
         "vad_min_rms": _DEFAULT_LISTEN_VAD_MIN_RMS,
@@ -930,6 +1040,10 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         vr_cfg, "plate_opacity", _DEFAULT_VR_PLATE_OPACITY, 0.0, 0.95
     ):
         changed = True
+    if _coerce_float_range_config(vr_cfg, "font_scale", 1.0, 0.7, 1.8):
+        changed = True
+    if _coerce_bool_config(vr_cfg, "speaker_marks", True):
+        changed = True
     position = vr_cfg.get("position")
     normalized_position = _normalize_vr_position(position)
     if position != normalized_position:
@@ -965,6 +1079,75 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if wrist_cfg.get("hand") != wrist_hand:
         wrist_cfg["hand"] = wrist_hand
         changed = True
+    show_mode = str(wrist_cfg.get("show_mode", "twist") or "twist").strip().lower()
+    if show_mode not in {"twist", "look", "always"}:
+        show_mode = "twist"
+    if wrist_cfg.get("show_mode") != show_mode:
+        wrist_cfg["show_mode"] = show_mode
+        changed = True
+
+    feedback_cfg = vrc_cfg.get("vr_feedback")
+    if not isinstance(feedback_cfg, dict):
+        feedback_cfg = {}
+        vrc_cfg["vr_feedback"] = feedback_cfg
+        changed = True
+    for key, value in _VR_FEEDBACK_DEFAULTS.items():
+        if key not in feedback_cfg:
+            feedback_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(feedback_cfg, "haptics", True):
+        changed = True
+    if _coerce_bool_config(feedback_cfg, "sounds", True):
+        changed = True
+    if _coerce_float_range_config(feedback_cfg, "volume", 0.5, 0.0, 1.0):
+        changed = True
+
+    controls_cfg = vrc_cfg.get("vr_controls")
+    if not isinstance(controls_cfg, dict):
+        controls_cfg = {}
+        vrc_cfg["vr_controls"] = controls_cfg
+        changed = True
+    for key, value in _VR_CONTROLS_DEFAULTS.items():
+        if key not in controls_cfg:
+            controls_cfg[key] = value
+            changed = True
+    if _coerce_bool_config(controls_cfg, "block_game_input", True):
+        changed = True
+    if _coerce_bool_config(controls_cfg, "swap_trigger_grip", False):
+        changed = True
+    if _coerce_float_range_config(controls_cfg, "trigger_threshold", 0.5, 0.05, 1.0):
+        changed = True
+    if _coerce_float_range_config(controls_cfg, "grip_threshold", 0.4, 0.05, 1.0):
+        changed = True
+    if _coerce_int_range_config(controls_cfg, "thumbrest_taps", 4, 2, 6):
+        changed = True
+    if str(controls_cfg.get("thumbrest_action", "")) not in _THUMBREST_ACTIONS:
+        controls_cfg["thumbrest_action"] = "frame_gesture"
+        changed = True
+
+    panels_cfg = vrc_cfg.get("vr_panels")
+    if not isinstance(panels_cfg, dict):
+        panels_cfg = {}
+        vrc_cfg["vr_panels"] = panels_cfg
+        changed = True
+    for key, value in _VR_PANELS_DEFAULTS.items():
+        if key not in panels_cfg:
+            panels_cfg[key] = value
+            changed = True
+    if str(panels_cfg.get("color_preset", "")) not in _PANEL_PRESETS:
+        panels_cfg["color_preset"] = "default"
+        changed = True
+    for key in ("tooltips", "show_time", "same_hand_gather"):
+        if _coerce_bool_config(panels_cfg, key, True):
+            changed = True
+    if _coerce_float_range_config(panels_cfg, "opacity", 1.0, 0.3, 1.0):
+        changed = True
+    if _coerce_float_range_config(panels_cfg, "default_width", 0.42, 0.28, 0.7):
+        changed = True
+    for key in ("two_hand_left", "two_hand_right"):
+        if str(panels_cfg.get(key, "")) not in _TWO_HAND_ACTIONS:
+            panels_cfg[key] = _VR_PANELS_DEFAULTS[key]
+            changed = True
 
     # The headset status line was removed; a saved config that still
     # carries its section loses it rather than keeping a dead switch.
@@ -994,6 +1177,12 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         shot_cfg = {}
         vrc_cfg["screenshot_translation"] = shot_cfg
         changed = True
+    if "display_version" not in shot_cfg:
+        # Saved before the panel existed: "card" was the default then.
+        if str(shot_cfg.get("placement", "") or "").strip().lower() in {"", "card", "in_place"}:
+            shot_cfg["placement"] = "panel"
+        shot_cfg["display_version"] = _SCREENSHOT_DISPLAY_VERSION
+        changed = True
     for key, value in _SCREENSHOT_DEFAULTS.items():
         if key not in shot_cfg:
             shot_cfg[key] = value
@@ -1012,12 +1201,46 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
     if shot_cfg.get("hand") != hand:
         shot_cfg["hand"] = hand
         changed = True
-    placement = str(shot_cfg.get("placement", "card") or "card").strip().lower()
-    if placement not in {"card", "hand"}:
-        placement = "card"
+    placement = str(shot_cfg.get("placement", "panel") or "panel").strip().lower()
+    if placement not in {"panel", "card", "hand"}:
+        placement = "panel"
     if shot_cfg.get("placement") != placement:
         shot_cfg["placement"] = placement
         changed = True
+    if shot_cfg.get("display_version") != _SCREENSHOT_DISPLAY_VERSION:
+        shot_cfg["display_version"] = _SCREENSHOT_DISPLAY_VERSION
+        changed = True
+    if _coerce_bool_config(shot_cfg, "frame_gesture", True):
+        changed = True
+    if _coerce_bool_config(shot_cfg, "auto_translate", True):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "still_seconds", 0.6, 0.2, 3.0):
+        changed = True
+    view_eye = str(shot_cfg.get("view_eye", "right") or "right").strip().lower()
+    if view_eye not in {"left", "right"}:
+        view_eye = "right"
+    if shot_cfg.get("view_eye") != view_eye:
+        shot_cfg["view_eye"] = view_eye
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "gesture_sensitivity", 0.5, 0.0, 1.0):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "frame_arm_seconds", 0.3, 0.1, 1.0):
+        changed = True
+    if _coerce_float_range_config(shot_cfg, "frame_release_seconds", 0.25, 0.1, 1.0):
+        changed = True
+    if _coerce_bool_config(shot_cfg, "quick_frame", False):
+        changed = True
+    if _coerce_bool_config(shot_cfg, "match_colors", True):
+        changed = True
+    for key, default in (
+        ("recognize_only", False),
+        ("ignore_line_breaks", False),
+        ("auto_copy", False),
+        ("scan_codes", True),
+        ("stick_scaling", True),
+    ):
+        if _coerce_bool_config(shot_cfg, key, default):
+            changed = True
     if _coerce_bool_config(shot_cfg, "selection_mode", True):
         changed = True
     if _coerce_float_range_config(shot_cfg, "depth_meters", 1.5, 0.8, 5.0):
@@ -1093,7 +1316,7 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         vrc_cfg["source_language"] = "auto"
         changed = True
     if not str(vrc_cfg.get("target_language", "")).strip():
-        vrc_cfg["target_language"] = "zh"
+        vrc_cfg["target_language"] = listen_target_default
         changed = True
     listen_engine = str(vrc_cfg.get("asr_engine", "") or "").strip()
     if listen_engine == "whisper-large-v3-turbo":
@@ -1375,6 +1598,12 @@ def _ensure_audio_device_config(config: dict, loaded: dict | None = None) -> boo
         audio_cfg, "frame_duration_ms", _DEFAULT_FRAME_DURATION_MS, 10, 30
     ):
         changed = True
+    # Hold a controller button (bound in SteamVR) to talk; off by default.
+    if "push_to_talk" not in audio_cfg:
+        audio_cfg["push_to_talk"] = False
+        changed = True
+    if _coerce_bool_config(audio_cfg, "push_to_talk", False):
+        changed = True
     if int(audio_cfg.get("frame_duration_ms", _DEFAULT_FRAME_DURATION_MS)) not in {
         10,
         20,
@@ -1461,6 +1690,10 @@ def _ensure_osc_config(config: dict) -> bool:
         "listen": f"{prefix}ToggleListen",
         "tts": f"{prefix}ToggleTts",
         "overlay": f"{prefix}ToggleOverlay",
+        "vr_overlay": f"{prefix}ToggleVrOverlay",
+        "frame_gesture": f"{prefix}FrameGesture",
+        "target_language": f"{prefix}TargetLanguage",
+        "screenshot": f"{prefix}Screenshot",
     }
     for key, value in control_defaults.items():
         if not str(control_params.get(key, "") or "").strip():
@@ -1843,6 +2076,11 @@ def _ensure_translation_config(
     elif not isinstance(fallback_backends, list):
         trans_cfg["fallback_backends"] = []
         changed = True
+    # A free web primary is backed by the other free web services unless the
+    # player turned it off (see translators.factory.FREE_WEB_BACKENDS).
+    if not isinstance(trans_cfg.get("auto_free_fallback"), bool):
+        trans_cfg["auto_free_fallback"] = True
+        changed = True
 
     output_format = normalize_output_format(trans_cfg.get("output_format"))
     if trans_cfg.get("output_format") != output_format:
@@ -1967,13 +2205,8 @@ def _ensure_translation_config(
         if not isinstance(anthropic_cfg, dict):
             continue
         model = str(anthropic_cfg.get("model", "") or "").strip().lower()
-        if (
-            "opus" in model
-            or model in _LEGACY_ANTHROPIC_MODEL_IDS
-            or (
-                "sonnet" in model
-                and model not in {"claude-sonnet-4-6", "claude-sonnet-5"}
-            )
+        if model in _LEGACY_ANTHROPIC_MODEL_IDS or not model.startswith(
+            ANTHROPIC_MODEL_ID_PREFIXES
         ):
             anthropic_cfg["model"] = _DEFAULT_ANTHROPIC_MODEL
             changed = True
@@ -2084,6 +2317,9 @@ def _ensure_asr_config(config: dict) -> bool:
         changed = True
 
     engine = str(asr_cfg.get("engine", "")).strip()
+    # Whisper was retired as a backend; a saved choice moves to the local model
+    # the player may already have, and the saved "whisper" section is dropped
+    # with the other unknown keys below.
     if engine == "whisper-large-v3-turbo":
         engine = "sensevoice-small"
         asr_cfg["engine"] = engine
@@ -2118,42 +2354,6 @@ def _ensure_asr_config(config: dict) -> bool:
 
     if "ncpu" not in sensevoice_cfg:
         sensevoice_cfg["ncpu"] = None
-        changed = True
-
-    whisper_spec = get_asr_engine_spec("whisper-large-v3-turbo")
-    whisper_cfg = asr_cfg.get("whisper")
-    if not isinstance(whisper_cfg, dict):
-        whisper_cfg = {}
-        asr_cfg["whisper"] = whisper_cfg
-        changed = True
-    whisper_defaults = {
-        "model_id": WHISPER_ASR_DEFAULT_MODEL,
-        "model_revision": WHISPER_ASR_DEFAULT_REVISION,
-        "language": "auto",
-        "ncpu": None,
-    }
-    for key, value in whisper_defaults.items():
-        if key not in whisper_cfg:
-            whisper_cfg[key] = value
-            changed = True
-    current_whisper_model = str(whisper_cfg.get("model_id", "")).strip()
-    if (
-        not current_whisper_model
-        or current_whisper_model in WHISPER_ASR_LEGACY_DEFAULT_MODELS
-        or current_whisper_model
-        in {
-            spec.model_id
-            for engine, spec in ASR_ENGINE_SPECS.items()
-            if engine != "whisper-large-v3-turbo" and spec.requires_local_model
-        }
-    ):
-        whisper_cfg["model_id"] = whisper_spec.model_id
-        changed = True
-    if (
-        str(whisper_cfg.get("model_revision", "")).strip()
-        != whisper_spec.model_revision
-    ):
-        whisper_cfg["model_revision"] = whisper_spec.model_revision
         changed = True
 
     qwen_cfg = asr_cfg.get("qwen3_asr")
@@ -2757,7 +2957,7 @@ def load_config() -> dict:
     if _ensure_text_input_window_config(merged):
         config_changed = True
     if _ensure_screenshot_hotkey_config(merged):
-        changed = True
+        config_changed = True
     if _ensure_hotkey_config(merged):
         config_changed = True
     if _apply_startup_asr_default(merged):
@@ -2776,6 +2976,8 @@ def load_config() -> dict:
     # saved language instead.
     prefer_auto_ui_language = created_new or recover_ui_language_from_os
     if bootstrap_ui_language(merged, prefer_auto=prefer_auto_ui_language):
+        config_changed = True
+    if prefer_auto_ui_language and _apply_first_run_listen_language(merged):
         config_changed = True
     if _ensure_translation_config(
         merged,

@@ -374,6 +374,66 @@ def card_transform(
     return _multiply(anchor.pose, local)
 
 
+def view_fraction(
+    anchor: HeadAnchor, point: Sequence[float]
+) -> tuple[float, float, float] | None:
+    """Where a world point appears in the left eye's frame: (u, v, depth).
+
+    ``u``/``v`` are fractions of the frame (top-left origin, may lie outside
+    0..1 for a point outside the view); ``depth`` is the distance in front of
+    the eye along its view axis. None for a point behind or at the eye.
+    The inverse of :func:`card_transform`'s direction for a frame point.
+    """
+
+    pose = anchor.pose
+    try:
+        px, py, pz = (float(point[0]), float(point[1]), float(point[2]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    # World -> head: the pose's rotation is orthonormal, so its inverse is
+    # its transpose applied to the offset from the head's origin.
+    dx, dy, dz = px - pose[0][3], py - pose[1][3], pz - pose[2][3]
+    hx = pose[0][0] * dx + pose[1][0] * dy + pose[2][0] * dz
+    hy = pose[0][1] * dx + pose[1][1] * dy + pose[2][1] * dz
+    hz = pose[0][2] * dx + pose[1][2] * dy + pose[2][2] * dz
+    ex, ey, ez = anchor.eye_offset
+    x, y, z = hx - ex, hy - ey, hz - ez
+    depth = -z
+    if depth <= 1e-3:
+        return None
+    left, right, top, bottom = anchor.tangents
+    x_tan = x / depth
+    y_tan = y / depth
+    u = (x_tan - left) / (right - left) if right != left else 0.5
+    # The frame's top edge is at the tangent OpenVR names ``bottom``.
+    v = (y_tan - bottom) / (top - bottom) if top != bottom else 0.5
+    return (u, v, depth)
+
+
+def region_quad(
+    anchor: HeadAnchor, region: Sequence[float], depth: float
+) -> tuple[list[list[float]], float, float]:
+    """(3x4 transform, width m, height m) of a quad that covers ``region``
+    (u0, v0, u1, v1 of the frame) exactly, ``depth`` metres in front of the
+    eye and facing the head - so it lines up with what that region shows."""
+
+    u0, v0, u1, v1 = (float(value) for value in region)
+    depth = max(0.05, float(depth))
+    left, right, top, bottom = anchor.tangents
+    width = abs(u1 - u0) * abs(right - left) * depth
+    height = abs(v1 - v0) * abs(bottom - top) * depth
+    centre = ((u0 + u1) / 2.0, (v0 + v1) / 2.0)
+    x_tan = left + centre[0] * (right - left)
+    y_tan = bottom + centre[1] * (top - bottom)
+    ex, ey, ez = anchor.eye_offset
+    local: Matrix34 = (
+        (1.0, 0.0, 0.0, ex + x_tan * depth),
+        (0.0, 1.0, 0.0, ey + y_tan * depth),
+        (0.0, 0.0, 1.0, ez - depth),
+    )
+    return _multiply(anchor.pose, local), max(0.01, width), max(0.01, height)
+
+
 def card_width_meters(
     anchor: HeadAnchor, width_fraction: float, depth: float, *, scale: float = CARD_SCALE
 ) -> float:

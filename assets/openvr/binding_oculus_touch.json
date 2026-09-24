@@ -4,7 +4,16 @@
   "app_key": "mio.translator.overlay",
   "bindings": {
     "/actions/mio": {
-      "haptics": [],
+      "haptics": [
+        {
+          "output": "/actions/mio/out/haptic",
+          "path": "/user/hand/left/output/haptic"
+        },
+        {
+          "output": "/actions/mio/out/haptic",
+          "path": "/user/hand/right/output/haptic"
+        }
+      ],
       "poses": [
         {
           "output": "/actions/mio/in/pointer_left",
@@ -38,36 +47,48 @@
           "inputs": {
             "click": {
               "output": "/actions/mio/in/hold_trigger"
+            },
+            "pull": {
+              "output": "/actions/mio/in/trigger_value"
             }
           },
-          "mode": "button",
+          "mode": "trigger",
           "path": "/user/hand/left/input/trigger"
         },
         {
           "inputs": {
             "click": {
               "output": "/actions/mio/in/hold_grip"
+            },
+            "pull": {
+              "output": "/actions/mio/in/grip_value"
             }
           },
-          "mode": "button",
+          "mode": "trigger",
           "path": "/user/hand/left/input/grip"
         },
         {
           "inputs": {
             "click": {
               "output": "/actions/mio/in/hold_trigger"
+            },
+            "pull": {
+              "output": "/actions/mio/in/trigger_value"
             }
           },
-          "mode": "button",
+          "mode": "trigger",
           "path": "/user/hand/right/input/trigger"
         },
         {
           "inputs": {
             "click": {
               "output": "/actions/mio/in/hold_grip"
+            },
+            "pull": {
+              "output": "/actions/mio/in/grip_value"
             }
           },
-          "mode": "button",
+          "mode": "trigger",
           "path": "/user/hand/right/input/grip"
         },
         {
@@ -104,6 +125,116 @@
             }
           },
           "mode": "button",
+          "path": "/user/hand/right/input/joystick"
+        },
+        {
+          "inputs": {
+            "position": {
+              "output": "/actions/mio/in/stick"
+            }
+          },
+          "mode": "joystick",
+          "path": "/user/hand/left/input/joystick"
+        },
+        {
+          "inputs": {
+            "touch": {
+              "output": "/actions/mio/in/thumbrest"
+            }
+          },
+          "mode": "button",
+          "path": "/user/hand/left/input/thumbrest"
+        },
+        {
+          "inputs": {
+            "position": {
+              "output": "/actions/mio/in/stick"
+            }
+          },
+          "mode": "joystick",
+          "path": "/user/hand/right/input/joystick"
+        },
+        {
+          "inputs": {
+            "touch": {
+              "output": "/actions/mio/in/thumbrest"
+            }
+          },
+          "mode": "button",
+          "path": "/user/hand/right/input/thumbrest"
+        }
+      ]
+    },
+    "/actions/mio_block": {
+      "sources": [
+        {
+          "inputs": {
+            "click": {
+              "output": "/actions/mio_block/in/trigger"
+            },
+            "pull": {
+              "output": "/actions/mio_block/in/trigger_value"
+            }
+          },
+          "mode": "trigger",
+          "path": "/user/hand/left/input/trigger"
+        },
+        {
+          "inputs": {
+            "click": {
+              "output": "/actions/mio_block/in/grip"
+            },
+            "pull": {
+              "output": "/actions/mio_block/in/grip_value"
+            }
+          },
+          "mode": "trigger",
+          "path": "/user/hand/left/input/grip"
+        },
+        {
+          "inputs": {
+            "click": {
+              "output": "/actions/mio_block/in/trigger"
+            },
+            "pull": {
+              "output": "/actions/mio_block/in/trigger_value"
+            }
+          },
+          "mode": "trigger",
+          "path": "/user/hand/right/input/trigger"
+        },
+        {
+          "inputs": {
+            "click": {
+              "output": "/actions/mio_block/in/grip"
+            },
+            "pull": {
+              "output": "/actions/mio_block/in/grip_value"
+            }
+          },
+          "mode": "trigger",
+          "path": "/user/hand/right/input/grip"
+        }
+      ]
+    },
+    "/actions/mio_block_stick": {
+      "sources": [
+        {
+          "inputs": {
+            "position": {
+              "output": "/actions/mio_block_stick/in/stick"
+            }
+          },
+          "mode": "joystick",
+          "path": "/user/hand/left/input/joystick"
+        },
+        {
+          "inputs": {
+            "position": {
+              "output": "/actions/mio_block_stick/in/stick"
+            }
+          },
+          "mode": "joystick",
           "path": "/user/hand/right/input/joystick"
         }
       ]

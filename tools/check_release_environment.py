@@ -33,6 +33,7 @@ REQUIRED_MODULES = (
     "tokenizers",
     "tqdm",
     "editdistance",
+    "anthropic",
     "openai",
     "tiktoken",
     "pythonosc",

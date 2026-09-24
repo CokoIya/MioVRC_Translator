@@ -33,6 +33,7 @@ from src.core.in_place_layout import (
     in_place_transform,
 )
 from src.core.overlay_texture import OverlayTextureUploader
+from src.core.vr_eye_capture import DEFAULT_VIEW_EYE, eye_index
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,9 @@ class _RuntimeOverlay:
         self._uploader: OverlayTextureUploader | None = None
         self._available = False
         self._visible = False
+        # The eye reads are taken from (the player's dominant one); the
+        # owner keeps it in step with the setting.
+        self.view_eye = DEFAULT_VIEW_EYE
 
     def _quad_width(self, picture_width_meters: float) -> float:
         """The overlay width that shows the last picture at the given width."""
@@ -193,8 +197,8 @@ class _RuntimeOverlay:
         )
 
     # ------------------------------------------------------------- head pose
-    def snapshot_head_anchor(self) -> HeadAnchor | None:
-        """Where the head is right now, plus how its left eye projects.
+    def snapshot_head_anchor(self, eye: str | None = None) -> HeadAnchor | None:
+        """Where the head is right now, plus how the view eye projects.
 
         Read at capture time so the labels can be pinned to the world where the
         frame was seen, however the player turns afterwards.
@@ -213,9 +217,10 @@ class _RuntimeOverlay:
                 return None
             m = hmd.mDeviceToAbsoluteTracking
             pose = tuple(tuple(float(m[r][c]) for c in range(4)) for r in range(3))
-            eye = system.getEyeToHeadTransform(openvr.Eye_Left)
-            eye_offset = (float(eye[0][3]), float(eye[1][3]), float(eye[2][3]))
-            tangents = tuple(float(v) for v in system.getProjectionRaw(openvr.Eye_Left))
+            index = eye_index(openvr, eye or self.view_eye)
+            eye_pose = system.getEyeToHeadTransform(index)
+            eye_offset = (float(eye_pose[0][3]), float(eye_pose[1][3]), float(eye_pose[2][3]))
+            tangents = tuple(float(v) for v in system.getProjectionRaw(index))
         except Exception:
             logger.debug("Failed to read the head pose", exc_info=True)
             return None
@@ -437,20 +442,34 @@ class SteamVRSelectionFrame(_RuntimeOverlay):
             "setOverlayTransformTrackedDeviceRelative",
         ):
             return False
-        self._safe(lambda: overlay.setOverlayWidthInMeters(handle, meters), "setOverlayWidthInMeters")
         self._safe(
             lambda: overlay.setOverlayMouseScale(handle, openvr.HmdVector2_t(1.0, 1.0)),
             "setOverlayMouseScale",
         )
+        # Upload first: a picture letterboxed on the pinned texture needs a
+        # wider quad to appear at ``meters``.
         if not self._upload(buffer, width, height):
             return False
+        self._frame_meters = meters
+        self._safe(
+            lambda: overlay.setOverlayWidthInMeters(handle, self._quad_width(meters)),
+            "setOverlayWidthInMeters",
+        )
         self._show()
         return self._visible
 
     def push(self, buffer: Any, width: int, height: int) -> None:
         """Replace the texture while the frame stays where it is."""
 
-        self._upload(buffer, width, height)
+        if not self._upload(buffer, width, height):
+            return
+        meters = getattr(self, "_frame_meters", None)
+        overlay, handle = self._overlay, self._handle
+        if meters and overlay is not None and handle is not None:
+            self._safe(
+                lambda: overlay.setOverlayWidthInMeters(handle, self._quad_width(meters)),
+                "setOverlayWidthInMeters",
+            )
 
     def hide(self) -> None:
         self._dragging = False
@@ -485,7 +504,9 @@ class SteamVRSelectionFrame(_RuntimeOverlay):
         uploader = self._uploader
         if uploader is None or not uploader.mouse_y_is_top_down:
             v = 1.0 - v
-        return (u, v)
+        if uploader is not None:
+            u, v = uploader.picture_fraction(u, v)
+        return (max(0.0, min(1.0, u)), max(0.0, min(1.0, v)))
 
     def _handle_event(self, event: Any) -> None:
         openvr = self._openvr

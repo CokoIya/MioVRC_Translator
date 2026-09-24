@@ -58,3 +58,10 @@ selftest-frozen.stderr.txt
 .agents/
 CLAUDE.md
 CLAUDE.local.md
+
+# Local test and lint artefacts.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ruff_cache/

@@ -139,6 +139,26 @@ class OverlayTextureUploader:
 
         return max(0.01, float(picture_width_meters)) * self._scale
 
+    def picture_fraction(self, u: float, v: float) -> tuple[float, float]:
+        """Map a point on the texture to the same point on the last picture.
+
+        ``u``/``v`` are texture fractions with ``v`` counting from the top
+        (see ``mouse_y_is_top_down``). Pointer events and ray hits land on the
+        whole texture; once a picture of another size was letterboxed onto the
+        pinned canvas, the texture's margins are not picture, and using the
+        raw fraction put selections and button hits off by the margin. A point
+        in the margin maps outside 0..1.
+        """
+
+        canvas, drawn = self._canvas, self._drawn
+        if self._last_path != "gl" or not canvas or not drawn or drawn == canvas:
+            return (float(u), float(v))
+        canvas_w, canvas_h = canvas
+        drawn_w, drawn_h = max(1, drawn[0]), max(1, drawn[1])
+        x = (float(u) * canvas_w - (canvas_w - drawn_w) // 2) / drawn_w
+        y = (float(v) * canvas_h - (canvas_h - drawn_h) // 2) / drawn_h
+        return (x, y)
+
     def _compose(self, image: Any) -> tuple[Any, tuple[int, int]]:
         """Fit the picture on the canvas, centred; returns (canvas, drawn size)."""
 

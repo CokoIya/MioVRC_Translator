@@ -1,16 +1,9 @@
 from __future__ import annotations
 
 import logging
-import time
-
-import requests
 
 from src.utils.secure_http import validate_api_base_url
-from src.utils.http_session_pool import ThreadLocalSessionPool
-from src.utils.provider_diagnostics import safe_exception_summary
-from src.utils.provider_warmup import warmup_requests_session
-
-from .base import BaseTranslator
+from .web_translator_base import WebTranslatorBase
 from src.utils.input_validation import ValidationError, validate_translation_text
 
 logger = logging.getLogger(__name__)
@@ -61,8 +54,10 @@ _DEEPL_TARGET_LANGS = {
 }
 
 
-class DeepLTranslator(BaseTranslator):
+class DeepLTranslator(WebTranslatorBase):
     """DeepL API Free / Pro translator."""
+
+    PROVIDER_LABEL = "DeepL"
 
     def __init__(
         self,
@@ -81,42 +76,16 @@ class DeepLTranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        session_headers = {
-            "Authorization": f"DeepL-Auth-Key {self._api_key}",
-            "User-Agent": "MioTranslator/1.3",
-        }
-
-        def session_factory():
-            session = requests.Session()
-            session.headers.update(session_headers)
-            return session
-
-        self._session_pool = ThreadLocalSessionPool(session_factory)
+        self._init_session_pool(
+            self._base_url,
+            headers={"Authorization": f"DeepL-Auth-Key {self._api_key}"},
+        )
         self.model = "deepl"
 
     def prewarm(self) -> bool:
         """Warm this translation worker's DeepL session."""
 
-        result = warmup_requests_session(
-            self._session_pool.get(),
-            f"{self._base_url.rstrip('/')}/usage",
-            method="HEAD",
-            timeout_s=min(self._timeout_s, 3.0),
-        )
-        self._log_prewarm_result(result)
-        return result.succeeded
-
-    def _log_prewarm_result(self, result) -> None:
-        level = logger.info if result.succeeded else logger.warning
-        level(
-            "DeepL translation prewarm %s "
-            "(probe_status=%s probe_route_accepted=%s elapsed_ms=%.0f error_type=%s)",
-            "transport reachable" if result.succeeded else "failed",
-            result.status_code if result.status_code is not None else "unknown",
-            bool(result.status_code is not None and 200 <= result.status_code < 400),
-            result.elapsed_s * 1000.0,
-            result.error_type or "none",
-        )
+        return self._prewarm_session(f"{self._base_url.rstrip('/')}/usage")
 
     def translate(
         self,
@@ -166,39 +135,24 @@ class DeepLTranslator(BaseTranslator):
         self._remember_context_turn(text, translated, src_lang, tgt_lang)
         return translated
 
+    def _check_status(self, response) -> None:
+        if response.status_code == 456:
+            raise RuntimeError("DeepL quota exceeded")
+        super()._check_status(response)
+
     def _request_translation(self, payload: dict[str, str]) -> str:
         url = f"{self._base_url}/translate"
-        last_exc: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            started = time.perf_counter()
-            try:
-                response = self._session_pool.get().post(
-                    url,
-                    data=payload,
-                    timeout=self._timeout_s,
-                )
-                if response.status_code == 456:
-                    raise RuntimeError("DeepL quota exceeded")
-                response.raise_for_status()
-                data = response.json()
-                translations = data.get("translations", [])
-                if not translations:
-                    raise RuntimeError("DeepL response did not include translations")
-                text = translations[0].get("text", "")
-                logger.info(
-                    "DeepL translation finished (elapsed=%.2fs)",
-                    time.perf_counter() - started,
-                )
-                return str(text or "")
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "DeepL translation attempt failed: %s",
-                    safe_exception_summary(exc),
-                )
-                if attempt < self._max_retries:
-                    time.sleep(min(0.25 * (attempt + 1), 1.0))
-        raise RuntimeError(f"DeepL translation failed: {last_exc}") from last_exc
+        return self._send_with_retries(
+            lambda session: session.post(url, data=payload, timeout=self._timeout_s),
+            self._parse_payload,
+        )
+
+    @staticmethod
+    def _parse_payload(response) -> str:
+        translations = response.json().get("translations", [])
+        if not translations:
+            raise RuntimeError("DeepL response did not include translations")
+        return str(translations[0].get("text", "") or "")
 
     def _source_language(self, code: str) -> str:
         normalized = self._normalize_language_code(code)

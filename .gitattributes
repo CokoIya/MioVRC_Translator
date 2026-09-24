@@ -1,0 +1,36 @@
+# Normalise line endings: text files are stored with LF in the repository and
+# checked out with the platform default (CRLF on Windows with autocrlf), so a
+# file edited on any machine no longer flips the whole file in a diff.
+* text=auto
+
+# Windows tooling that must keep CRLF regardless of the checkout platform.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets never take part in end-of-line conversion or text diffs.
+*.png binary
+*.PNG binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.TTF binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.wav binary
+*.mp3 binary
+*.ogg binary
+*.onnx binary
+*.pt binary
+*.pth binary
+*.bin binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.zip binary
+*.7z binary
+*.pdf binary
+*.sig binary

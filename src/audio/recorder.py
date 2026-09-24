@@ -59,6 +59,10 @@ except ImportError:
     _HAS_SOXR = False
 
 FRAME_QUEUE_MAXSIZE = 64
+# Half of one 16-bit step: a frame whose loudest sample stays below this is
+# digital zero, what a stalled Windows capture stream delivers. A quiet room
+# still carries a noise floor well above it.
+DIGITAL_SILENCE_PEAK = 0.5 / 32768.0
 logger = logging.getLogger(__name__)
 _MAX_CAPTURE_CHANNELS = 8
 _COMMON_CAPTURE_RATES = (
@@ -170,6 +174,8 @@ class AudioRecorder:
         self._last_frame_rms = 0.0
         self._peak_frame_rms = 0.0
         self._last_non_silent_at = 0.0
+        self._last_signal_at = 0.0
+        self._flush_pending_on_stop = False
         self._denoiser = AdaptiveDenoiser(strength=denoise_strength)
         self._chunk_streamer = (
             ChunkStreamer(
@@ -220,6 +226,8 @@ class AudioRecorder:
             self._last_frame_rms = 0.0
             self._peak_frame_rms = 0.0
             self._last_non_silent_at = 0.0
+            self._last_signal_at = 0.0
+            self._flush_pending_on_stop = False
             self._clear_frame_queue()
             self._last_worker_error = None
             self._last_worker_error_at = 0.0
@@ -310,6 +318,7 @@ class AudioRecorder:
             "last_frame_rms": round(self._last_frame_rms, 6),
             "peak_frame_rms": round(self._peak_frame_rms, 6),
             "last_non_silent_at": self._last_non_silent_at,
+            "last_signal_at": self._last_signal_at,
             "capture_rate": self._capture_rate,
             "target_rate": self.sample_rate,
             "channels": self._capture_channels,
@@ -563,8 +572,15 @@ class AudioRecorder:
         )
         raise last_err
 
-    def stop(self):
+    def stop(self, *, flush_pending: bool = False):
+        """Stop capturing.
+
+        ``flush_pending`` emits the sentence in progress instead of dropping
+        it, for a stop that ends speech on purpose (muting right after talking).
+        """
+
         with self._lifecycle_lock:
+            self._flush_pending_on_stop = bool(flush_pending)
             self._running = False
             stream = self._stream
             self._stream = None
@@ -730,6 +746,8 @@ class AudioRecorder:
             normalized = self._prepare_frame(frame)
             if normalized.size == 0:
                 continue
+            if float(np.max(np.abs(normalized))) >= DIGITAL_SILENCE_PEAK:
+                self._last_signal_at = time.monotonic()
             normalized = self._denoiser.process(
                 normalized,
                 update_profile=not previous_in_speech,
@@ -810,32 +828,47 @@ class AudioRecorder:
             if not previous_in_speech:
                 continue
 
-            segment = np.concatenate(self._buffer) if self._buffer else None
-            speech_samples = self._speech_samples
-            self._buffer.clear()
-            self._speech_samples = 0
-            self._was_in_speech = False
-            self.vad.reset()
-            self._pre_speech_buffer.clear()
-            if segment is None or speech_samples < self._min_segment_samples:
-                continue
-            try:
-                emitted_at = time.monotonic()
-                audio_duration_s = float(segment.size) / max(self.sample_rate, 1)
-                vad_finalization_s = min(
-                    max(float(self.silence_threshold_s), 0.0),
-                    audio_duration_s,
-                )
-                self._last_segment_timing = {
-                    "speech_ended_at": emitted_at - vad_finalization_s,
-                    "segment_emitted_at": emitted_at,
-                    "vad_finalization_s": vad_finalization_s,
-                    "audio_duration_s": audio_duration_s,
-                }
-                self._segments_emitted += 1
-                self.on_segment(segment)
-            except Exception as exc:
-                logger.exception("AudioRecorder on_segment callback failed: %s", exc)
+            self._finish_segment()
+
+        if self._flush_pending_on_stop and self._was_in_speech:
+            # Stopped mid-sentence on purpose (the player muted right after
+            # speaking): what was said before the stop is still a sentence.
+            logger.info(
+                "AudioRecorder flushing the sentence in progress on stop "
+                "(speech_s=%.2f)",
+                self._speech_samples / max(self.sample_rate, 1),
+            )
+            self._finish_segment()
+
+    def _finish_segment(self) -> None:
+        """Emit the buffered speech as one segment and reset for the next one."""
+
+        segment = np.concatenate(self._buffer) if self._buffer else None
+        speech_samples = self._speech_samples
+        self._buffer.clear()
+        self._speech_samples = 0
+        self._was_in_speech = False
+        self.vad.reset()
+        self._pre_speech_buffer.clear()
+        if segment is None or speech_samples < self._min_segment_samples:
+            return
+        try:
+            emitted_at = time.monotonic()
+            audio_duration_s = float(segment.size) / max(self.sample_rate, 1)
+            vad_finalization_s = min(
+                max(float(self.silence_threshold_s), 0.0),
+                audio_duration_s,
+            )
+            self._last_segment_timing = {
+                "speech_ended_at": emitted_at - vad_finalization_s,
+                "segment_emitted_at": emitted_at,
+                "vad_finalization_s": vad_finalization_s,
+                "audio_duration_s": audio_duration_s,
+            }
+            self._segments_emitted += 1
+            self.on_segment(segment)
+        except Exception as exc:
+            logger.exception("AudioRecorder on_segment callback failed: %s", exc)
 
     def _enqueue_frame(self, frame: np.ndarray | None) -> None:
         try:

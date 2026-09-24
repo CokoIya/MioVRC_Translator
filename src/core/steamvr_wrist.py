@@ -58,6 +58,47 @@ LASER_COLOR = (120, 220, 255)
 # is clicked by resting the laser on it for this long. The cursor fills up
 # to show the countdown.
 DWELL_SECONDS = 0.9
+# How the panel comes up. "twist": roll the wrist twice (OVR Toolkit's way).
+# "look": raise the wrist and look at it, like a watch (VRHandsFrame's
+# wrist menu). "always": it stays on the wrist.
+SHOW_MODES = ("twist", "look", "always")
+DEFAULT_SHOW_MODE = "twist"
+# "look": the back of the hand must face the eyes within this angle, the eyes
+# look toward it within the other, and it must be at most this far away.
+LOOK_FACING_DEGREES = 45.0
+LOOK_GAZE_DEGREES = 30.0
+LOOK_MAX_DISTANCE_M = 0.7
+# Looser limits keep it up once shown, so a glance that drifts does not
+# flicker it; it goes after this long outside them.
+LOOK_KEEP_FACING_DEGREES = 65.0
+LOOK_KEEP_GAZE_DEGREES = 50.0
+LOOK_SHOW_SECONDS = 0.15
+LOOK_HIDE_SECONDS = 0.5
+
+
+def normalize_show_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in SHOW_MODES else DEFAULT_SHOW_MODE
+
+
+def wrist_is_looked_at(
+    head: Rows, controller: Rows, *, facing_degrees: float, gaze_degrees: float, max_distance: float
+) -> bool:
+    """The back of the hand turned to the eyes, and the eyes on it."""
+
+    panel = compose(controller, local_transform())
+    panel_pos = (panel[0][3], panel[1][3], panel[2][3])
+    head_pos = (float(head[0][3]), float(head[1][3]), float(head[2][3]))
+    to_head = tuple(head_pos[i] - panel_pos[i] for i in range(3))
+    distance = math.sqrt(sum(c * c for c in to_head))
+    if distance < 1e-6 or distance > max_distance:
+        return False
+    # The panel's face is the controller's +Y (see local_transform).
+    normal = (float(controller[0][1]), float(controller[1][1]), float(controller[2][1]))
+    facing = sum(normal[i] * to_head[i] for i in range(3)) / distance
+    forward = (-float(head[0][2]), -float(head[1][2]), -float(head[2][2]))
+    gaze = -sum(forward[i] * to_head[i] for i in range(3)) / distance
+    return facing >= math.cos(math.radians(facing_degrees)) and gaze >= math.cos(math.radians(gaze_degrees))
 
 Vector = tuple[float, float, float]
 Ray = tuple[Vector, Vector]
@@ -165,7 +206,9 @@ def laser_texture() -> ctypes.Array:
 class SteamVRLaser:
     """The beam from the pointing controller, shown only while the panel is."""
 
-    def __init__(self) -> None:
+    def __init__(self, key: str = LASER_OVERLAY_KEY, name: str = LASER_OVERLAY_NAME) -> None:
+        self._key = str(key)
+        self._name = str(name)
         self._openvr: Any | None = None
         self._overlay: Any | None = None
         self._handle: Any | None = None
@@ -185,7 +228,7 @@ class SteamVRLaser:
 
             self._openvr = openvr
             self._overlay = openvr.IVROverlay()
-            self._handle = self._overlay.createOverlay(LASER_OVERLAY_KEY, LASER_OVERLAY_NAME)
+            self._handle = self._overlay.createOverlay(self._key, self._name)
             self._texture = laser_texture()
             self._overlay.setOverlayRaw(
                 self._handle, self._texture, LASER_TEXTURE_WIDTH, LASER_TEXTURE_HEIGHT, 4
@@ -257,8 +300,15 @@ class SteamVRWristPanel:
         hand: str = "left",
         width_meters: float = DEFAULT_WRIST_WIDTH_METERS,
         on_action: Callable[[str], None] | None = None,
+        show_mode: str = DEFAULT_SHOW_MODE,
+        on_toggle: Callable[[bool], None] | None = None,
     ) -> None:
         self._panel_factory = panel_factory
+        # Told when the gesture shows or hides the panel, for a cue.
+        self._on_toggle = on_toggle
+        self._show_mode = normalize_show_mode(show_mode)
+        self._look_since: float | None = None
+        self._unlook_since: float | None = None
         self._panel: Any | None = None
         self._hand = "right" if str(hand).lower() == "right" else "left"
         self._width_meters = max(0.1, min(1.0, float(width_meters)))
@@ -304,6 +354,35 @@ class SteamVRWristPanel:
     @property
     def panel(self) -> Any | None:
         return self._panel
+
+    @property
+    def show_mode(self) -> str:
+        return self._show_mode
+
+    def set_show_mode(self, mode: str) -> None:
+        wanted = normalize_show_mode(mode)
+        if wanted == self._show_mode:
+            return
+        self._show_mode = wanted
+        self._look_since = None
+        self._unlook_since = None
+        self._twist = TwistDetector()
+        # "always" shows it now; the other modes start hidden until asked.
+        self._shown = wanted == "always"
+        self._set_visible(self._shown and not self._suspended)
+
+    @property
+    def pointing_hand(self) -> str:
+        """The hand whose laser works this panel: the one not wearing it."""
+
+        return "left" if self._hand == "right" else "right"
+
+    @property
+    def pointer_on_panel(self) -> bool:
+        """True while the laser rests on the panel, so nothing else should
+        take that hand's trigger."""
+
+        return self._visible and self._cursor is not None
 
     def _ok(self, action: Callable[[], Any], label: str) -> bool:
         try:
@@ -510,6 +589,15 @@ class SteamVRWristPanel:
                 image = render_image(hover=self._hover, pressed=self._pressed, cursor=self._cursor, **extra)
                 if self._uploader.upload_image(image):
                     self._dirty = False
+                    # Keep the panel its intended size if the picture had to
+                    # be letterboxed on the texture pinned by the first upload.
+                    quad_width = self._uploader.quad_width(self._width_meters)
+                    if abs(quad_width - getattr(self, "_applied_quad_width", self._width_meters)) > 1e-4:
+                        self._applied_quad_width = quad_width
+                        self._ok(
+                            lambda: overlay.setOverlayWidthInMeters(handle, quad_width),
+                            "setOverlayWidthInMeters",
+                        )
                     return
             buffer, width, height = panel.render_rgba(hover=self._hover, pressed=self._pressed)
         except Exception:
@@ -560,16 +648,27 @@ class SteamVRWristPanel:
             self._trigger_was_down = bool(trigger_down)
             return
         self._attach()
-        sideways, forward = controller_axes(controller)
-        banked = self._twist.count
-        if self._twist.update(sideways, forward, moment):
-            self._shown = not self._shown
-            logger.info("Wrist panel %s by a double twist", "shown" if self._shown else "hidden")
-        elif self._twist.count > banked:
-            # One twist banked: says in the log how far the wrist actually rolled.
-            logger.info(
-                "Wrist twist %d/%d (rolled %.0f deg)", self._twist.count, TWISTS_TO_TOGGLE, self._twist.last_peak
-            )
+        was_shown = self._shown
+        if self._show_mode == "always":
+            self._shown = True
+        elif self._show_mode == "look":
+            self._shown = self._update_look(head, controller, moment)
+        else:
+            sideways, forward = controller_axes(controller)
+            banked = self._twist.count
+            if self._twist.update(sideways, forward, moment):
+                self._shown = not self._shown
+                logger.info("Wrist panel %s by a double twist", "shown" if self._shown else "hidden")
+            elif self._twist.count > banked:
+                # One twist banked: says in the log how far the wrist actually rolled.
+                logger.info(
+                    "Wrist twist %d/%d (rolled %.0f deg)", self._twist.count, TWISTS_TO_TOGGLE, self._twist.last_peak
+                )
+        if self._shown != was_shown and callable(self._on_toggle):
+            try:
+                self._on_toggle(self._shown)
+            except Exception:
+                logger.debug("Wrist panel toggle callback failed", exc_info=True)
         self._set_visible(self._shown and not self._suspended)
         if not self._visible:
             self._trigger_was_down = bool(trigger_down)
@@ -614,6 +713,44 @@ class SteamVRWristPanel:
         self._trigger_was_down = down
         if self._dirty:
             self.push()
+
+    def _update_look(self, head, controller, now: float) -> bool:
+        """"look" mode: up while the player looks at the back of the hand."""
+
+        if head is None:
+            return self._shown
+        try:
+            if self._shown:
+                looking = wrist_is_looked_at(
+                    head,
+                    controller,
+                    facing_degrees=LOOK_KEEP_FACING_DEGREES,
+                    gaze_degrees=LOOK_KEEP_GAZE_DEGREES,
+                    max_distance=LOOK_MAX_DISTANCE_M * 1.2,
+                )
+            else:
+                looking = wrist_is_looked_at(
+                    head,
+                    controller,
+                    facing_degrees=LOOK_FACING_DEGREES,
+                    gaze_degrees=LOOK_GAZE_DEGREES,
+                    max_distance=LOOK_MAX_DISTANCE_M,
+                )
+        except (TypeError, ValueError, IndexError):
+            return self._shown
+        if looking:
+            self._unlook_since = None
+            if self._shown:
+                return True
+            if self._look_since is None:
+                self._look_since = now
+            return now - self._look_since >= LOOK_SHOW_SECONDS
+        self._look_since = None
+        if not self._shown:
+            return False
+        if self._unlook_since is None:
+            self._unlook_since = now
+        return now - self._unlook_since < LOOK_HIDE_SECONDS
 
     def _fire(self, action: str) -> None:
         if not callable(self._on_action):
@@ -688,8 +825,13 @@ class SteamVRWristPanel:
         # Texture v counts from the bottom unless the picture went up through
         # the flipped GL path, which makes it count from the top.
         uploader = self._uploader
-        y = v * height if (uploader is not None and uploader.mouse_y_is_top_down) else (1.0 - v) * height
+        if not (uploader is not None and uploader.mouse_y_is_top_down):
+            v = 1.0 - v
+        if uploader is not None:
+            # A panel picture letterboxed on the pinned texture: map through it.
+            u, v = uploader.picture_fraction(u, v)
         x = u * width
+        y = v * height
         cursor = (x, y)
         if self._cursor is None or abs(cursor[0] - self._cursor[0]) > 2 or abs(cursor[1] - self._cursor[1]) > 2:
             self._cursor = cursor

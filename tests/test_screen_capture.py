@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from PySide6.QtCore import QBuffer, QByteArray, Qt
+from PySide6.QtCore import QBuffer, QByteArray
 from PySide6.QtGui import QColor, QImage
 
 from src.core import screen_capture

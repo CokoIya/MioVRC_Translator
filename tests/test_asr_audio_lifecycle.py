@@ -11,13 +11,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from src.asr import hf_model_downloader, model_manager
+from src.asr import model_manager
+from src.utils import hf_model_downloader
 from src.asr.base import ASRProvider
 from src.asr.fallback_asr import FallbackASR
-from src.asr.hf_model_downloader import HFModelDownloader
+from src.utils.hf_model_downloader import HFModelDownloader
 from src.asr.qwen3_asr import Qwen3ASRProvider
 from src.asr.sensevoice_asr import SenseVoiceASR
-from src.asr.whisper_asr import WhisperASR
 from src.audio.desktop_recorder import DesktopAudioRecorder
 from src.audio.recorder import AudioRecorder
 from src.audio.vad_detector import SileroVADDetector
@@ -37,7 +37,7 @@ class _DummyASR(ASRProvider):
         self.close_count += 1
 
 
-@pytest.mark.parametrize("provider_type", [SenseVoiceASR, WhisperASR])
+@pytest.mark.parametrize("provider_type", [SenseVoiceASR])
 def test_local_asr_close_releases_model_and_cuda_cache(
     monkeypatch,
     provider_type,

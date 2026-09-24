@@ -381,7 +381,7 @@ class TestConfig:
         _ensure_vrc_listen_config(config, loaded={})
         wrist = config["vrc_listen"]["vr_wrist"]
 
-        assert wrist == {"enabled": True, "hand": "left"}
+        assert wrist == {"enabled": True, "hand": "left", "show_mode": "twist"}
 
     def test_a_bad_hand_falls_back_to_left(self):
         from src.utils.config_manager import _ensure_vrc_listen_config
@@ -389,7 +389,7 @@ class TestConfig:
         config = {"vrc_listen": {"vr_wrist": {"enabled": False, "hand": "foot"}}}
         _ensure_vrc_listen_config(config, loaded=config)
 
-        assert config["vrc_listen"]["vr_wrist"] == {"enabled": False, "hand": "left"}
+        assert config["vrc_listen"]["vr_wrist"] == {"enabled": False, "hand": "left", "show_mode": "twist"}
 
 
 class TestCaptureSuspend:

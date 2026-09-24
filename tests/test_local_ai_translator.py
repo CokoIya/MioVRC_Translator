@@ -292,7 +292,6 @@ def test_credentialed_local_ai_allows_literal_private_lan_http(monkeypatch):
     assert translator._trust_env is False
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
@@ -317,7 +316,7 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert backend_base_url_is_editable("anthropic_compatible") is True
     assert backend_api_key_is_required("anthropic_compatible") is True
     assert backend_model_is_selectable("anthropic_compatible") is True
-    assert get_backend_model_options("anthropic_compatible")[0] == "claude-sonnet-5"
+    assert get_backend_model_options("anthropic_compatible")[0] == "claude-opus-5"
     assert translator._client.kwargs["api_key"] == "relay-key"
     assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
     assert translator._client.kwargs["timeout"] == 11.0
@@ -342,7 +341,6 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
         ("https://api.anthropic.com", "https://api.anthropic.com"),
     ),
 )
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_normalizes_sdk_api_suffix(
     monkeypatch,
     configured_url,
@@ -369,7 +367,6 @@ def test_anthropic_compatible_normalizes_sdk_api_suffix(
     assert translator._client.kwargs["base_url"] == sdk_base_url
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_rejects_plaintext_public_http(monkeypatch):
     monkeypatch.setitem(
         sys.modules,

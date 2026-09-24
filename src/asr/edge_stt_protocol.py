@@ -20,13 +20,17 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import re
 import struct
+import threading
+from dataclasses import dataclass
 from typing import Any
 
 TRUSTED_CLIENT_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
 CHROMIUM_FULL_VERSION = "143.0.3650.75"
 CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split(".", 1)[0]
 SEC_MS_GEC_VERSION = f"1-{CHROMIUM_FULL_VERSION}"
+EXTENSION_ORIGIN = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
 SPEECH_HOST = "speech.platform.bing.com"
 RECOGNITION_PATH = "/speech/recognition/edge/interactive/v1"
 
@@ -38,24 +42,102 @@ SEC_MS_GEC_WINDOW_SECONDS = 300
 BITS_PER_SAMPLE = 16
 CHANNELS = 1
 
-WSS_HEADERS = {
-    "Pragma": "no-cache",
-    "Cache-Control": "no-cache",
-    "Origin": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{CHROMIUM_MAJOR_VERSION}.0.0.0 "
-        f"Safari/537.36 Edg/{CHROMIUM_MAJOR_VERSION}.0.0.0"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-}
+_TOKEN_RE = re.compile(r"[0-9A-F]{32}")
+_CHROMIUM_VERSION_RE = re.compile(r"[0-9]{2,4}(?:\.[0-9]{1,6}){3}")
+_ORIGIN_RE = re.compile(r"chrome-extension://[a-p]{32}")
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeSpeechIdentity:
+    """What the service checks to accept a client: token, browser version, origin.
+
+    These are the parts Microsoft can rotate. The built-in values ship with
+    the release; a newer set can arrive only through the signed section of
+    the remote catalog (``src.utils.signed_catalog``), so the recogniser can
+    be fixed without a new installer.
+    """
+
+    trusted_client_token: str = TRUSTED_CLIENT_TOKEN
+    chromium_full_version: str = CHROMIUM_FULL_VERSION
+    origin: str = EXTENSION_ORIGIN
+
+    @classmethod
+    def parse(cls, data: object) -> "EdgeSpeechIdentity | None":
+        """Build an identity from untrusted data; None unless every field is well formed."""
+
+        if not isinstance(data, dict):
+            return None
+        token = str(data.get("trusted_client_token") or "").strip().upper()
+        version = str(data.get("chromium_full_version") or "").strip()
+        origin = str(data.get("origin") or "").strip()
+        if not (
+            _TOKEN_RE.fullmatch(token)
+            and _CHROMIUM_VERSION_RE.fullmatch(version)
+            and _ORIGIN_RE.fullmatch(origin)
+        ):
+            return None
+        return cls(token, version, origin)
+
+    @property
+    def chromium_major_version(self) -> str:
+        return self.chromium_full_version.split(".", 1)[0]
+
+    @property
+    def sec_ms_gec_version(self) -> str:
+        return f"1-{self.chromium_full_version}"
+
+
+DEFAULT_IDENTITY = EdgeSpeechIdentity()
+_identity_lock = threading.Lock()
+_identity = DEFAULT_IDENTITY
+
+
+def current_identity() -> EdgeSpeechIdentity:
+    with _identity_lock:
+        return _identity
+
+
+def set_identity(identity: EdgeSpeechIdentity | None) -> bool:
+    """Use ``identity`` for new connections (None: the built-in one). True if it changed."""
+
+    global _identity
+    selected = identity or DEFAULT_IDENTITY
+    with _identity_lock:
+        changed = selected != _identity
+        _identity = selected
+    return changed
+
+
+def wss_headers(identity: EdgeSpeechIdentity | None = None) -> dict[str, str]:
+    """The WebSocket handshake headers the service expects from Edge."""
+
+    selected = identity or current_identity()
+    major = selected.chromium_major_version
+    return {
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+        "Origin": selected.origin,
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            f"(KHTML, like Gecko) Chrome/{major}.0.0.0 "
+            f"Safari/537.36 Edg/{major}.0.0.0"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
+# The built-in headers, for callers that only need the shipped identity.
+WSS_HEADERS = wss_headers(DEFAULT_IDENTITY)
 
 
 def _utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def generate_sec_ms_gec(clock_skew_seconds: float = 0.0) -> str:
+def generate_sec_ms_gec(
+    clock_skew_seconds: float = 0.0,
+    identity: EdgeSpeechIdentity | None = None,
+) -> str:
     """Sign the current five-minute window with the trusted client token.
 
     ``clock_skew_seconds`` compensates a wrong local clock: the service rejects
@@ -63,23 +145,29 @@ def generate_sec_ms_gec(clock_skew_seconds: float = 0.0) -> str:
     only way to discover the offset.
     """
 
+    token = (identity or current_identity()).trusted_client_token
     ticks = _utc_now().timestamp() + float(clock_skew_seconds)
     ticks += WIN_EPOCH_SECONDS
     ticks -= ticks % SEC_MS_GEC_WINDOW_SECONDS
     # Windows file time counts 100-nanosecond intervals.
     ticks *= 1e9 / 100
-    payload = f"{ticks:.0f}{TRUSTED_CLIENT_TOKEN}".encode("ascii")
+    payload = f"{ticks:.0f}{token}".encode("ascii")
     return hashlib.sha256(payload).hexdigest().upper()
 
 
-def build_recognition_url(language: str, clock_skew_seconds: float = 0.0) -> str:
+def build_recognition_url(
+    language: str,
+    clock_skew_seconds: float = 0.0,
+    identity: EdgeSpeechIdentity | None = None,
+) -> str:
     """Build the recognition WebSocket URL for one language."""
 
+    selected = identity or current_identity()
     return (
         f"wss://{SPEECH_HOST}{RECOGNITION_PATH}"
-        f"?TrustedClientToken={TRUSTED_CLIENT_TOKEN}"
-        f"&Sec-MS-GEC={generate_sec_ms_gec(clock_skew_seconds)}"
-        f"&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}"
+        f"?TrustedClientToken={selected.trusted_client_token}"
+        f"&Sec-MS-GEC={generate_sec_ms_gec(clock_skew_seconds, selected)}"
+        f"&Sec-MS-GEC-Version={selected.sec_ms_gec_version}"
         f"&language={language}"
         "&profanity=raw"
     )

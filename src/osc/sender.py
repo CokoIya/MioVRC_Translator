@@ -13,6 +13,15 @@ from pythonosc import udp_client
 
 
 MAX_CHATBOX_CHARS = 144
+# A sentence longer than the chatbox holds goes out as pages rather than being
+# cut: in the "original first" formats the cut used to fall on the translation.
+MAX_CHATBOX_PAGES = 4
+# How long each page stays up before the next replaces it; a reader needs
+# more than the bare send interval to finish 144 characters.
+CHATBOX_PAGE_SECONDS = 2.5
+# Where a page may end, best first: a line break, then a sentence end, then a
+# clause break, then any space.
+_PAGE_BREAKS = (("\n",), tuple("。！？!?"), tuple("，、；;,:："), (" ",))
 _VALID_AVATAR_PARAM_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MIN_SEND_INTERVAL_S = 0.8
 SEND_QUEUE_MAXSIZE = 32
@@ -35,6 +44,43 @@ class _QueuedOSCMessage:
     upstream_started_at: float = 0.0
     ui_delivered_at: float = 0.0
     completion_callback: Callable[[Mapping[str, object]], None] | None = None
+
+
+def split_chatbox_pages(
+    text: str, limit: int = MAX_CHATBOX_CHARS, max_pages: int = MAX_CHATBOX_PAGES
+) -> list[str]:
+    """Cut ``text`` into chatbox pages at the most natural break that fits.
+
+    A break is only taken in the second half of a page, so pages stay full;
+    with none there, the page is cut at the limit. Text beyond ``max_pages``
+    ends the last page with an ellipsis.
+    """
+
+    remaining = str(text or "").strip()
+    limit = max(8, int(limit))
+    pages: list[str] = []
+    while remaining and len(pages) < max(1, int(max_pages)):
+        if len(remaining) <= limit:
+            pages.append(remaining)
+            remaining = ""
+            break
+        window = remaining[:limit]
+        cut = 0
+        for marks in _PAGE_BREAKS:
+            best = max(window.rfind(mark) for mark in marks)
+            if best >= limit // 2:
+                cut = best + 1
+                break
+        if cut <= 0:
+            cut = limit
+        page = remaining[:cut].strip()
+        if page:
+            pages.append(page)
+        remaining = remaining[cut:].strip()
+    if remaining and pages:
+        last = pages[-1]
+        pages[-1] = (last[: limit - 1].rstrip() if len(last) >= limit else last) + "\u2026"
+    return pages
 
 
 class VRCOSCSender:
@@ -66,6 +112,9 @@ class VRCOSCSender:
         self._stop_event = threading.Event()
         self._last_error = ""
         self._closed = False
+        self._typing = False
+        self._notify_sound = False
+        self._posted_since_clear = False
         self._start_worker()
 
     def _start_worker(self) -> None:
@@ -121,8 +170,6 @@ class VRCOSCSender:
             )
         ):
             return ""
-        if len(safe) > MAX_CHATBOX_CHARS:
-            safe = safe[: MAX_CHATBOX_CHARS - 3] + "..."
         return safe
 
     def _chatbox_min_interval_s(self, text: str) -> float:
@@ -190,6 +237,10 @@ class VRCOSCSender:
                     self._last_error = ""
                     if payload.rate_limited:
                         self._last_sent_at = sent_at
+                    if payload.address == "/chatbox/input":
+                        self._posted_since_clear = bool(
+                            payload.arguments and str(payload.arguments[0] or "")
+                        )
                 queued_at = payload.queued_at or dequeued_at
                 logger.info(
                     "OSC send finished (address=%s source=%s session_id=%s "
@@ -430,19 +481,61 @@ class VRCOSCSender:
         with self._state_lock:
             generation = int(getattr(self, "_chatbox_generation", 0))
         context = self._request_context_fields(request_context)
-        queued = self._enqueue_payload(
-            _QueuedOSCMessage(
-                address="/chatbox/input",
-                arguments=(safe, immediate, False),
-                rate_limited=True,
-                queued_at=time.monotonic(),
-                min_interval_s=self._chatbox_min_interval_s(safe),
-                generation=generation,
-                completion_callback=completion_callback,
-                **context,
+        pages = split_chatbox_pages(safe)
+        queued = False
+        for index, page in enumerate(pages):
+            first = index == 0
+            queued_page = self._enqueue_payload(
+                _QueuedOSCMessage(
+                    address="/chatbox/input",
+                    arguments=(page, immediate, bool(getattr(self, "_notify_sound", False))),
+                    rate_limited=True,
+                    queued_at=time.monotonic(),
+                    # Later pages wait long enough for the earlier one to be read.
+                    min_interval_s=(
+                        self._chatbox_min_interval_s(page)
+                        if first
+                        else max(self._min_send_interval_s, CHATBOX_PAGE_SECONDS)
+                    ),
+                    generation=generation,
+                    # One request, one completion: the timing belongs to the
+                    # first page, which is when the sentence reached VRChat.
+                    completion_callback=completion_callback if first else None,
+                    **(context if first else {}),
+                )
             )
-        )
+            queued = queued or queued_page
+            if first and not queued_page:
+                break
+        if queued:
+            # A message posted ends the "typing" bubble on VRChat's side.
+            with self._state_lock:
+                self._typing = False
         return safe if queued else ""
+
+    def set_typing(self, typing: bool) -> bool:
+        """Show or clear VRChat's "typing" bubble above the player.
+
+        Sent straight away rather than queued behind pending pages, and only
+        when the state changes.
+        """
+
+        wanted = bool(typing)
+        with self._state_lock:
+            if self._closed or bool(getattr(self, "_typing", False)) == wanted:
+                return False
+            self._typing = wanted
+        try:
+            self._client.send_message("/chatbox/typing", [wanted])
+        except Exception as exc:
+            logger.debug("OSC typing indicator failed: %s", type(exc).__name__)
+            return False
+        return True
+
+    def set_notify_sound(self, enabled: bool) -> None:
+        """Whether VRChat plays its notification sound for each message."""
+
+        self._notify_sound = bool(enabled)
 
     def clear_chatbox(self) -> bool:
         with self._state_lock:
@@ -456,6 +549,19 @@ class VRCOSCSender:
                 generation=generation,
             )
         )
+
+    def clear_chatbox_if_posted(self) -> bool:
+        """Empty the chatbox, but only if Mio put something in it.
+
+        A stop should take Mio's last line down; it must not wipe a message
+        the player typed into VRChat's own keyboard.
+        """
+
+        with self._state_lock:
+            posted = bool(getattr(self, "_posted_since_clear", False))
+        if not posted:
+            return False
+        return self.clear_chatbox()
 
     def clear_pending_chatbox(self) -> int:
         """Invalidate queued chatbox text while preserving avatar telemetry."""

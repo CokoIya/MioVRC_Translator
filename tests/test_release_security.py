@@ -323,7 +323,12 @@ def test_provider_logs_do_not_emit_full_relay_urls_or_raw_tracebacks() -> None:
     ):
         source = _read(relative_path)
         assert 'failed: %s", exc' not in source
-        assert "safe_exception_summary" in source
+        assert "logger.exception" not in source
+        # Requests and their failure logging live in the shared base.
+        assert "WebTranslatorBase" in source
+    web_base = _read("src/translators/web_translator_base.py")
+    assert 'failed: %s", exc' not in web_base
+    assert "safe_exception_summary" in web_base
 
     qwen = _read("src/tts/api_tts_engines.py")
     manager = _read("src/tts/manager.py")
@@ -331,8 +336,6 @@ def test_provider_logs_do_not_emit_full_relay_urls_or_raw_tracebacks() -> None:
     main_window = _read("src/ui_qt/main_window.py")
     scheduler = _read("src/core/realtime_scheduler.py")
     settings_window = _read("src/ui_qt/settings_window.py")
-    tts_service = _read("src/core/tts_service.py")
-    translation_pipeline = _read("src/core/translation_pipeline.py")
     output_dispatcher = _read("src/core/output_dispatcher.py")
     assert 'logger.error("Qwen TTS synthesis failed: %s"' not in qwen
     assert 'logger.error("TTS synthesis failed: %s"' not in manager
@@ -346,19 +349,9 @@ def test_provider_logs_do_not_emit_full_relay_urls_or_raw_tracebacks() -> None:
     assert "TTS test finished without playback success: %s" not in settings_window
     assert "safe_exception_summary" in settings_window
     assert (
-        'logger.warning("Failed to initialize TTS manager: %s", exc)' not in tts_service
-    )
-    assert 'logger.warning("TTS speak failed: %s", exc)' not in tts_service
-    assert (
-        'logger.warning("Manual translation failed: %s", exc)'
-        not in translation_pipeline
-    )
-    assert (
         'logger.warning("Output sink failed: %s", key, exc_info=True)'
         not in output_dispatcher
     )
-    assert "safe_exception_summary" in tts_service
-    assert "safe_exception_summary" in translation_pipeline
     assert "safe_exception_summary" in output_dispatcher
 
 

@@ -21,7 +21,7 @@ from src.asr.model_registry import (
     SENSEVOICE_DEFAULT_MODEL,
     SENSEVOICE_DEFAULT_REVISION,
 )
-from src.asr.hf_model_downloader import _is_safe_model_download_url
+from src.utils.hf_model_downloader import _is_safe_model_download_url
 from src.utils.app_paths import resource_base_dirs, writable_app_dir
 from src.utils.secure_http import open_validated_requests_response
 

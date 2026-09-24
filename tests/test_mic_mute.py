@@ -280,8 +280,8 @@ def test_vrchat_mute_pauses_and_unmute_resumes_physical_microphone_capture():
     window._sync_avatar_speaking_state = lambda **_kwargs: None
     window._reset_streaming_state = lambda _source=None: capture_events.append("reset")
 
-    def stop_capture():
-        capture_events.append("stop")
+    def stop_capture(*, flush_pending=False):
+        capture_events.append("stop+flush" if flush_pending else "stop")
         window._recorder = None
 
     def start_capture():
@@ -297,9 +297,10 @@ def test_vrchat_mute_pauses_and_unmute_resumes_physical_microphone_capture():
 
     assert window._mic_muted is False
     assert window._mic_capture_paused_for_mute is False
-    assert capture_events == ["reset", "stop", "start"]
+    assert capture_events == ["reset", "stop+flush", "start"]
     assert asr_capture_events == [False, False, True]
-    assert window._realtime_source_generations[MIC_SOURCE] == 1
+    # Work admitted before the mute was spoken while unmuted: not cancelled.
+    assert not getattr(window, "_realtime_source_generations", {}).get(MIC_SOURCE)
     assert bottom_events == ["mic_mute_on", "mic_mute_off"]
 
 
@@ -314,3 +315,99 @@ def test_microphone_start_is_suppressed_while_muted():
     window._start_microphone_capture()
 
     assert window._mic_capture_paused_for_mute is True
+
+
+def test_mute_can_be_set_to_discard_sentences_spoken_just_before_it():
+    window = MainWindow.__new__(MainWindow)
+    capture_events: list[str] = []
+    window._config = {
+        "osc": {"sync_mute_self": True},
+        "audio": {"mute_discards_pending_speech": True},
+    }
+    window._running = True
+    window._destroying = False
+    window._mic_muted = False
+    window._mic_capture_paused_for_mute = False
+    window._recorder = object()
+    window._asr = None
+    window._refresh_mic_mute_button = lambda: None
+    window._set_bottom = lambda *_args, **_kwargs: None
+    window._copy = lambda key: key
+    window._sync_avatar_muted_state = lambda **_kwargs: None
+    window._sync_avatar_speaking_state = lambda **_kwargs: None
+    window._reset_streaming_state = lambda _source=None: None
+
+    def stop_capture(*, flush_pending=False):
+        capture_events.append("stop+flush" if flush_pending else "stop")
+        window._recorder = None
+
+    window._stop_microphone_capture = stop_capture
+
+    window._handle_vrchat_mute_self(True)
+
+    assert capture_events == ["stop"]
+    assert window._realtime_source_generations[MIC_SOURCE] == 1
+
+
+def test_flushed_sentence_is_admitted_although_the_mute_already_applies():
+    window, scheduler = _window_for_mute(muted=True)
+    window._build_realtime_payload = lambda audio, **_kwargs: SimpleNamespace(
+        asr_provider=None, diagnostics={}
+    )
+    window._asr_provider_key = lambda _provider: "asr"
+    window._asr_provider_concurrency = lambda _provider: 1
+
+    window._on_audio_segment("audio captured while muted", MIC_SOURCE)
+    window._mic_flushing_before_mute = True
+    window._on_audio_segment("sentence spoken before the mute", MIC_SOURCE)
+
+    assert len(scheduler.submissions) == 1
+
+
+def _asr_stage_window(*, discard: bool):
+    from src.ui_qt.main_window import _RealtimeAudioPayload
+
+    window, _scheduler = _window_for_mute(muted=True)
+    window._config = {"audio": {"mute_discards_pending_speech": discard}}
+    window._realtime_task_active = lambda _task: True
+    window._call_in_ui = lambda _callback: None
+    heard: list[str] = []
+
+    def transcribe(_provider, _source, audio, *_args, **_kwargs):
+        heard.append(audio)
+        return "text"
+
+    window._transcribe_with_provider = transcribe
+    payload = _RealtimeAudioPayload(
+        audio="spoken before the mute",
+        asr_provider=object(),
+        asr_language="ja",
+        source_language="ja",
+        target_language="en",
+        second_target_language="",
+        third_target_language="",
+        listen_target_language="",
+        listen_prefix="",
+        send_to_chatbox=True,
+        config_snapshot={},
+    )
+    task = SimpleNamespace(source=MIC_SOURCE, session_id=7, sequence=1, payload=payload)
+    return window, task, heard
+
+
+def test_recognition_finishes_admitted_mic_audio_after_a_mute():
+    import threading
+
+    window, task, heard = _asr_stage_window(discard=False)
+
+    assert window._scheduler_asr_stage(task, threading.Event()) == "text"
+    assert heard == ["spoken before the mute"]
+
+
+def test_recognition_drops_admitted_mic_audio_when_mute_discards_it():
+    import threading
+
+    window, task, heard = _asr_stage_window(discard=True)
+
+    assert window._scheduler_asr_stage(task, threading.Event()) == ""
+    assert heard == []

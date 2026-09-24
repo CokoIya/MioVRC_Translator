@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable
 import requests
 
-from src.asr.hf_model_downloader import (
+from src.utils.hf_model_downloader import (
     DownloadProgress,
     DownloadState,
     _CHUNK_SIZE,

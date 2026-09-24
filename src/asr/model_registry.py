@@ -4,9 +4,6 @@ from dataclasses import dataclass, replace
 
 from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
-WHISPER_ASR_LEGACY_DEFAULT_MODELS = frozenset({"iic/Whisper-large-v3-turbo"})
-WHISPER_ASR_DEFAULT_MODEL = "iic/speech_whisper-small_asr_english"
-WHISPER_ASR_DEFAULT_REVISION = "master"
 SENSEVOICE_DEFAULT_MODEL = "iic/SenseVoiceSmall"
 SENSEVOICE_DEFAULT_REVISION = "70514a3da51f1160f51d18449dab6128bbd4928b"
 QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash-2026-02-10"
@@ -101,16 +98,6 @@ ASR_ENGINE_SPECS: dict[str, ASRRuntimeSpec] = {
             ("model.pt", 936_291_369),
         ),
     ),
-    "whisper-large-v3-turbo": ASRRuntimeSpec(
-        engine="whisper-large-v3-turbo",
-        label="Whisper Small",
-        config_key="whisper",
-        model_id=WHISPER_ASR_DEFAULT_MODEL,
-        model_revision=WHISPER_ASR_DEFAULT_REVISION,
-        requires_local_model=True,
-        bundled_dir_names=("whisper-small",),
-        required_files=("small.en.pb",),
-    ),
     "qwen3-asr": ASRRuntimeSpec(
         engine="qwen3-asr",
         label="Qwen3-ASR",
@@ -202,12 +189,6 @@ def get_asr_runtime_spec(
         or base_spec.model_revision
     )
     if model_id == base_spec.model_id:
-        model_revision = base_spec.model_revision
-    if (
-        base_spec.engine == "whisper-large-v3-turbo"
-        and model_id in WHISPER_ASR_LEGACY_DEFAULT_MODELS
-    ):
-        model_id = base_spec.model_id
         model_revision = base_spec.model_revision
     model_owner = _BUILTIN_MODEL_OWNER.get(model_id)
     if model_owner is not None and model_owner != resolved_engine:

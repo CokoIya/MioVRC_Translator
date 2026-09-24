@@ -11,7 +11,10 @@ button, and the whole thing is one hit-tested picture. Widgets would bring
 popups and focus handling that cannot work inside an overlay texture.
 
 The panel only knows facts handed to it in :meth:`set_state`; every button
-reports an action id and the main window decides what it means.
+reports an action id and the main window decides what it means. It has two
+pages: the controls, and the reads kept this session (VRHandsFrame keeps its
+captures on the wrist the same way), switched with ``page:main`` and
+``page:reads``.
 """
 
 from __future__ import annotations
@@ -26,7 +29,9 @@ from src.utils.i18n import tr
 
 # Tall enough for four sections plus the hint under the last one; the
 # dashboard scales the tab, so only the aspect ratio shows.
-PANEL_SIZE = (1280, 1080)
+PANEL_SIZE = (1280, 1120)
+# Reads listed on the reads page; the rest wait in the history.
+MAX_LISTED_READS = 7
 CURSOR_RADIUS = 14
 CURSOR_COLOR = QColor(255, 255, 255, 235)
 CURSOR_RING = QColor(20, 24, 36, 200)
@@ -49,6 +54,7 @@ ACTIVE_HOVER = QColor(110, 180, 255, 240)
 TEXT = QColor(245, 247, 250)
 TEXT_DIM = QColor(190, 196, 208)
 DANGER = QColor(235, 90, 90, 230)
+NOTE = QColor(230, 150, 40, 220)
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,7 @@ class VRDashboardPanel:
         self._state: dict = {}
         self._buttons: list[Button] = []
         self._texts: list[tuple[QRect, str, int, QColor, bool]] = []
+        self._notes: list[QRect] = []
         self._layout_dirty = True
 
     @property
@@ -103,6 +110,7 @@ class VRDashboardPanel:
     def _layout(self) -> None:
         self._buttons = []
         self._texts = []
+        self._notes = []
         width, _height = PANEL_SIZE
         s = self._state
         y = MARGIN
@@ -115,6 +123,15 @@ class VRDashboardPanel:
                 (QRect(width // 2, y + 6, width // 2 - MARGIN, 36), status, HINT_PX, TEXT_DIM, False)
             )
         y += 62
+        note = str(s.get("note", "") or "")
+        if note:
+            # A one-off instruction (close this menu so the view can be read)
+            # goes above everything, where the player is already looking.
+            self._notes.append(QRect(MARGIN, y, width - 2 * MARGIN, 64))
+            self._texts.append(
+                (QRect(MARGIN + 18, y, width - 2 * MARGIN - 36, 64), note, BUTTON_PX, TEXT, True)
+            )
+            y += 64 + GAP
 
         def section(title_key: str) -> None:
             nonlocal y
@@ -140,6 +157,11 @@ class VRDashboardPanel:
                 )
                 x += w + GAP
             y += ROW_HEIGHT + GAP
+
+        if str(s.get("page", "main") or "main") == "reads":
+            self._layout_reads(y, section, row)
+            self._layout_dirty = False
+            return
 
         # -------------------------------------------------- listening
         section("vr_dash_section_listen")
@@ -212,7 +234,14 @@ class VRDashboardPanel:
 
         # -------------------------------------------------- screenshot
         section("vr_dash_section_screenshot")
-        row([("screenshot", self._t("vr_dash_screenshot"), False, False)])
+        reads = list(s.get("reads", []) or [])
+        row(
+            [
+                ("screenshot", self._t("vr_dash_screenshot"), False, False),
+                ("toggle_frame_gesture", self._t("vr_dash_frame_gesture"), bool(s.get("frame_gesture", False)), False),
+                ("page:reads", self._t("vr_dash_reads", count=len(reads)), False, False),
+            ]
+        )
         hint_key = (
             "vr_dash_screenshot_hint_bound"
             if bool(s.get("binding_active", False))
@@ -220,6 +249,51 @@ class VRDashboardPanel:
         )
         self._texts.append((QRect(MARGIN, y, width - 2 * MARGIN, 56), self._t(hint_key), HINT_PX, TEXT_DIM, False))
         self._layout_dirty = False
+
+    def _layout_reads(self, y: int, section, row) -> None:
+        """The second page: what the frame gesture does, and the kept reads."""
+
+        width, _height = PANEL_SIZE
+        s = self._state
+        section("vr_dash_section_reads")
+        row(
+            [
+                ("page:main", self._t("vr_dash_back"), False, False),
+                ("screenshot", self._t("vr_dash_screenshot"), False, False),
+                ("toggle_frame_gesture", self._t("vr_dash_frame_gesture"), bool(s.get("frame_gesture", False)), False),
+            ]
+        )
+        panels = int(s.get("open_panels", 0) or 0)
+        row(
+            [
+                ("gather_panels", self._t("vr_dash_gather"), False, False),
+                ("close_panels", self._t("vr_dash_close_panels", count=panels), False, panels > 0),
+                ("tutorial", self._t("vr_dash_tutorial"), False, False),
+            ]
+        )
+        section("vr_dash_section_history")
+        reads = [entry for entry in list(s.get("reads", []) or []) if isinstance(entry, dict)]
+        if not reads:
+            self._texts.append(
+                (QRect(MARGIN, self._cursor_y(), width - 2 * MARGIN, 56), self._t("vr_dash_reads_empty"), HINT_PX, TEXT_DIM, False)
+            )
+            return
+        for entry in reads[:MAX_LISTED_READS]:
+            entry_id = entry.get("id")
+            pinned = bool(entry.get("pinned", False))
+            row(
+                [
+                    (f"recall:{entry_id}", str(entry.get("label", "") or "—"), bool(entry.get("open", False)), False),
+                    (f"pin:{entry_id}", "★" if pinned else "☆", pinned, False),
+                ],
+                weights=[8, 1],
+            )
+
+    def _cursor_y(self) -> int:
+        """Just below the last thing laid out."""
+
+        bottoms = [button.rect.bottom() for button in self._buttons] + [rect.bottom() for rect, *_ in self._texts]
+        return (max(bottoms) + GAP) if bottoms else MARGIN
 
     # ------------------------------------------------------------ hit test
     def hit_test(self, x: float, y: float) -> str | None:
@@ -266,6 +340,9 @@ class VRDashboardPanel:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(BACKGROUND)
             painter.drawRoundedRect(QRectF(0, 0, width, height), 28, 28)
+            painter.setBrush(NOTE)
+            for rect in self._notes:
+                painter.drawRoundedRect(rect, RADIUS, RADIUS)
 
             for rect, text, px, color, bold in self._texts:
                 painter.setFont(_font(px, bold=bold))

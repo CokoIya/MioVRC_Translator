@@ -1076,6 +1076,7 @@ class DesktopAudioRecorder(AudioRecorder):
                 "frames_processed": self._total_frames,
                 "non_silent_frames": self._non_silent_frames,
                 "segments_emitted": int(getattr(self, "_segments_emitted", 0) or 0),
+                "last_segment_timing": dict(getattr(self, "_last_segment_timing", {}) or {}),
                 "requested_output_device": self._output_device_name or None,
                 "loopback_device": (
                     str(self._loopback_device_info.get("name", "")).strip()

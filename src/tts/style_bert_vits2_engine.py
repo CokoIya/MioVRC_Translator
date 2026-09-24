@@ -22,7 +22,7 @@ try:
 except ImportError:
     torch = None
 
-from src.asr.hf_model_downloader import model_dir, model_is_complete
+from src.utils.hf_model_downloader import model_dir, model_is_complete
 from src.version import APP_VERSION
 
 from .base import BaseTTS, TTSVoice

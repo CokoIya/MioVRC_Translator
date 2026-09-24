@@ -1,26 +1,25 @@
 from __future__ import annotations
 
 import logging
-import time
 
-import requests
-
-from .base import BaseTranslator, TransformationOutputRejected
-from src.utils.http_session_pool import ThreadLocalSessionPool
+from .base import TransformationOutputRejected
+from .web_translator_base import WebTranslatorBase
 from src.utils.input_validation import ValidationError, validate_translation_text
-from src.utils.provider_diagnostics import safe_exception_summary
-from src.utils.provider_network import configure_requests_session_for_url
-from src.utils.provider_warmup import warmup_requests_session
 
 logger = logging.getLogger(__name__)
 
-class MicrosoftEdgeTranslator(BaseTranslator):
+
+class MicrosoftEdgeTranslator(WebTranslatorBase):
     """No-key translator backed by Microsoft Edge's web translation endpoint.
 
     The endpoint is an undocumented Edge browser service, not the supported
     Azure AI Translator API. It is intentionally presented as a web provider
     without an availability guarantee.
     """
+
+    PROVIDER_LABEL = "Microsoft Edge Web"
+    RETRY_BASE_DELAY_S = 0.2
+    RETRY_MAX_DELAY_S = 0.8
 
     def __init__(
         self,
@@ -35,12 +34,7 @@ class MicrosoftEdgeTranslator(BaseTranslator):
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
 
-        def session_factory():
-            session = requests.Session()
-            session.headers.update({"User-Agent": "MioTranslator/1.3"})
-            return configure_requests_session_for_url(session, self._base_url)
-
-        self._session_pool = ThreadLocalSessionPool(session_factory)
+        self._init_session_pool(self._base_url, configure_network=True)
         # Matches the catalog id shown in settings; it also prefixes the
         # translation cache key, so it must stay in step with that catalog.
         self.model = "bing"
@@ -54,23 +48,7 @@ class MicrosoftEdgeTranslator(BaseTranslator):
         and retains the transport session without sending synthetic text.
         """
 
-        result = warmup_requests_session(
-            self._session_pool.get(),
-            self._base_url,
-            method="HEAD",
-            timeout_s=min(self._timeout_s, 3.0),
-        )
-        logger.log(
-            logging.INFO if result.succeeded else logging.WARNING,
-            "Microsoft Edge Web translation prewarm %s "
-            "(probe_status=%s probe_route_accepted=%s elapsed_ms=%.0f error_type=%s method=HEAD)",
-            "transport reachable" if result.succeeded else "failed",
-            result.status_code if result.status_code is not None else "unknown",
-            bool(result.status_code is not None and 200 <= result.status_code < 400),
-            result.elapsed_s * 1000.0,
-            result.error_type or "none",
-        )
-        return result.succeeded
+        return self._prewarm_session(self._base_url)
 
     def translate(
         self,
@@ -162,36 +140,15 @@ class MicrosoftEdgeTranslator(BaseTranslator):
         )
 
     def _request_translation(self, params: dict[str, str], text: str) -> str:
-        last_exc: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            started = time.perf_counter()
-            try:
-                response = self._session_pool.get().post(
-                    self._base_url,
-                    params=params,
-                    json=[text],
-                    timeout=self._timeout_s,
-                )
-                if response.status_code == 429:
-                    raise RuntimeError("Microsoft Edge Web rate limit reached")
-                response.raise_for_status()
-                translated = self._parse_response(response.json())
-                logger.info(
-                    "Microsoft Edge Web translation finished (elapsed=%.2fs)",
-                    time.perf_counter() - started,
-                )
-                return translated
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "Microsoft Edge Web translation attempt failed: %s",
-                    safe_exception_summary(exc),
-                )
-                if attempt < self._max_retries:
-                    time.sleep(min(0.2 * (attempt + 1), 0.8))
-        raise RuntimeError(
-            f"Microsoft Edge Web translation failed: {last_exc}"
-        ) from last_exc
+        return self._send_with_retries(
+            lambda session: session.post(
+                self._base_url,
+                params=params,
+                json=[text],
+                timeout=self._timeout_s,
+            ),
+            lambda response: self._parse_response(response.json()),
+        )
 
     @staticmethod
     def _parse_response(data: object) -> str:

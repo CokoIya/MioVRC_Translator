@@ -786,7 +786,7 @@ def test_background_warmup_never_constructs_local_asr_or_tts(monkeypatch):
     window._virtual_output_resolution_in_progress = False
     window._config = {
         "translation": {"output_format": "original_only"},
-        "asr": {"engine": "whisper-large-v3-turbo"},
+        "asr": {"engine": "sensevoice-small"},
         "vrc_listen": {"enabled": False},
         "tts": {"enabled": True, "engine": "qwen_vc"},
     }
@@ -1979,6 +1979,43 @@ def test_microphone_diagnostics_reopens_previously_working_digital_silence(monke
     window._maybe_log_mic_diagnostics()
 
     assert restarted == ["sustained digital silence"]
+
+
+def test_microphone_diagnostics_does_not_reopen_a_quiet_room(monkeypatch):
+    """Player log 2026-09-21: rms 1e-4..1e-3 before every restart, not zeros."""
+
+    window = MainWindow.__new__(MainWindow)
+    window._mic_muted = False
+    window._last_mic_diagnostic_log_at = 0.0
+    window._last_mic_result_at = 100.0
+    window._last_mic_started_at = 100.0
+    window._active_mic_input_device_name = "Pico Mic"
+    window._resolve_mic_input_device_name = lambda **_kwargs: "Pico Mic"
+    window._get_output_format = lambda: "original_only"
+    window._recorder = type(
+        "Recorder",
+        (),
+        {
+            "diagnostics_snapshot": lambda _self: {
+                "active_device": "Pico Mic",
+                "running": True,
+                "worker_alive": True,
+                "frames_processed": 4000,
+                "segments_emitted": 20,
+                "last_frame_rms": 0.0002,
+                "peak_frame_rms": 0.3,
+                "last_non_silent_at": 120.0,
+                "last_signal_at": 199.9,
+            }
+        },
+    )()
+    restarted: list[str] = []
+    window._restart_microphone_capture = lambda reason: restarted.append(reason)
+    monkeypatch.setattr("src.ui_qt.main_window.time.monotonic", lambda: 200.0)
+
+    window._maybe_log_mic_diagnostics()
+
+    assert restarted == []
 
 
 def test_microphone_diagnostics_does_not_restart_a_never_used_quiet_stream(monkeypatch):

@@ -7,7 +7,25 @@ DEFAULT_UI_LANGUAGE = "zh-CN"
 # Claude/Anthropic is intentionally disabled for this release.  Keep the
 # legacy catalog entries available only for safe migration of old configs; no
 # UI selector, active catalog, or translator factory may expose them.
-DISABLED_TRANSLATION_BACKENDS = frozenset({"anthropic", "anthropic_compatible"})
+# Backends that stay in the catalog but cannot be selected or created. Empty
+# since Claude came back; the guard is kept so a backend can be retired
+# again without touching every caller.
+DISABLED_TRANSLATION_BACKENDS: frozenset[str] = frozenset()
+# The Claude families the translator knows how to drive (see
+# AnthropicTranslator._apply_model_request_defaults). A saved official-Claude
+# model outside them (3.x, 4.0, 4.1) is migrated to the default, and a remote
+# catalog cannot put anything else into the presets. "claude-opus-5" also
+# covers Opus 5.5.
+ANTHROPIC_MODEL_ID_PREFIXES: tuple[str, ...] = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-fable-5",
+)
 
 UI_FONT_851 = "851"
 UI_FONT_SYSTEM = "system"
@@ -896,7 +914,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "anthropic": {
         "label": "Claude",
         "base_url": "https://api.anthropic.com",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-5",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -909,7 +927,7 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "anthropic_compatible": {
         "label": "Claude Compatible",
         "base_url": "https://api.anthropic.com",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-opus-5",
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -997,11 +1015,13 @@ TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
         "nvidia/nemotron-3-nano-30b-a3b",
     ),
     "anthropic": (
+        "claude-opus-5",
         "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
     ),
     "anthropic_compatible": (
+        "claude-opus-5",
         "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
@@ -1339,14 +1359,14 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "anthropic": {
-        "claude-haiku-4-5": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
+        "claude-opus-5": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
         },
         "claude-sonnet-5": {
-            "speed": "balanced",
+            "speed": "fast",
             "quality": "high",
             "fit": "recommended",
             "note": "general_high_quality",
@@ -1354,14 +1374,14 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         "claude-sonnet-4-6": {
             "speed": "balanced",
             "quality": "high",
-            "fit": "very_recommended",
-            "note": "live_default",
+            "fit": "general",
+            "note": "general_high_quality",
         },
-        "claude-haiku-4-5-20251001": {
-            "speed": "fast",
+        "claude-haiku-4-5": {
+            "speed": "very_fast",
             "quality": "balanced",
-            "fit": "recommended",
-            "note": "ultra_fast",
+            "fit": "general",
+            "note": "economy_first",
         },
     },
     "anthropic_compatible": {},
@@ -1528,10 +1548,10 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "nvidia/nemotron-3-nano-30b-a3b": "8.4",
     },
     "anthropic": {
+        "claude-opus-5": "9.6",
+        "claude-sonnet-5": "9.3",
+        "claude-sonnet-4-6": "9.0",
         "claude-haiku-4-5": "8.5",
-        "claude-sonnet-5": "9.2",
-        "claude-sonnet-4-6": "9.2",
-        "claude-haiku-4-5-20251001": "8.4",
     },
     "anthropic_compatible": {},
 }

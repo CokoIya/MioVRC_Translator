@@ -209,6 +209,31 @@ class TextBlock:
         return self.width * self.height
 
 
+def merge_blocks(blocks) -> TextBlock | None:
+    """Every block as one paragraph over their joint upright box.
+
+    VRHandsFrame's "ignore line breaks": when a player frames one notice,
+    they want it translated as one text, even where the reluctant grouping
+    above would keep a column of short lines apart.
+    """
+
+    blocks = [block for block in blocks if block is not None]
+    if not blocks:
+        return None
+    ordered = sorted(blocks, key=lambda block: (block.top, block.left))
+    corners = [
+        corner
+        for block in ordered
+        for corner in box_corners(block.left, block.top, block.width, block.height, block.angle)
+    ]
+    x0 = min(x for x, _ in corners)
+    y0 = min(y for _, y in corners)
+    x1 = max(x for x, _ in corners)
+    y1 = max(y for _, y in corners)
+    lines = tuple(line for block in ordered for line in block.lines)
+    return TextBlock(lines=lines, left=x0, top=y0, width=x1 - x0, height=y1 - y0, angle=0.0)
+
+
 class _Draft:
     """A block being assembled, kept in the frame of its first line."""
 

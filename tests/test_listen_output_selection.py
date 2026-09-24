@@ -158,3 +158,37 @@ def test_process_audio_summary_reduces_a_snapshot_to_flags():
     }
     assert selection.process_audio_summary({"process_ids": "bad"})["process_count"] == 0
     assert selection.process_audio_summary([]) == {}
+
+
+@pytest.mark.parametrize(
+    ("stats", "expected"),
+    [
+        ({"last_non_silent_at": 10.0}, "no_audio"),
+        ({"last_non_silent_at": 95.0, "vad_in_speech": True}, "speech_in_progress"),
+        (
+            {
+                "last_non_silent_at": 95.0,
+                "last_segment_timing": {"segment_emitted_at": 90.0},
+            },
+            "segments_without_result",
+        ),
+        (
+            {
+                "last_non_silent_at": 95.0,
+                "last_segment_timing": {"segment_emitted_at": 40.0},
+            },
+            "audio_but_nothing",
+        ),
+    ],
+)
+def test_capture_idle_state_names_ordinary_idle_cases(stats, expected):
+    state = selection.capture_idle_state(
+        stats,
+        now=100.0,
+        idle_anchor=50.0,
+        recent_s=15.0,
+        present_state="audio_but_nothing",
+        absent_state="no_audio",
+    )
+
+    assert state == expected

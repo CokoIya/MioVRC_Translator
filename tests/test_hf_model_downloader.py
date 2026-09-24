@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from src.asr import hf_model_downloader as downloader
+from src.utils import hf_model_downloader as downloader
 
 
 _REAL_MODEL_URL_VALIDATOR = downloader._is_safe_model_download_url

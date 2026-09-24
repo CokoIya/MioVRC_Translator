@@ -23,7 +23,7 @@ from collections import deque
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 from src.ui_qt.theme import theme_tokens
 
@@ -57,6 +57,25 @@ ORIGINAL_TEXT_COLOR = "#ffffff"
 OTHER_TRANSLATION_COLOR = "#ffc857"
 SELF_TRANSLATION_COLOR = "#5fd0ff"
 SEPARATOR_COLOR = "rgba(255, 255, 255, 45)"
+# The player can make the board's text larger or smaller.
+DEFAULT_FONT_SCALE = 1.0
+MIN_FONT_SCALE = 0.7
+MAX_FONT_SCALE = 1.8
+# Colour alone does not tell the sides apart for every player (red-green
+# colour blindness turns amber and blue into two greys): a small shape in
+# front of each translation says whose line it is as well.
+SELF_MARK = "\u25cf"  # ●  the player's own line
+OTHER_MARK = "\u25c6"  # ◆  someone else's
+
+
+def clamp_font_scale(value: object, default: float = DEFAULT_FONT_SCALE) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed != parsed:  # NaN
+        return default
+    return max(MIN_FONT_SCALE, min(MAX_FONT_SCALE, parsed))
 
 
 def clamp_plate_opacity(value: object, default: float = DEFAULT_PLATE_OPACITY) -> float:
@@ -78,10 +97,14 @@ class VROverlayPanel(QFrame):
         theme: str = "dark",
         size: tuple[int, int] = DEFAULT_PANEL_SIZE,
         plate_opacity: float = DEFAULT_PLATE_OPACITY,
+        font_scale: float = DEFAULT_FONT_SCALE,
+        speaker_marks: bool = True,
     ) -> None:
         super().__init__(None)
         self._theme = str(theme or "dark")
         self._plate_opacity = clamp_plate_opacity(plate_opacity)
+        self._font_scale = clamp_font_scale(font_scale)
+        self._speaker_marks = bool(speaker_marks)
         self._entries: deque[tuple[str, str, str]] = deque(maxlen=MAX_VR_LINES)
         self._rows: list[tuple[QLabel, QLabel | None, QLabel | None]] = []
 
@@ -105,6 +128,28 @@ class VROverlayPanel(QFrame):
     @property
     def plate_opacity(self) -> float:
         return self._plate_opacity
+
+    def set_font_scale(self, value: float) -> bool:
+        """Returns True when the text size changed (the board needs a redraw)."""
+
+        scale = clamp_font_scale(value)
+        if abs(scale - self._font_scale) < 1e-3:
+            return False
+        self._font_scale = scale
+        self._apply_style()
+        self._rebuild_rows()
+        return True
+
+    @property
+    def font_scale(self) -> float:
+        return self._font_scale
+
+    def set_speaker_marks(self, enabled: bool) -> bool:
+        if bool(enabled) == self._speaker_marks:
+            return False
+        self._speaker_marks = bool(enabled)
+        self._rebuild_rows()
+        return True
 
     def set_panel_size(self, width: int, height: int) -> None:
         self.resize(max(240, int(width)), max(120, int(height)))
@@ -180,23 +225,25 @@ class VROverlayPanel(QFrame):
         # The theme only names the plate; the text colours are fixed so they
         # read over any world.
         theme_tokens(self._theme)
+        translation_px = int(round(BASE_TRANSLATION_PX * getattr(self, "_font_scale", DEFAULT_FONT_SCALE)))
+        original_px = int(round(BASE_ORIGINAL_PX * getattr(self, "_font_scale", DEFAULT_FONT_SCALE)))
         self.setStyleSheet(
             f"""
             QFrame#vrPanel {{ background: transparent; }}
             QLabel {{ background: transparent; font-family: {PANEL_FONT_FAMILIES}; }}
             QLabel#vrTranslation {{
                 color: {OTHER_TRANSLATION_COLOR};
-                font-size: {BASE_TRANSLATION_PX}px;
+                font-size: {translation_px}px;
                 font-weight: 700;
             }}
             QLabel#vrTranslationSelf {{
                 color: {SELF_TRANSLATION_COLOR};
-                font-size: {BASE_TRANSLATION_PX}px;
+                font-size: {translation_px}px;
                 font-weight: 700;
             }}
             QLabel#vrOriginal {{
                 color: {ORIGINAL_TEXT_COLOR};
-                font-size: {BASE_ORIGINAL_PX}px;
+                font-size: {original_px}px;
                 font-weight: 700;
             }}
             QFrame#vrSeparator {{
@@ -218,8 +265,8 @@ class VROverlayPanel(QFrame):
     def _rebuild_rows(self) -> None:
         """Rows the way OVR's board reads: what was said in white, its
         translation under it in colour, everything centred, a hairline
-        between messages. No bubbles and no speaker tags - the colour of the
-        translation already says whose line it is."""
+        between messages. No bubbles and no name tags; the colour of the
+        translation, and a small shape in front of it, say whose line it is."""
 
         self._build_rows()
         # The newest line is the point of the board. When the rows outgrow
@@ -249,7 +296,10 @@ class VROverlayPanel(QFrame):
                 original_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
                 row_layout.addWidget(original_label)
 
-            translation = QLabel(translated, row)
+            shown = translated
+            if getattr(self, "_speaker_marks", False):
+                shown = f"{SELF_MARK if is_self else OTHER_MARK} {translated}"
+            translation = QLabel(shown, row)
             translation.setObjectName("vrTranslationSelf" if is_self else "vrTranslation")
             translation.setWordWrap(True)
             translation.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)

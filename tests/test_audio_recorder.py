@@ -56,6 +56,84 @@ class AudioRecorderTests(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0].size, 15 * frame.size)
 
+    def _speaking_recorder(self, segments):
+        recorder = AudioRecorder(segments.append, min_segment_s=0.1)
+
+        class IdentityDenoiser:
+            @staticmethod
+            def process(frame, *, update_profile):
+                del update_profile
+                return frame
+
+        class AlwaysSpeakingVAD:
+            in_speech = False
+            _min_rms = 0.0
+
+            def process_frame(self, _pcm):
+                self.in_speech = True
+                return True
+
+            def activation_speech_samples(self, frame_size):
+                return frame_size
+
+            def reset(self):
+                self.in_speech = False
+
+        recorder._denoiser = IdentityDenoiser()
+        recorder.vad = AlwaysSpeakingVAD()
+        frame = np.full(480, 0.1, dtype=np.float32)
+        for _index in range(10):
+            recorder._frame_queue.put_nowait(frame.copy())
+        recorder._frame_queue.put_nowait(None)
+        return recorder, frame
+
+    def test_stop_drops_the_sentence_in_progress_by_default(self):
+        segments = []
+        recorder, _frame = self._speaking_recorder(segments)
+
+        recorder._process_loop()
+
+        self.assertEqual(segments, [])
+
+    def test_stop_with_flush_emits_the_sentence_in_progress(self):
+        segments = []
+        recorder, frame = self._speaking_recorder(segments)
+        recorder._flush_pending_on_stop = True
+
+        recorder._process_loop()
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].size, 10 * frame.size)
+        self.assertFalse(recorder._was_in_speech)
+
+    def test_signal_presence_ignores_digital_zero_but_not_a_quiet_floor(self):
+        recorder = AudioRecorder(lambda _segment: None)
+
+        class Silent:
+            in_speech = False
+            _min_rms = 0.012
+
+            def process_frame(self, _pcm):
+                return False
+
+            def reset(self):
+                pass
+
+        recorder.vad = Silent()
+        recorder._frame_queue.put_nowait(np.zeros(480, dtype=np.int16))
+        recorder._frame_queue.put_nowait(None)
+        recorder._process_loop()
+        self.assertEqual(recorder._last_signal_at, 0.0)
+
+        # A quiet room (a few 16-bit steps, about 2e-4): far below the voice
+        # threshold, still not digital zero.
+        recorder._frame_queue.put_nowait(np.full(480, 6, dtype=np.int16))
+        recorder._frame_queue.put_nowait(None)
+        recorder._process_loop()
+        self.assertGreater(recorder._last_signal_at, 0.0)
+        self.assertEqual(recorder._last_non_silent_at, 0.0)
+        self.assertIn("last_signal_at", recorder.diagnostics_snapshot())
+
     def test_vad_state_callback_failure_is_logged_and_processing_continues(self):
         segments = []
         vad_calls = []

@@ -20,6 +20,12 @@ def _apply_remote_catalog(data: dict) -> None:
         from src.utils.ui_config import set_catalog
 
         set_catalog(load_catalog_from_data(data))
+        try:
+            from src.utils.signed_catalog import apply_signed_catalog
+
+            apply_signed_catalog(data)
+        except Exception:
+            logger.exception("Could not apply the signed catalog section")
 
 
 def _run_maintenance() -> None:

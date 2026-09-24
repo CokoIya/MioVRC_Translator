@@ -142,9 +142,13 @@ _FIRST_PERSON_RE = re.compile(
     r"\b(?:я|мне|меня|мой|моя|моё|мы|наш)\b)",
     re.IGNORECASE,
 )
+# Only unambiguous "you". Japanese そちら also means "that way / over there"
+# and 君 after a name is the honorific suffix (田中君); either one in a correct
+# translation of a first-person sentence used to reject it as a perspective
+# shift and cost a structured retry.
 _SECOND_PERSON_RE = re.compile(
     r"(?:\b(?:you|your|yours)\b|"
-    r"你|您|你们|你的|您的|あなた|君|お前|そちら|"
+    r"你|您|你们|你的|您的|あなた|(?<![぀-ヿ㐀-鿿])君|お前|"
     r"(?:너|당신|여러분)(?:는|가|를|의|도|에게)?|"
     r"\b(?:ты|тебе|тебя|твой|вы|вам|вас|ваш)\b)",
     re.IGNORECASE,

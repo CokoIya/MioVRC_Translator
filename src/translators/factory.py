@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 from collections.abc import Mapping
 from threading import Lock
+import time
 from typing import Callable
 import logging
 
-from .base import BaseTranslator, TranslationContextStore
+from .anthropic_translator import AnthropicTranslator
+from .base import BaseTranslator, TransformationOutputRejected, TranslationContextStore
 from .deepl_translator import DeepLTranslator
 from .google_web_translator import GoogleWebTranslator
 from .libretranslate_translator import LibreTranslateTranslator
@@ -57,16 +59,27 @@ OPENAI_COMPATIBLE_BACKENDS = {
 
 
 class FallbackTranslator(BaseTranslator):
+    CIRCUIT_FAILURE_THRESHOLD = 3
+    CIRCUIT_COOLDOWN_S = 120.0
+
     def __init__(
         self,
         primary: BaseTranslator,
         fallback_factories: list[tuple[str, Callable[[], BaseTranslator]]],
         context_store: TranslationContextStore | None = None,
+        *,
+        primary_name: str = "primary",
+        clock: Callable[[], float] = time.monotonic,
     ):
         super().__init__(
             context_store=context_store or getattr(primary, "_context_store", None)
         )
         self._primary = primary
+        self._primary_name = str(primary_name or "primary")
+        self._clock = clock
+        # name -> (consecutive failures, skip-until monotonic time)
+        self._health: dict[str, tuple[int, float]] = {}
+        self._health_lock = Lock()
         self._fallback_factories = list(fallback_factories)
         self._fallbacks: dict[str, BaseTranslator] = {}
         self._fallbacks_lock = Lock()
@@ -104,6 +117,29 @@ class FallbackTranslator(BaseTranslator):
         tgt_lang: str,
         context_source: str = "default",
     ) -> str:
+        return self._run_chain(
+            "translation",
+            lambda translator: translator.translate(
+                text,
+                src_lang,
+                tgt_lang,
+                context_source=context_source,
+            ),
+        )
+
+    def _run_chain(
+        self,
+        operation: str,
+        call: Callable[[BaseTranslator], str],
+    ) -> str:
+        """Run ``call`` on the primary, then each fallback, until one answers.
+
+        A backend that failed ``CIRCUIT_FAILURE_THRESHOLD`` times in a row is
+        skipped for ``CIRCUIT_COOLDOWN_S``: a dead free endpoint would otherwise
+        cost its full timeout on every sentence before the fallback got a turn.
+        When every backend is resting they are all tried anyway, in order.
+        """
+
         request_metrics: dict[str, object] = {}
 
         def capture(translator: BaseTranslator) -> None:
@@ -113,49 +149,86 @@ class FallbackTranslator(BaseTranslator):
             )
             self._record_translation_metrics(**request_metrics)
 
-        try:
-            try:
-                result = self._primary.translate(
-                    text,
-                    src_lang,
-                    tgt_lang,
-                    context_source=context_source,
+        candidates: list[tuple[str, Callable[[], BaseTranslator]]] = [
+            (self._primary_name, lambda: self._primary),
+            *(
+                (
+                    backend,
+                    lambda backend=backend, factory=factory: self._fallback_translator(
+                        backend, factory
+                    ),
                 )
-            finally:
-                capture(self._primary)
-            self._last_metrics_translator = self._primary
-            return result
-        except Exception as primary_exc:
-            logger.warning(
-                "Primary translation backend failed; trying fallbacks (%s)",
-                safe_exception_summary(primary_exc),
-            )
-            for backend, factory in self._fallback_factories:
-                if self._pending_requests_retired():
-                    raise primary_exc
+                for backend, factory in self._fallback_factories
+            ),
+        ]
+        now = self._clock()
+        ready = [item for item in candidates if not self._circuit_open(item[0], now)]
+        if not ready:
+            ready = candidates
+
+        first_exc: Exception | None = None
+        for index, (name, get_translator) in enumerate(ready):
+            if index > 0 and self._pending_requests_retired() and first_exc is not None:
+                raise first_exc
+            translator: BaseTranslator | None = None
+            try:
+                translator = get_translator()
                 try:
-                    translator = self._fallback_translator(backend, factory)
-                    try:
-                        result = translator.translate(
-                            text,
-                            src_lang,
-                            tgt_lang,
-                            context_source=context_source,
-                        )
-                    finally:
-                        capture(translator)
-                    self._last_metrics_translator = translator
-                    return result
-                except Exception as fallback_exc:
-                    if self._pending_requests_retired():
-                        raise primary_exc
-                    logger.warning(
-                        "Fallback translation backend failed "
-                        "(backend=%s error=%s)",
-                        backend,
-                        safe_exception_summary(fallback_exc),
-                    )
-            raise primary_exc
+                    result = call(translator)
+                finally:
+                    capture(translator)
+            except Exception as exc:
+                if first_exc is None:
+                    first_exc = exc
+                if self._pending_requests_retired():
+                    raise first_exc
+                self._record_backend_failure(name, exc)
+                logger.warning(
+                    "%s %s backend failed; trying the next one (backend=%s error=%s)",
+                    "Primary" if name == self._primary_name else "Fallback",
+                    operation,
+                    name,
+                    safe_exception_summary(exc),
+                )
+                continue
+            self._record_backend_success(name)
+            self._last_metrics_translator = translator
+            return result
+        assert first_exc is not None
+        raise first_exc
+
+    # ----------------------------------------------------- circuit breaker
+    def _circuit_open(self, name: str, now: float) -> bool:
+        with self._health_lock:
+            health = self._health.get(name)
+            return health is not None and health[1] > now
+
+    def _record_backend_failure(self, name: str, exc: Exception) -> None:
+        # Bad input or a rejected rewrite says nothing about availability.
+        if isinstance(exc, (ValueError, TransformationOutputRejected)):
+            return
+        now = self._clock()
+        with self._health_lock:
+            failures, open_until = self._health.get(name, (0, 0.0))
+            failures += 1
+            opened = failures >= self.CIRCUIT_FAILURE_THRESHOLD and open_until <= now
+            if opened:
+                open_until = now + self.CIRCUIT_COOLDOWN_S
+            self._health[name] = (failures, open_until)
+        if opened:
+            logger.warning(
+                "Translation backend %s failed %d times in a row; skipping it "
+                "for %.0fs and using the next backend in the chain",
+                name,
+                failures,
+                self.CIRCUIT_COOLDOWN_S,
+            )
+
+    def _record_backend_success(self, name: str) -> None:
+        with self._health_lock:
+            previous = self._health.pop(name, None)
+        if previous is not None and previous[0] >= self.CIRCUIT_FAILURE_THRESHOLD:
+            logger.info("Translation backend %s answers again", name)
 
     def translation_metrics(self) -> dict[str, object]:
         request_metrics = super().translation_metrics()
@@ -235,58 +308,15 @@ class FallbackTranslator(BaseTranslator):
         language_hint: str = "auto",
         context_source: str = "mic",
     ) -> str:
-        request_metrics: dict[str, object] = {}
-
-        def capture(translator: BaseTranslator) -> None:
-            merge_translation_metrics(
-                request_metrics,
-                translation_metrics_snapshot(translator),
-            )
-            self._record_translation_metrics(**request_metrics)
-
-        try:
-            try:
-                result = self._primary.rewrite_asr(
-                    text,
-                    style,
-                    language_hint=language_hint,
-                    context_source=context_source,
-                )
-            finally:
-                capture(self._primary)
-            self._last_metrics_translator = self._primary
-            return result
-        except Exception as primary_exc:
-            logger.warning(
-                "Primary ASR rewrite backend failed; trying fallbacks (%s)",
-                safe_exception_summary(primary_exc),
-            )
-            for backend, factory in self._fallback_factories:
-                if self._pending_requests_retired():
-                    raise primary_exc
-                try:
-                    translator = self._fallback_translator(backend, factory)
-                    try:
-                        result = translator.rewrite_asr(
-                            text,
-                            style,
-                            language_hint=language_hint,
-                            context_source=context_source,
-                        )
-                    finally:
-                        capture(translator)
-                    self._last_metrics_translator = translator
-                    return result
-                except Exception as fallback_exc:
-                    if self._pending_requests_retired():
-                        raise primary_exc
-                    logger.warning(
-                        "Fallback ASR rewrite backend failed "
-                        "(backend=%s error=%s)",
-                        backend,
-                        safe_exception_summary(fallback_exc),
-                    )
-            raise primary_exc
+        return self._run_chain(
+            "ASR rewrite",
+            lambda translator: translator.rewrite_asr(
+                text,
+                style,
+                language_hint=language_hint,
+                context_source=context_source,
+            ),
+        )
 
     def close(self) -> None:
         # Mark the wrapper unavailable before taking the child snapshot so an
@@ -376,7 +406,30 @@ def _backend_cfg(trans_cfg: Mapping[str, object], backend: str) -> Mapping[str, 
     return {}
 
 
+# No-key web endpoints without an availability promise. When one of them is
+# the primary and the player configured no fallbacks, the others back it up.
+FREE_WEB_BACKENDS: tuple[str, ...] = ("microsoft_edge_web", "google_web", "mymemory")
+
+
 def _fallback_backends(
+    trans_cfg: Mapping[str, object], primary_backend: str
+) -> list[str]:
+    configured = _configured_fallback_backends(trans_cfg, primary_backend)
+    if configured:
+        return configured
+    if primary_backend in FREE_WEB_BACKENDS and _bool_setting(
+        trans_cfg.get("auto_free_fallback"), True
+    ):
+        valid_backends = set(get_backend_order())
+        return [
+            backend
+            for backend in FREE_WEB_BACKENDS
+            if backend != primary_backend and backend in valid_backends
+        ]
+    return []
+
+
+def _configured_fallback_backends(
     trans_cfg: Mapping[str, object], primary_backend: str
 ) -> list[str]:
     raw = trans_cfg.get("fallback_backends", ())
@@ -527,6 +580,79 @@ def _create_translator_for_backend(
     if backend in DISABLED_TRANSLATION_BACKENDS:
         raise ValueError(f"Translation backend is disabled: {backend}")
 
+    if backend in {"anthropic", "anthropic_compatible"}:
+        spec = get_backend_spec(backend)
+        backend_cfg = _backend_cfg(trans_cfg, backend)
+        api_key = _require_text(
+            backend_cfg.get("api_key", ""), f"{get_backend_label(backend)} API Key"
+        )
+        model = _require_text(
+            get_backend_config_value(trans_cfg, backend, "model"),
+            f"{get_backend_label(backend)} Model",
+            max_chars=512,
+        )
+
+        timeout_s = _float_setting(
+            backend_cfg.get("timeout_s"),
+            spec.get("timeout_s", 15.0),
+            minimum=3.0,
+            maximum=120.0,
+        )
+        return AnthropicTranslator(
+            api_key=api_key,
+            model=model,
+            base_url=get_backend_config_value(trans_cfg, backend, "base_url"),
+            timeout_s=timeout_s,
+            max_retries=_int_setting(
+                backend_cfg.get("max_retries"),
+                spec.get("max_retries", 0),
+                minimum=0,
+                maximum=3,
+            ),
+            max_output_tokens=int(spec.get("max_output_tokens", 192)),
+            context_store=context_store,
+            provider_id=backend,
+            custom_headers=backend_cfg.get("custom_headers", {}),
+            streaming=_bool_setting(
+                backend_cfg.get("streaming"),
+                spec.get("streaming", False),
+            ),
+            connect_timeout_s=_float_setting(
+                backend_cfg.get("connect_timeout_s"),
+                timeout_s,
+                minimum=0.1,
+                maximum=120.0,
+            ),
+            pool_timeout_s=_float_setting(
+                backend_cfg.get("pool_timeout_s"),
+                timeout_s,
+                minimum=0.1,
+                maximum=120.0,
+            ),
+            read_timeout_s=_float_setting(
+                backend_cfg.get("read_timeout_s"),
+                timeout_s,
+                minimum=0.1,
+                maximum=300.0,
+            ),
+            write_timeout_s=_float_setting(
+                backend_cfg.get("write_timeout_s"),
+                timeout_s,
+                minimum=0.1,
+                maximum=300.0,
+            ),
+            wall_timeout_s=_float_setting(
+                backend_cfg.get("wall_timeout_s"),
+                timeout_s,
+                minimum=0.1,
+                maximum=300.0,
+            ),
+            refusal_fallbacks=_bool_setting(
+                backend_cfg.get("refusal_fallbacks"),
+                True,
+            ),
+        )
+
     if backend == "deepl":
         spec = get_backend_spec(backend)
         backend_cfg = _backend_cfg(trans_cfg, backend)
@@ -671,6 +797,7 @@ def create_translator(
         primary,
         factories,
         context_store=context_store,
+        primary_name=backend,
     )
 
 
@@ -684,6 +811,7 @@ def test_translation_connection(config: dict) -> str:
     # A connection test must report the selected provider's own failure rather
     # than succeeding through an unrelated fallback backend.
     trans_cfg["fallback_backends"] = []
+    trans_cfg["auto_free_fallback"] = False
     translator = create_translator(snapshot)
     try:
         result = translator.translate(

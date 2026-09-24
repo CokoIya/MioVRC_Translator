@@ -2,30 +2,26 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from collections.abc import Mapping
 
-import requests
-
-from .base import BaseTranslator
-from src.utils.http_session_pool import ThreadLocalSessionPool
+from .web_translator_base import WebTranslatorBase
 from src.utils.input_validation import ValidationError, validate_translation_text
 from src.utils.lang_detect import detect_language
-from src.utils.provider_diagnostics import safe_exception_summary
-from src.utils.provider_warmup import warmup_requests_session
 
 logger = logging.getLogger(__name__)
 
 _NUMERIC_PREFIX_RE = re.compile(r"^\s*\d+\s*(?::|\uff1a)\s*")
 
 
-class MyMemoryTranslator(BaseTranslator):
+class MyMemoryTranslator(WebTranslatorBase):
     """MyMemory public translation API translator.
 
     The endpoint works without a player-provided API key. MyMemory requires an
     explicit source language, so "auto" is mapped through Mio's lightweight
     local script detector for common chat languages.
     """
+
+    PROVIDER_LABEL = "MyMemory"
 
     def __init__(
         self,
@@ -41,34 +37,13 @@ class MyMemoryTranslator(BaseTranslator):
         self._contact_email = str(contact_email or "").strip()
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        def session_factory():
-            session = requests.Session()
-            session.headers.update({"User-Agent": "MioTranslator/1.3"})
-            return session
-
-        self._session_pool = ThreadLocalSessionPool(session_factory)
+        self._init_session_pool(self._base_url)
         self.model = "mymemory"
 
     def prewarm(self) -> bool:
         """Warm this translation worker's MyMemory session."""
 
-        result = warmup_requests_session(
-            self._session_pool.get(),
-            self._base_url,
-            method="HEAD",
-            timeout_s=min(self._timeout_s, 3.0),
-        )
-        logger.log(
-            logging.INFO if result.succeeded else logging.WARNING,
-            "MyMemory translation prewarm %s "
-            "(probe_status=%s probe_route_accepted=%s elapsed_ms=%.0f error_type=%s)",
-            "transport reachable" if result.succeeded else "failed",
-            result.status_code if result.status_code is not None else "unknown",
-            bool(result.status_code is not None and 200 <= result.status_code < 400),
-            result.elapsed_s * 1000.0,
-            result.error_type or "none",
-        )
-        return result.succeeded
+        return self._prewarm_session(self._base_url)
 
     def translate(
         self,
@@ -120,38 +95,24 @@ class MyMemoryTranslator(BaseTranslator):
         return translated
 
     def _request_translation(self, payload: dict[str, str]) -> str:
-        last_exc: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            started = time.perf_counter()
-            try:
-                response = self._session_pool.get().get(
-                    self._base_url,
-                    params=payload,
-                    timeout=self._timeout_s,
-                )
-                response.raise_for_status()
-                data = response.json()
-                status = str(data.get("responseStatus", "")).strip()
-                if status != "200":
-                    details = str(data.get("responseDetails") or "unknown error")
-                    raise RuntimeError(f"MyMemory API error: {details}")
-                if bool(data.get("quotaFinished")):
-                    raise RuntimeError("MyMemory quota is exhausted")
-                translated = self._extract_translation(data)
-                logger.info(
-                    "MyMemory translation finished (elapsed=%.2fs)",
-                    time.perf_counter() - started,
-                )
-                return translated
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "MyMemory translation attempt failed: %s",
-                    safe_exception_summary(exc),
-                )
-                if attempt < self._max_retries:
-                    time.sleep(min(0.25 * (attempt + 1), 1.0))
-        raise RuntimeError(f"MyMemory translation failed: {last_exc}") from last_exc
+        return self._send_with_retries(
+            lambda session: session.get(
+                self._base_url,
+                params=payload,
+                timeout=self._timeout_s,
+            ),
+            self._parse_payload,
+        )
+
+    def _parse_payload(self, response) -> str:
+        data = response.json()
+        status = str(data.get("responseStatus", "")).strip()
+        if status != "200":
+            details = str(data.get("responseDetails") or "unknown error")
+            raise RuntimeError(f"MyMemory API error: {details}")
+        if bool(data.get("quotaFinished")):
+            raise RuntimeError("MyMemory quota is exhausted")
+        return self._extract_translation(data)
 
     def _source_language(self, code: str, text: str) -> str:
         raw = str(code or "").strip().lower().replace("_", "-")

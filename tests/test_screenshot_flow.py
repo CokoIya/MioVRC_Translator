@@ -75,7 +75,8 @@ class _Sheet:
         self.cards.append((width, height, anchor, centre_uv, width_meters, depth))
         return self.shows
 
-    def snapshot_head_anchor(self):
+    def snapshot_head_anchor(self, eye=None):
+        self.eye = eye
         return self.now
 
     def hide(self):
@@ -129,6 +130,25 @@ class _FakeImage:
         return False
 
 
+class _Panels:
+    """The kept-panel manager: records what it was asked to open."""
+
+    def __init__(self, opens=True):
+        self.opens = opens
+        self.opened: list = []
+
+    @property
+    def count(self):
+        return len(self.opened) if self.opens else 0
+
+    def open_result(self, **kwargs):
+        self.opened.append(kwargs)
+        return len(self.opened) if self.opens else None
+
+    def entry_ids(self):
+        return []
+
+
 class _Timer:
     def __init__(self):
         self.started: list[int] = []
@@ -180,6 +200,11 @@ def _window(monkeypatch, *, vr=True, selection=True, placement="card"):
     window._vr_label_sheet = sheet
     window._vr_hand_panel = hand
     window._desktop_inplace_overlay = desktop
+    window._vr_result_panels = None
+    panels = _Panels()
+    cues: list = []
+    monkeypatch.setattr(window, "_ensure_result_panels", lambda: panels if vr else None)
+    monkeypatch.setattr(window, "_vr_cue", lambda name, hand=None: cues.append(name))
     messages: list = []
     monkeypatch.setattr(window, "_ensure_screenshot_translator", lambda: translator)
     monkeypatch.setattr(window, "_ensure_vr_selection_frame", lambda: frame if vr else None)
@@ -213,10 +238,17 @@ def _window(monkeypatch, *, vr=True, selection=True, placement="card"):
     )
     monkeypatch.setattr(
         "src.ui_qt.in_place_painter.render_translation_card",
-        lambda picture, lines, offset=(0, 0): _FakeImage(picture.width(), picture.height()),
+        lambda picture, lines, offset=(0, 0), **_kwargs: _FakeImage(picture.width(), picture.height()),
     )
     return window, types.SimpleNamespace(
-        translator=translator, frame=frame, sheet=sheet, hand=hand, desktop=desktop, messages=messages
+        translator=translator,
+        frame=frame,
+        sheet=sheet,
+        hand=hand,
+        desktop=desktop,
+        messages=messages,
+        panels=panels,
+        cues=cues,
     )
 
 
@@ -429,13 +461,57 @@ class TestResultRouting:
 
         assert f.sheet.cards[0][2] is f.sheet.now
 
-    def test_the_old_in_place_value_now_means_the_card(self, monkeypatch):
+    def test_the_old_in_place_value_now_means_the_panel(self, monkeypatch):
         window, f = _window(monkeypatch, placement="in_place")
 
         MainWindow._on_screenshot_result(window, _result())
 
+        assert len(f.panels.opened) == 1
+        assert f.sheet.cards == [] and f.sheet.calls == []
+
+    def test_the_panel_hangs_where_the_text_was_until_it_is_closed(self, monkeypatch):
+        import math
+
+        window, f = _window(monkeypatch, placement="panel")
+
+        MainWindow._on_screenshot_result(window, _result())
+
+        assert len(f.panels.opened) == 1
+        opened = f.panels.opened[0]
+        rows = opened["rows"]
+        # Along the direction the text was seen in, no further than arm's
+        # length plus a little (the configured 2.5 m is for the card).
+        assert (rows[0][3], rows[1][3], rows[2][3]) == pytest.approx((-0.034, 1.6, -1.0))
+        # Upright and facing the head.
+        facing = (rows[0][2], rows[1][2], rows[2][2])
+        to_head = (0.034, 0.0, 1.0)
+        length = math.sqrt(sum(c * c for c in to_head))
+        assert facing == pytest.approx(tuple(c / length for c in to_head))
+        assert rows[1][0] == pytest.approx(0.0)
+        assert opened["pairs"] == [("こんにちは", "你好")]
+        # No countdown and no card: it stays until closed.
+        assert "<hide-later>" not in f.messages
+        assert not getattr(window, "_screenshot_result_visible", False)
+        assert f.sheet.cards == []
+        assert f.cues == ["result"]
+
+    def test_every_read_is_kept_for_the_wrist_panel(self, monkeypatch):
+        window, f = _window(monkeypatch, placement="card")
+
+        MainWindow._on_screenshot_result(window, _result())
+        MainWindow._on_screenshot_result(window, _result(pairs=[("A", "甲")]))
+
+        history = window._read_history
+        assert [entry.pairs for entry in history.recent()] == [[("A", "甲")], [("こんにちは", "你好")]]
+        assert history.recent()[0].card is not None
+
+    def test_a_panel_that_will_not_open_falls_back_to_the_card(self, monkeypatch):
+        window, f = _window(monkeypatch, placement="panel")
+        f.panels.opens = False
+
+        MainWindow._on_screenshot_result(window, _result())
+
         assert len(f.sheet.cards) == 1
-        assert f.sheet.calls == []
 
     def test_hand_placement_puts_the_card_on_the_hand(self, monkeypatch):
         window, f = _window(monkeypatch, placement="hand")

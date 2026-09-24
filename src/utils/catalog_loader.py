@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from src.utils.ui_config import (
+    ANTHROPIC_MODEL_ID_PREFIXES,
     TRANSLATION_BACKENDS,
     TRANSLATION_MODEL_PRESETS,
     TRANSLATION_MODEL_PROFILES,
@@ -182,13 +183,7 @@ def _is_allowed_openai_model_id(value: object) -> bool:
 
 def _is_allowed_anthropic_model_id(value: object) -> bool:
     text = str(value or "").strip().lower()
-    if not text.startswith("claude-") or "opus" in text:
-        return False
-    if "sonnet" in text:
-        return text.startswith(("claude-sonnet-4-6", "claude-sonnet-5"))
-    if "haiku" in text:
-        return text.startswith("claude-haiku-4-5")
-    return False
+    return text.startswith(ANTHROPIC_MODEL_ID_PREFIXES)
 
 
 def _dedupe_presets(values: tuple[str, ...]) -> tuple[str, ...]:

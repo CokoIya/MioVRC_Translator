@@ -45,7 +45,7 @@ def test_google_web_accepts_json_object_response(monkeypatch):
     )
     session.get = session.post
     monkeypatch.setattr(
-        "src.translators.google_web_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -59,7 +59,7 @@ def test_edge_web_posts_kikitan_compatible_payload(monkeypatch):
         _FakeResponse([{"translations": [{"text": "こんにちは", "to": "ja"}]}])
     )
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -79,7 +79,7 @@ def test_edge_web_posts_kikitan_compatible_payload(monkeypatch):
 def test_edge_web_maps_simplified_chinese_and_rejects_bad_response(monkeypatch):
     session = _FakeSession(_FakeResponse({"unexpected": True}))
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -98,7 +98,7 @@ def test_edge_web_prewarm_only_uses_bounded_transport_probe(monkeypatch):
         _FakeResponse([{"translations": [{"text": ".", "to": "en"}]}])
     )
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -122,6 +122,7 @@ def test_factory_creates_edge_web_without_api_key():
         {
             "translation": {
                 "backend": "microsoft_edge_web",
+                "auto_free_fallback": False,
                 "microsoft_edge_web": {"timeout_s": 5, "max_retries": 0},
             }
         }
@@ -158,7 +159,7 @@ def test_edge_web_retries_with_detection_when_the_source_hint_is_wrong(monkeypat
         _FakeResponse([{"translations": [{"text": "你好", "to": "zh-Hans"}]}]),
     ])
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -181,7 +182,7 @@ def test_edge_web_does_not_retry_when_detection_was_already_used(monkeypatch):
         _FakeResponse([{"translations": [{"text": korean, "to": "zh-Hans"}]}])
     )
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 
@@ -198,7 +199,7 @@ def test_edge_web_keeps_a_correct_first_answer_without_retrying(monkeypatch):
         _FakeResponse([{"translations": [{"text": "你好", "to": "zh-Hans"}]}]),
     ])
     monkeypatch.setattr(
-        "src.translators.microsoft_edge_translator.requests.Session",
+        "src.translators.web_translator_base.requests.Session",
         lambda: session,
     )
 

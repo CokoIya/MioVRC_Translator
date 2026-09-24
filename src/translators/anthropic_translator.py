@@ -5,6 +5,7 @@ import httpx
 
 import logging
 import math
+import re
 import time
 import urllib.parse
 from collections.abc import Mapping
@@ -59,11 +60,47 @@ def normalize_anthropic_base_url(base_url: str) -> str:
     )
 
 
+ANTHROPIC_OFFICIAL_HOST = "api.anthropic.com"
+# Thinking cannot be switched off on these; they run at low effort instead.
+_ALWAYS_THINKING_MODEL_PREFIXES = ("claude-opus-5-5", "claude-fable-", "claude-mythos-")
+# Room for a short thought plus the subtitle on the always-thinking models.
+_ALWAYS_THINKING_MIN_MAX_TOKENS = 2048
+# Think by default but accept ``thinking: disabled`` (at the default effort).
+_THINKING_DEFAULT_ON_MODEL_PREFIXES = ("claude-opus-5", "claude-sonnet-5")
+# With thinking switched off these models occasionally echo internal tags;
+# this is the wording Anthropic recommends against it.
+_NO_INTERNAL_TAGS_INSTRUCTION = (
+    "Do not include internal or system XML tags in your response."
+)
+# Server-side refusal fallback: "default" routes a declined request to the
+# model Anthropic recommends for the refusal category.
+REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_REFUSAL_FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-")
+_INTERNAL_TAG_BLOCK_RE = re.compile(
+    r"<(thinking|reasoning|analysis|scratchpad)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_INTERNAL_TAG_RE = re.compile(
+    r"</?(?:thinking|reasoning|analysis|scratchpad)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_internal_tags(text: str) -> str:
+    """Drop internal reasoning markup a model leaked into its visible text."""
+
+    if not text or "<" not in text:
+        return text
+    cleaned = _INTERNAL_TAG_BLOCK_RE.sub("", text)
+    cleaned = _INTERNAL_TAG_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
 class AnthropicTranslator(BaseTranslator):
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-sonnet-4-6",
+        model: str = "claude-opus-5",
         base_url: str = "https://api.anthropic.com",
         timeout_s: float = 15.0,
         max_retries: int = 0,
@@ -78,6 +115,7 @@ class AnthropicTranslator(BaseTranslator):
         read_timeout_s: float | None = None,
         write_timeout_s: float | None = None,
         wall_timeout_s: float | None = None,
+        refusal_fallbacks: bool = True,
     ):
         super().__init__(prompt_profile=prompt_profile, context_store=context_store)
         try:
@@ -152,6 +190,11 @@ class AnthropicTranslator(BaseTranslator):
             validated_base_url
         )
         self._provider_id = str(provider_id or "anthropic").strip().casefold()
+        self._refusal_fallbacks = bool(refusal_fallbacks)
+        self._official_endpoint = (
+            (urllib.parse.urlsplit(validated_base_url).hostname or "").casefold()
+            == ANTHROPIC_OFFICIAL_HOST
+        )
         self._max_output_tokens = max(int(max_output_tokens), 32)
         self._streaming_enabled = bool(streaming)
         self._streaming_supported = True
@@ -325,10 +368,12 @@ class AnthropicTranslator(BaseTranslator):
                     if callable(get_final_message):
                         final_response = get_final_message()
                 self._raise_if_wall_timeout(request_started)
+                self._raise_if_refused(final_response)
                 parse_started = time.perf_counter()
                 output = "".join(fragments)
                 if not output and final_response is not None:
                     output = self._message_output_text(final_response)
+                output = _strip_internal_tags(output)
                 parse_s += max(0.0, time.perf_counter() - parse_started)
                 self._record_translation_metrics(
                     first_token_s=first_token_s,
@@ -352,8 +397,9 @@ class AnthropicTranslator(BaseTranslator):
         self._raise_if_wall_timeout(request_started)
         response = messages.create(**kwargs)
         self._raise_if_wall_timeout(request_started)
+        self._raise_if_refused(response)
         parse_started = time.perf_counter()
-        output = self._message_output_text(response)
+        output = _strip_internal_tags(self._message_output_text(response))
         self._record_translation_metrics(
             first_token_s=None,
             parse_s=max(0.0, time.perf_counter() - parse_started),
@@ -408,6 +454,7 @@ class AnthropicTranslator(BaseTranslator):
                 }
             ],
         }
+        self._apply_model_request_defaults(kwargs)
         request_timeout = self._sdk_timeout()
         if request_timeout:
             kwargs["timeout"] = request_timeout
@@ -530,6 +577,7 @@ class AnthropicTranslator(BaseTranslator):
                 }
             ],
         }
+        self._apply_model_request_defaults(kwargs)
         request_timeout = self._sdk_timeout()
         if request_timeout:
             kwargs["timeout"] = request_timeout
@@ -722,6 +770,7 @@ class AnthropicTranslator(BaseTranslator):
             "max_tokens": output_tokens,
             "messages": [{"role": "user", "content": user}],
         }
+        self._apply_model_request_defaults(kwargs)
         request_timeout = self._sdk_timeout()
         if request_timeout:
             kwargs["timeout"] = request_timeout
@@ -803,6 +852,92 @@ class AnthropicTranslator(BaseTranslator):
             total_s=max(0.0, time.perf_counter() - call_started),
         )
         return rewritten
+
+    def _apply_model_request_defaults(self, kwargs: dict[str, object]) -> None:
+        """Fit the request to the model family.
+
+        A subtitle call has a small ``max_tokens``, and thinking tokens count
+        against it. Claude Opus 5 and Sonnet 5 think unless told not to, so
+        thinking is switched off there, with the instruction Anthropic
+        recommends against leaked internal tags. Opus 5.5 and the Fable tier
+        cannot switch thinking off (the request would be rejected), so they run
+        at low effort with room for a little thinking. The 4.6-4.8 and Haiku
+        models do not think unless asked and need nothing.
+
+        On Anthropic's own endpoint the Opus 5 / Opus 5.5 / Fable families also
+        opt into the server-side refusal fallback, which re-runs a request their
+        safety classifiers declined on the model Anthropic recommends for that
+        category instead of losing the sentence. Relays are left alone: they may
+        not know the parameter.
+        """
+
+        model = str(self.model or "").strip().lower()
+        if model.startswith(_ALWAYS_THINKING_MODEL_PREFIXES):
+            kwargs.pop("thinking", None)
+            output_config = dict(kwargs.get("output_config") or {})
+            output_config.setdefault("effort", "low")
+            kwargs["output_config"] = output_config
+            kwargs["max_tokens"] = max(
+                int(kwargs.get("max_tokens") or 0),
+                _ALWAYS_THINKING_MIN_MAX_TOKENS,
+            )
+        elif model.startswith(_THINKING_DEFAULT_ON_MODEL_PREFIXES):
+            kwargs["thinking"] = {"type": "disabled"}
+            system = str(kwargs.get("system") or "")
+            if _NO_INTERNAL_TAGS_INSTRUCTION not in system:
+                kwargs["system"] = (
+                    f"{system}\n\n{_NO_INTERNAL_TAGS_INSTRUCTION}"
+                    if system
+                    else _NO_INTERNAL_TAGS_INSTRUCTION
+                )
+        if (
+            getattr(self, "_refusal_fallbacks", False)
+            and getattr(self, "_official_endpoint", False)
+            and model.startswith(_REFUSAL_FALLBACK_MODEL_PREFIXES)
+        ):
+            headers = dict(kwargs.get("extra_headers") or {})
+            configured = (getattr(self, "_custom_headers", None) or {}).get(
+                "anthropic-beta"
+            )
+            betas = [
+                part.strip()
+                for source in (configured, headers.get("anthropic-beta"))
+                for part in str(source or "").split(",")
+                if part.strip()
+            ]
+            betas.append(REFUSAL_FALLBACK_BETA)
+            headers["anthropic-beta"] = ",".join(dict.fromkeys(betas))
+            kwargs["extra_headers"] = headers
+            body = dict(kwargs.get("extra_body") or {})
+            body.setdefault("fallbacks", "default")
+            kwargs["extra_body"] = body
+
+    def _raise_if_refused(self, response: object) -> None:
+        """A declined request is an HTTP 200 with ``stop_reason: refusal``.
+
+        Whatever text came with it (a mid-stream decline keeps the partial
+        output) must not reach a subtitle, so it becomes a safety failure the
+        error formatter shows as such.
+        """
+
+        if response is None:
+            return
+        if isinstance(response, dict):
+            stop_reason = response.get("stop_reason")
+            details = response.get("stop_details")
+        else:
+            stop_reason = getattr(response, "stop_reason", None)
+            details = getattr(response, "stop_details", None)
+        if str(stop_reason or "").strip().casefold() != "refusal":
+            return
+        if isinstance(details, dict):
+            category = details.get("category")
+        else:
+            category = getattr(details, "category", None)
+        raise RuntimeError(
+            "Anthropic safety policy declined the request "
+            f"(stop_reason=refusal category={str(category or 'unspecified')[:40]})"
+        )
 
     def _estimate_max_tokens(self, text: str) -> int:
         compact = "".join(str(text or "").split())

@@ -55,11 +55,89 @@
       "name": "/actions/mio/in/pointer_right",
       "type": "pose",
       "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/push_to_talk",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/out/haptic",
+      "type": "vibration",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/trigger_value",
+      "type": "vector1",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/grip_value",
+      "type": "vector1",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio_block/in/trigger",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio_block/in/grip",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio_block/in/trigger_value",
+      "type": "vector1",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio_block/in/grip_value",
+      "type": "vector1",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/stick",
+      "type": "vector2",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/thumbrest",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/toggle_frame_gesture",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/gather_panels",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio/in/close_panels",
+      "type": "boolean",
+      "requirement": "optional"
+    },
+    {
+      "name": "/actions/mio_block_stick/in/stick",
+      "type": "vector2",
+      "requirement": "optional"
     }
   ],
   "action_sets": [
     {
       "name": "/actions/mio",
+      "usage": "leftright"
+    },
+    {
+      "name": "/actions/mio_block",
+      "usage": "leftright"
+    },
+    {
+      "name": "/actions/mio_block_stick",
       "usage": "leftright"
     }
   ],
@@ -72,7 +150,23 @@
       "/actions/mio/in/hold_grip": "Hold grip (chord for translate)",
       "/actions/mio/in/any_button": "Any other button (puts a shown translation away)",
       "/actions/mio/in/pointer_left": "Left controller tip (aims at the wrist panel)",
-      "/actions/mio/in/pointer_right": "Right controller tip (aims at the wrist panel)"
+      "/actions/mio/in/pointer_right": "Right controller tip (aims at the wrist panel)",
+      "/actions/mio/in/push_to_talk": "Hold to talk (Mio's microphone)",
+      "/actions/mio/out/haptic": "Vibration (Mio feedback)",
+      "/actions/mio_block": "Mio Translator (kept from the game while framing or using a panel)",
+      "/actions/mio/in/trigger_value": "Trigger pull (how hard)",
+      "/actions/mio/in/grip_value": "Grip pull (how hard)",
+      "/actions/mio_block/in/trigger": "Trigger (while Mio has it)",
+      "/actions/mio_block/in/grip": "Grip (while Mio has it)",
+      "/actions/mio_block/in/trigger_value": "Trigger pull (while Mio has it)",
+      "/actions/mio_block/in/grip_value": "Grip pull (while Mio has it)",
+      "/actions/mio_block_stick": "Mio Translator (stick kept from the game while framing)",
+      "/actions/mio/in/stick": "Stick (scales the frame while framing)",
+      "/actions/mio_block_stick/in/stick": "Stick (while Mio has it)",
+      "/actions/mio/in/thumbrest": "Thumb rest (tap to switch the hand frame)",
+      "/actions/mio/in/toggle_frame_gesture": "Switch the hand frame on / off",
+      "/actions/mio/in/gather_panels": "Gather the panels in front of me",
+      "/actions/mio/in/close_panels": "Close every panel"
     },
     {
       "language_tag": "zh_CN",
@@ -82,7 +176,23 @@
       "/actions/mio/in/hold_grip": "按住抓握键（截图翻译组合键）",
       "/actions/mio/in/any_button": "其他任意按键（收起显示中的翻译）",
       "/actions/mio/in/pointer_left": "左手柄指向（操作手腕面板）",
-      "/actions/mio/in/pointer_right": "右手柄指向（操作手腕面板）"
+      "/actions/mio/in/pointer_right": "右手柄指向（操作手腕面板）",
+      "/actions/mio/in/push_to_talk": "按住说话（Mio 麦克风）",
+      "/actions/mio/out/haptic": "振动（Mio 提示）",
+      "/actions/mio_block": "Mio 翻译器（取景和操作面板时不交给游戏）",
+      "/actions/mio/in/trigger_value": "扳机按下的程度",
+      "/actions/mio/in/grip_value": "抓握键按下的程度",
+      "/actions/mio_block/in/trigger": "扳机（Mio 占用时）",
+      "/actions/mio_block/in/grip": "抓握键（Mio 占用时）",
+      "/actions/mio_block/in/trigger_value": "扳机按下的程度（Mio 占用时）",
+      "/actions/mio_block/in/grip_value": "抓握键按下的程度（Mio 占用时）",
+      "/actions/mio_block_stick": "Mio 翻译器（取景时摇杆不交给游戏）",
+      "/actions/mio/in/stick": "摇杆（取景时缩放取景框）",
+      "/actions/mio_block_stick/in/stick": "摇杆（Mio 占用时）",
+      "/actions/mio/in/thumbrest": "拇指托（连点开关双手取景）",
+      "/actions/mio/in/toggle_frame_gesture": "开关双手取景",
+      "/actions/mio/in/gather_panels": "把面板收拢到面前",
+      "/actions/mio/in/close_panels": "关闭全部面板"
     },
     {
       "language_tag": "ja_JP",
@@ -92,7 +202,23 @@
       "/actions/mio/in/hold_grip": "グリップ長押し（翻訳の同時押し）",
       "/actions/mio/in/any_button": "その他のボタン（表示中の翻訳を閉じる）",
       "/actions/mio/in/pointer_left": "左コントローラーの先端（手首パネルの操作）",
-      "/actions/mio/in/pointer_right": "右コントローラーの先端（手首パネルの操作）"
+      "/actions/mio/in/pointer_right": "右コントローラーの先端（手首パネルの操作）",
+      "/actions/mio/in/push_to_talk": "押している間だけ話す（Mio のマイク）",
+      "/actions/mio/out/haptic": "振動（Mio の合図）",
+      "/actions/mio_block": "Mio 翻訳（フレームやパネル操作中はゲームに渡さない）",
+      "/actions/mio/in/trigger_value": "トリガーの押し込み量",
+      "/actions/mio/in/grip_value": "グリップの押し込み量",
+      "/actions/mio_block/in/trigger": "トリガー（Mio が使用中）",
+      "/actions/mio_block/in/grip": "グリップ（Mio が使用中）",
+      "/actions/mio_block/in/trigger_value": "トリガーの押し込み量（Mio が使用中）",
+      "/actions/mio_block/in/grip_value": "グリップの押し込み量（Mio が使用中）",
+      "/actions/mio_block_stick": "Mio 翻訳（フレーム中はスティックをゲームに渡さない）",
+      "/actions/mio/in/stick": "スティック（フレーム中に枠を拡大縮小）",
+      "/actions/mio_block_stick/in/stick": "スティック（Mio が使用中）",
+      "/actions/mio/in/thumbrest": "サムレスト（連続タップで両手フレームを切り替え）",
+      "/actions/mio/in/toggle_frame_gesture": "両手フレームのオン / オフ",
+      "/actions/mio/in/gather_panels": "パネルを目の前に集める",
+      "/actions/mio/in/close_panels": "パネルをすべて閉じる"
     }
   ]
 }

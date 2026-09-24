@@ -165,7 +165,7 @@ def test_requests_translators_prewarm_current_worker_session(
         calls.append((client, url, kwargs))
         return _SUCCESS
 
-    monkeypatch.setattr(f"{module_name}.warmup_requests_session", fake_warmup)
+    monkeypatch.setattr("src.translators.web_translator_base.warmup_requests_session", fake_warmup)
     translator = translator_type.__new__(translator_type)
     translator._session_pool = pool
     translator._base_url = base_url

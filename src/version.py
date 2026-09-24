@@ -17,6 +17,12 @@ INSTALLER_SIGNATURE_KEY_ID = "mio-installer-ed25519-v2"
 TRUSTED_INSTALLER_PUBLIC_KEYS: tuple[tuple[str, str], ...] = (
     (INSTALLER_SIGNATURE_KEY_ID, UPDATE_MANIFEST_PUBLIC_KEY),
 )
+# The remote catalog's signed section (src/utils/signed_catalog.py): same
+# release key, its own key id and signing context.
+CATALOG_SIGNATURE_KEY_ID = "mio-catalog-ed25519-v2"
+TRUSTED_CATALOG_PUBLIC_KEYS: tuple[tuple[str, str], ...] = (
+    (CATALOG_SIGNATURE_KEY_ID, UPDATE_MANIFEST_PUBLIC_KEY),
+)
 # ────────────────────────────────────────────────────────────────────────────
 
 # A test build (build_beta.ps1) stamps its own version into the bundle instead

@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from src.asr import sensevoice_asr, whisper_asr
+from src.asr import sensevoice_asr
 
 
 @pytest.mark.parametrize(
@@ -14,11 +14,6 @@ from src.asr import sensevoice_asr, whisper_asr
             sensevoice_asr,
             sensevoice_asr.SenseVoiceASR,
             id="sensevoice",
-        ),
-        pytest.param(
-            whisper_asr,
-            whisper_asr.WhisperASR,
-            id="whisper",
         ),
     ),
 )
@@ -84,11 +79,6 @@ def test_existing_local_model_is_resolved_once_and_load_stages_are_timed(
             sensevoice_asr,
             sensevoice_asr.SenseVoiceASR,
             id="sensevoice",
-        ),
-        pytest.param(
-            whisper_asr,
-            whisper_asr.WhisperASR,
-            id="whisper",
         ),
     ),
 )

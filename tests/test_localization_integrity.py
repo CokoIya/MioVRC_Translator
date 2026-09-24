@@ -210,6 +210,8 @@ def test_component_catalogs_do_not_silently_reuse_english_ui_sentences():
         ("settings", "vr_overlay_width_value"),
         ("settings", "screenshot_depth_value"),
         ("settings", "vr_overlay_angle_value"),
+        # A percentage is written the same way everywhere.
+        ("settings", "vr_feedback_volume_value"),
         *(
             ("translation_backend_labels", backend)
             for backend in {

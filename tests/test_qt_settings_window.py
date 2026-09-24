@@ -1420,6 +1420,21 @@ def test_original_only_output_saved_on_format_change(qtbot, config, monkeypatch)
     assert config["translation"]["fallback_backends"] == ["deepseek", "local_ai"]
 
 
+def test_free_service_fallback_switch_round_trips(qtbot, config, monkeypatch):
+    _patch_dialog_deps(monkeypatch)
+    monkeypatch.setattr("src.ui_qt.settings_window.config_manager.save_config", lambda cfg: None)
+    config["translation"]["auto_free_fallback"] = True
+
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert dialog._auto_free_fallback_var.value() is True
+    dialog._auto_free_fallback_var.set(False)
+    dialog._save()
+
+    assert config["translation"]["auto_free_fallback"] is False
+
+
 def test_style_bert_saved_voice_id_selects_display_and_tests_with_id(qtbot, config, monkeypatch):
     voice_id = "demo-model :: mio-speaker :: Neutral"
     display_name = "Mio Voice / Neutral"
@@ -2459,7 +2474,7 @@ def test_qwen_tts_test_network_failure_shows_actionable_message(
 
 
 def test_bert_model_download_opens_progress_window(qtbot, config, monkeypatch):
-    from src.asr.hf_model_downloader import DownloadProgress, DownloadState
+    from src.utils.hf_model_downloader import DownloadProgress, DownloadState
 
     _patch_dialog_deps(monkeypatch)
     config["tts"] = {

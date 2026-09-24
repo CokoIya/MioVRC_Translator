@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import types
 
-import pytest
 
 from src.core import vr_eye_capture
-from src.core.vr_eye_capture import EyeFrame, capture_left_eye, eye_frame_size
+from src.core.vr_eye_capture import EyeFrame, capture_eye, eye_frame_size, eye_index, normalize_view_eye
 
 
 class _Capture:
     def __init__(self, frame):
         self._frame = frame
+        self.eyes: list = []
 
-    def capture(self, module):
+    def capture(self, module, eye="right"):
+        self.eyes.append(eye)
         return self._frame
 
 
@@ -22,7 +23,7 @@ def test_a_frame_becomes_a_capture_with_tangents(monkeypatch, qapp):
     frame = EyeFrame(bytes([10, 20, 30, 255]) * 4, 2, 2, (-1.28, 1.28, -1.28, 1.28), bgra=False)
     monkeypatch.setattr(vr_eye_capture, "shared_eye_capture", lambda: _Capture(frame))
 
-    capture = capture_left_eye(types.SimpleNamespace())
+    capture = capture_eye(types.SimpleNamespace())
 
     assert capture.ok
     assert capture.source == "vr_eye"
@@ -33,7 +34,7 @@ def test_a_frame_becomes_a_capture_with_tangents(monkeypatch, qapp):
 def test_no_frame_is_an_empty_capture_not_an_exception(monkeypatch, qapp):
     monkeypatch.setattr(vr_eye_capture, "shared_eye_capture", lambda: _Capture(None))
 
-    capture = capture_left_eye(types.SimpleNamespace())
+    capture = capture_eye(types.SimpleNamespace())
 
     assert not capture.ok
     assert capture.source == "vr_eye"
@@ -146,3 +147,23 @@ class TestFreshFrame:
                 return False, _Timing(3)
 
         assert vr_eye_capture.compositor_frame_index(_NotFilled()) is None
+
+
+def test_the_chosen_eye_is_the_one_read(monkeypatch, qapp):
+    frame = EyeFrame(bytes([10, 20, 30, 255]) * 4, 2, 2, (-1.2, 1.3, -1.2, 1.2), bgra=False)
+    source = _Capture(frame)
+    monkeypatch.setattr(vr_eye_capture, "shared_eye_capture", lambda: source)
+
+    capture_eye(types.SimpleNamespace(), "left")
+
+    assert source.eyes == ["left"]
+
+
+def test_the_dominant_eye_defaults_to_the_right_one():
+    module = types.SimpleNamespace(Eye_Left=0, Eye_Right=1)
+
+    assert normalize_view_eye(None) == "right"
+    assert normalize_view_eye("LEFT") == "left"
+    assert normalize_view_eye("nonsense") == "right"
+    assert eye_index(module, "left") == 0
+    assert eye_index(module, "right") == 1

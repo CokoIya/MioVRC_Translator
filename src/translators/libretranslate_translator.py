@@ -1,27 +1,22 @@
 from __future__ import annotations
 
 import logging
-import time
-
-import requests
 
 from src.utils.secure_http import validate_api_base_url
-from src.utils.http_session_pool import ThreadLocalSessionPool
-from src.utils.provider_diagnostics import safe_exception_summary
-from src.utils.provider_warmup import warmup_requests_session
-
-from .base import BaseTranslator
+from .web_translator_base import WebTranslatorBase
 from src.utils.input_validation import ValidationError, validate_translation_text
 
 logger = logging.getLogger(__name__)
 
 
-class LibreTranslateTranslator(BaseTranslator):
+class LibreTranslateTranslator(WebTranslatorBase):
     """LibreTranslate translator.
 
     This backend is intended for a local/self-hosted LibreTranslate server or a
     trusted public instance. Self-hosting avoids provider-side quota limits.
     """
+
+    PROVIDER_LABEL = "LibreTranslate"
 
     def __init__(
         self,
@@ -39,34 +34,13 @@ class LibreTranslateTranslator(BaseTranslator):
         )
         self._timeout_s = max(float(timeout_s), 1.0)
         self._max_retries = max(int(max_retries), 0)
-        def session_factory():
-            session = requests.Session()
-            session.headers.update({"User-Agent": "MioTranslator/1.3"})
-            return session
-
-        self._session_pool = ThreadLocalSessionPool(session_factory)
+        self._init_session_pool(self._base_url)
         self.model = "libretranslate"
 
     def prewarm(self) -> bool:
         """Warm this translation worker's LibreTranslate session."""
 
-        result = warmup_requests_session(
-            self._session_pool.get(),
-            f"{self._base_url.rstrip('/')}/languages",
-            method="HEAD",
-            timeout_s=min(self._timeout_s, 3.0),
-        )
-        logger.log(
-            logging.INFO if result.succeeded else logging.WARNING,
-            "LibreTranslate prewarm %s "
-            "(probe_status=%s probe_route_accepted=%s elapsed_ms=%.0f error_type=%s)",
-            "transport reachable" if result.succeeded else "failed",
-            result.status_code if result.status_code is not None else "unknown",
-            bool(result.status_code is not None and 200 <= result.status_code < 400),
-            result.elapsed_s * 1000.0,
-            result.error_type or "none",
-        )
-        return result.succeeded
+        return self._prewarm_session(f"{self._base_url.rstrip('/')}/languages")
 
     def translate(
         self,
@@ -119,32 +93,10 @@ class LibreTranslateTranslator(BaseTranslator):
 
     def _request_translation(self, payload: dict[str, str]) -> str:
         url = f"{self._base_url}/translate"
-        last_exc: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            started = time.perf_counter()
-            try:
-                response = self._session_pool.get().post(
-                    url,
-                    json=payload,
-                    timeout=self._timeout_s,
-                )
-                response.raise_for_status()
-                data = response.json()
-                translated = data.get("translatedText", "")
-                logger.info(
-                    "LibreTranslate request finished (elapsed=%.2fs)",
-                    time.perf_counter() - started,
-                )
-                return str(translated or "")
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(
-                    "LibreTranslate attempt failed: %s",
-                    safe_exception_summary(exc),
-                )
-                if attempt < self._max_retries:
-                    time.sleep(min(0.25 * (attempt + 1), 1.0))
-        raise RuntimeError(f"LibreTranslate failed: {last_exc}") from last_exc
+        return self._send_with_retries(
+            lambda session: session.post(url, json=payload, timeout=self._timeout_s),
+            lambda response: str(response.json().get("translatedText", "") or ""),
+        )
 
     def _language(self, code: str, *, allow_auto: bool) -> str:
         normalized = self._normalize_language_code(code)

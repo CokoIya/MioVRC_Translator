@@ -308,7 +308,6 @@ def _anthropic_config() -> dict:
     }
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_streams_with_custom_headers_and_exact_model(monkeypatch):
     instances = _install_fake_anthropic(monkeypatch)
     translator = create_translator(_anthropic_config())
@@ -331,7 +330,6 @@ def test_anthropic_compatible_streams_with_custom_headers_and_exact_model(monkey
         translator.close()
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_compatible_falls_back_only_for_explicit_stream_rejection(
     monkeypatch,
 ):
@@ -345,7 +343,6 @@ def test_anthropic_compatible_falls_back_only_for_explicit_stream_rejection(
         translator.close()
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_provider_logs_hide_relay_path_and_raw_error(
     monkeypatch,
     caplog,
@@ -443,7 +440,6 @@ def test_common_relay_http_status_text_is_classified(error):
     assert friendly.category == "auth"
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_overload_is_provider_failure_not_billing_quota():
     friendly = format_translation_error(
         "HTTP 529 - {'type': 'overloaded_error', 'message': 'Overloaded'}",
@@ -454,7 +450,6 @@ def test_anthropic_overload_is_provider_failure_not_billing_quota():
     assert friendly.category == "provider"
 
 
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_model_not_found_404_is_model_error():
     friendly = format_translation_error(
         "HTTP 404 Not Found: not_found_error model: claude-custom-preview",
@@ -743,7 +738,6 @@ def _install_close_released_anthropic(monkeypatch, *, reject_streaming: bool):
 
 
 @pytest.mark.parametrize("streaming", (False, True))
-@pytest.mark.skip(reason="Claude/Anthropic translation backends are disabled")
 def test_anthropic_hard_wall_timeout_covers_nonstream_and_stream_fallback(
     monkeypatch,
     streaming,
