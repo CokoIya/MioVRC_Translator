@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MioVRC素材托管工具</title>
-<meta name="description" content="VRChat 改模用的本地素材管理工具：把 Booth 已购、百度网盘分享和电脑里的素材整理成一个素材库。Windows 免费使用。">
+<meta name="description" content="VRChat 改模素材工具：在软件里逛 Booth 和闲鱼、下单、和卖家聊天，买到的素材一键下载、自动解压进素材库；电脑里和百度网盘里的素材也整理在一起。Windows 免费使用。">
 <meta property="og:title" content="MioVRC素材托管工具">
-<meta property="og:description" content="把 Booth 已购、百度网盘分享和电脑里的素材整理成一个素材库。">
+<meta property="og:description" content="找素材、买素材、管素材，都在一个软件里：Booth 和闲鱼内置，买到的直接下载进素材库。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://miovrc.com/vrca/">
 <meta name="theme-color" content="#0d1029">
@@ -29,6 +29,7 @@
   --orange: #ff8a4c;
   --purple: #9a6bff;
   --coral: #ff5a6a;
+  --yellow: #ffcf3f;
   --latin: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "DIN Alternate", system-ui, sans-serif;
   --cjk: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
 }
@@ -122,6 +123,20 @@ section.hero { position: relative; overflow: hidden; padding: 0; }
 .app .t em { font-style: normal; background: #ff5a6a; color: #fff; border-radius: 3px; padding: 0 3px; margin-right: 3px; font-size: 8.5px; }
 .app .c { display: flex; gap: 3px; padding: 0 6px 6px; }
 .app .c span { font-size: 8px; color: #c78bff; background: rgba(199, 139, 255, .12); border-radius: 3px; padding: 0 3px; }
+.app .c i { margin-left: auto; font-style: normal; font-size: 8.5px; font-weight: 600; color: #eceef6; font-family: var(--latin); }
+.app .head .tabs { display: flex; flex: none; padding: 2px; border-radius: 10px; background: #0f1018; border: 1px solid #2e3247; }
+.app .head .tabs span { font-size: 9px; line-height: 14px; padding: 0 7px; border-radius: 7px; color: #9a9eb5; }
+.app .head .tabs span.on { background: #282b3d; color: #eceef6; }
+.app .side span.chips { display: flex; flex-wrap: wrap; gap: 3px; padding: 0; }
+.app .side .chips em { font-style: normal; font-size: 8.5px; line-height: 13px; padding: 0 5px; border-radius: 7px; border: 1px solid #2e3247; background: #1f2231; color: #9a9eb5; }
+.app .side .chips em.on { border-color: rgba(255, 90, 106, .6); background: rgba(255, 90, 106, .14); color: #eceef6; }
+.app .cv .bds { position: absolute; left: 4px; top: 4px; display: flex; gap: 3px; z-index: 1; }
+.app .cv .bds span { font-size: 7.5px; line-height: 11px; padding: 0 4px; border-radius: 3px; font-weight: 600; }
+.app .cv .bds .own { background: #10241f; color: #5ee0c5; border: 1px solid rgba(94, 224, 197, .45); }
+.app .cv .bds .buy { background: #ff5a6a; color: #fff; }
+.app .cv .pg { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; z-index: 1; display: flex; align-items: center; justify-content: flex-end; padding: 0 5px; background: rgba(14, 15, 24, .78); }
+.app .cv .pg i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(63, 208, 166, .45); }
+.app .cv .pg b { position: relative; font-size: 7.5px; font-weight: 600; color: #eceef6; font-family: var(--latin); }
 .stage .plate.p2 { position: absolute; right: 0; bottom: 58px; --rank: var(--orange); }
 .stage .plate.p3 { position: absolute; left: -2%; top: 92px; --rank: var(--green); }
 
@@ -145,6 +160,10 @@ section { padding: 88px 0; }
 .step .n { font-family: var(--latin); font-size: 30px; font-weight: 700; line-height: 1; color: var(--portal); min-width: 26px; }
 .step h3 { margin: 0 0 4px; font-size: 17px; }
 .step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+.steps.four { grid-template-columns: repeat(4, 1fr); }
+.steps.four .step { flex-direction: column; gap: 10px; padding: 26px 24px 24px; }
+.steps.four .step h3 { font-size: 20px; }
+.steps.four .step .n { font-size: 15px; color: var(--faint); min-width: 0; }
 
 /* download: two portals */
 .dl { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -184,6 +203,10 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   .qm { grid-template-columns: 1fr 1fr; }
   .steps { grid-template-columns: 1fr; }
   .step + .step { border-left: 0; border-top: 1px solid var(--line); }
+  .steps.four { grid-template-columns: 1fr 1fr; }
+  .steps.four .step + .step { border-top: 0; }
+  .steps.four .step:nth-child(even) { border-left: 1px solid var(--line); }
+  .steps.four .step:nth-child(n+3) { border-top: 1px solid var(--line); }
 }
 @media (max-width: 640px) {
   .wrap { padding: 0 16px; }
@@ -196,6 +219,9 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   .app .side { display: none; }
   .stage .plate.p2, .stage .plate.p3 { display: none; }
   .qm, .dl { grid-template-columns: 1fr; }
+  .steps.four { grid-template-columns: 1fr; }
+  .steps.four .step:nth-child(even) { border-left: 0; }
+  .steps.four .step + .step { border-top: 1px solid var(--line); }
   section { padding: 64px 0; }
   .sh h2 { font-size: 28px; }
   .btn { height: 46px; padding: 0 18px; }
@@ -213,6 +239,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   <div class="wrap">
     <a class="family" href="../" title="MioVRC 首页"><img src="../assets/icons/app_icon_mio.png" alt="Mio"><span class="full">MioVRC</span><span class="sep full">/</span><span>素材托管工具</span></a>
     <nav>
+      <a href="#flow">流程</a>
       <a href="#features">功能</a>
       <a href="#download">下载</a>
       <a href="#faq">常见问题</a>
@@ -225,13 +252,13 @@ footer .note { flex-basis: 100%; font-size: 13px; }
 <section class="hero" aria-labelledby="title">
   <div class="wrap">
     <div>
-      <span class="plate" style="--rank: var(--portal)">VRChat 改模素材管理<small>Windows</small></span>
+      <span class="plate" style="--rank: var(--portal)">VRChat 改模素材工具<small>Windows</small></span>
       <h1 id="title"><span class="mio">MioVRC</span>素材托管工具</h1>
-      <p class="lede">Booth 买的、网盘下的、解压在各个文件夹里的素材，整理成一个素材库。点一下卡片，就打开它所在的文件夹。</p>
+      <p class="lede">在软件里逛 Booth 和闲鱼，下单、和卖家聊天；买到的素材一键下载，自动解压进素材库。电脑里和网盘里已有的，也都整理在这里。</p>
       <div class="actions">
         <a class="btn go" id="heroDl" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">
           <svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>下载<span class="v" data-ver></span></a>
-        <a class="btn" href="#features">看看能做什么</a>
+        <a class="btn" href="#flow">看看怎么用</a>
       </div>
       <div class="meta"><span>免费</span><span>开源</span><span>Windows 10 / 11</span><span>数据只存在本机</span></div>
     </div>
@@ -242,30 +269,40 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       <span class="plate p1">MioVRC素材托管工具<small data-ver></small></span>
       <div class="app">
         <div class="bar">MioVRC素材托管工具<span class="wc"><span>—</span><span>☐</span><span>✕</span></span></div>
-        <div class="head"><span class="s"></span><span class="b"></span><span class="b"></span></div>
+        <div class="head"><span class="tabs"><span>素材库</span><span class="on">Booth</span><span>闲鱼</span></span><span class="s"></span><span class="b"></span></div>
         <div class="body">
           <div class="side">
             <b>分类</b>
-            <span class="on">全部</span>
-            <span><i style="background:#ff7aa8"></i>衣服</span>
-            <span><i style="background:#ffb547"></i>头发</span>
-            <span><i style="background:#6fd3ff"></i>配饰</span>
-            <span><i style="background:#c78bff"></i>素体</span>
+            <span class="chips"><em class="on">衣服</em><em class="on">头发</em><em>配饰</em><em>妆容</em><em>手势</em></span>
             <b>适配素体</b>
-            <span>Lumi</span><span>Hana</span>
+            <span class="chips"><em class="on">Lumi</em><em>Hana</em><em>Mira</em></span>
+            <b>风格</b>
+            <span class="chips"><em class="on">可爱</em><em>JK</em><em>女仆</em></span>
           </div>
           <div class="grid">
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff7aa8,#7b5cff)"></div><div class="t"><em>新</em>Starlight Dress</div><div class="c"><span>Lumi</span><span>Hana</span></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ffb547,#ff5a6a)"></div><div class="t">Twin Tail Hair</div><div class="c"><span>Hana</span></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#3fe6d8,#2f8cff)"></div><div class="t">Sailor Uniform</div><div class="c"><span>Lumi</span><span>+3</span></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#9a6bff,#2f8cff)"></div><div class="t">Night Kimono</div><div class="c"><span>Mira</span></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#43d17a,#3fe6d8)"></div><div class="t">Ribbon Choker</div><div class="c"><span>通用</span></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff8a4c,#ffb547)"></div><div class="t">Cat Ear Hoodie</div><div class="c"><span>Lumi</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff7aa8,#7b5cff)"><span class="bds"><span class="own">素材库已有</span><span class="buy">已购</span></span></div><div class="t">Starlight Dress</div><div class="c"><span>Lumi</span><span>Hana</span><i>¥1,500</i></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ffb547,#ff5a6a)"><span class="bds"><span class="buy">已购</span></span><span class="pg"><i style="width:68%"></i><b>68%</b></span></div><div class="t">Twin Tail Hair</div><div class="c"><span>Lumi</span><i>¥800</i></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#3fe6d8,#2f8cff)"></div><div class="t">Sailor Uniform</div><div class="c"><span>Lumi</span><span>+3</span><i>¥2,200</i></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#9a6bff,#2f8cff)"></div><div class="t">Night Kimono</div><div class="c"><span>Lumi</span><i>¥1,800</i></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#43d17a,#3fe6d8)"></div><div class="t">Bob Hair Set</div><div class="c"><span>Lumi</span><i>¥600</i></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff8a4c,#ffb547)"></div><div class="t">Cat Ear Hoodie</div><div class="c"><span>Lumi</span><i>¥1,200</i></div></div>
           </div>
         </div>
       </div>
-      <span class="plate p2">已购<small>已下载</small></span>
-      <span class="plate p3">百度网盘<small>3 个文件</small></span>
+      <span class="plate p2">已购<small>下载中 68%</small></span>
+      <span class="plate p3">新素材<small>已自动入库</small></span>
+    </div>
+  </div>
+</section>
+
+<section id="flow" aria-labelledby="w-title" style="padding-bottom:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="w-title">从找素材到用上</h2><p>不用在浏览器、网盘和文件夹之间来回切。</p></div>
+    <div class="steps four">
+      <div class="step"><span class="n">1</span><div><h3>找</h3><p>Booth 页点选分类、素体、风格标签，可以多选，不用猜日文关键词；闲鱼直接搜。买过的、素材库里已有的会标出来。</p></div></div>
+      <div class="step"><span class="n">2</span><div><h3>买</h3><p>商品页、购物车、和卖家聊天都在软件里，登录保存在本机，不用切到浏览器。</p></div></div>
+      <div class="step"><span class="n">3</span><div><h3>下载</h3><p>Booth 已购点一下就下载，zip 自动解压进素材文件夹；闲鱼卖家发来的网盘分享，选中就能收进来。</p></div></div>
+      <div class="step"><span class="n">4</span><div><h3>用</h3><p>按分类、素体筛选，点卡片打开所在文件夹；标出哪些在 Unity 工程里用到，作者更新了会提醒。</p></div></div>
     </div>
   </div>
 </section>
@@ -274,29 +311,29 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   <div class="wrap">
     <div class="sh"><h2 id="f-title">能做什么</h2><p>素材越买越多，找起来越来越难。</p></div>
     <div class="qm">
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
-        <h3>自动整理</h3><p>扫描素材文件夹，认出 unitypackage、压缩包和解压后的文件夹，分好类，标出适配的素体。</p>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></svg></div>
+        <h3>逛 Booth</h3><p>分类、素体、风格标签多选，按人气、新上架、价格排序。卡片标出「已购」「素材库已有」，也能只看还没有的。</p>
+      </div>
+      <div class="tile" style="--c: var(--yellow)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
+        <h3>闲鱼</h3><p>在软件里搜索、登录、和卖家聊天、下单。卖家发来的网盘分享，在聊天里选中，一键收进素材库。</p>
       </div>
       <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M5 8h14l-1 12H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>
-        <h3>Booth 已购</h3><p>登录一次 Booth，列出买过的所有商品，哪些还没下载一眼就能看到，点一下打开下载页。</p>
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg></div>
+        <h3>已购一键下载</h3><p>同步 Booth 已购，没下载的点一下就下载。zip 自动解压，日文文件名不乱码，下完自动入库。</p>
+      </div>
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
+        <h3>自动整理</h3><p>认出 unitypackage、压缩包和解压后的文件夹，分好类、标出适配素体，同款合并成一张卡片。新放进来的会自动收进来。</p>
       </div>
       <div class="tile" style="--c: var(--blue)">
         <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/></svg></div>
-        <h3>百度网盘</h3><p>记下分享链接和提取码，读出分享里有哪些文件。合集分享会按文件夹拆成一个个素材。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="10" height="10" rx="2"/><path d="M10 18h8a2 2 0 0 0 2-2V8"/></svg></div>
-        <h3>同款合并</h3><p>同一件衣服给不同素体的包、PSD 源文件，合成一张卡片。选了素体，只显示能用的那个版本。</p>
+        <h3>百度网盘</h3><p>记下分享链接和提取码，读出分享里有哪些文件，合集按文件夹拆开。分享里加了新文件会提醒。</p>
       </div>
       <div class="tile" style="--c: var(--green)">
         <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/></svg></div>
         <h3>工程使用</h3><p>分析你的 Unity 工程，标出哪个素材正在用、用在哪个工程里，没用到的也能找出来。</p>
-      </div>
-      <div class="tile" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg></div>
-        <h3>跟上更新</h3><p>新下载的素材放进文件夹会自动收进来；网盘分享、Booth 商品页有变化时会提示。</p>
       </div>
     </div>
   </div>
@@ -308,7 +345,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <div class="steps">
       <div class="step"><span class="n">1</span><div><h3>下载并安装</h3><p>安装版默认装到 C 盘以外的磁盘，不需要管理员权限。</p></div></div>
       <div class="step"><span class="n">2</span><div><h3>选择文件夹</h3><p>选放素材的文件夹，比如 <span style="font-family:Consolas,monospace">BaiduNetdiskDownload</span>，有 Unity 工程也一起选上。</p></div></div>
-      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后每次打开都会在后台更新。</p></div></div>
+      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后去「Booth」「闲鱼」页找新素材，买到的直接下载进来。</p></div></div>
     </div>
   </div>
 </section>
@@ -349,8 +386,10 @@ footer .note { flex-basis: 100%; font-size: 13px; }
         <div class="a">点「更多信息」，再点「仍要运行」。程序没有购买数字签名，所以会有这个提示。</div></details>
       <details><summary>素材库的数据存在哪里？</summary>
         <div class="a">安装版在 <code>%LOCALAPPDATA%\MioVRC_AssetManager</code>，便携版在程序所在的文件夹。只保存在本机，不会上传。</div></details>
-      <details><summary>Booth 登录安全吗？</summary>
-        <div class="a">同步已购时会打开一个单独的浏览器窗口，登录信息只保存在这个窗口里，不读取你平时用的浏览器，也不经过任何服务器。</div></details>
+      <details><summary>买东西、聊天会跳到浏览器吗？</summary>
+        <div class="a">不会。Booth 和闲鱼的页面都在软件里打开，登录、购买、和卖家聊天、下载都在软件里完成。电脑上没有 WebView2 时，页面会开在一个单独的 Edge 或 Chrome 窗口里。</div></details>
+      <details><summary>Booth、闲鱼的登录安全吗？</summary>
+        <div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不读取你平时用的浏览器，也不经过任何服务器。下载已购用的登录另外加密保存，只有你的 Windows 账户能读取。</div></details>
       <details><summary>遇到问题怎么反馈？</summary>
         <div class="a">软件右下角有「反馈和建议」，写完直接发给作者。也可以在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
     </div>
@@ -363,7 +402,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <span>MioVRC素材托管工具 by Coko_Iya</span>
     <a href="../">Mio 实时翻译</a>
     <a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a>
-    <span class="note">本工具与 VRChat、BOOTH、pixiv、百度网盘没有关联。</span>
+    <span class="note">本工具与 VRChat、BOOTH、pixiv、闲鱼、百度网盘没有关联。</span>
   </div>
 </footer>
 
