@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MioVRC素材托管工具</title>
+<meta name="description" content="VRChat 改模用的本地素材管理工具：把 Booth 已购、百度网盘分享和电脑里的素材整理成一个素材库。Windows 免费使用。">
+<meta property="og:title" content="MioVRC素材托管工具">
+<meta property="og:description" content="把 Booth 已购、百度网盘分享和电脑里的素材整理成一个素材库。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://miovrc.com/vrca/">
+<meta name="theme-color" content="#0d1029">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='9' width='26' height='19' rx='4' fill='%233fe6d8'/%3E%3Cpath d='M10 9V7a6 6 0 0 1 12 0v2' stroke='%233fe6d8' stroke-width='3' fill='none'/%3E%3C/svg%3E">
+<style>
+:root {
+  --sky-top: #0b0e26;
+  --sky-low: #221947;
+  --panel: rgba(17, 21, 46, .72);
+  --panel-solid: #141836;
+  --line: rgba(150, 190, 255, .16);
+  --line-strong: rgba(150, 190, 255, .3);
+  --text: #eef1ff;
+  --muted: #a7aed0;
+  --faint: #7178a0;
+  --portal: #3fe6d8;
+  --portal-deep: #13a89c;
+  --blue: #2f8cff;
+  --green: #43d17a;
+  --orange: #ff8a4c;
+  --purple: #9a6bff;
+  --coral: #ff5a6a;
+  --latin: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "DIN Alternate", system-ui, sans-serif;
+  --cjk: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; color: var(--text); font: 16px/1.7 var(--latin); font-family: var(--latin), var(--cjk);
+  background: var(--sky-top) linear-gradient(180deg, var(--sky-top) 0, #12123a 520px, var(--sky-low) 1100px, #120f2c 100%);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--portal); outline-offset: 3px; border-radius: 6px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* stars: a fixed backdrop, nothing moves */
+.sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .9;
+  background-image:
+    radial-gradient(1px 1px at 20px 30px, #fff9 50%, transparent 51%), radial-gradient(1px 1px at 140px 90px, #fff7 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 260px 40px, #fffc 50%, transparent 51%), radial-gradient(1px 1px at 330px 170px, #fff6 50%, transparent 51%),
+    radial-gradient(1px 1px at 80px 210px, #fff8 50%, transparent 51%), radial-gradient(1.5px 1.5px at 200px 260px, #9ff 50%, transparent 51%),
+    radial-gradient(1px 1px at 380px 280px, #fff6 50%, transparent 51%), radial-gradient(1px 1px at 300px 110px, #fff5 50%, transparent 51%);
+  background-size: 420px 320px, 530px 410px, 610px 370px, 370px 290px, 470px 530px, 690px 450px, 390px 610px, 560px 340px; }
+/* top bar */
+.top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); background: rgba(11, 14, 38, .72); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 18px; height: 60px; }
+.family { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; white-space: nowrap; }
+.family img { width: 30px; height: 30px; border-radius: 8px; background: #efe6d9; }
+.family .sep { color: var(--faint); font-weight: 400; }
+.top nav { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+.top nav a { text-decoration: none; color: var(--muted); padding: 6px 12px; border-radius: 8px; font-size: 15px; }
+.top nav a:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
+.top nav a.gh { display: inline-flex; align-items: center; gap: 6px; color: var(--text); border: 1px solid var(--line-strong); }
+
+/* nameplate: the floating name tag above players in VRChat */
+.plate { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px; border-radius: 8px; background: rgba(8, 10, 26, .82);
+  border: 1px solid var(--line); font-size: 13px; color: var(--text); white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.plate::before { content: ""; width: 4px; height: 16px; border-radius: 2px; background: var(--rank, var(--blue)); }
+.plate small { color: var(--muted); font-size: 12px; }
+
+/* hero */
+section.hero { position: relative; overflow: hidden; padding: 0; }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 32px; align-items: center; padding-top: 48px; padding-bottom: 24px; }
+.hero h1 { margin: 18px 0 14px; font-size: clamp(40px, 5.4vw, 64px); line-height: 1.08; letter-spacing: .5px; font-weight: 700; }
+.hero h1 .mio { display: block; font-size: .62em; letter-spacing: 3px; color: var(--portal); font-weight: 600; }
+.hero p.lede { margin: 0 0 28px; font-size: 18px; color: var(--muted); max-width: 30em; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn { display: inline-flex; align-items: center; gap: 10px; height: 50px; padding: 0 22px; border-radius: 25px; text-decoration: none; font-weight: 600; font-size: 16px; border: 1px solid var(--line-strong); color: var(--text); background: rgba(255, 255, 255, .04); transition: background .15s, border-color .15s; }
+.btn:hover { background: rgba(255, 255, 255, .09); border-color: rgba(150, 190, 255, .5); }
+.btn.go { background: var(--portal); color: #062521; border-color: transparent; box-shadow: 0 0 0 4px rgba(63, 230, 216, .14), 0 10px 30px rgba(63, 230, 216, .25); }
+.btn.go:hover { background: #6af0e4; }
+.btn .v { font-family: var(--latin); font-weight: 500; opacity: .75; font-size: 14px; }
+.meta { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.meta span { font-size: 13px; color: var(--muted); padding: 2px 10px; border-radius: 6px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); }
+
+/* the world behind the window: a portal over a floor grid */
+.stage { position: relative; height: 520px; perspective: 1400px; }
+.floor { position: absolute; left: -30%; right: -30%; bottom: -40px; height: 420px; transform: rotateX(74deg); transform-origin: 50% 100%;
+  background-image: linear-gradient(rgba(63, 230, 216, .28) 1px, transparent 1px), linear-gradient(90deg, rgba(63, 230, 216, .28) 1px, transparent 1px);
+  background-size: 56px 56px; -webkit-mask-image: radial-gradient(ellipse 50% 80% at 50% 70%, #000 20%, transparent 70%); mask-image: radial-gradient(ellipse 50% 80% at 50% 70%, #000 20%, transparent 70%); }
+.portal { position: absolute; left: 50%; top: 46%; width: 470px; height: 470px; translate: -50% -50%; border-radius: 50%;
+  background: radial-gradient(circle, rgba(63, 230, 216, .22) 0 52%, rgba(63, 230, 216, 0) 70%); }
+.portal::before { content: ""; position: absolute; inset: 0; border-radius: 50%; padding: 6px;
+  background: conic-gradient(from 0deg, var(--portal), var(--blue), var(--purple), var(--portal));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+  filter: drop-shadow(0 0 18px rgba(63, 230, 216, .55)); animation: spin 18s linear infinite; }
+.portal::after { content: ""; position: absolute; inset: 18px; border-radius: 50%; border: 1px dashed rgba(63, 230, 216, .35); }
+@keyframes spin { to { transform: rotate(1turn); } }
+.stage .plate.p1 { position: absolute; left: 50%; top: 4px; translate: -50% 0; --rank: var(--portal); font-size: 14px; }
+
+/* the program, drawn small */
+.app { position: absolute; left: 50%; top: 50%; width: 540px; translate: -50% -46%; transform: rotateY(-14deg) rotateX(4deg);
+  border-radius: 12px; overflow: hidden; background: #14151f; border: 1px solid rgba(255, 255, 255, .12);
+  box-shadow: 0 40px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(63, 230, 216, .15), 0 0 60px rgba(63, 230, 216, .12); font-family: var(--cjk); }
+.app .bar { height: 28px; display: flex; align-items: center; padding: 0 10px; gap: 8px; background: #191b27; border-bottom: 1px solid #2e3247; font-size: 11px; color: #c9cbe0; }
+.app .bar .wc { margin-left: auto; display: flex; gap: 14px; color: #8b8fa6; font-size: 11px; }
+.app .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #2e3247; }
+.app .head .s { flex: 1; height: 18px; border-radius: 9px; background: #0f1018; border: 1px solid #2e3247; }
+.app .head .b { height: 18px; width: 44px; border-radius: 5px; background: #282b3d; }
+.app .body { display: grid; grid-template-columns: 96px 1fr; }
+.app .side { padding: 8px; border-right: 1px solid #2e3247; display: flex; flex-direction: column; gap: 5px; font-size: 10px; color: #9a9eb5; }
+.app .side b { color: #6c7088; font-weight: 600; font-size: 9px; margin-top: 4px; }
+.app .side span { display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px; }
+.app .side span.on { background: rgba(255, 90, 106, .14); color: #eceef6; }
+.app .side i { width: 6px; height: 6px; border-radius: 50%; }
+.app .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px; }
+.app .card { border-radius: 7px; background: #1f2231; overflow: hidden; border: 1px solid #2a2e42; }
+.app .cv { height: 62px; position: relative; }
+.app .cv::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 70% 30%, rgba(255, 255, 255, .25), transparent 40%); }
+.app .t { font-size: 9.5px; font-weight: 600; color: #eceef6; padding: 5px 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app .t em { font-style: normal; background: #ff5a6a; color: #fff; border-radius: 3px; padding: 0 3px; margin-right: 3px; font-size: 8.5px; }
+.app .c { display: flex; gap: 3px; padding: 0 6px 6px; }
+.app .c span { font-size: 8px; color: #c78bff; background: rgba(199, 139, 255, .12); border-radius: 3px; padding: 0 3px; }
+.stage .plate.p2 { position: absolute; right: 0; bottom: 58px; --rank: var(--orange); }
+.stage .plate.p3 { position: absolute; left: -2%; top: 92px; --rank: var(--green); }
+
+/* sections */
+section { padding: 88px 0; }
+.sh { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 30px; }
+.sh h2 { margin: 0; font-size: 34px; line-height: 1.2; }
+.sh p { margin: 0; color: var(--muted); }
+
+/* features: tiles like the in-game quick menu */
+.qm { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.tile { position: relative; padding: 22px 22px 20px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); }
+.tile .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 14px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
+.tile h3 { margin: 0 0 6px; font-size: 18px; }
+.tile p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+
+/* steps: a real sequence */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgba(13, 16, 40, .6); }
+.step { padding: 24px 26px; display: flex; gap: 16px; align-items: flex-start; }
+.step + .step { border-left: 1px solid var(--line); }
+.step .n { font-family: var(--latin); font-size: 30px; font-weight: 700; line-height: 1; color: var(--portal); min-width: 26px; }
+.step h3 { margin: 0 0 4px; font-size: 17px; }
+.step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+/* download: two portals */
+.dl { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.gate { position: relative; padding: 30px 28px 28px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); overflow: hidden; display: flex; flex-direction: column; }
+.gate .ring { position: absolute; right: -96px; top: -110px; width: 210px; height: 210px; border-radius: 50%;
+  border: 3px solid var(--g); box-shadow: 0 0 40px color-mix(in srgb, var(--g) 45%, transparent), inset 0 0 40px color-mix(in srgb, var(--g) 30%, transparent); opacity: .7; }
+.gate .plate { align-self: flex-start; --rank: var(--g); margin-bottom: 16px; }
+.gate h3 { margin: 0 0 6px; font-size: 24px; }
+.gate p { margin: 0 0 22px; color: var(--muted); max-width: 24em; }
+.gate .row { margin-top: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.gate .size { color: var(--faint); font-size: 14px; font-family: var(--latin); }
+.dlnote { margin-top: 18px; color: var(--muted); font-size: 14.5px; display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.dlnote a { color: var(--portal); }
+#netdisk[hidden] { display: none; }
+
+/* questions */
+.qa { display: grid; gap: 10px; max-width: 820px; }
+.qa details { border: 1px solid var(--line); border-radius: 12px; background: rgba(13, 16, 40, .6); }
+.qa summary { cursor: pointer; padding: 16px 20px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 12px; }
+.qa summary::-webkit-details-marker { display: none; }
+.qa summary::after { content: "+"; margin-left: auto; color: var(--portal); font-size: 20px; line-height: 1; }
+.qa details[open] summary::after { content: "−"; }
+.qa .a { padding: 0 20px 18px; color: var(--muted); }
+.qa code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13.5px; color: var(--text); background: rgba(255, 255, 255, .07); padding: 1px 6px; border-radius: 5px; }
+
+footer { border-top: 1px solid var(--line); padding: 34px 0 48px; color: var(--faint); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; }
+footer a { color: var(--muted); text-decoration: none; }
+footer a:hover { color: var(--text); }
+footer .note { flex-basis: 100%; font-size: 13px; }
+
+@media (max-width: 960px) {
+  .hero .wrap { grid-template-columns: 1fr; min-height: 0; max-height: none; padding-bottom: 40px; }
+  .stage { height: 420px; }
+  .portal { width: 380px; height: 380px; }
+  .app { width: 440px; }
+  .qm { grid-template-columns: 1fr 1fr; }
+  .steps { grid-template-columns: 1fr; }
+  .step + .step { border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  .top nav a:not(.gh) { display: none; }
+  .family .full { display: none; }
+  .stage { height: 330px; }
+  .portal { width: 300px; height: 300px; }
+  .app { width: 330px; transform: none; translate: -50% -48%; }
+  .app .body { grid-template-columns: 1fr; }
+  .app .side { display: none; }
+  .stage .plate.p2, .stage .plate.p3 { display: none; }
+  .qm, .dl { grid-template-columns: 1fr; }
+  section { padding: 64px 0; }
+  .sh h2 { font-size: 28px; }
+  .btn { height: 46px; padding: 0 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .portal::before { animation: none; }
+}
+</style>
+</head>
+<body>
+<div class="sky" aria-hidden="true"></div>
+
+<header class="top">
+  <div class="wrap">
+    <a class="family" href="../" title="MioVRC 首页"><img src="../assets/icons/app_icon_mio.png" alt="Mio"><span class="full">MioVRC</span><span class="sep full">/</span><span>素材托管工具</span></a>
+    <nav>
+      <a href="#features">功能</a>
+      <a href="#download">下载</a>
+      <a href="#faq">常见问题</a>
+      <a class="gh" href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero" aria-labelledby="title">
+  <div class="wrap">
+    <div>
+      <span class="plate" style="--rank: var(--portal)">VRChat 改模素材管理<small>Windows</small></span>
+      <h1 id="title"><span class="mio">MioVRC</span>素材托管工具</h1>
+      <p class="lede">Booth 买的、网盘下的、解压在各个文件夹里的素材，整理成一个素材库。点一下卡片，就打开它所在的文件夹。</p>
+      <div class="actions">
+        <a class="btn go" id="heroDl" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">
+          <svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>下载<span class="v" data-ver></span></a>
+        <a class="btn" href="#features">看看能做什么</a>
+      </div>
+      <div class="meta"><span>免费</span><span>开源</span><span>Windows 10 / 11</span><span>数据只存在本机</span></div>
+    </div>
+
+    <div class="stage" aria-hidden="true">
+      <div class="floor"></div>
+      <div class="portal"></div>
+      <span class="plate p1">MioVRC素材托管工具<small data-ver></small></span>
+      <div class="app">
+        <div class="bar">MioVRC素材托管工具<span class="wc"><span>—</span><span>☐</span><span>✕</span></span></div>
+        <div class="head"><span class="s"></span><span class="b"></span><span class="b"></span></div>
+        <div class="body">
+          <div class="side">
+            <b>分类</b>
+            <span class="on">全部</span>
+            <span><i style="background:#ff7aa8"></i>衣服</span>
+            <span><i style="background:#ffb547"></i>头发</span>
+            <span><i style="background:#6fd3ff"></i>配饰</span>
+            <span><i style="background:#c78bff"></i>素体</span>
+            <b>适配素体</b>
+            <span>Lumi</span><span>Hana</span>
+          </div>
+          <div class="grid">
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff7aa8,#7b5cff)"></div><div class="t"><em>新</em>Starlight Dress</div><div class="c"><span>Lumi</span><span>Hana</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ffb547,#ff5a6a)"></div><div class="t">Twin Tail Hair</div><div class="c"><span>Hana</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#3fe6d8,#2f8cff)"></div><div class="t">Sailor Uniform</div><div class="c"><span>Lumi</span><span>+3</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#9a6bff,#2f8cff)"></div><div class="t">Night Kimono</div><div class="c"><span>Mira</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#43d17a,#3fe6d8)"></div><div class="t">Ribbon Choker</div><div class="c"><span>通用</span></div></div>
+            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff8a4c,#ffb547)"></div><div class="t">Cat Ear Hoodie</div><div class="c"><span>Lumi</span></div></div>
+          </div>
+        </div>
+      </div>
+      <span class="plate p2">已购<small>已下载</small></span>
+      <span class="plate p3">百度网盘<small>3 个文件</small></span>
+    </div>
+  </div>
+</section>
+
+<section id="features" aria-labelledby="f-title">
+  <div class="wrap">
+    <div class="sh"><h2 id="f-title">能做什么</h2><p>素材越买越多，找起来越来越难。</p></div>
+    <div class="qm">
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
+        <h3>自动整理</h3><p>扫描素材文件夹，认出 unitypackage、压缩包和解压后的文件夹，分好类，标出适配的素体。</p>
+      </div>
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M5 8h14l-1 12H6z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>
+        <h3>Booth 已购</h3><p>登录一次 Booth，列出买过的所有商品，哪些还没下载一眼就能看到，点一下打开下载页。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/></svg></div>
+        <h3>百度网盘</h3><p>记下分享链接和提取码，读出分享里有哪些文件。合集分享会按文件夹拆成一个个素材。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="10" height="10" rx="2"/><path d="M10 18h8a2 2 0 0 0 2-2V8"/></svg></div>
+        <h3>同款合并</h3><p>同一件衣服给不同素体的包、PSD 源文件，合成一张卡片。选了素体，只显示能用的那个版本。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/></svg></div>
+        <h3>工程使用</h3><p>分析你的 Unity 工程，标出哪个素材正在用、用在哪个工程里，没用到的也能找出来。</p>
+      </div>
+      <div class="tile" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg></div>
+        <h3>跟上更新</h3><p>新下载的素材放进文件夹会自动收进来；网盘分享、Booth 商品页有变化时会提示。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="s-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="s-title">开始使用</h2></div>
+    <div class="steps">
+      <div class="step"><span class="n">1</span><div><h3>下载并安装</h3><p>安装版默认装到 C 盘以外的磁盘，不需要管理员权限。</p></div></div>
+      <div class="step"><span class="n">2</span><div><h3>选择文件夹</h3><p>选放素材的文件夹，比如 <span style="font-family:Consolas,monospace">BaiduNetdiskDownload</span>，有 Unity 工程也一起选上。</p></div></div>
+      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后每次打开都会在后台更新。</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="download" aria-labelledby="d-title" style="padding-top:24px">
+  <div class="wrap">
+    <div class="sh"><h2 id="d-title">下载</h2><p id="relinfo">最新版本见 GitHub 发布页</p></div>
+    <div class="dl">
+      <div class="gate" style="--g: var(--portal)">
+        <span class="ring" aria-hidden="true"></span>
+        <span class="plate">安装版<small data-ver></small></span>
+        <h3>推荐</h3>
+        <p>有桌面快捷方式，可以在软件里一键更新。卸载时可以选择保留数据。</p>
+        <div class="row"><a class="btn go" id="dlSetup" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">下载安装版</a><span class="size" id="szSetup"></span></div>
+      </div>
+      <div class="gate" style="--g: var(--purple)">
+        <span class="ring" aria-hidden="true"></span>
+        <span class="plate">便携版<small data-ver></small></span>
+        <h3>解压就能用</h3>
+        <p>适合放在 U 盘或固定的工具文件夹里。数据保存在程序旁边，整个文件夹带走就行。</p>
+        <div class="row"><a class="btn" id="dlZip" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">下载便携版</a><span class="size" id="szZip"></span></div>
+      </div>
+    </div>
+    <div class="dlnote">
+      <span>需要 Windows 10 / 11（64 位）</span>
+      <span>用过「VRC素材库」的，在软件里点更新即可，数据会保留</span>
+      <a href="https://github.com/CokoIya/MioVRC_AssetManager/releases" target="_blank" rel="noopener">全部版本和更新内容</a>
+      <a id="netdisk" hidden target="_blank" rel="noopener">GitHub 下载慢？用百度网盘下载</a>
+    </div>
+  </div>
+</section>
+
+<section id="faq" aria-labelledby="q-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="q-title">常见问题</h2></div>
+    <div class="qa">
+      <details><summary>打开时 Windows 提示「已保护你的电脑」</summary>
+        <div class="a">点「更多信息」，再点「仍要运行」。程序没有购买数字签名，所以会有这个提示。</div></details>
+      <details><summary>素材库的数据存在哪里？</summary>
+        <div class="a">安装版在 <code>%LOCALAPPDATA%\MioVRC_AssetManager</code>，便携版在程序所在的文件夹。只保存在本机，不会上传。</div></details>
+      <details><summary>Booth 登录安全吗？</summary>
+        <div class="a">同步已购时会打开一个单独的浏览器窗口，登录信息只保存在这个窗口里，不读取你平时用的浏览器，也不经过任何服务器。</div></details>
+      <details><summary>遇到问题怎么反馈？</summary>
+        <div class="a">软件右下角有「反馈和建议」，写完直接发给作者。也可以在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MioVRC素材托管工具 by Coko_Iya</span>
+    <a href="../">Mio 实时翻译</a>
+    <a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a>
+    <span class="note">本工具与 VRChat、BOOTH、pixiv、百度网盘没有关联。</span>
+  </div>
+</footer>
+
+<script>
+// Optional: a Baidu netdisk link for players who can't download from GitHub ("" hides the link).
+const NETDISK = "";
+
+(function () {
+  const REPO = "CokoIya/MioVRC_AssetManager";
+  if (NETDISK) { const n = document.getElementById("netdisk"); n.href = NETDISK; n.hidden = false; }
+  const mb = n => (n / 1048576).toFixed(1) + " MB";
+  const ctl = "AbortController" in window ? new AbortController() : null;
+  if (ctl) setTimeout(() => ctl.abort(), 8000);
+  // the newest release: version and direct download links (the release page stays the fallback)
+  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { signal: ctl ? ctl.signal : undefined, headers: { Accept: "application/vnd.github+json" } })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(rel => {
+      const ver = (rel.tag_name || "").replace(/^v/i, "");
+      if (ver) document.querySelectorAll("[data-ver]").forEach(el => { el.textContent = (el.tagName === "SMALL" ? "" : " ") + "v" + ver; });
+      const pick = (ext, word) => (rel.assets || []).filter(a => a.name.toLowerCase().endsWith(ext)).sort((a, b) => (b.name.toLowerCase().includes(word)) - (a.name.toLowerCase().includes(word)))[0];
+      const setup = pick(".exe", "setup"), zip = pick(".zip", "portable");
+      if (setup) { document.getElementById("dlSetup").href = setup.browser_download_url; document.getElementById("heroDl").href = setup.browser_download_url; document.getElementById("szSetup").textContent = mb(setup.size); }
+      if (zip) { document.getElementById("dlZip").href = zip.browser_download_url; document.getElementById("szZip").textContent = mb(zip.size); }
+      const d = rel.published_at ? new Date(rel.published_at) : null;
+      if (ver) document.getElementById("relinfo").textContent = "v" + ver + (d ? "，" + (d.getMonth() + 1) + " 月 " + d.getDate() + " 日发布" : "");
+    })
+    .catch(() => {});
+})();
+</script>
+</body>
+</html>
