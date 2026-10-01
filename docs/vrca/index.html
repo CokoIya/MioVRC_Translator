@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MioVRC素材托管工具</title>
-<meta name="description" content="VRChat 改模素材工具：在软件里逛 Booth 和闲鱼、下单、和卖家聊天，买到的素材一键下载、自动解压进素材库；电脑里和百度网盘里的素材也整理在一起。Windows 免费使用。">
+<meta name="description" content="VRChat 改模素材工具：在软件里逛 Booth 和闲鱼、下单、和卖家聊天，买到的素材和百度网盘分享直接下载、自动解压进素材库，再一键导入 Unity 工程。Windows 免费使用。">
 <meta property="og:title" content="MioVRC素材托管工具">
-<meta property="og:description" content="找素材、买素材、管素材，都在一个软件里：Booth 和闲鱼内置，买到的直接下载进素材库。">
+<meta property="og:description" content="找素材、买素材、下载、导入工程，都在一个软件里：Booth 和闲鱼内置，网盘分享直接下载，一键导入 Unity。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://miovrc.com/vrca/">
 <meta name="theme-color" content="#0d1029">
@@ -254,7 +254,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <div>
       <span class="plate" style="--rank: var(--portal)">VRChat 改模素材工具<small>Windows</small></span>
       <h1 id="title"><span class="mio">MioVRC</span>素材托管工具</h1>
-      <p class="lede">在软件里逛 Booth 和闲鱼，下单、和卖家聊天；买到的素材一键下载，自动解压进素材库。电脑里和网盘里已有的，也都整理在这里。</p>
+      <p class="lede">在软件里逛 Booth 和闲鱼、下单、和卖家聊天；买到的素材和网盘分享直接下载、自动解压，一键导入 Unity 工程。</p>
       <div class="actions">
         <a class="btn go" id="heroDl" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">
           <svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>下载<span class="v" data-ver></span></a>
@@ -290,7 +290,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
         </div>
       </div>
       <span class="plate p2">已购<small>下载中 68%</small></span>
-      <span class="plate p3">新素材<small>已自动入库</small></span>
+      <span class="plate p3">一键导入<small>已进 Unity 工程</small></span>
     </div>
   </div>
 </section>
@@ -301,8 +301,8 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <div class="steps four">
       <div class="step"><span class="n">1</span><div><h3>找</h3><p>Booth 页点选分类、素体、风格标签，可以多选，不用猜日文关键词；闲鱼直接搜。买过的、素材库里已有的会标出来。</p></div></div>
       <div class="step"><span class="n">2</span><div><h3>买</h3><p>商品页、购物车、和卖家聊天都在软件里，登录保存在本机，不用切到浏览器。</p></div></div>
-      <div class="step"><span class="n">3</span><div><h3>下载</h3><p>Booth 已购点一下就下载，zip 自动解压进素材文件夹；闲鱼卖家发来的网盘分享，选中就能收进来。</p></div></div>
-      <div class="step"><span class="n">4</span><div><h3>用</h3><p>按分类、素体筛选，点卡片打开所在文件夹；标出哪些在 Unity 工程里用到，作者更新了会提醒。</p></div></div>
+      <div class="step"><span class="n">3</span><div><h3>下载</h3><p>Booth 已购点一下就下载；闲鱼卖家发来的网盘分享收进来，登录百度网盘后在软件里直接下载。压缩包自动解压，下完自动入库。</p></div></div>
+      <div class="step"><span class="n">4</span><div><h3>用</h3><p>选好 Unity 工程点「一键导入」：PSD 包、分卷一起解压，unitypackage 直接进工程。哪些在用、作者更新了，都会标出来。</p></div></div>
     </div>
   </div>
 </section>
@@ -321,19 +321,19 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       </div>
       <div class="tile" style="--c: var(--orange)">
         <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg></div>
-        <h3>已购一键下载</h3><p>同步 Booth 已购，没下载的点一下就下载。zip 自动解压，日文文件名不乱码，下完自动入库。</p>
+        <h3>已购一键下载</h3><p>同步 Booth 已购，没下载的点一下就下载。压缩包自动解压，日文文件名不乱码，下完自动入库。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/><path d="M12 10v6m0 0-2.5-2.5M12 16l2.5-2.5"/></svg></div>
+        <h3>网盘直接下载</h3><p>收进来的百度网盘分享，登录后在软件里直接下载、解压、入库，不用开网盘客户端。分享里东西多，可以只勾要的那几个；断了接着下。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></div>
+        <h3>一键导入工程</h3><p>选好 Unity 工程点一下：PSD 包、分卷、带密码的压缩包一起解压，unitypackage 直接写进 Assets，已有的就地更新。</p>
       </div>
       <div class="tile" style="--c: var(--portal)">
         <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
-        <h3>自动整理</h3><p>认出 unitypackage、压缩包和解压后的文件夹，分好类、标出适配素体，同款合并成一张卡片。新放进来的会自动收进来。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/></svg></div>
-        <h3>百度网盘</h3><p>记下分享链接和提取码，读出分享里有哪些文件，合集按文件夹拆开。分享里加了新文件会提醒。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/></svg></div>
-        <h3>工程使用</h3><p>分析你的 Unity 工程，标出哪个素材正在用、用在哪个工程里，没用到的也能找出来。</p>
+        <h3>自动整理</h3><p>认出 unitypackage、压缩包和解压后的文件夹，分好类、标出适配素体，同款合并成一张卡片；还能看出哪个素材用在哪个工程里。「工程」页一个工程一张卡片，点一下用对应版本的 Unity 打开。</p>
       </div>
     </div>
   </div>
@@ -345,7 +345,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <div class="steps">
       <div class="step"><span class="n">1</span><div><h3>下载并安装</h3><p>安装版默认装到 C 盘以外的磁盘，不需要管理员权限。</p></div></div>
       <div class="step"><span class="n">2</span><div><h3>选择文件夹</h3><p>选放素材的文件夹，比如 <span style="font-family:Consolas,monospace">BaiduNetdiskDownload</span>，有 Unity 工程也一起选上。</p></div></div>
-      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后去「Booth」「闲鱼」页找新素材，买到的直接下载进来。</p></div></div>
+      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后去「Booth」「闲鱼」页找新素材，买到的直接下载进来，再一键导入工程。</p></div></div>
     </div>
   </div>
 </section>
@@ -388,8 +388,18 @@ footer .note { flex-basis: 100%; font-size: 13px; }
         <div class="a">安装版在 <code>%LOCALAPPDATA%\MioVRC_AssetManager</code>，便携版在程序所在的文件夹。只保存在本机，不会上传。</div></details>
       <details><summary>买东西、聊天会跳到浏览器吗？</summary>
         <div class="a">不会。Booth 和闲鱼的页面都在软件里打开，登录、购买、和卖家聊天、下载都在软件里完成。电脑上没有 WebView2 时，页面会开在一个单独的 Edge 或 Chrome 窗口里。</div></details>
-      <details><summary>Booth、闲鱼的登录安全吗？</summary>
-        <div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不读取你平时用的浏览器，也不经过任何服务器。下载已购用的登录另外加密保存，只有你的 Windows 账户能读取。</div></details>
+      <details><summary>一键导入要先关掉 Unity 吗？</summary>
+        <div class="a">不用。导入是把文件直接写进工程的 Assets 文件夹，Unity 开着的话切回去就会刷新；没开就等下次打开工程。工程里已有的资源会就地更新，不会多出一份。rar、7z 和分卷压缩包用你电脑上默认的解压软件来解（7-Zip、Bandizip、WinRAR、好压等都行），普通 zip 不需要装。</div></details>
+      <details><summary>下载的素材放在哪里？</summary>
+        <div class="a">没改过设置的话，放在 C 盘以外剩余空间最大的那个盘的 <code>MioVRCdownload</code> 文件夹，优先用你素材文件夹所在的盘；只有 C 盘时放在第一个素材文件夹里。设置 →「下载位置」可以改成别的文件夹。</div></details>
+      <details><summary>网盘分享里东西很多，能只下一部分吗？</summary>
+        <div class="a">能。在素材详情的「网盘内容」里勾选要的文件或文件夹，点「下载所选」，只转存、下载勾选的部分。以后想要别的，再勾选接着下，会放进同一个文件夹。</div></details>
+      <details><summary>工程卡片的「开启封面」会往工程里放什么？</summary>
+        <div class="a">一个只在 Unity 编辑器里运行的小插件（<code>Packages/com.miovrc.projectcard</code>）。打开工程、保存场景时，它给场景里的模型拍一张正面照，存到工程的 <code>UserSettings/MioVRCA</code>，旧的自动删掉。它不改场景，也不会跟模型一起上传；点「关闭封面」就会连照片一起删掉。工程里的插件管理请继续用 VCC 或 ALCOM。</div></details>
+      <details><summary>百度网盘下载需要会员吗？</summary>
+        <div class="a">普通账号也能下，但百度对非超级会员限速，大文件会很慢；开通百度网盘超级会员后会快很多，软件不会绕过限速。下载时会先把分享存进你网盘的「MioVRCA」文件夹再下载到电脑，网盘里的这份不会自动删除，不需要可以自己删。</div></details>
+      <details><summary>Booth、闲鱼、百度网盘的登录安全吗？</summary>
+        <div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不读取你平时用的浏览器，也不经过任何服务器。登录会长期保留，重启、更新软件后不用重新登录。下载用的登录另外加密保存，只有你的 Windows 账户能读取；在设置里可以随时退出、更换账号。</div></details>
       <details><summary>遇到问题怎么反馈？</summary>
         <div class="a">软件右下角有「反馈和建议」，写完直接发给作者。也可以在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
     </div>
