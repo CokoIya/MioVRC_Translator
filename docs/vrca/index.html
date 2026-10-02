@@ -3,10 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MioVRC素材托管工具</title>
-<meta name="description" content="VRChat 改模素材工具：在软件里逛 Booth 和闲鱼、下单、和卖家聊天，买到的素材和百度网盘分享直接下载、自动解压进素材库，再一键导入 Unity 工程。Windows 免费使用。">
-<meta property="og:title" content="MioVRC素材托管工具">
-<meta property="og:description" content="找素材、买素材、下载、导入工程，都在一个软件里：Booth 和闲鱼内置，网盘分享直接下载，一键导入 Unity。">
+<title>MioVRCA - VRChat 改模素材管理工具｜Booth、网盘素材一键导入 Unity</title>
+<meta name="description" content="MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，还能一键创建 VRChat 基础工程。">
+<meta name="keywords" content="MioVRCA, miovrca, MioVRC, VRChat 素材管理, VRChat 改模, Booth 素材, VRChat 模型, Unity 一键导入, Modular Avatar, MioVRC_AssetManager">
+<link rel="canonical" href="https://miovrc.com/vrca/">
+<meta property="og:site_name" content="MioVRC">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://miovrc.com/assets/icons/app_icon_mio.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="MioVRCA - VRChat 改模素材管理工具">
+<meta name="twitter:description" content="找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Windows 免费开源。">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "MioVRCA", "alternateName": ["MioVRC 素材托管工具", "MioVRC_AssetManager", "MioVRC AssetManager", "VRC素材库"], "description": "MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，还能一键创建 VRChat 基础工程。", "url": "https://miovrc.com/vrca/", "image": "https://miovrc.com/assets/icons/app_icon_mio.png", "applicationCategory": "UtilitiesApplication", "operatingSystem": "Windows 10, Windows 11", "softwareVersion": "1.7.2", "inLanguage": "zh-CN", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "CNY"}, "downloadUrl": "https://github.com/CokoIya/MioVRC_AssetManager/releases/latest", "codeRepository": "https://github.com/CokoIya/MioVRC_AssetManager", "author": {"@type": "Person", "name": "Coko_Iya", "url": "https://github.com/CokoIya"}}</script>
+<meta property="og:title" content="MioVRCA - VRChat 改模素材管理工具">
+<meta property="og:description" content="MioVRCA：找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Booth 和闲鱼内置，网盘分享直接下载，一键导入 Unity。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://miovrc.com/vrca/">
 <meta name="theme-color" content="#0d1029">
@@ -150,6 +159,7 @@ section { padding: 88px 0; }
 .qm { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .tile { position: relative; padding: 22px 22px 20px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); }
 .tile .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 14px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
+.tile.wide { grid-column: 1 / -1; }
 .tile h3 { margin: 0 0 6px; font-size: 18px; }
 .tile p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
 
@@ -237,7 +247,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
 
 <header class="top">
   <div class="wrap">
-    <a class="family" href="../" title="MioVRC 首页"><img src="../assets/icons/app_icon_mio.png" alt="Mio"><span class="full">MioVRC</span><span class="sep full">/</span><span>素材托管工具</span></a>
+    <a class="family" href="../" title="MioVRC 首页"><img src="../assets/icons/app_icon_mio.png" alt="Mio"><span class="full">MioVRC</span><span class="sep full">/</span><span>MioVRCA</span></a>
     <nav>
       <a href="#flow">流程</a>
       <a href="#features">功能</a>
@@ -252,9 +262,9 @@ footer .note { flex-basis: 100%; font-size: 13px; }
 <section class="hero" aria-labelledby="title">
   <div class="wrap">
     <div>
-      <span class="plate" style="--rank: var(--portal)">VRChat 改模素材工具<small>Windows</small></span>
-      <h1 id="title"><span class="mio">MioVRC</span>素材托管工具</h1>
-      <p class="lede">在软件里逛 Booth 和闲鱼、下单、和卖家聊天；买到的素材和网盘分享直接下载、自动解压，一键导入 Unity 工程。</p>
+      <span class="plate" style="--rank: var(--portal)">免费开源<small>Windows</small></span>
+      <h1 id="title"><span class="mio">VRChat 素材托管工具</span>MioVRCA</h1>
+      <p class="lede">MioVRCA 是给 VRChat 改模玩家用的素材管理工具。在软件里逛 Booth 和闲鱼、下单、和卖家聊天；买到的素材和网盘分享直接下载、自动解压，一键导入 Unity 工程。</p>
       <div class="actions">
         <a class="btn go" id="heroDl" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">
           <svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>下载<span class="v" data-ver></span></a>
@@ -266,9 +276,9 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <div class="stage" aria-hidden="true">
       <div class="floor"></div>
       <div class="portal"></div>
-      <span class="plate p1">MioVRC素材托管工具<small data-ver></small></span>
+      <span class="plate p1">MioVRCA<small data-ver></small></span>
       <div class="app">
-        <div class="bar">MioVRC素材托管工具<span class="wc"><span>—</span><span>☐</span><span>✕</span></span></div>
+        <div class="bar">MioVRCA<span class="wc"><span>—</span><span>☐</span><span>✕</span></span></div>
         <div class="head"><span class="tabs"><span>素材库</span><span class="on">Booth</span><span>闲鱼</span></span><span class="s"></span><span class="b"></span></div>
         <div class="body">
           <div class="side">
@@ -302,7 +312,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       <div class="step"><span class="n">1</span><div><h3>找</h3><p>Booth 页点选分类、素体、风格标签，可以多选，不用猜日文关键词；闲鱼直接搜。买过的、素材库里已有的会标出来。</p></div></div>
       <div class="step"><span class="n">2</span><div><h3>买</h3><p>商品页、购物车、和卖家聊天都在软件里，登录保存在本机，不用切到浏览器。</p></div></div>
       <div class="step"><span class="n">3</span><div><h3>下载</h3><p>Booth 已购点一下就下载；闲鱼卖家发来的网盘分享收进来，登录百度网盘后在软件里直接下载。压缩包自动解压，下完自动入库。</p></div></div>
-      <div class="step"><span class="n">4</span><div><h3>用</h3><p>选好 Unity 工程点「一键导入」：PSD 包、分卷一起解压，unitypackage 直接进工程。哪些在用、作者更新了，都会标出来。</p></div></div>
+      <div class="step"><span class="n">4</span><div><h3>用</h3><p>选好 Unity 工程点「一键导入」：PSD 包、分卷一起解压，unitypackage 直接进工程，再到「流水线」把衣服、头发、道具装到模型上、做好菜单。没有工程的话一键建一个。哪些在用、作者更新了，都会标出来。</p></div></div>
     </div>
   </div>
 </section>
@@ -334,6 +344,14 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       <div class="tile" style="--c: var(--portal)">
         <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
         <h3>自动整理</h3><p>认出 unitypackage、压缩包和解压后的文件夹，分好类、标出适配素体，同款合并成一张卡片；还能看出哪个素材用在哪个工程里。「工程」页一个工程一张卡片，点一下用对应版本的 Unity 打开。</p>
+      </div>
+      <div class="tile wide" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></svg></div>
+        <h3>流水线：装素材、做菜单</h3><p>工程里导入过的素材自动列出来，勾上要装的，衣服、头发、配饰、道具各按各的方式装到模型上，再生成菜单开关和图标。可以用你自己的 AI 账号（DeepSeek、ChatGPT 兼容、Claude 兼容），也可以不用 AI。</p>
+      </div>
+      <div class="tile wide" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="14" width="18" height="5" rx="2.5"/><circle cx="6" cy="16.5" r="1"/><circle cx="12" cy="16.5" r="1"/><circle cx="18" cy="16.5" r="1"/><rect x="6" y="6" width="5" height="6" rx="1"/><rect x="13" y="6" width="5" height="6" rx="1"/></svg></div>
+        <h3>一键创建基础工程</h3><p>起个名字，软件就建好 Unity 2022.3.22f1 的 VRChat 头像工程，VRChat SDK、Modular Avatar、lilToon、Avatar Optimizer、Gesture Manager、VRCFury 一次装齐，还能顺手把素材库里的素体导进去。新工程直接出现在 ALCOM / VCC 的列表里。</p>
       </div>
     </div>
   </div>
@@ -396,6 +414,8 @@ footer .note { flex-basis: 100%; font-size: 13px; }
         <div class="a">能。在素材详情的「网盘内容」里勾选要的文件或文件夹，点「下载所选」，只转存、下载勾选的部分。以后想要别的，再勾选接着下，会放进同一个文件夹。</div></details>
       <details><summary>工程卡片的「开启封面」会往工程里放什么？</summary>
         <div class="a">一个只在 Unity 编辑器里运行的小插件（<code>Packages/com.miovrc.projectcard</code>）。打开工程、保存场景时，它给场景里的模型拍一张正面照，存到工程的 <code>UserSettings/MioVRCA</code>，旧的自动删掉。它不改场景，也不会跟模型一起上传；点「关闭封面」就会连照片一起删掉。工程里的插件管理请继续用 VCC 或 ALCOM。</div></details>
+      <details><summary>流水线要花钱吗？会改坏我的工程吗？</summary>
+        <div class="a">软件本身免费。流水线不用 AI 也能跑（按网格名字分组）；用 AI 时用的是你自己的 AI 账号（DeepSeek、ChatGPT 兼容或 Claude 兼容的服务），费用由服务商按用量收；API Key 加密保存在你的电脑上，只发给你填的接口地址。AI 的改动都能在 Unity 里按 Ctrl+Z 撤销，软件不会替你保存场景；会删除东西、保存场景的操作要你点「允许」才执行。它会往工程的 <code>Packages</code> 里放两个只在编辑器里运行的插件（流水线插件和开源的 UnitySkills），点「移除」就会删掉。穿戴和菜单需要工程里装着 VRChat SDK 和 Modular Avatar。</div></details>
       <details><summary>百度网盘下载需要会员吗？</summary>
         <div class="a">普通账号也能下，但百度对非超级会员限速，大文件会很慢；开通百度网盘超级会员后会快很多，软件不会绕过限速。下载时会先把分享存进你网盘的「MioVRCA」文件夹再下载到电脑，网盘里的这份不会自动删除，不需要可以自己删。</div></details>
       <details><summary>Booth、闲鱼、百度网盘的登录安全吗？</summary>
@@ -409,7 +429,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
 
 <footer>
   <div class="wrap">
-    <span>MioVRC素材托管工具 by Coko_Iya</span>
+    <span>MioVRCA by Coko_Iya</span>
     <a href="../">Mio 实时翻译</a>
     <a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a>
     <span class="note">本工具与 VRChat、BOOTH、pixiv、闲鱼、百度网盘没有关联。</span>
