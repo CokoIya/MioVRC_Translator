@@ -1,5 +1,12 @@
 # Mio RealTime Translator | VRChat / VRC 实时翻译工具
 
+## v1.5.0 源码与发行包说明
+
+本仓库从 v1.5.0 起提供可独立运行的非 VR 桌面版源码，保留 ASR、翻译、TTS、VRChat OSC/Chatbox、反向翻译及桌面悬浮字幕。SteamVR 头显界面、手柄手势、取景/OCR 翻译和扫码等 VR 实现不包含在当前源码树中，完整实现另行维护。既有公开提交历史保留。
+
+官网下载和 GitHub Releases 中的官方 v1.5.0 安装包包含 VR 功能，因此不等同于从本公开源码构建的桌面版。本仓库源码继续采用原有 GPLv3-or-later 许可；该许可说明不表示未包含在此仓库中的 VR 实现已开源。
+
+
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./docs/README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./docs/README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./docs/README.en.md)

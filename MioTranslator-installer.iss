@@ -4,15 +4,17 @@
 ; A test build (build_beta.ps1) passes /DAppVersion and /DAppNumericVersion;
 ; a release takes the values below.
 #ifndef AppVersion
-#define AppVersion "v1.4.1"
+#define AppVersion "v1.5.0"
 #endif
 #ifndef AppNumericVersion
-#define AppNumericVersion "1.4.1"
+#define AppNumericVersion "1.5.0"
 #endif
 #define AppPublisher "みお_Mio"
 #define AppURL "https://github.com/CokoIya/MioVRC_Translator"
 #define AppExeName "MioTranslator.exe"
+#ifndef SourceDir
 #define SourceDir "dist\MioTranslator"
+#endif
 
 [Setup]
 AppId={{A3F2C1B4-9E7D-4F6A-8C3E-1D5B0A2F9C8E}

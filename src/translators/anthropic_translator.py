@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import httpx
+import json
 
 import logging
 import math
@@ -17,6 +18,7 @@ from .base import (
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
+from src.utils.model_family import model_family_id
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.provider_diagnostics import (
     provider_endpoint_diagnostics,
@@ -28,6 +30,9 @@ from src.utils.secure_http import validate_api_base_url
 
 
 ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S = 60.0
+# Anthropic's models endpoint pages at most 1000 entries per request.
+_MODEL_LIST_PAGE_SIZE = 1000
+_MODEL_LIST_MAX_PAGES = 10
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +67,35 @@ def normalize_anthropic_base_url(base_url: str) -> str:
 
 ANTHROPIC_OFFICIAL_HOST = "api.anthropic.com"
 # Thinking cannot be switched off on these; they run at low effort instead.
-_ALWAYS_THINKING_MODEL_PREFIXES = ("claude-opus-5-5", "claude-fable-", "claude-mythos-")
+# The OpenAI-protocol relay path reads the same table.
+ALWAYS_THINKING_CLAUDE_PREFIXES = ("claude-opus-5-5", "claude-fable-", "claude-mythos-")
 # Room for a short thought plus the subtitle on the always-thinking models.
-_ALWAYS_THINKING_MIN_MAX_TOKENS = 2048
+ALWAYS_THINKING_MIN_MAX_TOKENS = 2048
+# A rejected thinking switch is a 400/422 whose message names the setting.
+# Rate limits, auth failures and server errors never step the ladder down,
+# even when the model id they echo contains "thinking".
+_THINKING_REJECTION_STATUSES = frozenset({400, 422})
+_THINKING_REJECTION_MARKERS = (
+    "thinking.type",
+    "thinking type",
+    "between_tools",
+    "adaptive",
+    "cannot be disabled",
+)
+_ERROR_CODE_RE = re.compile(r"\berror code:\s*(\d{3})\b", re.IGNORECASE)
+# Claude Sonnet 5.5 rejects ``thinking: disabled``; its lowest setting is
+# ``between_tools`` (no up-front thinking, and a translation uses no tools).
+_BETWEEN_TOOLS_THINKING_MODEL_PREFIXES = ("claude-sonnet-5-5",)
 # Think by default but accept ``thinking: disabled`` (at the default effort).
-_THINKING_DEFAULT_ON_MODEL_PREFIXES = ("claude-opus-5", "claude-sonnet-5")
+_THINKING_DEFAULT_ON_MODEL_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-haiku-5")
+# Non-Claude families a relay serves over the Anthropic protocol. DeepSeek,
+# GLM and Kimi take the same ``thinking`` switch in the Anthropic format.
+_RELAY_THINKING_OFF_PREFIXES = ("deepseek", "glm-", "kimi-")
+# GLM-5.3 cannot stop thinking: no switch, low effort and room for the reply.
+_RELAY_LOW_EFFORT_PREFIXES = ("glm-5.3",)
+# Kimi K3 and the Kimi coding models always think and take no switch at all;
+# they get room for the reply only.
+_RELAY_ALWAYS_THINKING_RE = re.compile(r"^kimi-k3|^kimi-.*-code")
 # With thinking switched off these models occasionally echo internal tags;
 # this is the wording Anthropic recommends against it.
 _NO_INTERNAL_TAGS_INSTRUCTION = (
@@ -94,6 +123,29 @@ def _strip_internal_tags(text: str) -> str:
     cleaned = _INTERNAL_TAG_BLOCK_RE.sub("", text)
     cleaned = _INTERNAL_TAG_RE.sub("", cleaned)
     return cleaned.strip()
+
+
+def provider_error_status(exc: BaseException) -> int | None:
+    """HTTP status of a provider SDK error, or None when it is not an HTTP error.
+
+    Reads ``status_code`` (SDK ``APIStatusError``), then ``response.status_code``,
+    then the "Error code: N" prefix both SDKs put in front of the message.
+    """
+
+    for candidate in (
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(candidate, bool):
+            continue
+        try:
+            status = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    match = _ERROR_CODE_RE.search(str(exc or ""))
+    return int(match.group(1)) if match else None
 
 
 class AnthropicTranslator(BaseTranslator):
@@ -196,6 +248,7 @@ class AnthropicTranslator(BaseTranslator):
             == ANTHROPIC_OFFICIAL_HOST
         )
         self._max_output_tokens = max(int(max_output_tokens), 32)
+        self._thinking_mode_override = ""
         self._streaming_enabled = bool(streaming)
         self._streaming_supported = True
         self._last_response_summary = ""
@@ -257,6 +310,55 @@ class AnthropicTranslator(BaseTranslator):
                 result.error_type or "unknown",
             )
         return result.succeeded
+
+    def list_models(self, *, timeout_s: float = 12.0) -> list:
+        """Return the Claude models the key can use (``GET /v1/models``).
+
+        Follows Anthropic's pagination (``has_more`` and ``last_id`` sent back
+        as ``after_id``) for at most ``_MODEL_LIST_MAX_PAGES`` pages. A relay
+        that ignores ``after_id`` and repeats a page ends the walk. The raw
+        list is not truncated here: the offered list is capped after filtering.
+        """
+
+        from .model_listing import parse_model_list_payload
+
+        timeout = max(1.0, float(timeout_s))
+
+        def request():
+            client = self._client.with_options(timeout=timeout, max_retries=0)
+            models: list = []
+            seen: set[str] = set()
+            after_id: str | None = None
+            for _page in range(_MODEL_LIST_MAX_PAGES):
+                params: dict[str, object] = {"limit": _MODEL_LIST_PAGE_SIZE}
+                if after_id:
+                    params["after_id"] = after_id
+                raw = client.models.with_raw_response.list(**params)
+                http_response = getattr(raw, "http_response", None)
+                content = getattr(http_response, "content", b"") or b""
+                page_models = parse_model_list_payload(content)
+                added = 0
+                for listed in page_models:
+                    if listed.id not in seen:
+                        seen.add(listed.id)
+                        models.append(listed)
+                        added += 1
+                try:
+                    body = json.loads(content.decode("utf-8-sig") or "{}")
+                except (UnicodeDecodeError, ValueError):
+                    body = {}
+                has_more = bool(isinstance(body, dict) and body.get("has_more"))
+                next_after = str(body.get("last_id") or "") if isinstance(body, dict) else ""
+                if not has_more or not next_after or next_after == after_id or not added:
+                    break
+                after_id = next_after
+            return models
+
+        return self._run_with_wall_timeout(
+            request,
+            timeout_s=timeout + 2.0,
+            operation_name="model list request",
+        )
 
     def _raise_if_wall_timeout(self, started_at: float) -> None:
         wall_timeout = getattr(
@@ -328,11 +430,87 @@ class AnthropicTranslator(BaseTranslator):
         return str(getattr(event, "text", "") or "")
 
     def _message_request(self, kwargs: dict) -> tuple[str, object]:
+        def run() -> tuple[str, object]:
+            current = dict(kwargs)
+            stepped_mode = ""
+            for _attempt in range(2):
+                try:
+                    result = self._message_request_unbounded(current)
+                except Exception as exc:
+                    step = self._thinking_fallback_kwargs(current, exc)
+                    if step is None:
+                        raise
+                    current, stepped_mode = step
+                    continue
+                self._remember_thinking_mode(stepped_mode)
+                return result
+            result = self._message_request_unbounded(current)
+            self._remember_thinking_mode(stepped_mode)
+            return result
+
         return self._run_with_wall_timeout(
-            lambda: self._message_request_unbounded(kwargs),
+            run,
             timeout_s=getattr(self, "_wall_timeout_s", None),
             operation_name="Anthropic-compatible request",
         )
+
+    def _remember_thinking_mode(self, mode: str) -> None:
+        """Keep a stepped-down thinking switch once a request with it succeeded."""
+
+        if mode:
+            self._thinking_mode_override = mode
+
+    def _thinking_fallback_kwargs(
+        self,
+        kwargs: dict,
+        exc: Exception,
+    ) -> tuple[dict, str] | None:
+        """Step down the thinking switch when a model rejects the one sent.
+
+        Model lists come from the provider, so a model newer than this code may
+        not accept ``thinking: disabled``. Try ``between_tools`` next, then let
+        it think at low effort with room for the reply. Only a 400/422 that
+        names the thinking setting counts as a rejection. Returns the adjusted
+        request and the mode it uses; the caller keeps the mode only after a
+        request with it succeeds.
+        """
+
+        if provider_error_status(exc) not in _THINKING_REJECTION_STATUSES:
+            return None
+        message = str(exc or "").lower()
+        if not any(marker in message for marker in _THINKING_REJECTION_MARKERS):
+            return None
+        thinking = kwargs.get("thinking")
+        thinking_type = thinking.get("type") if isinstance(thinking, dict) else None
+        adjusted = dict(kwargs)
+        if thinking_type == "disabled":
+            adjusted["thinking"] = {"type": "between_tools"}
+            output_config = dict(adjusted.get("output_config") or {})
+            output_config.setdefault("effort", "low")
+            adjusted["output_config"] = output_config
+            mode = "between_tools"
+        elif thinking_type == "between_tools":
+            adjusted.pop("thinking", None)
+            output_config = dict(adjusted.get("output_config") or {})
+            output_config["effort"] = "low"
+            adjusted["output_config"] = output_config
+            adjusted["max_tokens"] = max(
+                int(adjusted.get("max_tokens") or 0),
+                ALWAYS_THINKING_MIN_MAX_TOKENS,
+            )
+            mode = "adaptive_low"
+        else:
+            return None
+        logger.warning(
+            "Anthropic-compatible provider rejected thinking=%s; retrying with %s "
+            "(model=%s endpoint=%s endpoint_id=%s)",
+            thinking_type,
+            (adjusted.get("thinking") or {}).get("type", "adaptive"),
+            self.model,
+            self._log_endpoint,
+            self._log_endpoint_id,
+        )
+        return adjusted, mode
 
     def _message_request_unbounded(self, kwargs: dict) -> tuple[str, object]:
         request_started = time.perf_counter()
@@ -869,17 +1047,41 @@ class AnthropicTranslator(BaseTranslator):
         safety classifiers declined on the model Anthropic recommends for that
         category instead of losing the sentence. Relays are left alone: they may
         not know the parameter.
+
+        A relay may also serve DeepSeek, GLM and Kimi over this protocol; they
+        get their vendor's switch (``_relay_vendor_thinking``). A rejected
+        switch steps down like Claude's (``_thinking_fallback_kwargs``).
         """
 
-        model = str(self.model or "").strip().lower()
-        if model.startswith(_ALWAYS_THINKING_MODEL_PREFIXES):
+        model = self._family_model_id()
+        override = getattr(self, "_thinking_mode_override", "")
+        vendor_thinking = self._relay_vendor_thinking(model)
+        if (
+            override == "adaptive_low"
+            or vendor_thinking == "low"
+            or model.startswith(ALWAYS_THINKING_CLAUDE_PREFIXES)
+        ):
             kwargs.pop("thinking", None)
             output_config = dict(kwargs.get("output_config") or {})
             output_config.setdefault("effort", "low")
             kwargs["output_config"] = output_config
             kwargs["max_tokens"] = max(
                 int(kwargs.get("max_tokens") or 0),
-                _ALWAYS_THINKING_MIN_MAX_TOKENS,
+                ALWAYS_THINKING_MIN_MAX_TOKENS,
+            )
+        elif override == "between_tools" or model.startswith(
+            _BETWEEN_TOOLS_THINKING_MODEL_PREFIXES
+        ):
+            kwargs["thinking"] = {"type": "between_tools"}
+            output_config = dict(kwargs.get("output_config") or {})
+            output_config.setdefault("effort", "low")
+            kwargs["output_config"] = output_config
+        elif vendor_thinking == "off":
+            kwargs["thinking"] = {"type": "disabled"}
+        elif vendor_thinking == "always":
+            kwargs["max_tokens"] = max(
+                int(kwargs.get("max_tokens") or 0),
+                ALWAYS_THINKING_MIN_MAX_TOKENS,
             )
         elif model.startswith(_THINKING_DEFAULT_ON_MODEL_PREFIXES):
             kwargs["thinking"] = {"type": "disabled"}
@@ -911,6 +1113,40 @@ class AnthropicTranslator(BaseTranslator):
             body = dict(kwargs.get("extra_body") or {})
             body.setdefault("fallbacks", "default")
             kwargs["extra_body"] = body
+
+    def _family_model_id(self) -> str:
+        """Lower-cased model id the per-family rules match.
+
+        A relay may list Claude with a vendor namespace or a dotted version
+        (``anthropic/claude-sonnet-5.5``); there the bare family id is used.
+        Anthropic's own endpoint keeps the id as given.
+        """
+
+        model = str(getattr(self, "model", "") or "").strip().lower()
+        if getattr(self, "_provider_id", "") == "anthropic_compatible":
+            return model_family_id(model)
+        return model
+
+    def _relay_vendor_thinking(self, model: str) -> str:
+        """How a non-Claude model on the relay's Anthropic protocol thinks.
+
+        ``model`` is the family id (``_family_model_id``). Returns "off" when
+        the model takes ``thinking: disabled`` (DeepSeek, GLM, Kimi K2.x),
+        "low" when it always thinks and runs at low effort (GLM-5.3),
+        "always" when it always thinks and takes no switch (Kimi K3 and the
+        Kimi coding models), and "" for Claude, unknown families and
+        Anthropic's own endpoint.
+        """
+
+        if getattr(self, "_provider_id", "") != "anthropic_compatible":
+            return ""
+        if model.startswith(_RELAY_LOW_EFFORT_PREFIXES):
+            return "low"
+        if _RELAY_ALWAYS_THINKING_RE.match(model):
+            return "always"
+        if model.startswith(_RELAY_THINKING_OFF_PREFIXES):
+            return "off"
+        return ""
 
     def _raise_if_refused(self, response: object) -> None:
         """A declined request is an HTTP 200 with ``stop_reason: refusal``.

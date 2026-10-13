@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 
 QWEN_TTS_BASE_URL_MAINLAND = "https://dashscope.aliyuncs.com/api/v1"
@@ -26,34 +27,90 @@ QWEN_TTS_REGION_ALIASES = {
     "japan": "japan",
 }
 
-# Cloud voice cloning (DashScope voice enrollment).  The Tokyo workspace
-# region is deliberately absent: the enrollment endpoint is only published for
-# Beijing and Singapore, so offering it would produce voices that can never be
-# created.  Tokyo users pick another region for cloning.
-QWEN_VC_DEFAULT_REGION = "singapore"
-QWEN_VC_DEFAULT_MODEL = "qwen3-tts-vc-2026-01-22"
+# Cloud voice cloning: DashScope ``voice-enrollment`` plus a Qwen-Audio-TTS
+# synthesis model. Alibaba retired qwen-voice-enrollment and every
+# qwen3-tts-vc model on 2026-10-10. The replacement takes the recording as a
+# URL, which the app gets from Model Studio's temporary storage, and that
+# storage only exists in the China (Beijing) region. Cloning is therefore
+# Beijing-only for now: Singapore can enroll voices only from a public URL the
+# player would have to host, and Tokyo has no enrollment at all.
+QWEN_VC_DEFAULT_REGION = "china_mainland"
+QWEN_VC_DEFAULT_MODEL = "qwen-audio-3.0-tts-flash"
+QWEN_VC_MODEL_OPTIONS = (
+    QWEN_VC_DEFAULT_MODEL,
+    "qwen-audio-3.1-tts-flash",
+    "qwen-audio-3.0-tts-plus",
+)
+# Synthesis models a cloned voice can target: the Qwen-Audio-TTS family
+# (qwen-audio-3.0-tts-flash, qwen-audio-3.1-tts-flash, qwen-audio-3.0-tts-plus
+# and their snapshots). The realtime (WebSocket) and ASR models of the same
+# family, CosyVoice and the retired qwen3-tts-vc snapshots cannot speak with a
+# voice-enrollment voice through the SpeechSynthesizer route.
+QWEN_VC_MODEL_PATTERN = re.compile(r"^qwen-audio-\d+(?:\.\d+)?-tts-", re.IGNORECASE)
 QWEN_VC_REGION_BASE_URLS = {
     "china_mainland": QWEN_TTS_BASE_URL_MAINLAND,
-    "singapore": QWEN_TTS_BASE_URL_INTERNATIONAL,
 }
 QWEN_VC_REGION_ALIASES = {
     "china": "china_mainland",
     "cn": "china_mainland",
     "mainland": "china_mainland",
-    "china-mainland": "china_mainland",
     "beijing": "china_mainland",
-    "intl": "singapore",
-    "international": "singapore",
-    "sg": "singapore",
-    # Tokyo cannot enroll voices; fall back to the shared international host
-    # instead of leaving the endpoint blank.
-    "jp": "singapore",
-    "japan": "singapore",
+    # Singapore and Tokyo keys cannot clone through temporary storage. Resolve
+    # to Beijing so the endpoint is never blank; the settings page explains
+    # that a Beijing (China mainland) key is required.
+    "singapore": "china_mainland",
+    "intl": "china_mainland",
+    "international": "china_mainland",
+    "sg": "china_mainland",
+    "jp": "china_mainland",
+    "japan": "china_mainland",
 }
-# Regions where DashScope publishes the voice enrollment endpoint. A key issued
-# for any other region authenticates against its own region only, so it cannot
-# be reused for cloning.
-VOICE_CLONE_SUPPORTED_REGIONS = frozenset({"china_mainland", "singapore"})
+# Endpoints older releases stored for cloning. They are replaced by the
+# Beijing endpoint instead of being kept as a "custom" address.
+QWEN_VC_LEGACY_BASE_URLS = frozenset({QWEN_TTS_BASE_URL_INTERNATIONAL})
+# Regions where the app can enroll a voice. A key issued for any other region
+# authenticates against its own region only, so it cannot be reused here.
+VOICE_CLONE_SUPPORTED_REGIONS = frozenset({"china_mainland"})
+
+
+def qwen_vc_model_is_supported(model: object) -> bool:
+    """Whether a synthesis model can speak with a voice-enrollment voice."""
+
+    return bool(QWEN_VC_MODEL_PATTERN.match(str(model or "").strip()))
+
+
+# Enrolled voice ids are named "{target_model}-{prefix}-{unique id}". The
+# account-wide list also returns CosyVoice and Qwen-Audio-Realtime voices, so
+# recognise those families too; they are filtered out by target model.
+_TARGET_MODEL_FROM_VOICE_RE = re.compile(
+    r"^("
+    r"qwen-audio-\d+(?:\.\d+)?-(?:tts|realtime)-(?:flash|plus)"
+    r"|cosyvoice-v\d+(?:\.\d+)?(?:-(?:flash|plus))?"
+    r")-[A-Za-z0-9]"
+)
+
+
+def target_model_from_voice_id(voice_id: object) -> str:
+    """The synthesis model a voice id was enrolled for, or "" if unknown."""
+
+    match = _TARGET_MODEL_FROM_VOICE_RE.match(str(voice_id or "").strip())
+    return match.group(1) if match else ""
+
+
+def cloned_voice_survives_retirement(voice: Mapping[str, object]) -> bool:
+    """Whether a stored cloned voice was enrolled with the current service.
+
+    Voices enrolled for the retired qwen3-tts-vc models (and records from
+    before the target model was stored, which were all qwen3-tts-vc) were
+    deleted by Alibaba on 2026-10-10 and can never speak again. Voices of a
+    Qwen-Audio-TTS model survive; realtime and CosyVoice voices are not
+    something this engine can speak with either.
+    """
+
+    target = str(voice.get("target_model") or "").strip()
+    if not target:
+        target = target_model_from_voice_id(voice.get("voice_id"))
+    return qwen_vc_model_is_supported(target)
 
 
 def region_supports_voice_cloning(region: object) -> bool:
@@ -114,7 +171,6 @@ TTS_API_REGION_OPTION_KEYS = {
         ("qwen_region_custom", "custom"),
     ),
     "qwen_vc": (
-        ("qwen_region_singapore", "singapore"),
         ("qwen_region_china_mainland", "china_mainland"),
         ("qwen_region_custom", "custom"),
     ),
@@ -136,12 +192,25 @@ TTS_API_DEFAULT_REGIONS = {
 }
 TTS_API_MODEL_OPTIONS = {
     "mimo_tts": (XIAOMI_TTS_DEFAULT_MODEL,),
-    "qwen_tts": (
-        "qwen3-tts-flash",
-        "qwen3-tts-instruct-flash",
-    ),
-    "qwen_vc": (QWEN_VC_DEFAULT_MODEL,),
+    # qwen3-tts-instruct-flash and every dated qwen3-tts snapshot were retired
+    # on 2026-10-10; the stable alias is the only Qwen-TTS model left.
+    "qwen_tts": (QWEN_TTS_DEFAULT_MODEL,),
+    "qwen_vc": QWEN_VC_MODEL_OPTIONS,
 }
+# Retired Qwen-TTS synthesis models; saved configs move to the stable alias.
+QWEN_TTS_RETIRED_MODEL_PREFIXES = (
+    "qwen3-tts-instruct-flash",
+    "qwen3-tts-flash-20",
+    "qwen-tts",
+)
+TTS_API_LEGACY_BASE_URLS = {
+    "qwen_vc": QWEN_VC_LEGACY_BASE_URLS,
+}
+
+
+def qwen_tts_model_is_retired(model: object) -> bool:
+    text = str(model or "").strip().lower()
+    return bool(text) and text.startswith(QWEN_TTS_RETIRED_MODEL_PREFIXES)
 TTS_API_DEFAULT_CONFIGS = {
     "mimo_tts": {
         "api_key": "",
@@ -164,6 +233,9 @@ TTS_API_DEFAULT_CONFIGS = {
         "volume": 0.8,
         "instructions": "",
         "optimize_instructions": True,
+        # Opt-in: derive reading guidance for instruct models from the
+        # roleplay persona settings when no explicit instructions are set.
+        "use_persona_instructions": False,
         "timeout_seconds": 30,
         "connect_timeout_seconds": 30,
         "read_timeout_seconds": 30,
@@ -173,7 +245,7 @@ TTS_API_DEFAULT_CONFIGS = {
     "qwen_vc": {
         "api_key": "",
         "region": QWEN_VC_DEFAULT_REGION,
-        "base_url": QWEN_TTS_BASE_URL_INTERNATIONAL,
+        "base_url": QWEN_TTS_BASE_URL_MAINLAND,
         "model": QWEN_VC_DEFAULT_MODEL,
         # No preset voices exist for cloning; the player registers one first.
         "voice": "",
@@ -301,9 +373,37 @@ def normalize_cloned_voices(value: object) -> tuple[dict[str, str], ...]:
                 "target_model": str(entry.get("target_model") or "").strip(),
                 "created_at": str(entry.get("created_at") or "").strip(),
                 "language": str(entry.get("language") or "").strip(),
+                # DashScope keys and voices are scoped to a service region;
+                # older records predate this field and stay usable anywhere.
+                "region": str(entry.get("region") or "").strip(),
+                # Review state from the service: DEPLOYING, OK or UNDEPLOYED.
+                # Empty for records created before reviews existed.
+                "status": str(entry.get("status") or "").strip().upper(),
             }
         )
     return tuple(voices)
+
+
+def cloned_voice_is_usable(
+    voice: Mapping[str, object],
+    *,
+    model: object,
+    region: object,
+) -> bool:
+    """Return whether a stored cloned voice can be used with this model/region."""
+
+    wanted_model = str(model or "").strip()
+    wanted_region = str(region or "").strip()
+    voice_model = str(voice.get("target_model") or "").strip()
+    voice_region = str(voice.get("region") or "").strip()
+    if wanted_model and voice_model and voice_model != wanted_model:
+        return False
+    if wanted_region and voice_region and voice_region != wanted_region:
+        return False
+    # A recording the service rejected during review can never speak.
+    if str(voice.get("status") or "").strip().upper() == "UNDEPLOYED":
+        return False
+    return True
 
 
 def get_cloned_voice_options(
@@ -321,6 +421,28 @@ def get_cloned_voice_options(
             voice["language"] or "multi",
         )
         for voice in normalize_cloned_voices(raw)
+    )
+
+
+def usable_cloned_voice_options(
+    config: Mapping[str, object] | None,
+) -> tuple[tuple[str, str, str, str, str], ...]:
+    """Cloned voices registered for the configured model and service region."""
+
+    if not isinstance(config, Mapping):
+        return ()
+    model = config.get("model", "")
+    region = config.get("region", "")
+    return tuple(
+        (
+            voice["voice_id"],
+            voice["display_name"] or voice["voice_id"],
+            voice["language"] or "multi",
+            "",
+            voice["language"] or "multi",
+        )
+        for voice in normalize_cloned_voices(config.get("custom_voices"))
+        if cloned_voice_is_usable(voice, model=model, region=region)
     )
 
 
@@ -378,7 +500,7 @@ def get_tts_api_known_base_urls(engine: object) -> frozenset[str]:
         return frozenset()
     return frozenset(
         value for value in TTS_API_REGION_BASE_URLS[engine_code].values() if value
-    )
+    ) | TTS_API_LEGACY_BASE_URLS.get(engine_code, frozenset())
 
 
 def tts_api_region_from_base_url(engine: object, base_url: object) -> str:
@@ -391,6 +513,9 @@ def tts_api_region_from_base_url(engine: object, base_url: object) -> str:
     for region, url in TTS_API_REGION_BASE_URLS[engine_code].items():
         if text == str(url).rstrip("/"):
             return region
+    if text in TTS_API_LEGACY_BASE_URLS.get(engine_code, frozenset()):
+        # An endpoint this engine no longer offers is not a custom address.
+        return TTS_API_DEFAULT_REGIONS[engine_code]
     return "custom"
 
 

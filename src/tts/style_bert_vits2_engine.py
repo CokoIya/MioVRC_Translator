@@ -8,11 +8,14 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import types
+import unicodedata
 import wave
 from collections import OrderedDict
-from importlib.machinery import ModuleSpec
+from importlib.machinery import ModuleSpec, PathFinder
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -22,16 +25,20 @@ try:
 except ImportError:
     torch = None
 
+from src.utils.app_paths import resource_base_dirs
 from src.utils.hf_model_downloader import model_dir, model_is_complete
 from src.version import APP_VERSION
 
 from .base import BaseTTS, TTSVoice
 from .style_bert_vits2_models import (
     StyleBertVits2ModelError,
+    StyleBertVits2ModelInfo,
     list_imported_style_bert_models,
     parse_style_bert_voice_id,
+    resolve_style_bert_voice_language,
     style_bert_preset_title,
     style_bert_voice_id,
+    style_bert_voice_language,
 )
 from src.utils.config_manager import normalize_style_bert_bert_language
 from src.utils.gpu_support import clear_torch_cuda_cache
@@ -68,6 +75,9 @@ _SBV2_PYOPENJTALK_WORKER_PATCHED = False
 _SBV2_TYPEGUARD_PATCHED = False
 _SBV2_LANGUAGE_PREFLIGHTED: set[str] = set()
 
+# Words the GRU below gets wrong but players say constantly.  Style-Bert-VITS2
+# consults its own CMU dictionary first, so only out-of-vocabulary words ever
+# reach this table.
 _OFFLINE_G2P_COMMON: dict[str, list[str]] = {
     "a": ["AH0"],
     "ai": ["EY1", "AY1"],
@@ -79,6 +89,31 @@ _OFFLINE_G2P_COMMON: dict[str, list[str]] = {
     "test": ["T", "EH1", "S", "T"],
     "vrchat": ["V", "IY1", "AA1", "R", "CH", "AE1", "T"],
 }
+# g2p_en ships a small GRU encoder/decoder (checkpoint20.npz, Apache-2.0)
+# for out-of-vocabulary words.  Running it here with numpy keeps the rest of
+# g2p_en, which needs NLTK corpora the packaged app cannot download, out of
+# the process entirely.
+_G2P_EN_CHECKPOINT_NAME = "checkpoint20.npz"
+_G2P_EN_GRAPHEMES: tuple[str, ...] = ("<pad>", "<unk>", "</s>") + tuple(
+    "abcdefghijklmnopqrstuvwxyz"
+)
+_G2P_EN_PHONEMES: tuple[str, ...] = ("<pad>", "<unk>", "<s>", "</s>") + (
+    "AA0", "AA1", "AA2", "AE0", "AE1", "AE2", "AH0", "AH1", "AH2", "AO0",
+    "AO1", "AO2", "AW0", "AW1", "AW2", "AY0", "AY1", "AY2", "B", "CH", "D", "DH",
+    "EH0", "EH1", "EH2", "ER0", "ER1", "ER2", "EY0", "EY1",
+    "EY2", "F", "G", "HH",
+    "IH0", "IH1", "IH2", "IY0", "IY1", "IY2", "JH", "K", "L",
+    "M", "N", "NG", "OW0", "OW1",
+    "OW2", "OY0", "OY1", "OY2", "P", "R", "S", "SH", "T", "TH",
+    "UH0", "UH1", "UH2", "UW",
+    "UW0", "UW1", "UW2", "V", "W", "Y", "Z", "ZH",
+)
+_G2P_EN_MAX_PHONES = 20
+_G2P_EN_WEIGHT_KEYS = (
+    "enc_emb", "enc_w_ih", "enc_w_hh", "enc_b_ih", "enc_b_hh",
+    "dec_emb", "dec_w_ih", "dec_w_hh", "dec_b_ih", "dec_b_hh",
+    "fc_w", "fc_b",
+)
 _OFFLINE_G2P_DIGRAPHS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("tion", ("SH", "AH0", "N")),
     ("sion", ("ZH", "AH0", "N")),
@@ -119,9 +154,6 @@ _OFFLINE_G2P_LETTERS: dict[str, tuple[str, ...]] = {
     "z": ("Z",),
 }
 _OFFLINE_G2P_TOKEN_RE = re.compile(r"[A-Za-z']+|[.,!?;:\-]+")
-
-# Monkey-patch safetensors to convert FP16 to FP32 on CPU
-_original_load_safetensors = None
 
 _REQUIRED_TRANSFORMERS_BERT_EXPORTS = (
     "AutoModelForMaskedLM",
@@ -358,7 +390,11 @@ def _preflight_style_bert_text_processing(bert_language: str) -> None:
         from style_bert_vits2.constants import Languages
         from style_bert_vits2.nlp import clean_text
 
-        sample = "Hello, Mio 2026." if bert_language == "en" else "你好，Mio 2026。"
+        sample = (
+            "Hello, nice to meet you in 2026."
+            if bert_language == "en"
+            else "你好，Mio 2026。"
+        )
         language_enum = getattr(Languages, bert_language.upper())
         clean_text(sample, language_enum)
     except Exception as exc:
@@ -723,46 +759,6 @@ def _install_style_bert_runtime_patches() -> None:
     _install_style_bert_cpu_duration_patch()
 
 
-def _patched_load_safetensors(checkpoint_path, model, for_infer=False):
-    """Load safetensors and convert FP16 to FP32 for CPU inference."""
-    from safetensors import safe_open
-    import torch
-
-    tensors = {}
-    iteration = None
-    with safe_open(str(checkpoint_path), framework="pt", device="cpu") as f:
-        for key in f.keys():
-            if key == "iteration":
-                iteration = f.get_tensor(key).item()
-            tensor = f.get_tensor(key)
-            # Convert FP16 to FP32 for CPU
-            if tensor.dtype == torch.float16:
-                tensor = tensor.float()
-            tensors[key] = tensor
-
-    if hasattr(model, "module"):
-        result = model.module.load_state_dict(tensors, strict=False)
-    else:
-        result = model.load_state_dict(tensors, strict=False)
-
-    # Log missing/unexpected keys (simplified from original)
-    for key in result.missing_keys:
-        if key.startswith("enc_q") and for_infer:
-            continue
-        logger.warning(f"Missing key: {key}")
-    for key in result.unexpected_keys:
-        if key == "iteration":
-            continue
-        logger.warning(f"Unexpected key: {key}")
-
-    if iteration is None:
-        logger.info(f"Loaded '{checkpoint_path}'")
-    else:
-        logger.info(f"Loaded '{checkpoint_path}' (iteration {iteration})")
-
-    return model, iteration
-
-
 def _encode_wav_bytes(sample_rate: int, audio_array: np.ndarray) -> bytes:
     """Encode PCM audio into a WAV byte stream without scipy."""
     pcm_audio = np.asarray(audio_array)
@@ -813,19 +809,75 @@ def _ensure_importable_stdio() -> None:
         stdout_wrapper.SAFE_STDOUT = sys.stdout
 
 
-def _nltk_zip_resource_ready(resource_name: str) -> bool:
+def _g2p_en_checkpoint_candidates() -> list[Path]:
+    """Locate g2p_en's bundled GRU weights without importing g2p_en."""
+    candidates: list[Path] = []
     try:
-        import nltk
-
-        pathsec = getattr(nltk, "pathsec", None)
-        if pathsec is None:
-            pathsec = importlib.import_module("nltk.pathsec")
-        pathsec.ENFORCE = True
-
-        nltk.data.find(resource_name)
-        return True
+        # PathFinder bypasses sys.modules, so the lookup still works after the
+        # shim below has replaced the real package there.
+        spec = PathFinder.find_spec("g2p_en")
     except Exception:
-        return False
+        spec = None
+    if spec is not None:
+        for location in list(spec.submodule_search_locations or []):
+            candidates.append(Path(location) / _G2P_EN_CHECKPOINT_NAME)
+        if spec.origin:
+            candidates.append(Path(spec.origin).parent / _G2P_EN_CHECKPOINT_NAME)
+    try:
+        for base in resource_base_dirs():
+            candidates.append(Path(base) / "g2p_en" / _G2P_EN_CHECKPOINT_NAME)
+    except Exception:
+        logger.debug("Could not enumerate resource dirs for g2p_en weights", exc_info=True)
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+class _NeuralEnglishG2p:
+    """g2p_en's GRU grapheme-to-phoneme model, run from its weights with numpy."""
+
+    def __init__(self, checkpoint_path: Path) -> None:
+        with np.load(str(checkpoint_path)) as archive:
+            weights = {key: np.asarray(archive[key], dtype=np.float32) for key in _G2P_EN_WEIGHT_KEYS}
+        self._w = weights
+        self._g2idx = {grapheme: index for index, grapheme in enumerate(_G2P_EN_GRAPHEMES)}
+
+    @staticmethod
+    def _gru_cell(x, h, w_ih, w_hh, b_ih, b_hh):
+        gates_x = x @ w_ih.T + b_ih
+        gates_h = h @ w_hh.T + b_hh
+        split = gates_x.shape[-1] * 2 // 3
+        rz = 1.0 / (1.0 + np.exp(-(gates_x[:, :split] + gates_h[:, :split])))
+        r, z = np.split(rz, 2, axis=-1)
+        n = np.tanh(gates_x[:, split:] + r * gates_h[:, split:])
+        return (1.0 - z) * n + z * h
+
+    def predict(self, word: str) -> list[str]:
+        w = self._w
+        indices = [self._g2idx.get(char, 1) for char in word] + [2]
+        encoded = np.take(w["enc_emb"], np.expand_dims(indices, 0), axis=0)
+        hidden = np.zeros((1, w["enc_w_hh"].shape[1]), np.float32)
+        for step in range(encoded.shape[1]):
+            hidden = self._gru_cell(
+                encoded[:, step, :], hidden,
+                w["enc_w_ih"], w["enc_w_hh"], w["enc_b_ih"], w["enc_b_hh"],
+            )
+        decoder_input = np.take(w["dec_emb"], [2], axis=0)  # <s>
+        phones: list[str] = []
+        for _ in range(_G2P_EN_MAX_PHONES):
+            hidden = self._gru_cell(
+                decoder_input, hidden,
+                w["dec_w_ih"], w["dec_w_hh"], w["dec_b_ih"], w["dec_b_hh"],
+            )
+            logits = hidden @ w["fc_w"].T + w["fc_b"]
+            predicted = int(logits.argmax())
+            if predicted == 3:  # </s>
+                break
+            phones.append(_G2P_EN_PHONEMES[predicted] if predicted < len(_G2P_EN_PHONEMES) else "<unk>")
+            decoder_input = np.take(w["dec_emb"], [predicted], axis=0)
+        return [phone for phone in phones if phone not in {"<pad>", "<unk>", "<s>"}]
 
 
 def _rough_english_pronunciation(word: str) -> list[str]:
@@ -844,22 +896,78 @@ def _rough_english_pronunciation(word: str) -> list[str]:
     return phones or ["AH0"]
 
 
+_NEURAL_G2P_LOADED = False
+_NEURAL_G2P: _NeuralEnglishG2p | None = None
+_NEURAL_G2P_LOCK = threading.Lock()
+
+
+def _load_neural_english_g2p() -> _NeuralEnglishG2p | None:
+    global _NEURAL_G2P_LOADED, _NEURAL_G2P
+    with _NEURAL_G2P_LOCK:
+        if _NEURAL_G2P_LOADED:
+            return _NEURAL_G2P
+        _NEURAL_G2P_LOADED = True
+        for candidate in _g2p_en_checkpoint_candidates():
+            try:
+                if not candidate.is_file():
+                    continue
+                _NEURAL_G2P = _NeuralEnglishG2p(candidate)
+                logger.info("Loaded Style-Bert-VITS2 English g2p weights from %s", candidate)
+                break
+            except Exception:
+                logger.debug("Could not load g2p_en weights from %s", candidate, exc_info=True)
+        if _NEURAL_G2P is None:
+            logger.warning(
+                "g2p_en GRU weights (%s) were not found; out-of-vocabulary English "
+                "words fall back to letter rules",
+                _G2P_EN_CHECKPOINT_NAME,
+            )
+        return _NEURAL_G2P
+
+
 class _OfflineG2p:
-    """Minimal g2p_en replacement that avoids NLTK network downloads."""
+    """Drop-in for ``g2p_en.G2p`` that never touches NLTK.
+
+    Style-Bert-VITS2 resolves dictionary words itself and only calls this for
+    out-of-vocabulary tokens, one word at a time.  The real g2p_en runs
+    ``nltk.pos_tag`` on every call, which needs the ``averaged_perceptron_tagger_eng``
+    corpus; the packaged app does not ship it and must not download at
+    playback time, so English synthesis used to fail on the first unknown word.
+    """
+
+    def __init__(self) -> None:
+        self._neural = _load_neural_english_g2p()
+
+    def _word_phones(self, word: str) -> list[str]:
+        known = _OFFLINE_G2P_COMMON.get(word)
+        if known:
+            return list(known)
+        letters = re.sub(r"[^a-z]", "", word)
+        if letters and self._neural is not None:
+            try:
+                phones = self._neural.predict(letters)
+            except Exception:
+                logger.debug("Neural g2p failed for %r", word, exc_info=True)
+                phones = []
+            if phones:
+                return phones
+        return _rough_english_pronunciation(word)
 
     def __call__(self, text: object) -> list[str]:
+        normalized = "".join(
+            char
+            for char in unicodedata.normalize("NFD", str(text or ""))
+            if unicodedata.category(char) != "Mn"
+        )
         result: list[str] = []
-        for token in _OFFLINE_G2P_TOKEN_RE.findall(str(text or "")):
+        for token in _OFFLINE_G2P_TOKEN_RE.findall(normalized):
             if re.fullmatch(r"[.,!?;:\-]+", token):
                 result.append(token[0])
                 continue
             clean = token.strip("'").lower()
             if not clean:
                 continue
-            result.extend(
-                _OFFLINE_G2P_COMMON.get(clean)
-                or _rough_english_pronunciation(clean)
-            )
+            result.extend(self._word_phones(clean))
             result.append(" ")
         if result and result[-1] == " ":
             result.pop()
@@ -867,35 +975,35 @@ class _OfflineG2p:
 
 
 def _install_g2p_en_offline_fallback() -> None:
-    """Prevent g2p_en from downloading NLTK corpora during SBV2 inference."""
-    existing = sys.modules.get("g2p_en")
-    if existing is not None:
-        _ensure_module_spec("g2p_en", existing)
-        return
+    """Make Style-Bert-VITS2 use the NLTK-free English g2p above.
 
-    # g2p_en checks specifically for these zip resources at import time.
-    # If they are missing, importing the real package calls nltk.download()
-    # and can block players behind a slow or unreachable network.
-    if (
-        _nltk_zip_resource_ready("taggers/averaged_perceptron_tagger.zip")
-        and _nltk_zip_resource_ready("corpora/cmudict.zip")
-    ):
-        try:
-            module = importlib.import_module("g2p_en")
-            _ensure_module_spec("g2p_en", module)
-            return
-        except Exception:
-            pass
+    This always replaces ``g2p_en``: importing the real package calls
+    ``nltk.download()`` when its corpora are missing and raises from
+    ``nltk.pos_tag`` when only the pre-3.9 tagger is present, which is exactly
+    what the frozen build ships.
+    """
+    existing = sys.modules.get("g2p_en")
+    if existing is not None and getattr(existing, "_MIO_FALLBACK", False):
+        return
 
     fallback_module = types.ModuleType("g2p_en")
     fallback_module.G2p = _OfflineG2p
     fallback_module._MIO_FALLBACK = True
     _ensure_module_spec("g2p_en", fallback_module)
     sys.modules["g2p_en"] = fallback_module
-    logger.warning(
-        "Using offline g2p_en fallback for Style-Bert-VITS2; "
-        "NLTK tagger/cmudict resources were not available locally"
-    )
+    if existing is not None:
+        logger.info("Replaced the imported g2p_en package with the built-in English g2p")
+
+    # SBV2 binds ``_g2p = G2p()`` at import time; swap an instance that was
+    # already created from the real package.
+    english_g2p = sys.modules.get("style_bert_vits2.nlp.english.g2p")
+    if english_g2p is not None and not isinstance(
+        getattr(english_g2p, "_g2p", None), _OfflineG2p
+    ):
+        try:
+            english_g2p._g2p = _OfflineG2p()
+        except Exception:
+            logger.debug("Could not replace the SBV2 English g2p instance", exc_info=True)
 
 
 def _maximum_path_fallback(neg_cent: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -1031,16 +1139,27 @@ def style_bert_bert_assets_ready(language: object) -> bool:
     return model_is_complete(style_bert_bert_model_id(language))
 
 
+__all__ = [
+    "StyleBertVits2TTS",
+    "list_style_bert_vits2_voices",
+    "resolve_style_bert_voice_language",
+    "style_bert_voice_language",
+]
+
+
 def list_style_bert_vits2_voices(bert_language: object = "jp") -> list[TTSVoice]:
     """List imported Style-Bert-VITS2 voices without loading the inference runtime."""
     normalized_language = normalize_style_bert_bert_language(bert_language)
-    language, locale = _STYLE_BERT_VOICE_LOCALES.get(
-        normalized_language.upper(),
-        _STYLE_BERT_VOICE_LOCALES["JP"],
-    )
     voices: list[TTSVoice] = []
     for model in list_imported_style_bert_models():
         for speaker in model.speakers:
+            voice_language = resolve_style_bert_voice_language(
+                model, speaker, normalized_language
+            )
+            language, locale = _STYLE_BERT_VOICE_LOCALES.get(
+                voice_language.upper(),
+                _STYLE_BERT_VOICE_LOCALES["JP"],
+            )
             for style in model.styles:
                 voice_id = style_bert_voice_id(model.name, speaker, style)
                 display_title = style_bert_preset_title(model.name, speaker)
@@ -1068,6 +1187,10 @@ class StyleBertVits2TTS(BaseTTS):
         self._tts_model_cls = _load_runtime_tts_model_cls()
         self._model_cache: OrderedDict[str, Any] = OrderedDict()
         self._closed = False
+        # BERT/model loading and inference share module-level state in the
+        # upstream package and are far too heavy to run twice at once on a
+        # CPU; the manager may still call in from several worker threads.
+        self._synthesis_lock = threading.RLock()
         requested_device = device if device in ("cpu", "cuda") else "cpu"
         if requested_device == "cuda" and not style_bert_cuda_available():
             logger.warning(
@@ -1077,26 +1200,8 @@ class StyleBertVits2TTS(BaseTTS):
             requested_device = "cpu"
         self._device = requested_device
         self._bert_language = normalize_style_bert_bert_language(bert_language)
-        self._patch_applied = False
         if self._device == "cpu":
             _configure_style_bert_cpu_runtime()
-
-        # Apply monkey-patch for FP16->FP32 conversion on CPU
-        global _original_load_safetensors
-        if _original_load_safetensors is None and self._device == "cpu":
-            try:
-                from style_bert_vits2.models.utils import safetensors as sbv2_safetensors
-                _original_load_safetensors = sbv2_safetensors.load_safetensors
-                sbv2_safetensors.load_safetensors = _patched_load_safetensors
-                self._patch_applied = True
-                logger.info("Applied FP16->FP32 conversion patch for CPU inference")
-            except Exception as e:
-                logger.warning(f"Failed to apply safetensors patch: {e}")
-
-    def __del__(self) -> None:
-        """Clean up monkey-patch on destruction."""
-        if self._patch_applied:
-            self._restore_original_loader()
 
     def close(self) -> None:
         """Release cached voice models and their CUDA tensors."""
@@ -1107,22 +1212,8 @@ class StyleBertVits2TTS(BaseTTS):
         cache = getattr(self, "_model_cache", None)
         if cache is not None:
             cache.clear()
-        self._restore_original_loader()
         gc.collect()
         clear_torch_cuda_cache()
-
-    def _restore_original_loader(self) -> None:
-        """Restore original safetensors loader."""
-        global _original_load_safetensors
-        if _original_load_safetensors is not None:
-            try:
-                from style_bert_vits2.models.utils import safetensors as sbv2_safetensors
-                sbv2_safetensors.load_safetensors = _original_load_safetensors
-                _original_load_safetensors = None
-                self._patch_applied = False
-                logger.debug("Restored original safetensors loader")
-            except Exception as exc:
-                logger.debug("Failed to restore safetensors loader: %s", exc)
 
     @property
     def runtime_available(self) -> bool:
@@ -1135,12 +1226,17 @@ class StyleBertVits2TTS(BaseTTS):
         return self._device
 
     def is_available(self) -> bool:
-        """Check whether the runtime and at least one imported model are ready."""
+        """Check whether the runtime and at least one imported model are ready.
+
+        The BERT download is deliberately not part of this check: a missing
+        BERT model raises a specific error at synthesis time, which the UI can
+        explain, whereas an "unavailable" engine silently falls back or stays
+        mute.
+        """
         if getattr(self, "_closed", False):
             return False
         return (
             self._tts_model_cls is not None
-            and style_bert_bert_assets_ready(self._bert_language)
             and bool(list_imported_style_bert_models())
         )
 
@@ -1151,6 +1247,46 @@ class StyleBertVits2TTS(BaseTTS):
     def get_sample_rate(self) -> int:
         """Return the sample rate for Style-Bert-VITS2 models."""
         return 44100
+
+    def prewarm(self, voice: str = "") -> None:
+        """Load the BERT runtime and the configured voice model ahead of speech.
+
+        On a CPU this is the 10-30 s that otherwise lands on the first
+        sentence of a conversation.
+        """
+        if getattr(self, "_closed", False) or self._tts_model_cls is None:
+            return
+        with self._synthesis_lock:
+            models = list_imported_style_bert_models()
+            if not models:
+                return
+            model_info = None
+            speaker_name = ""
+            if str(voice or "").strip():
+                try:
+                    model_name, speaker_name, _style = parse_style_bert_voice_id(voice)
+                except Exception:
+                    model_name = ""
+                model_info = next((item for item in models if item.name == model_name), None)
+            if model_info is None:
+                model_info = models[0]
+                speaker_name = model_info.speakers[0] if model_info.speakers else ""
+            language = self._voice_bert_language(model_info, speaker_name)
+            if not style_bert_bert_assets_ready(language):
+                logger.info(
+                    "Style-Bert-VITS2 prewarm skipped: %s BERT model is not downloaded",
+                    STYLE_BERT_LANGUAGE_NAMES[language],
+                )
+                return
+            started = time.monotonic()
+            self._ensure_bert_runtime(language)
+            self._get_or_create_model(model_info)
+            logger.info(
+                "Style-Bert-VITS2 prewarm finished (model=%s language=%s elapsed=%.1fs)",
+                model_info.name,
+                language,
+                time.monotonic() - started,
+            )
 
     def synthesize(
         self,
@@ -1163,7 +1299,10 @@ class StyleBertVits2TTS(BaseTTS):
         if getattr(self, "_closed", False):
             raise RuntimeError("Style-Bert-VITS2 engine is closed")
         if self._tts_model_cls is None:
-            raise RuntimeError("Style-Bert-VITS2 runtime is not available")
+            raise RuntimeError(
+                "Style-Bert-VITS2 runtime is not available"
+                + (f": {_RUNTIME_IMPORT_ERROR}" if _RUNTIME_IMPORT_ERROR else "")
+            )
 
         clean_text = str(text or "").strip()
         if not clean_text:
@@ -1181,7 +1320,22 @@ class StyleBertVits2TTS(BaseTTS):
         if model_info is None:
             raise RuntimeError("The selected Style-Bert-VITS2 model folder is missing")
 
-        voice_bert_language = self._voice_bert_language(model_name, speaker_name)
+        with self._synthesis_lock:
+            return self._synthesize_locked(
+                clean_text, model_info, speaker_name, style_name, rate, volume
+            )
+
+    def _synthesize_locked(
+        self,
+        clean_text: str,
+        model_info: StyleBertVits2ModelInfo,
+        speaker_name: str,
+        style_name: str,
+        rate: float,
+        volume: float,
+    ) -> bytes:
+        model_name = model_info.name
+        voice_bert_language = self._voice_bert_language(model_info, speaker_name)
         self._ensure_bert_runtime(voice_bert_language)
         model = self._get_or_create_model(model_info)
         speaker_id = getattr(model, "spk2id", {}).get(speaker_name)
@@ -1296,8 +1450,14 @@ class StyleBertVits2TTS(BaseTTS):
     def _ensure_japanese_bert_runtime(self) -> None:
         self._ensure_bert_runtime("jp")
 
-    def _voice_bert_language(self, _model_name: str, _speaker_name: str) -> str:
-        return self._bert_language
+    def _voice_bert_language(
+        self,
+        model_info: StyleBertVits2ModelInfo,
+        speaker_name: str,
+    ) -> str:
+        return resolve_style_bert_voice_language(
+            model_info, speaker_name, self._bert_language
+        )
 
     def _ensure_bert_runtime(self, language: str | None = None) -> None:
         bert_language = normalize_style_bert_bert_language(
@@ -1307,8 +1467,9 @@ class StyleBertVits2TTS(BaseTTS):
         language_name = STYLE_BERT_LANGUAGE_NAMES[bert_language]
         if not style_bert_bert_assets_ready(bert_language):
             raise RuntimeError(
-                f"The shared {language_name} Style-Bert-VITS2 runtime model is not downloaded."
-        )
+                f"The shared {language_name} Style-Bert-VITS2 BERT runtime model "
+                f"({model_id}) is not downloaded."
+            )
 
         try:
             _ensure_style_bert_language_runtime_dependencies(bert_language)

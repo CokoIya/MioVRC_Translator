@@ -83,6 +83,33 @@ _CERTIFICATE_ERROR_TOKENS = (
     "self signed certificate",
     "unknown ca",
 )
+# DashScope answers an unpaid or unsubscribed account with HTTP 403, which
+# otherwise reads as a wrong key / wrong region.
+_BILLING_ERROR_TOKENS = (
+    "arrearage",
+    "unpurchased",
+    "insufficient balance",
+    "account balance",
+    "model subscription",
+    "overdue",
+)
+# Local engines whose model files the player still has to download/import.
+_MODEL_MISSING_ERROR_TOKENS = (
+    "is not downloaded",
+    "model folder is missing",
+    "voice model is missing",
+    "no cloned voice yet",
+    "has no cloned voice",
+)
+_LANGUAGE_MISMATCH_ERROR_TOKENS = (
+    "jp-extra",
+    "language is not jp",
+)
+# A cloned voice that belongs to another synthesis model or service region.
+_VOICE_CONFIGURATION_ERROR_TOKENS = (
+    "registered for model",
+    "registered in region",
+)
 
 TTS_ERROR_TOKEN_PREFIX = "tts_error:"
 TTS_ERROR_CODES = frozenset(
@@ -104,6 +131,9 @@ TTS_ERROR_CODES = frozenset(
         "provider",
         "invalid_input",
         "unavailable",
+        "billing",
+        "model_missing",
+        "language_mismatch",
     }
 )
 
@@ -152,6 +182,14 @@ def tts_error_code(error: object) -> str:
         )
     ):
         return "safety"
+    if any(token in message for token in _BILLING_ERROR_TOKENS):
+        return "billing"
+    if any(token in message for token in _VOICE_CONFIGURATION_ERROR_TOKENS):
+        return "configuration"
+    if any(token in message for token in _MODEL_MISSING_ERROR_TOKENS):
+        return "model_missing"
+    if any(token in message for token in _LANGUAGE_MISMATCH_ERROR_TOKENS):
+        return "language_mismatch"
     if any(token in message for token in _AUTH_ERROR_TOKENS):
         return "authentication"
     if any(token in message for token in _RATE_LIMIT_ERROR_TOKENS):

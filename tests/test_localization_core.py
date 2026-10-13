@@ -6,7 +6,7 @@ from src.utils.localization import (
     translate_language_catalog,
     validate_language_catalog,
 )
-from src.utils.ui_config import get_backend_label, get_ui_language
+from src.utils.ui_config import get_backend_label, get_ui_language, normalize_backend
 
 
 def test_language_normalization_supports_common_platform_locale_names():
@@ -80,9 +80,18 @@ def test_ui_config_normalizes_platform_locale_variants():
 
 
 def test_backend_labels_localize_qualifiers_without_changing_backend_codes():
-    assert get_backend_label("openai_compatible", "zh-CN") == "GPT 兼容服务"
+    # The single relay backend ("中转站兼容") keeps the openai_compatible code.
+    assert get_backend_label("openai_compatible", "zh-CN") == "中转站兼容"
+    assert get_backend_label("openai_compatible", "en") == "Relay Compatible"
+    assert get_backend_label("openai_compatible", "ja") == "中継サービス互換"
+    assert get_backend_label("openai_compatible", "ru") == "Совместимость с ретранслятором"
+    assert get_backend_label("openai_compatible", "ko") == "중계 서비스 호환"
     assert get_backend_label("local_ai", "ja") == "ローカル AI"
     assert get_backend_label("deepl", "ru") == "DeepL (бесплатный тариф)"
-    assert get_backend_label("anthropic_compatible", "ko") == "Claude 호환 서비스"
+    # The old Claude/Grok-compatible ids resolve to the relay and its label.
+    assert get_backend_label("anthropic_compatible", "ko") == "중계 서비스 호환"
+    assert get_backend_label("grok_compatible", "zh-CN") == "中转站兼容"
+    assert normalize_backend("anthropic_compatible") == "openai_compatible"
+    assert normalize_backend("grok_compatible") == "openai_compatible"
     assert get_backend_label("microsoft_edge_web", "zh-CN") == "Bing翻译(免费)"
-    assert get_backend_label("openai_compatible") == "GPT Compatible"
+    assert get_backend_label("openai_compatible") == "Relay Compatible"

@@ -135,6 +135,28 @@ def test_model_url_validator_rejects_private_targets(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("fake_ip", ["198.18.0.216", "198.19.255.1", "fdfe:dcba:9876::17"])
+def test_model_url_validator_accepts_fake_ip_proxy_answers(monkeypatch, fake_ip):
+    """Clash/Mihomo fake-IP DNS answers must not block model downloads."""
+
+    family = 23 if ":" in fake_ip else 2
+    monkeypatch.setattr(
+        downloader.socket,
+        "getaddrinfo",
+        lambda host, port, **_kwargs: [(family, 1, 6, "", (fake_ip, port))],
+    )
+
+    assert _REAL_MODEL_URL_VALIDATOR("https://hf-mirror.com/owner/model/resolve/x/config.json")
+    # The relaxation is scoped to the synthetic ranges: ordinary private
+    # answers stay rejected.
+    monkeypatch.setattr(
+        downloader.socket,
+        "getaddrinfo",
+        lambda host, port, **_kwargs: [(2, 1, 6, "", ("10.0.0.5", port))],
+    )
+    assert not _REAL_MODEL_URL_VALIDATOR("https://hf-mirror.com/owner/model/resolve/x/config.json")
+
+
 class _FakeResponse:
     def __init__(
         self,

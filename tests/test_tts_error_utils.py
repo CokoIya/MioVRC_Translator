@@ -63,6 +63,43 @@ def test_tts_error_code_exposes_stable_localization_categories(message, expected
     assert tts_error_code(tts_error_token(expected)) == expected
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        (
+            "Style-Bert-VITS2 synthesis failed: The shared English Style-Bert-VITS2 "
+            "BERT runtime model (microsoft/deberta-v3-large) is not downloaded.",
+            "model_missing",
+        ),
+        ("The selected Style-Bert-VITS2 model folder is missing", "model_missing"),
+        (
+            "Qwen Voice Cloning has no cloned voice yet. Record one in Settings",
+            "model_missing",
+        ),
+        (
+            "Style-Bert-VITS2 synthesis failed: The model is trained with JP-Extra, "
+            "but the language is not JP",
+            "language_mismatch",
+        ),
+        (
+            "Qwen TTS account access denied (HTTP 403): Arrearage. The DashScope "
+            "account balance or model subscription needs attention",
+            "billing",
+        ),
+        (
+            "The cloned voice 'Mine' was registered for model 'qwen3-tts-vc-x' in "
+            "region 'singapore'; it cannot be used with model 'y'",
+            "configuration",
+        ),
+        ("Style-Bert-VITS2 runtime is not available: torch is not installed", "unavailable"),
+    ),
+)
+def test_tts_error_code_classifies_local_engine_and_account_failures(message, expected):
+    """Local-engine failures must not collapse into the generic provider bucket."""
+    assert tts_error_code(message) == expected
+    assert tts_error_code(tts_error_token(expected)) == expected
+
+
 def test_tts_error_code_classifies_local_credential_configuration():
     assert (
         tts_error_code("Qwen TTS API Key is still encrypted and cannot be used")

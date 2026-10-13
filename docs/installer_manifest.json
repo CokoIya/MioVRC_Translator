@@ -1,25 +1,25 @@
 {
-  "version": "v1.4.1",
-  "installer_name": "MioTranslator-Setup-v1.4.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.4.1/MioTranslator-Setup-v1.4.1.exe",
-  "size_bytes": 345205937,
-  "sha256": "e253920f5cb021268db1838c47a34029bdd008e73a200b169e9892afa8810595",
+  "version": "v1.5.0",
+  "installer_name": "MioTranslator-Setup-v1.5.0.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.0/MioTranslator-Setup-v1.5.0.exe",
+  "size_bytes": 431226824,
+  "sha256": "f357c048ac34947e330e8acd90b84029596418920c63157a04127dea4ce53d90",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "ad2fa27e9314e4d970662fcea8103afa82b360891f8679cb918123cb9cd0c5b2c6e2d810dbe9b095a6e2aa50f99832595edcb6e03d7f08eb070da38f4ffd6d05",
-  "notes": "v1.4.1 disables Claude/Anthropic translation backends and migrates saved Claude selections to the default service; it retains direct Edge speech recognition, optional SenseVoice local ASR, and Qwen cloud voice enrollment.",
+  "installer_signature": "1f7531c40c812ea322f7bc0c2b35592c2cbb7eec59228990b05ea0b754c60f9b9616275f7d52066f3fb80f3ce15335b5688009a97a52386c14012cdf82328e04",
+  "notes": "v1.5.0 adds Mio VR Gestures: two-hand screenshot translation, independent screenshot languages, QR links, wrist bookmarks, bidirectional session history and fixed-heading captions with manual recentering. Existing Mio translation, ASR and TTS services remain. VR requires SteamVR and tracked headset/controllers.",
   "notes_i18n": {
-    "zh-CN": "v1.4.1 增加直连 Edge 语音识别，保留 SenseVoice 可选本地 ASR，移除过时的浏览器/实时 ASR 与旧本地 TTS 路径，并增加 Qwen 云端声音注册。",
-    "en": "v1.4.1 disables Claude/Anthropic translation backends and migrates saved Claude selections to the default service; it retains direct Edge speech recognition, optional SenseVoice local ASR, and Qwen cloud voice enrollment.",
-    "ja": "v1.4.1 は Edge 音声認識の直接接続を追加し、SenseVoice を任意のローカル ASR として残し、旧式のブラウザー／ライブ ASR とローカル TTS 経路を整理し、Qwen クラウド音声登録を追加しました。",
-    "ru": "v1.4.1 добавляет прямое распознавание речи Edge, оставляет SenseVoice необязательным локальным ASR, удаляет устаревшие браузерные/Live-ASR и локальные TTS-пути и добавляет регистрацию голоса Qwen в облаке.",
-    "ko": "v1.4.1은 Edge 음성 인식 직접 연결을 추가하고 SenseVoice를 선택적 로컬 ASR로 유지하며 오래된 브라우저/Live-ASR 및 로컬 TTS 경로를 정리하고 Qwen 클라우드 음성 등록을 추가합니다."
+    "zh-CN": "v1.5.0 新增 Mio VR手势：双手取景翻译、独立截图语言、二维码链接、手腕书签与双向转译记录，以及固定朝向字幕和“移到眼前”。保留 Mio 原有翻译、ASR、TTS 服务。VR 需要 SteamVR 与正常追踪的头显和手柄。",
+    "en": "v1.5.0 adds Mio VR Gestures: two-hand screenshot translation, independent screenshot languages, QR links, wrist bookmarks, bidirectional session history and fixed-heading captions with manual recentering. Existing Mio translation, ASR and TTS services remain. VR requires SteamVR and tracked headset/controllers.",
+    "ja": "v1.5.0 は Mio VRジェスチャーを追加：両手の画像翻訳、画像専用言語、QR リンク、手首ブックマーク、双方向のセッション履歴、向き固定字幕と再配置。Mio の翻訳・ASR・TTS は維持します。VR には SteamVR と追跡中の頭と両手が必要です。",
+    "ru": "v1.5.0 добавляет жесты Mio VR: перевод снимков двумя руками, отдельные языки снимков, QR-ссылки, закладки на запястье, историю обеих сторон диалога в сеансе и субтитры фиксированного направления с возвратом перед глазами. Сервисы перевода, ASR и TTS сохранены. Требуются SteamVR и отслеживаемые шлем и контроллеры.",
+    "ko": "v1.5.0은 Mio VR 제스처를 추가합니다: 양손 스크린샷 번역, 독립 언어 설정, QR 링크, 손목 북마크, 양방향 세션 기록, 방향 고정 자막과 재배치. 기존 Mio 번역·ASR·TTS는 유지됩니다. VR에는 SteamVR과 정상 추적 중인 헤드셋·컨트롤러가 필요합니다."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-08-29T21:21:19+09:00",
+  "published_at": "2026-10-13T18:14:47+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "60873811eff4f7d0c4c2668a0cb3cabf757e107c5573d85651d0b107799cf305feb8b35809d06a4ebe2335668f13bc3b717df110bb7c5d46001fe217c268db0e"
+  "signature": "9d7f677844aabfeec0f78ff11e36a1235077e9d66f0ee5d3c94170b545e18df8311ab93ec5a18ae5b4618ed6d6f0ba594ea02e76a2e999b9b23b310db8cada04"
 }

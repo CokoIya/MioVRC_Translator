@@ -59,9 +59,6 @@ REQUIRED_MODULES = (
     "g2p_en",
     "nltk",
     "defusedxml",
-    "openvr",
-    "winrt.windows.media.ocr",
-    "rapidocr_onnxruntime",
     "cv2",
     "pyworld",
 )

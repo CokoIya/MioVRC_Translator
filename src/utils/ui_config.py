@@ -2,30 +2,66 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 
+from src.utils.model_retirement import (  # noqa: F401 - re-exported
+    ANTHROPIC_MODEL_ID_PREFIXES,
+    is_retired_translation_model,
+)
+
 DEFAULT_UI_LANGUAGE = "zh-CN"
 
-# Claude/Anthropic is intentionally disabled for this release.  Keep the
-# legacy catalog entries available only for safe migration of old configs; no
-# UI selector, active catalog, or translator factory may expose them.
 # Backends that stay in the catalog but cannot be selected or created. Empty
 # since Claude came back; the guard is kept so a backend can be retired
 # again without touching every caller.
 DISABLED_TRANSLATION_BACKENDS: frozenset[str] = frozenset()
-# The Claude families the translator knows how to drive (see
-# AnthropicTranslator._apply_model_request_defaults). A saved official-Claude
-# model outside them (3.x, 4.0, 4.1) is migrated to the default, and a remote
-# catalog cannot put anything else into the presets. "claude-opus-5" also
-# covers Opus 5.5.
-ANTHROPIC_MODEL_ID_PREFIXES: tuple[str, ...] = (
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-5",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
-    "claude-fable-5",
+# The single relay-station backend ("中转站兼容"). It replaced the separate
+# GPT-, Grok- and Claude-compatible backends; their ids stay as aliases so old
+# configs, fallback chains and remote catalogs resolve to it.
+RELAY_BACKEND = "openai_compatible"
+LEGACY_RELAY_BACKENDS: dict[str, str] = {
+    "grok_compatible": "openai",
+    "anthropic_compatible": "anthropic",
+}
+RELAY_PROTOCOL_OPENAI = "openai"
+RELAY_PROTOCOL_ANTHROPIC = "anthropic"
+RELAY_PROTOCOLS: tuple[str, ...] = (RELAY_PROTOCOL_OPENAI, RELAY_PROTOCOL_ANTHROPIC)
+# DeepSeek is offered as its flash model only: every DeepSeek "pro" id is
+# hidden from fetched model lists (case-insensitive; matches deepseek-v4-pro,
+# deepseek/deepseek-v4-pro:free, deepseek-ai/DeepSeek-V4-Pro, "DeepSeek V4
+# Pro", deepseek-v4-pro-260425, but not deepseek-prover).
+DEEPSEEK_PRO_MODEL_PATTERN = r"deepseek[^/]*[-_.\s]pro(?![a-z0-9])"
+
+
+_RELAY_MODEL_VENDOR_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("claude-", "anthropic"),
+    ("grok-", "xai"),
+    ("gemini-", "gemini"),
+    ("deepseek-", "deepseek"),
+    ("kimi-", "kimi"),
+    ("glm-", "zhipu"),
+    ("qwen", "qianwen"),
+    ("mimo-", "xiaomi"),
+    ("mistral-", "mistral"),
+    ("ministral-", "mistral"),
+    ("hunyuan-", "hunyuan"),
+    ("doubao-", "doubao"),
 )
+
+
+def normalize_relay_protocol(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"anthropic", "claude", "messages", "anthropic_messages"}:
+        return RELAY_PROTOCOL_ANTHROPIC
+    return RELAY_PROTOCOL_OPENAI
+
+
+def relay_protocol_from_config(trans_cfg: Mapping[str, object] | None) -> str:
+    """Wire protocol of the relay backend in a translation config section."""
+
+    relay_cfg = trans_cfg.get(RELAY_BACKEND) if isinstance(trans_cfg, Mapping) else None
+    if isinstance(relay_cfg, Mapping):
+        return normalize_relay_protocol(relay_cfg.get("protocol"))
+    return RELAY_PROTOCOL_OPENAI
+
 
 UI_FONT_851 = "851"
 UI_FONT_SYSTEM = "system"
@@ -556,6 +592,37 @@ NVIDIA_TRANSLATION_KNOWN_BASE_URLS = frozenset(
     NVIDIA_TRANSLATION_REGION_BASE_URLS.values()
 )
 
+# Tencent closed the old Hunyuan API (api.hunyuan.cloud.tencent.com) on
+# 2026-09-30; Hunyuan models are now served by TokenHub, whose China and
+# Global sites issue separate keys.
+HUNYUAN_TRANSLATION_BASE_URL_CHINA = "https://tokenhub.tencentmaas.com/v1"
+HUNYUAN_TRANSLATION_BASE_URL_GLOBAL = "https://tokenhub-intl.tencentmaas.com/v1"
+HUNYUAN_TRANSLATION_LEGACY_BASE_URLS = frozenset(
+    {
+        "https://api.hunyuan.cloud.tencent.com/v1",
+        "https://api.hunyuan.cloud.tencent.com",
+        "https://hunyuan.tencentcloudapi.com",
+    }
+)
+HUNYUAN_TRANSLATION_DEFAULT_REGION = "china"
+HUNYUAN_TRANSLATION_REGION_BASE_URLS = {
+    "china": HUNYUAN_TRANSLATION_BASE_URL_CHINA,
+    "global": HUNYUAN_TRANSLATION_BASE_URL_GLOBAL,
+}
+HUNYUAN_TRANSLATION_REGION_ALIASES = {
+    "cn": "china",
+    "mainland": "china",
+    "china_mainland": "china",
+    "guangzhou": "china",
+    "intl": "global",
+    "international": "global",
+    "singapore": "global",
+    "sg": "global",
+}
+HUNYUAN_TRANSLATION_KNOWN_BASE_URLS = frozenset(
+    HUNYUAN_TRANSLATION_REGION_BASE_URLS.values()
+)
+
 DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL = "https://api.deepseek.com"
 DEEPSEEK_TRANSLATION_DEFAULT_REGION = "official"
 DEEPSEEK_TRANSLATION_REGION_BASE_URLS = {
@@ -581,18 +648,21 @@ TRANSLATION_BACKEND_REGION_BASE_URLS = {
     "deepseek": DEEPSEEK_TRANSLATION_REGION_BASE_URLS,
     "xiaomi": XIAOMI_TRANSLATION_REGION_BASE_URLS,
     "nvidia": NVIDIA_TRANSLATION_REGION_BASE_URLS,
+    "hunyuan": HUNYUAN_TRANSLATION_REGION_BASE_URLS,
 }
 TRANSLATION_BACKEND_REGION_ALIASES = {
     "qianwen": QWEN_TRANSLATION_REGION_ALIASES,
     "deepseek": DEEPSEEK_TRANSLATION_REGION_ALIASES,
     "xiaomi": XIAOMI_TRANSLATION_REGION_ALIASES,
     "nvidia": NVIDIA_TRANSLATION_REGION_ALIASES,
+    "hunyuan": HUNYUAN_TRANSLATION_REGION_ALIASES,
 }
 TRANSLATION_BACKEND_DEFAULT_REGIONS = {
     "qianwen": QWEN_TRANSLATION_DEFAULT_REGION,
     "deepseek": DEEPSEEK_TRANSLATION_DEFAULT_REGION,
     "xiaomi": XIAOMI_TRANSLATION_DEFAULT_REGION,
     "nvidia": NVIDIA_TRANSLATION_DEFAULT_REGION,
+    "hunyuan": HUNYUAN_TRANSLATION_DEFAULT_REGION,
 }
 TRANSLATION_BACKEND_REGION_OPTION_KEYS = {
     "qianwen": (
@@ -616,13 +686,34 @@ TRANSLATION_BACKEND_REGION_OPTION_KEYS = {
         ("nvidia_region_global", "global"),
         ("nvidia_region_custom", "custom"),
     ),
+    "hunyuan": (
+        ("hunyuan_region_china", "china"),
+        ("hunyuan_region_global", "global"),
+        ("hunyuan_region_custom", "custom"),
+    ),
 }
 
 TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "openai": {
         "label": "GPT",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-luna",
+        "model_list": "remote",
+        "model_list_include": ("gpt-",),
+        "model_list_exclude": (
+            "search",
+            "codex",
+            "computer-use",
+            "deep-research",
+            "cyber",
+            "rosalind",
+            "translate",
+            "diarize",
+            "-oss",
+            "instruct",
+            "-pro",
+            "chat-latest",
+        ),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -632,10 +723,46 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "streaming": False,
         "granular_timeout_input": True,
     },
+    # One entry for every relay station (中转站): GPT, Claude, Grok, Gemini ...
+    # models behind one Base URL. The model list is fetched from the relay;
+    # ``protocol`` picks the wire format (OpenAI chat completions by default,
+    # Anthropic messages for relays called over /v1/messages, which may serve
+    # non-Claude models too).
     "openai_compatible": {
-        "label": "GPT Compatible",
+        "label": "Relay Compatible",
         "base_url": "https://api.openai.com/v1",
-        "model": "gpt-5.6-sol",
+        "model": "gpt-6-luna",
+        "model_list": "remote",
+        # Relays list what the player's relay serves; DeepSeek pro models are
+        # hidden everywhere (DeepSeek is offered as flash only). Slow "pro"
+        # reasoning modes, coding-tuned codex models (Responses-first),
+        # search-preview models, completion-only instruct models, multi-agent
+        # and batch-only variants cannot serve live subtitles.
+        "model_list_exclude_patterns": (
+            DEEPSEEK_PRO_MODEL_PATTERN,
+            r"(^|/)(o1-pro|o3-pro)",
+            r"(^|/)gpt-[0-9.]+(-[a-z]+)?-pro([-:]|$)",
+            r"^(?:[^/]+/)?gpt-[0-9.]+-codex",
+            r"(^|/)codex-mini",
+            r"search-preview",
+            r"(^|/)gpt-3\.5-turbo-instruct",
+            r"-multi-agent",
+            r":batch$",
+        ),
+        # Recommended ids, matched by family id (openai/gpt-6-luna and
+        # anthropic/claude-haiku-5.5 count). OpenRouter serves DeepSeek flash
+        # as deepseek-v4.1-flash and ~deepseek/deepseek-flash-latest.
+        "model_list_priority": (
+            "gpt-6-luna",
+            "gpt-5.6-luna",
+            "claude-haiku-5-5",
+            "deepseek-flash",
+            "deepseek-v4.1-flash",
+            "deepseek-flash-latest",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "grok-4.3",
+        ),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -645,48 +772,34 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "streaming_input": True,
         "streaming": False,
         "granular_timeout_input": True,
+        "protocol_input": True,
+        "protocol": "openai",
         "api_key_hint": (
-            "Use this for OpenAI-compatible proxy or relay providers. Enter "
-            "the Base URL and model id supplied by that provider."
+            "Enter the Base URL and API key of your relay station (中转站). "
+            "Mio reads the relay's model list so you can pick any model it "
+            "serves - GPT, Claude, Grok, Gemini and others."
         ),
         "model_hint": (
-            "Choose the model id exposed by your proxy. If your saved model is "
-            "not in the preset list, Mio keeps it available in this dropdown."
-        ),
-    },
-    "grok_compatible": {
-        "label": "Grok Compatible",
-        "base_url": "https://api.x.ai/v1",
-        "model": "grok-4.6",
-        "timeout_s": 15.0,
-        "max_output_tokens": 192,
-        "max_retries": 0,
-        "model_input": "editable",
-        "base_url_input": "entry",
-        "custom_headers_input": True,
-        "streaming_input": True,
-        "streaming": True,
-        "granular_timeout_input": True,
-        "api_key_hint": (
-            "Use an xAI key or the credential issued by any Grok-compatible "
-            "OpenAI relay. The Base URL is not restricted to official xAI endpoints."
-        ),
-        "model_hint": (
-            "grok-4.6 is the default. Relay-specific model names are preserved "
-            "exactly as entered and are never rewritten to an official xAI id."
+            "Pick a model from the list read from your relay, or type a model "
+            "id. Refresh the list after changing the Base URL, key or protocol."
         ),
     },
     "local_ai": {
         "label": "Local AI",
         "base_url": "http://127.0.0.1:11434/v1",
-        "model": "qwen2.5:7b-instruct",
+        "model": "qwen3:4b-instruct",
+        "model_list": "remote",
+        # The player's own server lists what is installed; DeepSeek pro tags
+        # (deepseek-v4-pro:cloud) are hidden like everywhere else, and any
+        # model name can still be typed.
+        "model_list_exclude_patterns": (DEEPSEEK_PRO_MODEL_PATTERN,),
         "timeout_s": 30.0,
         "max_output_tokens": 256,
         "max_retries": 0,
         "model_input": "entry",
         "base_url_input": "entry",
         "api_key_required": False,
-        "model_hint": "Enter the local model name exposed by your OpenAI-compatible server.",
+        "model_hint": "Pick a model your local OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM) reports, or type its exact name.",
         "api_key_hint": "Leave blank unless your local server requires an API key.",
     },
     "google_web": {
@@ -772,7 +885,12 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "qianwen": {
         "label": "Qwen",
         "base_url": QWEN_TRANSLATION_BASE_URL_INTERNATIONAL,
-        "model": "qwen-mt-plus",
+        "model": "qwen-mt-flash",
+        "model_list": "remote",
+        # The backend speaks Qwen-MT's translation_options protocol, so only
+        # Qwen-MT models can be routed through it.
+        "model_list_include": ("qwen-mt-",),
+        "model_list_exclude": ("qwen-mt-image", "qwen-mt-uni", "realtime", "livetranslate"),
         "timeout_s": 20.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -782,27 +900,49 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     },
     "hunyuan": {
         "label": "Tencent Hunyuan",
-        "base_url": "https://api.hunyuan.cloud.tencent.com/v1",
-        "model": "hunyuan-turbos-latest",
-        "extra_body": {"enable_enhancement": True},
+        "base_url": HUNYUAN_TRANSLATION_BASE_URL_CHINA,
+        "model": "hy3",
+        "model_list": "remote",
+        # Tencent's own text models: hy3 / hy4-preview and the hy-mt2
+        # translation models. TokenHub also lists image, video, speech and
+        # third-party models, which this backend does not offer.
+        "model_list_include": ("hy",),
+        "model_list_exclude": (
+            "image",
+            "video",
+            "vision",
+            "embedding",
+            "3d",
+            "tts",
+            "asr",
+            "speech",
+            "voice",
+            "audio",
+            "role",
+            "-code",
+            "-vl",
+        ),
         "timeout_s": 20.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "select",
+        "model_input": "editable",
         "base_url_input": "entry",
         "api_key_hint": (
-            "Use a Tencent Hunyuan API Key. This OpenAI-compatible endpoint is "
-            "a strong mainland China option when no-key public services are not reliable."
+            "Use a Tencent TokenHub API key from the site you choose (China or "
+            "Global). Keys from the retired Hunyuan console no longer work."
         ),
         "model_hint": (
-            "hunyuan-turbos-latest is the recommended low-latency Hunyuan default "
-            "for live translation."
+            "hy3 is the low-latency default; hy-mt2-plus and hy-mt2-lite are "
+            "Tencent's dedicated translation models."
         ),
     },
     "xiaomi": {
         "label": "Xiaomi AI",
         "base_url": XIAOMI_TRANSLATION_BASE_URL_PAYG,
-        "model": "mimo-v2.5-pro",
+        "model": "mimo-v2.6-flash",
+        "model_list": "remote",
+        "model_list_include": ("mimo-",),
+        "model_list_exclude": ("-tts", "-asr", "voiceclone", "voicedesign", "audio", "embed", "image", "video"),
         "extra_body": {"thinking": {"type": "disabled"}},
         "prefer_max_completion_tokens": True,
         "timeout_s": 20.0,
@@ -815,14 +955,20 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
             "region. Do not mix pay-as-you-go keys with Token Plan clusters."
         ),
         "model_hint": (
-            "mimo-v2.5-pro is the current quality default; switch to "
-            "mimo-v2-flash when latency matters more than quality."
+            "mimo-v2.6-flash is the low-latency default; mimo-v2.6-pro gives "
+            "higher quality, and the ultraspeed variant costs about 10x more."
         ),
     },
     "deepseek": {
         "label": "DeepSeek",
         "base_url": DEEPSEEK_TRANSLATION_BASE_URL_OFFICIAL,
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
+        "model_list": "remote",
+        # DeepSeek is offered as its flash model only (pro models hidden).
+        "model_list_include": ("deepseek-",),
+        "model_list_require": ("flash",),
+        "model_list_exclude": ("reasoner", "coder", "prover", "math", "-exp", "preview"),
+        "model_list_exclude_patterns": (DEEPSEEK_PRO_MODEL_PATTERN,),
         "timeout_s": 20.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -833,8 +979,30 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "zhipu": {
         "label": "GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-5.1",
-        "extra_body": {"thinking": {"type": "disabled"}},
+        "model": "glm-4.7-flashx",
+        "model_list": "remote",
+        # GLM's undocumented /models omits the flash/flashx ids, so the
+        # built-in list is merged into whatever it returns.
+        "model_list_merge_builtin": True,
+        "model_list_include": ("glm-",),
+        "model_list_exclude": (
+            "-thinking",
+            "voice",
+            "realtime",
+            "tts",
+            "asr",
+            "ocr",
+            "image",
+            "cogview",
+            "cogvideo",
+            "vidu",
+            "autoglm",
+            "codegeex",
+            "charglm",
+            "emohaa",
+            "glm-4-long",
+        ),
+        "model_list_exclude_patterns": (r"^glm-[0-9.]+v($|-)",),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -843,7 +1011,37 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "gemini": {
         "label": "Gemini",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-3.5-flash",
+        "model": "gemini-3.6-flash",
+        "model_list": "remote",
+        "model_list_include": ("gemini-",),
+        "model_list_exclude": (
+            "embedding",
+            "imagen",
+            "veo",
+            "tts",
+            "audio",
+            "live",
+            "image",
+            "nano-banana",
+            "robotics",
+            "computer-use",
+            "cyber",
+            "transcribe",
+            "translate",
+            "lyria",
+            "omni",
+            "deep-research",
+            "antigravity",
+            "gemma",
+            "aqa",
+            "learnlm",
+            "-exp",
+            "thinking",
+            "customtools",
+            "-pro",
+            "-latest",
+        ),
+        "model_list_exclude_patterns": (r"^gemini-[12]\.",),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -853,6 +1051,18 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "label": "Kimi",
         "base_url": "https://api.moonshot.cn/v1",
         "model": "kimi-k2.6",
+        "model_list": "remote",
+        "model_list_include": ("kimi-",),
+        "model_list_exclude": (
+            "-code",
+            "kimi-k2-",
+            "kimi-latest",
+            "thinking",
+            "preview",
+            "vision",
+            "embedding",
+            "audio",
+        ),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -862,6 +1072,24 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "label": "xAI",
         "base_url": "https://api.x.ai/v1",
         "model": "grok-4.3",
+        "model_list": "remote",
+        "model_list_include": ("grok-",),
+        "model_list_exclude": (
+            "imagine",
+            "image",
+            "video",
+            "voice",
+            "tts",
+            "stt",
+            "transcribe",
+            "embed",
+            "multi-agent",
+            "grok-build",
+            "grok-code",
+        ),
+        # "-reasoning" variants cannot switch reasoning off; "-non-reasoning"
+        # ones are the fast picks.
+        "model_list_exclude_patterns": (r"(?<!non)-reasoning$",),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -875,6 +1103,28 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "label": "Mistral",
         "base_url": "https://api.mistral.ai/v1",
         "model": "mistral-medium-3-5",
+        "model_list": "remote",
+        "model_list_include": ("mistral-small-", "mistral-medium-", "mistral-large-", "ministral-", "ft:"),
+        "model_list_exclude": (
+            "labs-",
+            "zai-",
+            "embed",
+            "ocr",
+            "moderation",
+            "shieldstral",
+            "codestral",
+            "devstral",
+            "voxtral",
+            "magistral",
+            "pixtral",
+            "leanstral",
+            "tts",
+            "transcribe",
+            "realtime",
+            "saba",
+            "mamba",
+            "mathstral",
+        ),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -883,20 +1133,70 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
     "doubao": {
         "label": "Doubao",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "model": "doubao-seed-2-0-pro-260215",
+        "model": "doubao-seed-2-1-lite-260915",
+        # Ark exposes no model list to an API key (only to account AK/SK), so
+        # Doubao keeps a built-in list; any current model or ep- endpoint id
+        # can still be typed.
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
-        "model_input": "entry",
+        "model_input": "editable",
         "model_hint": (
-            "Enter a current Ark model id in the Model field, such as "
-            "doubao-seed-2-0-pro-260215."
+            "Pick a current Ark model or type any model id or ep- inference "
+            "endpoint id from the Ark console."
         ),
     },
     "nvidia": {
         "label": "NVIDIA AI",
         "base_url": NVIDIA_TRANSLATION_BASE_URL,
-        "model": "nvidia/nemotron-3-nano-30b-a3b",
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "model_list": "remote",
+        "model_list_exclude": (
+            "embed",
+            "retriever",
+            "rerank",
+            "nvclip",
+            "vision",
+            "vlm",
+            "vila",
+            "neva",
+            "fuyu",
+            "kosmos",
+            "deplot",
+            "parse",
+            "cosmos",
+            "-omni-",
+            "video",
+            "detector",
+            "guard",
+            "safety",
+            "reward",
+            "jailbreak",
+            "gliner",
+            "topic-control",
+            "starcoder",
+            "codestral",
+            "codellama",
+            "codegemma",
+            "usdcode",
+            "coder",
+            "poolside/",
+            "riva-translate",
+            "chatqa",
+            "palmyra-med",
+            "palmyra-fin",
+            "/ising-",
+            "calibration",
+            "muse-glimmer",
+            "recurrentgemma",
+        ),
+        "model_list_exclude_patterns": (
+            r"-reasoning$",
+            r"-thinking$",
+            r"^moonshotai/kimi-k3$",
+            r"-v0\.1$",
+            DEEPSEEK_PRO_MODEL_PATTERN,
+        ),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -915,6 +1215,11 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "label": "Claude",
         "base_url": "https://api.anthropic.com",
         "model": "claude-opus-5",
+        "model_list": "remote",
+        "model_list_include": ("claude-",),
+        # Fable / Mythos think on every request and cost several times more:
+        # not a fit for live subtitles.
+        "model_list_exclude": ("mythos", "fable"),
         "timeout_s": 15.0,
         "max_output_tokens": 192,
         "max_retries": 0,
@@ -923,124 +1228,113 @@ TRANSLATION_BACKENDS: dict[str, dict[str, object]] = {
         "streaming_input": True,
         "streaming": False,
         "granular_timeout_input": True,
-    },
-    "anthropic_compatible": {
-        "label": "Claude Compatible",
-        "base_url": "https://api.anthropic.com",
-        "model": "claude-opus-5",
-        "timeout_s": 15.0,
-        "max_output_tokens": 192,
-        "max_retries": 0,
-        "model_input": "editable",
-        "base_url_input": "entry",
-        "custom_headers_input": True,
-        "streaming_input": True,
-        "streaming": False,
-        "granular_timeout_input": True,
-        "api_key_hint": (
-            "Use this for Claude-compatible proxy or relay providers. Enter "
-            "the Base URL and model id supplied by that provider."
-        ),
-        "model_hint": (
-            "Choose the Claude model id exposed by your proxy. If your saved "
-            "model is not in the preset list, Mio keeps it available in this dropdown."
-        ),
     },
 }
 
 TRANSLATION_MODEL_PRESETS: dict[str, tuple[str, ...]] = {
+    # Built-in recommendations. Backends that read their list from the
+    # provider only show these until the first successful refresh (or when
+    # the provider cannot be reached).
     "openai": (
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.4-mini",
         "gpt-5.6-luna",
     ),
-    "openai_compatible": (
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-    ),
-    "grok_compatible": ("grok-4.6", "grok-4.5"),
+    # The relay list comes from the relay itself (fetched at runtime).
+    "openai_compatible": (),
+    "local_ai": (),
     "google_web": ("google-web",),
     "microsoft_edge_web": ("bing",),
     "mymemory": ("mymemory",),
     "deepl": ("deepl-api",),
     "libretranslate": ("libretranslate",),
-    "deepseek": (
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
-    ),
+    "deepseek": ("deepseek-flash",),
     "zhipu": (
-        "glm-5.3",
-        "glm-5.3-flash",
+        "glm-4.7-flashx",
+        "glm-4.7-flash",
         "glm-5.2",
+        "glm-4.7",
+        "glm-5.3-flash",
     ),
     "qianwen": (
-        "qwen-mt-plus",
         "qwen-mt-flash",
         "qwen-mt-lite",
+        "qwen-mt-plus",
     ),
     "hunyuan": (
-        "hunyuan-turbos-latest",
-        "hunyuan-turbo-latest",
+        "hy3",
+        "hy-mt2-plus",
+        "hy-mt2-lite",
+        "hy4-preview",
     ),
     "xiaomi": (
-        "mimo-v2.5-pro",
-        "mimo-v2.5",
-        "mimo-v2-flash",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
+        "mimo-v2.6-pro-ultraspeed",
     ),
     "gemini": (
-        "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
     ),
     "kimi": (
-        "kimi-k3",
         "kimi-k2.6",
+        "kimi-k3",
     ),
     "xai": (
-        "grok-4.6",
-        "grok-4.5",
         "grok-4.3",
         "grok-4.20-0309-non-reasoning",
+        "grok-4.7",
+        "grok-4.6",
     ),
     "mistral": (
         "mistral-medium-3-5",
-        "mistral-medium-latest",
-        "mistral-small-latest",
-        "ministral-8b-latest",
+        "mistral-small-2603",
+        "ministral-14b-2512",
+        "ministral-8b-2512",
     ),
-    "doubao": (),
+    "doubao": (
+        "doubao-seed-2-1-lite-260915",
+        "doubao-seed-2-0-mini-260428",
+        "doubao-seed-2-1-turbo-260628",
+        "doubao-seed-2-1-pro-260915",
+        "deepseek-v4-1-flash-260910",
+    ),
     "nvidia": (
-        "nvidia/nemotron-3-nano-30b-a3b",
+        "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "deepseek-ai/deepseek-v4.1-flash",
+        "google/gemma-4-31b-it",
+        "nvidia/nemotron-3-super-120b-a12b",
     ),
     "anthropic": (
         "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
         "claude-sonnet-5",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ),
-    "anthropic_compatible": (
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "claude-sonnet-4-6",
         "claude-haiku-4-5",
     ),
 }
 
 TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "openai": {
-        "gpt-5.6-sol": {
-            "speed": "fast",
+        "gpt-6-luna": {
+            "speed": "very_fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "gpt-5.6-terra": {
+        "gpt-6-sol": {
+            "speed": "fast",
+            "quality": "very_high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
+        "gpt-5.4-mini": {
             "speed": "fast",
             "quality": "high",
             "fit": "recommended",
-            "note": "balanced_quality",
+            "note": "economy_first",
         },
         "gpt-5.6-luna": {
             "speed": "fast",
@@ -1048,28 +1342,8 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "gpt-5.5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
     },
     "openai_compatible": {},
-    "grok_compatible": {
-        "grok-4.6": {
-            "speed": "fast",
-            "quality": "very_high",
-            "fit": "very_recommended",
-            "note": "latest_default",
-        },
-        "grok-4.5": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "live_default",
-        },
-    },
     "google_web": {
         "google-web": {
             "speed": "very_fast",
@@ -1111,200 +1385,146 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
         },
     },
     "deepseek": {
-        "deepseek-v4-flash": {
+        "deepseek-flash": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "deepseek-v4-pro": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
     },
     "zhipu": {
-        "glm-5.3-flash": {
+        "glm-4.7-flashx": {
             "speed": "very_fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "glm-5.3": {
-            "speed": "balanced",
-            "quality": "high",
+        "glm-4.7-flash": {
+            "speed": "very_fast",
+            "quality": "balanced",
             "fit": "recommended",
-            "note": "quality_first",
+            "note": "economy_first",
         },
         "glm-5.2": {
             "speed": "fast",
             "quality": "high",
             "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "glm-5.1": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
-        "glm-5-turbo": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "very_recommended",
-            "note": "live_default",
-        },
-        "glm-5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "glm-4.7-flash": {
-            "speed": "fast",
-            "quality": "balanced",
-            "fit": "very_recommended",
-            "note": "live_default",
-        },
-        "glm-4.7-flashx": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "ultra_fast",
+            "note": "quality_first",
         },
         "glm-4.7": {
             "speed": "balanced",
             "quality": "high",
-            "fit": "general",
+            "fit": "recommended",
             "note": "general_high_quality",
+        },
+        "glm-5.3-flash": {
+            "speed": "balanced",
+            "quality": "high",
+            "fit": "general",
+            "note": "balanced_quality",
         },
     },
     "qianwen": {
+        "qwen-mt-flash": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
         "qwen-mt-lite": {
             "speed": "very_fast",
             "quality": "balanced",
-            "fit": "general",
-            "note": "economy_first",
-        },
-        "qwen-mt-flash": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "general",
+            "fit": "recommended",
             "note": "economy_first",
         },
         "qwen-mt-plus": {
             "speed": "fast",
-            "quality": "high",
-            "fit": "very_recommended",
+            "quality": "very_high",
+            "fit": "recommended",
             "note": "mt_quality",
         },
     },
     "hunyuan": {
-        "hunyuan-turbos-latest": {
+        "hy3": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "hunyuan-turbo-latest": {
-            "speed": "balanced",
+        "hy-mt2-plus": {
+            "speed": "very_fast",
             "quality": "high",
             "fit": "recommended",
-            "note": "balanced_quality",
+            "note": "mt_quality",
+        },
+        "hy-mt2-lite": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "economy_first",
+        },
+        "hy4-preview": {
+            "speed": "balanced",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "quality_first",
         },
     },
     "xiaomi": {
-        "mimo-v2-flash": {
+        "mimo-v2.6-flash": {
             "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "very_recommended",
-            "note": "ultra_fast",
-        },
-        "mimo-v2.5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "mimo-v2.5-pro": {
-            "speed": "balanced",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
+        },
+        "mimo-v2.6-pro": {
+            "speed": "fast",
+            "quality": "very_high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
+        "mimo-v2.6-pro-ultraspeed": {
+            "speed": "very_fast",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "ultra_fast",
         },
     },
     "gemini": {
-        "gemini-3.7-flash": {
+        "gemini-3.6-flash": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
-        },
-        "gemini-3.6-flash": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
         },
         "gemini-3.5-flash-lite": {
             "speed": "very_fast",
             "quality": "balanced",
-            "fit": "general",
+            "fit": "recommended",
             "note": "economy_first",
         },
-        "gemini-3.5-flash": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "balanced_quality",
-        },
-        "gemini-2.5-flash-lite": {
-            "speed": "very_fast",
-            "quality": "balanced",
-            "fit": "recommended",
-            "note": "live_default",
-        },
-        "gemini-2.5-flash": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "very_recommended",
-            "note": "balanced_quality",
-        },
-    },
-    "kimi": {
-        "kimi-k3": {
+        "gemini-3.8-flash": {
             "speed": "balanced",
-            "quality": "high",
+            "quality": "very_high",
             "fit": "recommended",
             "note": "quality_first",
         },
+    },
+    "kimi": {
         "kimi-k2.6": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "kimi-k2.5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
+        "kimi-k3": {
+            "speed": "slow",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "quality_first",
         },
     },
     "xai": {
-        "grok-4.6": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "quality_first",
-        },
-        "grok-4.5": {
-            "speed": "balanced",
-            "quality": "high",
-            "fit": "recommended",
-            "note": "general_high_quality",
-        },
         "grok-4.3": {
             "speed": "fast",
             "quality": "high",
@@ -1312,69 +1532,131 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "note": "live_default",
         },
         "grok-4.20-0309-non-reasoning": {
-            "speed": "balanced",
+            "speed": "very_fast",
             "quality": "high",
             "fit": "recommended",
-            "note": "balanced_quality",
+            "note": "ultra_fast",
         },
-        "grok-4.20": {
-            "speed": "fast",
-            "quality": "high",
-            "fit": "very_recommended",
-            "note": "live_default",
+        "grok-4.7": {
+            "speed": "balanced",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "quality_first",
+        },
+        "grok-4.6": {
+            "speed": "balanced",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "general_high_quality",
         },
     },
     "mistral": {
-        "mistral-small-latest": {
+        "mistral-medium-3-5": {
             "speed": "fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-        "mistral-medium-3-5": {
-            "speed": "balanced",
+        "mistral-small-2603": {
+            "speed": "fast",
             "quality": "high",
             "fit": "recommended",
             "note": "balanced_quality",
         },
-        "mistral-medium-latest": {
-            "speed": "balanced",
-            "quality": "high",
+        "ministral-14b-2512": {
+            "speed": "very_fast",
+            "quality": "balanced",
             "fit": "recommended",
-            "note": "balanced_quality",
+            "note": "economy_first",
         },
-        "ministral-8b-latest": {
+        "ministral-8b-2512": {
             "speed": "very_fast",
             "quality": "balanced",
             "fit": "general",
-            "note": "economy_first",
+            "note": "ultra_fast",
         },
     },
     "nvidia": {
-        "nvidia/nemotron-3-nano-30b-a3b": {
-            "speed": "balanced",
+        "nvidia/nemotron-3.5-lightning-30b-a3b": {
+            "speed": "very_fast",
             "quality": "high",
             "fit": "very_recommended",
             "note": "live_default",
         },
-    },
-    "anthropic": {
-        "claude-opus-5": {
-            "speed": "balanced",
+        "deepseek-ai/deepseek-v4.1-flash": {
+            "speed": "fast",
             "quality": "high",
-            "fit": "very_recommended",
-            "note": "live_default",
+            "fit": "recommended",
+            "note": "balanced_quality",
         },
-        "claude-sonnet-5": {
+        "google/gemma-4-31b-it": {
             "speed": "fast",
             "quality": "high",
             "fit": "recommended",
             "note": "general_high_quality",
         },
-        "claude-sonnet-4-6": {
+        "nvidia/nemotron-3-super-120b-a12b": {
             "speed": "balanced",
+            "quality": "very_high",
+            "fit": "general",
+            "note": "quality_first",
+        },
+    },
+    "doubao": {
+        "doubao-seed-2-1-lite-260915": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "doubao-seed-2-0-mini-260428": {
+            "speed": "very_fast",
+            "quality": "balanced",
+            "fit": "recommended",
+            "note": "economy_first",
+        },
+        "doubao-seed-2-1-turbo-260628": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "ultra_fast",
+        },
+        "doubao-seed-2-1-pro-260915": {
+            "speed": "balanced",
+            "quality": "very_high",
+            "fit": "recommended",
+            "note": "quality_first",
+        },
+        "deepseek-v4-1-flash-260910": {
+            "speed": "fast",
             "quality": "high",
             "fit": "general",
+            "note": "balanced_quality",
+        },
+    },
+    "anthropic": {
+        "claude-opus-5": {
+            "speed": "balanced",
+            "quality": "very_high",
+            "fit": "very_recommended",
+            "note": "live_default",
+        },
+        "claude-sonnet-5-5": {
+            "speed": "fast",
+            "quality": "very_high",
+            "fit": "recommended",
+            "note": "balanced_quality",
+        },
+        "claude-haiku-5-5": {
+            "speed": "very_fast",
+            "quality": "high",
+            "fit": "recommended",
+            "note": "ultra_fast",
+        },
+        "claude-sonnet-5": {
+            "speed": "fast",
+            "quality": "high",
+            "fit": "recommended",
             "note": "general_high_quality",
         },
         "claude-haiku-4-5": {
@@ -1384,24 +1666,16 @@ TRANSLATION_MODEL_PROFILES: dict[str, dict[str, dict[str, str]]] = {
             "note": "economy_first",
         },
     },
-    "anthropic_compatible": {},
 }
 
 TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
     "openai": {"zh-CN": "GPT", "en": "GPT", "ja": "GPT", "ru": "GPT", "ko": "GPT"},
-    "grok_compatible": {
-        "zh-CN": "Grok 兼容服务",
-        "en": "Grok Compatible",
-        "ja": "Grok 互換サービス",
-        "ru": "Grok-совместимый сервис",
-        "ko": "Grok 호환 서비스",
-    },
     "openai_compatible": {
-        "zh-CN": "GPT 兼容服务",
-        "en": "GPT Compatible",
-        "ja": "GPT 互換サービス",
-        "ru": "GPT-совместимый сервис",
-        "ko": "GPT 호환 서비스",
+        "zh-CN": "中转站兼容",
+        "en": "Relay Compatible",
+        "ja": "中継サービス互換",
+        "ru": "Совместимость с ретранслятором",
+        "ko": "중계 서비스 호환",
     },
     "local_ai": {
         "zh-CN": "本地 AI",
@@ -1445,20 +1719,13 @@ TRANSLATION_BACKEND_LABELS: dict[str, dict[str, str]] = {
     "doubao": {"zh-CN": "豆包", "en": "Doubao", "ja": "Doubao", "ru": "Doubao", "ko": "Doubao"},
     "nvidia": {"zh-CN": "NVIDIA AI", "en": "NVIDIA AI", "ja": "NVIDIA AI", "ru": "NVIDIA AI", "ko": "NVIDIA AI"},
     "anthropic": {"zh-CN": "Claude", "en": "Claude", "ja": "Claude", "ru": "Claude", "ko": "Claude"},
-    "anthropic_compatible": {
-        "zh-CN": "Claude 兼容服务",
-        "en": "Claude Compatible",
-        "ja": "Claude 互換サービス",
-        "ru": "Claude-совместимый сервис",
-        "ko": "Claude 호환 서비스",
-    },
 }
 
 # Keep profiles strictly aligned with selectable models. This prevents removed,
 # deprecated, reasoning-only, or known slow models from resurfacing through
 # recommendation metadata even when an older catalog is cached.
 for _profile_backend, _profiles in tuple(TRANSLATION_MODEL_PROFILES.items()):
-    if _profile_backend in {"openai_compatible", "anthropic_compatible"}:
+    if _profile_backend == RELAY_BACKEND:
         TRANSLATION_MODEL_PROFILES[_profile_backend] = {}
         continue
     _allowed_models = set(TRANSLATION_MODEL_PRESETS.get(_profile_backend, ()))
@@ -1470,16 +1737,12 @@ for _profile_backend, _profiles in tuple(TRANSLATION_MODEL_PROFILES.items()):
 
 TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
     "openai": {
-        "gpt-5.6-sol": "9.6",
-        "gpt-5.6-terra": "9.4",
+        "gpt-6-luna": "9.5",
+        "gpt-6-sol": "9.3",
+        "gpt-5.4-mini": "8.9",
         "gpt-5.6-luna": "9.0",
-        "gpt-5.5": "9.5",
     },
     "openai_compatible": {},
-    "grok_compatible": {
-        "grok-4.6": "9.8",
-        "grok-4.5": "9.0",
-    },
     "google_web": {
         "google-web": "8.6",
     },
@@ -1496,70 +1759,78 @@ TRANSLATION_MODEL_RECOMMENDATION_SCORES: dict[str, dict[str, str]] = {
         "libretranslate": "8.0",
     },
     "deepseek": {
-        "deepseek-v4-flash": "9.1",
-        "deepseek-v4-pro": "8.7",
+        "deepseek-flash": "9.2",
     },
     "zhipu": {
-        "glm-5.3": "9.4",
-        "glm-5.2": "9.1",
-        "glm-5.3-flash": "9.0",
+        "glm-4.7-flashx": "9.1",
+        "glm-4.7-flash": "8.7",
+        "glm-5.2": "9.2",
+        "glm-4.7": "8.9",
+        "glm-5.3-flash": "8.8",
     },
     "qianwen": {
-        "qwen-mt-plus": "9.7",
-        "qwen-mt-lite": "8.4",
-        "qwen-mt-flash": "8.7",
+        "qwen-mt-flash": "9.5",
+        "qwen-mt-lite": "8.6",
+        "qwen-mt-plus": "9.6",
     },
     "hunyuan": {
-        "hunyuan-turbos-latest": "8.9",
-        "hunyuan-turbo-latest": "8.4",
+        "hy3": "9.1",
+        "hy-mt2-plus": "9.0",
+        "hy-mt2-lite": "8.4",
+        "hy4-preview": "8.8",
     },
     "xiaomi": {
-        "mimo-v2.5-pro": "9.0",
-        "mimo-v2.5": "8.5",
-        "mimo-v2-flash": "8.4",
+        "mimo-v2.6-flash": "9.1",
+        "mimo-v2.6-pro": "9.2",
+        "mimo-v2.6-pro-ultraspeed": "8.8",
     },
     "gemini": {
-        "gemini-3.7-flash": "9.5",
         "gemini-3.6-flash": "9.4",
-        "gemini-3.5-flash-lite": "8.6",
-        "gemini-3.5-flash": "9.3",
-        "gemini-2.5-flash": "8.8",
-        "gemini-2.5-flash-lite": "8.4",
+        "gemini-3.5-flash-lite": "8.7",
+        "gemini-3.8-flash": "9.3",
     },
     "kimi": {
-        "kimi-k3": "9.4",
         "kimi-k2.6": "9.1",
-        "kimi-k2.5": "8.6",
+        "kimi-k3": "8.8",
     },
     "xai": {
-        "grok-4.6": "9.4",
-        "grok-4.5": "9.2",
-        "grok-4.3": "9.0",
-        "grok-4.20": "9.0",
-        "grok-4.20-0309-non-reasoning": "8.4",
+        "grok-4.3": "9.2",
+        "grok-4.20-0309-non-reasoning": "8.8",
+        "grok-4.7": "8.9",
+        "grok-4.6": "8.8",
     },
     "mistral": {
-        "mistral-small-latest": "8.8",
-        "mistral-medium-3-5": "8.7",
-        "mistral-medium-latest": "8.5",
-        "ministral-8b-latest": "7.5",
+        "mistral-medium-3-5": "8.9",
+        "mistral-small-2603": "8.8",
+        "ministral-14b-2512": "8.3",
+        "ministral-8b-2512": "7.8",
     },
     "nvidia": {
-        "nvidia/nemotron-3-nano-30b-a3b": "8.4",
+        "nvidia/nemotron-3.5-lightning-30b-a3b": "8.9",
+        "deepseek-ai/deepseek-v4.1-flash": "8.7",
+        "google/gemma-4-31b-it": "8.5",
+        "nvidia/nemotron-3-super-120b-a12b": "8.6",
+    },
+    "doubao": {
+        "doubao-seed-2-1-lite-260915": "9.1",
+        "doubao-seed-2-0-mini-260428": "8.5",
+        "doubao-seed-2-1-turbo-260628": "8.8",
+        "doubao-seed-2-1-pro-260915": "9.0",
+        "deepseek-v4-1-flash-260910": "8.7",
     },
     "anthropic": {
         "claude-opus-5": "9.6",
+        "claude-sonnet-5-5": "9.5",
+        "claude-haiku-5-5": "9.1",
         "claude-sonnet-5": "9.3",
-        "claude-sonnet-4-6": "9.0",
         "claude-haiku-4-5": "8.5",
     },
-    "anthropic_compatible": {},
 }
 
 for _score_backend, _scores in tuple(
     TRANSLATION_MODEL_RECOMMENDATION_SCORES.items()
 ):
-    if _score_backend in {"openai_compatible", "anthropic_compatible"}:
+    if _score_backend == RELAY_BACKEND:
         TRANSLATION_MODEL_RECOMMENDATION_SCORES[_score_backend] = {}
         continue
     _allowed_models = set(TRANSLATION_MODEL_PRESETS.get(_score_backend, ()))
@@ -1651,6 +1922,8 @@ def _with_code(label: str, code: str) -> str:
 
 
 def normalize_backend(backend: str | None) -> str:
+    if backend in LEGACY_RELAY_BACKENDS:
+        backend = RELAY_BACKEND
     if backend in _catalog_backends() and backend not in DISABLED_TRANSLATION_BACKENDS:
         return str(backend)
     return DEFAULT_BACKEND
@@ -1744,6 +2017,8 @@ def backend_region_for_ui_language(backend: str | None, language: str | None) ->
         return "singapore"
     if backend_code == "xiaomi":
         return "china_cluster" if resolved.startswith("zh") else "global"
+    if backend_code == "hunyuan":
+        return "china" if resolved.startswith("zh") else "global"
     return _catalog_default_regions().get(backend_code, "")
 
 
@@ -1853,6 +2128,21 @@ def get_backend_value(backend: str | None, key: str) -> str:
     return str(value)
 
 
+def relay_protocol_default(protocol: object, key: str) -> str:
+    """Default ``key`` of the relay backend when it speaks ``protocol``.
+
+    The relay's own defaults are OpenAI's. A relay switched to the Anthropic
+    messages protocol starts from Claude's endpoint and default model instead;
+    an OpenAI URL or a GPT model id would never work there.
+    """
+
+    if key in {"model", "base_url"} and (
+        normalize_relay_protocol(protocol) == RELAY_PROTOCOL_ANTHROPIC
+    ):
+        return get_backend_value("anthropic", key)
+    return get_backend_value(RELAY_BACKEND, key)
+
+
 def backend_model_is_selectable(backend: str | None) -> bool:
     return str(get_backend_spec(backend).get("model_input", "select")) in {
         "select",
@@ -1895,21 +2185,95 @@ def get_backend_config_value(
             text = str(value).strip()
             if text:
                 return text
+        if normalized_backend == RELAY_BACKEND:
+            return relay_protocol_default(backend_cfg.get("protocol"), key)
     return get_backend_value(normalized_backend, key)
+
+
+def model_list_source_key(backend: str | None, base_url: object, protocol: object = "") -> str:
+    """Identify where a fetched model list came from.
+
+    A list read from one endpoint (or one relay protocol) is never offered for
+    another, so changing the Base URL invalidates a saved list.
+    """
+
+    normalized_backend = normalize_backend(backend)
+    url = str(base_url or "").strip().rstrip("/").casefold()
+    key = f"{normalized_backend}|{url}"
+    if normalized_backend == RELAY_BACKEND:
+        key += f"|{normalize_relay_protocol(protocol)}"
+    return key
+
+
+def backend_config_source_key(backend: str | None, backend_cfg: Mapping[str, object] | None) -> str:
+    cfg = backend_cfg if isinstance(backend_cfg, Mapping) else {}
+    base_url = str(cfg.get("base_url", "") or "").strip()
+    if not base_url:
+        base_url = (
+            relay_protocol_default(cfg.get("protocol"), "base_url")
+            if normalize_backend(backend) == RELAY_BACKEND
+            else get_backend_value(backend, "base_url")
+        )
+    return model_list_source_key(backend, base_url, cfg.get("protocol"))
+
+
+def saved_remote_model_list(
+    backend: str | None,
+    backend_cfg: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    """The model list last read from the provider and saved in the config.
+
+    Empty when nothing was saved or when the saved list belongs to a
+    different endpoint than the one now configured.
+    """
+
+    if not isinstance(backend_cfg, Mapping):
+        return ()
+    models = backend_cfg.get("remote_models")
+    source = str(backend_cfg.get("remote_models_source", "") or "")
+    if not isinstance(models, (list, tuple)) or not models or not source:
+        return ()
+    normalized_backend = normalize_backend(backend)
+    if source != backend_config_source_key(normalized_backend, backend_cfg):
+        return ()
+    result: list[str] = []
+    for item in models:
+        model = str(item or "").strip()
+        if not model or len(model) > 200 or model in result:
+            continue
+        if is_retired_translation_model(normalized_backend, model):
+            continue
+        result.append(model)
+        if len(result) >= 500:
+            break
+    return tuple(result)
 
 
 def get_backend_model_options(
     backend: str | None,
     current_model: str | None = None,
+    backend_cfg: Mapping[str, object] | None = None,
 ) -> tuple[str, ...]:
+    """Models offered in selectors: the provider's own list when one was read.
+
+    Falls back to the built-in recommendations when no list has been fetched
+    for the configured endpoint yet.
+    """
+
     normalized_backend = normalize_backend(backend)
-    models = list(_catalog_model_presets().get(normalized_backend, ()))
+    models = list(saved_remote_model_list(normalized_backend, backend_cfg))
+    if not models:
+        models = list(_catalog_model_presets().get(normalized_backend, ()))
     current = str(current_model or "").strip()
     if current and current not in models:
         models.insert(0, current)
     if models:
         return tuple(models)
-    fallback = get_backend_value(normalized_backend, "model")
+    if normalized_backend == RELAY_BACKEND:
+        protocol = backend_cfg.get("protocol") if isinstance(backend_cfg, Mapping) else ""
+        fallback = relay_protocol_default(protocol, "model")
+    else:
+        fallback = get_backend_value(normalized_backend, "model")
     return (fallback,) if fallback else ()
 
 
@@ -1921,10 +2285,19 @@ def get_backend_model_profile(
     resolved_model = str(model or "").strip() or get_backend_value(
         normalized_backend, "model"
     )
-    profile_backend = {
-        "openai_compatible": "openai",
-        "anthropic_compatible": "anthropic",
-    }.get(normalized_backend, normalized_backend)
+    profile_backend = normalized_backend
+    if normalized_backend == RELAY_BACKEND:
+        # A relay serves models of many vendors; describe a known model with
+        # its vendor's profile.
+        lowered_model = resolved_model.casefold()
+        profile_backend = next(
+            (
+                vendor
+                for prefix, vendor in _RELAY_MODEL_VENDOR_PREFIXES
+                if lowered_model.startswith(prefix)
+            ),
+            "openai",
+        )
     backend_profiles = _catalog_model_profiles().get(profile_backend, {})
     profile = backend_profiles.get(resolved_model, {})
     score = TRANSLATION_MODEL_RECOMMENDATION_SCORES.get(profile_backend, {}).get(

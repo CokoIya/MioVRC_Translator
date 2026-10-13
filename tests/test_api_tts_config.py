@@ -7,6 +7,11 @@ import pytest
 from src.tts.api_tts_config import (
     QWEN_TTS_BASE_URL_INTERNATIONAL,
     QWEN_TTS_BASE_URL_MAINLAND,
+    QWEN_TTS_DEFAULT_MODEL,
+    QWEN_VC_MODEL_OPTIONS,
+    get_tts_api_model_options,
+    qwen_tts_model_is_retired,
+    qwen_vc_model_is_supported,
     resolve_tts_api_config,
 )
 from src.utils import config_manager
@@ -145,3 +150,38 @@ def test_qwen_japan_region_does_not_inherit_international_endpoint():
 
     assert resolved["region"] == "japan"
     assert resolved["base_url"] == ""
+
+
+def test_qwen_tts_offers_only_the_stable_alias():
+    # qwen3-tts-instruct-flash and the dated snapshots were retired on 2026-10-10.
+    assert QWEN_TTS_DEFAULT_MODEL == "qwen3-tts-flash"
+    assert get_tts_api_model_options("qwen_tts") == ("qwen3-tts-flash",)
+    # A relay's own model id typed by the player is still offered.
+    assert get_tts_api_model_options("qwen_tts", "relay/qwen3-tts-private-2026-07") == (
+        "qwen3-tts-flash",
+        "relay/qwen3-tts-private-2026-07",
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "retired"),
+    (
+        ("qwen3-tts-instruct-flash", True),
+        ("qwen3-tts-instruct-flash-2026-01-26", True),
+        ("qwen3-tts-flash-2025-11-27", True),
+        ("qwen3-tts-flash-2025-09-18", True),
+        ("Qwen-TTS", True),
+        ("qwen-tts-latest", True),
+        ("qwen3-tts-flash", False),
+        ("relay/qwen3-tts-private-2026-07", False),
+        ("", False),
+        (None, False),
+    ),
+)
+def test_retired_qwen_tts_models_are_recognised(model, retired):
+    assert qwen_tts_model_is_retired(model) is retired
+
+
+def test_qwen_vc_offers_only_models_that_accept_cloned_voices():
+    assert get_tts_api_model_options("qwen_vc") == QWEN_VC_MODEL_OPTIONS
+    assert all(qwen_vc_model_is_supported(model) for model in QWEN_VC_MODEL_OPTIONS)

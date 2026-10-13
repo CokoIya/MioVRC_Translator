@@ -72,4 +72,22 @@ def test_missing_translation_api_key_localizes_backend_qualifier():
     )
 
     assert missing is True
-    assert backend == "GPT-совместимый сервис"
+    assert backend == "Совместимость с ретранслятором"
+
+
+def test_missing_translation_api_key_names_the_relay_for_a_legacy_relay_section():
+    # A raw config that still selects the old Claude-compatible backend is
+    # read as the relay (Anthropic protocol), which needs a key.
+    missing, backend = missing_required_translation_api_key(
+        {
+            "translation": {
+                "backend": "anthropic_compatible",
+                "output_format": "translated_only",
+                "anthropic_compatible": {"api_key": ""},
+            }
+        },
+        "ja",
+    )
+
+    assert missing is True
+    assert backend == "中継サービス互換"

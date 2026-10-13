@@ -15,6 +15,7 @@ import threading
 import weakref
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, QThread, QTimer, QUrl, Qt, Signal, QVariantAnimation
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
@@ -62,6 +63,7 @@ from src.asr.text_corrections import (
 from src.audio.desktop_recorder import list_output_devices as _list_desktop_output_devices
 from src.audio.recorder import AudioRecorder
 from src.tts.api_tts_config import (
+    QWEN_VC_DEFAULT_MODEL,
     region_supports_voice_cloning,
     TTS_API_ENGINE_IDS,
     get_tts_api_base_url,
@@ -74,7 +76,7 @@ from src.tts.api_tts_config import (
     resolve_tts_api_config,
 )
 from src.tts.factory import create_tts_engine
-from src.tts.error_utils import tts_error_code, tts_error_token
+from src.tts.error_utils import TTS_ERROR_TOKEN_PREFIX, tts_error_code, tts_error_token
 from src.tts.manager import TTSManager, find_best_virtual_output_device, resolve_output_device
 from src.tts.base import TTSVoice
 from src.core import voice_clone_service
@@ -83,11 +85,18 @@ from src.tts.reference_audio import (
     ReferenceAudioDecoderUnavailableError,
     normalize_reference_audio_file,
 )
+from src.tts.style_bert_vits2_downloader import (
+    get_hololive_downloader,
+    hololive_bundle_is_complete,
+)
 from src.tts.style_bert_vits2_models import (
     import_style_bert_model_path,
     list_imported_style_bert_models,
+    load_style_bert_vits2_presets,
+    resolve_style_bert_voice_language,
     style_bert_preset_title,
     style_bert_voice_id,
+    style_bert_voice_language,
 )
 from src.ui_qt.icon_utils import ui_icon
 from src.ui_qt.credential_prompt import show_missing_credential_prompt
@@ -113,6 +122,7 @@ from src.utils.app_paths import (
     secure_file_size,
 )
 from src.utils.logger import logs_dir
+from src.utils.model_family import model_family_id, same_model_family
 from src.utils.global_hotkey import normalize_hotkey, HotkeyError
 from src.utils.gpu_support import detect_nvidia_driver, torch_cuda_available
 from src.utils.i18n import get_tts_engine_label, tr
@@ -129,6 +139,14 @@ from src.utils.ui_config import (
     get_backend_order,
     DEFAULT_ASR_ENGINE,
     OUTPUT_FORMAT_OPTIONS,
+    RELAY_BACKEND,
+    RELAY_PROTOCOL_ANTHROPIC,
+    RELAY_PROTOCOL_OPENAI,
+    backend_config_source_key,
+    model_list_source_key,
+    normalize_relay_protocol,
+    relay_protocol_default,
+    saved_remote_model_list,
     UI_FONT_851,
     UI_FONT_SYSTEM,
     UI_LANGUAGE_OPTIONS,
@@ -162,7 +180,9 @@ from src.utils.ui_config import (
 from src.utils.credential_validation import (
     MissingCredential,
     first_missing_required_credential,
+    should_bypass_environment_proxies,
 )
+from src.translators.model_listing import backend_supports_model_listing
 from src.utils.localization import (
     SUPPORTED_UI_LANGUAGES,
     format_locale_number,
@@ -200,13 +220,18 @@ def style_bert_bert_model_id(language: object) -> str:
 
 def list_style_bert_vits2_voices(bert_language: object = "jp") -> list[TTSVoice]:
     normalized_language = normalize_style_bert_bert_language(bert_language)
-    language, locale = _STYLE_BERT_VOICE_LOCALES.get(
-        normalized_language.upper(),
-        _STYLE_BERT_VOICE_LOCALES["JP"],
-    )
     voices: list[TTSVoice] = []
     for model in list_imported_style_bert_models():
         for speaker in model.speakers:
+            # JP-Extra and catalog voices carry their own language; only the
+            # rest follow the BERT language setting.
+            voice_language = resolve_style_bert_voice_language(
+                model, speaker, normalized_language
+            )
+            language, locale = _STYLE_BERT_VOICE_LOCALES.get(
+                voice_language.upper(),
+                _STYLE_BERT_VOICE_LOCALES["JP"],
+            )
             for style in model.styles:
                 voice_id = style_bert_voice_id(model.name, speaker, style)
                 display_title = style_bert_preset_title(model.name, speaker)
@@ -233,6 +258,76 @@ SETTINGS_HINT_WRAP = 640
 SETTINGS_UI_CALLBACK_QUEUE_MAXSIZE = 256
 TTS_TEST_TIMEOUT_MS = 60_000
 STYLE_BERT_TTS_TEST_TIMEOUT_MS = 240_000
+# Result-dialog reasons for a failed TTS test of any engine but Qwen TTS
+# (which keeps its own region-aware texts).
+_TTS_TEST_REASON_KEYS = {
+    "model_missing": "tts_reason_model_missing",
+    "language_mismatch": "tts_reason_language_mismatch",
+    "unavailable": "tts_reason_unavailable",
+    "network": "tts_reason_network",
+    "timeout": "tts_reason_timeout",
+    "playback": "tts_reason_playback",
+    "invalid_input": "tts_reason_input",
+    "configuration": "tts_reason_configuration",
+    "unsupported_model": "tts_reason_configuration",
+    "invalid_endpoint": "tts_reason_configuration",
+    "authentication": "tts_reason_authentication",
+    "rate_limit": "tts_reason_rate_limit",
+    "queue_full": "tts_reason_busy",
+    "pipeline_full": "tts_reason_busy",
+    "suspended": "tts_reason_busy",
+    "safety": "tts_reason_safety",
+    "billing": "tts_reason_billing",
+    "provider": "tts_reason_provider",
+}
+# Voice cloning keeps its own Beijing- and account-aware texts for the
+# failures a test synthesis reports; other categories use the reasons above.
+_VOICE_CLONE_TEST_FAILURE_KEYS = {
+    "authentication": "voice_clone_auth_failed",
+    "billing": "voice_clone_access_denied",
+    "rate_limit": "voice_clone_rate_limited",
+    "network": "voice_clone_network_failed",
+    "timeout": "voice_clone_network_failed",
+    "unsupported_model": "voice_clone_model_unsupported",
+    "invalid_endpoint": "voice_clone_region_unsupported",
+    "model_missing": "voice_clone_no_voices",
+}
+# Model Studio hosts name their region: workspace and trial domains are
+# "{WorkspaceId}.{region}.maas.aliyuncs.com" and Hong Kong's shared domain is
+# "cn-hongkong.dashscope.aliyuncs.com". China (Beijing) is "cn-beijing", and
+# its shared domain is plain dashscope.aliyuncs.com. The shared domains below
+# serve Singapore and US (Virginia).
+_MODEL_STUDIO_BEIJING_REGION = "cn-beijing"
+_MODEL_STUDIO_NON_BEIJING_SHARED_HOSTS = frozenset(
+    {"dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"}
+)
+
+
+def _dashscope_url_is_outside_beijing(base_url: object) -> bool:
+    """Whether a custom DashScope address clearly belongs to another region.
+
+    Only Alibaba hosts that name their region are judged. A Beijing host
+    (dashscope.aliyuncs.com, *.cn-beijing.maas.aliyuncs.com) or an address
+    this cannot place (a proxy, a gateway) is not flagged: its key may well
+    be a Beijing key.
+    """
+
+    try:
+        host = urlsplit(str(base_url or "").strip()).hostname or ""
+    except ValueError:
+        return False
+    host = host.rstrip(".").casefold()
+    if host in _MODEL_STUDIO_NON_BEIJING_SHARED_HOSTS:
+        return True
+    suffix = ".aliyuncs.com"
+    if not host.endswith(suffix):
+        return False
+    labels = host[: -len(suffix)].split(".")
+    if len(labels) < 2 or labels[-1] not in {"maas", "dashscope"}:
+        return False
+    return not labels[-2].startswith(_MODEL_STUDIO_BEIJING_REGION)
+
+
 _NUMERIC_INPUT_VAR_NAMES = (
     "_backend_timeout_var",
     "_backend_connect_timeout_var",
@@ -726,6 +821,7 @@ def _roleplay_preset_options(ui_language: str) -> list[tuple[str, str]]:
 
 
 QT_SETTINGS_COPY = {
+    "vr_integration_section": {"zh-CN": "VRChat 联动设置", "en": "VR Integration", "ja": "VR 連携"},
     "header_title": {"zh-CN": "设置", "en": "Settings", "ja": "設定"},
     "header_subtitle": {
         "zh-CN": "按你想做的事来调整 Mio，不需要懂专业术语。",
@@ -782,7 +878,6 @@ QT_SETTINGS_COPY = {
         "ko": "음성 인식 엔진"
     },
     "translation_domain_section": {"zh-CN": "总翻译设置", "en": "Translation", "ja": "翻訳"},
-    "vr_integration_section": {"zh-CN": "VRChat 联动设置", "en": "VR Integration", "ja": "VR 連携"},
     "hotkey_voice_section": {"zh-CN": "快捷键设置", "en": "Hotkeys / Voice Control", "ja": "ホットキー / 音声制御"},
     "updates_models_section": {"zh-CN": "下载和更新", "en": "Updates / Models", "ja": "更新 / モデル"},
     "advanced_section": {"zh-CN": "高级", "en": "Advanced", "ja": "詳細"},
@@ -1302,6 +1397,7 @@ QT_SETTINGS_COPY.update({
     "slow": {"zh-CN": "偏慢", "en": "Slower", "ja": "やや遅い"},
     "basic": {"zh-CN": "基础", "en": "Basic", "ja": "基本"},
     "high": {"zh-CN": "高", "en": "High", "ja": "高い"},
+    "very_high": {"zh-CN": "很高", "en": "Very high", "ja": "とても高い"},
     "very_recommended": {"zh-CN": "非常推荐", "en": "Highly Recommended", "ja": "とても推奨"},
     "recommended": {"zh-CN": "推荐", "en": "Recommended", "ja": "推奨"},
     "general": {"zh-CN": "一般", "en": "General", "ja": "普通"},
@@ -1698,8 +1794,8 @@ QT_SETTINGS_COPY.update({
 })
 
 _SETTINGS_COMPLETE_RU_KO_COPY = {
-    "translation_domain_section": {"ru": "Перевод", "ko": "번역"},
     "vr_integration_section": {"ru": "Интеграция с VR", "ko": "VR 연동"},
+    "translation_domain_section": {"ru": "Перевод", "ko": "번역"},
     "hotkey_voice_section": {"ru": "Горячие клавиши / Голосовое управление", "ko": "단축키 / 음성 제어"},
     "updates_models_section": {"ru": "Обновления / Модели", "ko": "업데이트 / 모델"},
     "advanced_section": {"ru": "Дополнительно", "ko": "고급"},
@@ -1808,6 +1904,7 @@ _SETTINGS_COMPLETE_RU_KO_COPY = {
     "slow": {"ru": "Медленнее", "ko": "느림"},
     "basic": {"ru": "Базовое", "ko": "기본"},
     "high": {"ru": "Высокое", "ko": "높음"},
+    "very_high": {"ru": "Очень высокое", "ko": "매우 높음"},
     "very_recommended": {"ru": "Настоятельно рекомендуется", "ko": "매우 권장"},
     "recommended": {"ru": "Рекомендуется", "ko": "권장"},
     "general": {"ru": "Общее назначение", "ko": "일반"},
@@ -2031,6 +2128,195 @@ QT_SETTINGS_COPY.update({
         "ru": "Тест TTS превысил время ожидания",
         "ko": "TTS 테스트 시간이 초과되었습니다",
     },
+    "tts_engine_test_failed": {
+        "zh-CN": "{engine} 测试失败：{reason}",
+        "en": "{engine} test failed: {reason}",
+        "ja": "{engine} のテストに失敗しました：{reason}",
+        "ru": "Тест {engine} не пройден: {reason}",
+        "ko": "{engine} 테스트 실패: {reason}",
+    },
+    "tts_reason_model_missing": {
+        "zh-CN": "模型尚未下载或导入。请先下载对应语言的 BERT 模型，并导入或下载一个音色。",
+        "en": "Model files are missing. Download the BERT model for the voice's language and import or download a voice first.",
+        "ja": "モデルが未ダウンロードまたは未インポートです。ボイスの言語に対応する BERT モデルをダウンロードし、ボイスをインポートまたはダウンロードしてください。",
+        "ru": "Файлы модели отсутствуют. Сначала загрузите модель BERT для языка голоса и импортируйте или загрузите голос.",
+        "ko": "모델이 다운로드되지 않았거나 가져오지 않았습니다. 음색 언어에 맞는 BERT 모델을 다운로드하고 음색을 가져오거나 다운로드하세요.",
+    },
+    "tts_reason_language_mismatch": {
+        "zh-CN": "所选音色不支持该语言（JP-Extra 模型只能朗读日语）。",
+        "en": "The selected voice does not support this language (JP-Extra models only speak Japanese).",
+        "ja": "選択したボイスはこの言語に対応していません（JP-Extra モデルは日本語のみ）。",
+        "ru": "Выбранный голос не поддерживает этот язык (модели JP-Extra говорят только по-японски).",
+        "ko": "선택한 음색은 이 언어를 지원하지 않습니다 (JP-Extra 모델은 일본어만 가능).",
+    },
+    "tts_reason_unavailable": {
+        "zh-CN": "引擎运行时不可用，请查看运行时状态卡片或日志。",
+        "en": "The engine runtime is unavailable; check the runtime status card or the log.",
+        "ja": "エンジンのランタイムを利用できません。ランタイムの状態カードまたはログを確認してください。",
+        "ru": "Среда выполнения движка недоступна; проверьте карточку состояния или журнал.",
+        "ko": "엔진 런타임을 사용할 수 없습니다. 런타임 상태 카드나 로그를 확인하세요.",
+    },
+    "tts_reason_network": {
+        "zh-CN": "无法连接到服务，请检查网络、代理或 VPN 设置。",
+        "en": "The service could not be reached; check the network, proxy, or VPN settings.",
+        "ja": "サービスに接続できませんでした。ネットワーク、プロキシ、VPN の設定を確認してください。",
+        "ru": "Не удалось подключиться к сервису; проверьте сеть, прокси или VPN.",
+        "ko": "서비스에 연결할 수 없습니다. 네트워크, 프록시 또는 VPN 설정을 확인하세요.",
+    },
+    "tts_reason_timeout": {
+        "zh-CN": "合成超时。本地引擎第一次加载模型可能需要较长时间，请稍后再试。",
+        "en": "Synthesis timed out. A local engine can take a while to load its model the first time; try again shortly.",
+        "ja": "合成がタイムアウトしました。ローカルエンジンは初回のモデル読み込みに時間がかかることがあります。しばらくしてから再試行してください。",
+        "ru": "Синтез превысил время ожидания. Локальный движок может долго загружать модель в первый раз; повторите попытку позже.",
+        "ko": "합성이 시간 초과되었습니다. 로컬 엔진은 처음 모델을 불러올 때 시간이 걸릴 수 있습니다. 잠시 후 다시 시도하세요.",
+    },
+    "tts_reason_playback": {
+        "zh-CN": "音频播放失败，请检查输出设备。",
+        "en": "Audio playback failed; check the output device.",
+        "ja": "音声の再生に失敗しました。出力デバイスを確認してください。",
+        "ru": "Сбой воспроизведения звука; проверьте устройство вывода.",
+        "ko": "오디오 재생에 실패했습니다. 출력 장치를 확인하세요.",
+    },
+    "tts_reason_input": {
+        "zh-CN": "引擎无法处理测试文本。",
+        "en": "The engine could not process the test text.",
+        "ja": "エンジンがテストテキストを処理できませんでした。",
+        "ru": "Движок не смог обработать тестовый текст.",
+        "ko": "엔진이 테스트 텍스트를 처리할 수 없습니다.",
+    },
+    "tts_reason_configuration": {
+        "zh-CN": "配置不可用，请检查模型、服务区域和所选音色。",
+        "en": "The configuration is unusable; check the model, service region, and selected voice.",
+        "ja": "設定を使用できません。モデル、サービス地域、選択したボイスを確認してください。",
+        "ru": "Настройки непригодны; проверьте модель, регион сервиса и выбранный голос.",
+        "ko": "설정을 사용할 수 없습니다. 모델, 서비스 지역, 선택한 음색을 확인하세요.",
+    },
+    "tts_reason_authentication": {
+        "zh-CN": "服务拒绝了凭据，请检查 API Key 和服务区域。",
+        "en": "The service rejected the credential; check the API key and service region.",
+        "ja": "サービスが認証情報を拒否しました。API Key とサービス地域を確認してください。",
+        "ru": "Сервис отклонил учетные данные; проверьте API-ключ и регион сервиса.",
+        "ko": "서비스가 인증 정보를 거부했습니다. API Key와 서비스 지역을 확인하세요.",
+    },
+    "tts_reason_rate_limit": {
+        "zh-CN": "请求过于频繁，请稍候再试。",
+        "en": "The service is rate-limited; wait briefly and try again.",
+        "ja": "利用制限に達しました。しばらく待ってから再試行してください。",
+        "ru": "Достигнут лимит запросов; немного подождите и повторите попытку.",
+        "ko": "요청 한도에 도달했습니다. 잠시 후 다시 시도하세요.",
+    },
+    "tts_reason_busy": {
+        "zh-CN": "引擎正忙或已暂时暂停，请稍后再试。",
+        "en": "The engine is busy or temporarily paused; try again shortly.",
+        "ja": "エンジンが混雑または一時停止中です。しばらくしてから再試行してください。",
+        "ru": "Движок занят или временно приостановлен; повторите попытку позже.",
+        "ko": "엔진이 바쁘거나 일시 중지되었습니다. 잠시 후 다시 시도하세요.",
+    },
+    "tts_reason_safety": {
+        "zh-CN": "内容审核拒绝了测试文本。",
+        "en": "Content moderation rejected the test text.",
+        "ja": "コンテンツ審査がテストテキストを拒否しました。",
+        "ru": "Модерация контента отклонила тестовый текст.",
+        "ko": "콘텐츠 검수가 테스트 텍스트를 거부했습니다.",
+    },
+    "tts_reason_billing": {
+        "zh-CN": "账户余额不足或未开通该模型，请检查服务账户。",
+        "en": "The account is out of balance or the model is not subscribed; check the service account.",
+        "ja": "アカウント残高が不足しているか、モデルが未契約です。サービスのアカウントを確認してください。",
+        "ru": "На счету недостаточно средств или модель не подключена; проверьте аккаунт сервиса.",
+        "ko": "계정 잔액이 부족하거나 모델이 구독되지 않았습니다. 서비스 계정을 확인하세요.",
+    },
+    "tts_reason_provider": {
+        "zh-CN": "合成失败，详情请查看日志。",
+        "en": "Synthesis failed; see the log for details.",
+        "ja": "合成に失敗しました。詳細はログを確認してください。",
+        "ru": "Синтез не удался; подробности в журнале.",
+        "ko": "합성에 실패했습니다. 자세한 내용은 로그를 확인하세요.",
+    },
+    "voice_clone_busy_wait": {
+        "zh-CN": "音色正在上传或刷新中，请等待完成后再保存。",
+        "en": "A voice upload or refresh is still running; wait for it to finish before saving.",
+        "ja": "ボイスのアップロードまたは更新が実行中です。完了してから保存してください。",
+        "ru": "Загрузка или обновление голоса еще выполняется; дождитесь завершения перед сохранением.",
+        "ko": "음색 업로드 또는 새로 고침이 진행 중입니다. 완료될 때까지 기다린 뒤 저장하세요.",
+    },
+    "tts_hololive_hint": {
+        "zh-CN": "也可以直接下载 Hololive 成员的 Style-Bert-VITS2 音色包（来自 Kit-Lemonfoot 的公开模型），下载完成后会自动出现在音色列表中。英语成员需要英文 BERT 模型。",
+        "en": "You can also download Hololive talent voice packs for Style-Bert-VITS2 (Kit-Lemonfoot's public models); they appear in the voice list when the download finishes. English talents need the English BERT model.",
+        "ja": "ホロライブタレントの Style-Bert-VITS2 ボイスパック（Kit-Lemonfoot 公開モデル）を直接ダウンロードすることもできます。完了するとボイス一覧に表示されます。英語タレントには英語 BERT モデルが必要です。",
+        "ru": "Можно также загрузить голосовые пакеты талантов Hololive для Style-Bert-VITS2 (публичные модели Kit-Lemonfoot); после загрузки они появятся в списке голосов. Англоязычным талантам нужна английская модель BERT.",
+        "ko": "Hololive 멤버의 Style-Bert-VITS2 음색 팩(Kit-Lemonfoot 공개 모델)을 바로 다운로드할 수도 있습니다. 완료되면 음색 목록에 나타납니다. 영어 멤버는 영어 BERT 모델이 필요합니다.",
+    },
+    "tts_hololive_preset": {
+        "zh-CN": "Hololive 音色",
+        "en": "Hololive voice",
+        "ja": "ホロライブボイス",
+        "ru": "Голос Hololive",
+        "ko": "Hololive 음색",
+    },
+    "tts_hololive_download_btn": {
+        "zh-CN": "下载音色包",
+        "en": "Download pack",
+        "ja": "パックをダウンロード",
+        "ru": "Скачать пакет",
+        "ko": "음색 팩 다운로드",
+    },
+    "tts_hololive_redownload_btn": {
+        "zh-CN": "重新下载",
+        "en": "Download again",
+        "ja": "再ダウンロード",
+        "ru": "Скачать заново",
+        "ko": "다시 다운로드",
+    },
+    "tts_hololive_downloaded": {
+        "zh-CN": "{title} 已就绪（音色包 {pack}）。",
+        "en": "{title} is ready (pack {pack}).",
+        "ja": "{title} は準備済みです（パック {pack}）。",
+        "ru": "{title} готов (пакет {pack}).",
+        "ko": "{title} 준비 완료 (팩 {pack}).",
+    },
+    "tts_hololive_not_downloaded": {
+        "zh-CN": "音色包 {pack} 尚未下载（约 200 MB，部分成员共用一个包）。",
+        "en": "Pack {pack} is not downloaded yet (about 200 MB; several talents share one pack).",
+        "ja": "パック {pack} は未ダウンロードです（約 200 MB、複数のタレントで 1 つのパックを共有）。",
+        "ru": "Пакет {pack} еще не загружен (около 200 МБ; несколько талантов используют один пакет).",
+        "ko": "팩 {pack}은(는) 아직 다운로드되지 않았습니다 (약 200 MB, 여러 멤버가 한 팩을 공유).",
+    },
+    "tts_hololive_downloading": {
+        "zh-CN": "正在下载 {title} 的音色包…",
+        "en": "Downloading the voice pack for {title}…",
+        "ja": "{title} のボイスパックをダウンロード中…",
+        "ru": "Загружается голосовой пакет для {title}…",
+        "ko": "{title} 음색 팩 다운로드 중…",
+    },
+    "tts_hololive_download_title": {
+        "zh-CN": "下载 Hololive 音色：{title}",
+        "en": "Download Hololive voice: {title}",
+        "ja": "ホロライブボイスをダウンロード：{title}",
+        "ru": "Загрузка голоса Hololive: {title}",
+        "ko": "Hololive 음색 다운로드: {title}",
+    },
+    "tts_persona_instructions": {
+        "zh-CN": "按角色扮演人设生成朗读指令（仅 instruct 模型）",
+        "en": "Derive reading instructions from the roleplay persona (instruct models only)",
+        "ja": "ロールプレイのペルソナから読み上げ指示を生成（instruct モデルのみ）",
+        "ru": "Формировать указания для чтения из ролевой персоны (только instruct-модели)",
+        "ko": "롤플레이 페르소나로 낭독 지시 생성 (instruct 모델만)",
+    },
+    "tts_persona_instructions_hint": {
+        "zh-CN": "开启后，翻译设置中“角色扮演”模式的语气、礼貌程度和人设会转换成 Qwen instruct 模型的朗读风格提示；非 instruct 模型不会发送任何指令。",
+        "en": "When on, the tone, politeness, and persona from the roleplay mode in the translation settings become a reading-style prompt for Qwen instruct models; nothing is sent to non-instruct models.",
+        "ja": "オンにすると、翻訳設定の「ロールプレイ」モードのトーン、丁寧さ、ペルソナが Qwen instruct モデル向けの読み上げスタイル指示に変換されます。instruct 以外のモデルには何も送信されません。",
+        "ru": "При включении тон, вежливость и персона из режима ролевой игры в настройках перевода превращаются в подсказку стиля чтения для instruct-моделей Qwen; остальным моделям ничего не отправляется.",
+        "ko": "켜면 번역 설정의 '롤플레이' 모드에 설정한 어조, 공손함, 페르소나가 Qwen instruct 모델의 낭독 스타일 지시로 변환됩니다. instruct가 아닌 모델에는 아무것도 보내지 않습니다.",
+    },
+    "voice_clone_deleted": {
+        "zh-CN": "已删除音色「{voice}」。",
+        "en": "Deleted the voice \"{voice}\".",
+        "ja": "ボイス「{voice}」を削除しました。",
+        "ru": "Голос «{voice}» удален.",
+        "ko": "음색 \"{voice}\"을(를) 삭제했습니다.",
+    },
     "qwen_tts_auth_failed": {
         "zh-CN": "Qwen TTS 拒绝了 {region} 区域的凭据。API Key 可能无效、已被撤销，或属于其他服务区域。请选择创建该 Key 的区域，或更换 Key 后重新测试。",
         "en": "Qwen TTS rejected the credential for {region}. The API key may be invalid, revoked, or belong to another service region. Choose the region where the key was created, or replace the key, then test again.",
@@ -2094,6 +2380,15 @@ QT_SETTINGS_COPY.update({
         "ru": "Qwen TTS не принял текущий тестовый текст. Измените его и повторите попытку.",
         "ko": "Qwen TTS가 현재 테스트 문장을 처리할 수 없습니다. 내용을 수정한 뒤 다시 시도하세요.",
     },
+    # HTTP 403 for the account rather than the key (Arrearage,
+    # AccessDenied.Unpurchased, Model.AccessDenied, AllocationQuota.FreeTierOnly).
+    "qwen_tts_billing_failed": {
+        "zh-CN": "Qwen TTS 拒绝了该账号的访问：账号可能欠费或余额不足，或者未开通该模型、无权使用该模型；如果账号开启了“仅使用免费额度”，免费额度用完后请求也会被拒绝。请在阿里云百炼控制台检查账号后重新测试。",
+        "en": "Qwen TTS denied access for this account: it may be overdue or out of balance, or the model may not be activated or permitted for it; an account limited to its free quota is also refused once that quota is used up. Check the account in the Alibaba Cloud Model Studio console, then test again.",
+        "ja": "Qwen TTS がこのアカウントのアクセスを拒否しました。未払いや残高不足、モデルが未開通、またはモデルの利用権限がない可能性があります。「無料枠のみ」に制限したアカウントは、無料枠を使い切るとリクエストが拒否されます。Alibaba Cloud Model Studio コンソールでアカウントを確認してから再テストしてください。",
+        "ru": "Qwen TTS отказал этому аккаунту в доступе: возможно, есть задолженность или недостаточно средств, модель не подключена или аккаунту не разрешено её использовать; если аккаунт ограничен бесплатной квотой, после её исчерпания запросы тоже отклоняются. Проверьте аккаунт в консоли Alibaba Cloud Model Studio и повторите тест.",
+        "ko": "Qwen TTS가 이 계정의 접근을 거부했습니다. 요금이 연체되었거나 잔액이 부족하거나, 모델이 활성화되지 않았거나 사용 권한이 없을 수 있습니다. 무료 할당량만 쓰도록 제한한 계정은 할당량을 다 쓰면 요청이 거부됩니다. Alibaba Cloud Model Studio 콘솔에서 계정을 확인한 뒤 다시 테스트하세요.",
+    },
     "qwen_tts_provider_failed": {
         "zh-CN": "Qwen TTS 服务暂时失败，任务已释放，请稍后重新测试。",
         "en": "Qwen TTS temporarily failed and released the task. Test again shortly.",
@@ -2116,18 +2411,182 @@ QT_SETTINGS_COPY.update({
         "ko": "선택한 참조 음성을 음성 클로닝에 사용할 수 없습니다.",
     },
     "voice_clone_hint": {
-        "zh-CN": "声音克隆会使用参考样本的音色和说话方式。想要更有情绪，请使用清晰且带有目标情绪的样本。",
-        "en": "Voice Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want.",
-        "ja": "音声クローンは参照サンプルの声質と話し方を使います。感情を出したい場合は、欲しい雰囲気の明瞭で表情のあるサンプルを使ってください。",
-        "ru": "Voice Cloning использует тембр и подачу эталонного образца. Для эмоций используйте чистый выразительный образец с нужным настроением.",
-        "ko": "음성 클로닝은 참조 샘플의 음색과 말투를 사용합니다. 감정을 더 넣고 싶다면 원하는 느낌이 담긴 깨끗하고 표현력 있는 샘플을 사용하세요.",
+        "zh-CN": "声音克隆目前仅支持阿里云百炼北京地域（中国大陆）的 API Key，新加坡等地域暂不支持。克隆会使用参考样本的音色和说话方式；想要更有情绪，请使用清晰且带有目标情绪的样本。新音色需要服务审核，通常几分钟内可用。",
+        "en": "Voice cloning currently supports only Alibaba Cloud Model Studio API keys from the China (Beijing) region; Singapore and other regions are not supported yet. Cloning uses your reference sample for timbre and delivery. For more emotion, use a clean expressive sample with the feeling you want. New voices go through a short review by the service before they can be used.",
+        "ja": "音声クローンは現在、Alibaba Cloud Model Studio の中国（北京）リージョンの API キーのみ対応しています。シンガポールなど他のリージョンはまだ対応していません。クローンは参照サンプルの声質と話し方を使います。感情を出したい場合は、欲しい雰囲気の明瞭で表情のあるサンプルを使ってください。新しい音声はサービスの審査を経てから使えるようになります。",
+        "ru": "Клонирование голоса пока поддерживает только ключи API Alibaba Cloud Model Studio из региона Китай (Пекин); Сингапур и другие регионы пока не поддерживаются. Клонирование использует тембр и подачу эталонного образца. Для эмоций используйте чистый выразительный образец с нужным настроением. Новые голоса проходят короткую проверку сервисом, прежде чем станут доступны.",
+        "ko": "음성 클로닝은 현재 Alibaba Cloud Model Studio 중국(베이징) 지역의 API 키만 지원합니다. 싱가포르 등 다른 지역은 아직 지원하지 않습니다. 클로닝은 참조 샘플의 음색과 말투를 사용합니다. 감정을 더 넣고 싶다면 원하는 느낌이 담긴 깨끗하고 표현력 있는 샘플을 사용하세요. 새 음성은 서비스 심사를 거친 뒤 사용할 수 있습니다.",
+    },
+})
+QT_SETTINGS_COPY.update({
+    "relay_protocol": {
+        "zh-CN": "接口协议",
+        "en": "API protocol",
+        "ja": "接続方式",
+        "ru": "Протокол API",
+        "ko": "API 프로토콜",
+    },
+    "relay_protocol_openai": {
+        "zh-CN": "OpenAI 兼容（推荐）",
+        "en": "OpenAI compatible (recommended)",
+        "ja": "OpenAI 互換（推奨）",
+        "ru": "Совместимый с OpenAI (рекомендуется)",
+        "ko": "OpenAI 호환(권장)",
+    },
+    "relay_protocol_anthropic": {
+        "zh-CN": "Anthropic（仅支持 Claude 原生接口的中转）",
+        "en": "Anthropic (Claude-only relays)",
+        "ja": "Anthropic（Claude ネイティブ専用の中継）",
+        "ru": "Anthropic (ретрансляторы только для Claude)",
+        "ko": "Anthropic(Claude 네이티브 전용 중계)",
+    },
+    "relay_protocol_hint": {
+        "zh-CN": "大多数中转站（new-api、one-api 等）使用 OpenAI 兼容协议即可调用 GPT、Claude、Grok、Gemini；只有仅提供 Claude 原生 /v1/messages 接口的中转才需要选择 Anthropic。",
+        "en": "Most relay stations (new-api, one-api and similar) serve GPT, Claude, Grok and Gemini over the OpenAI-compatible protocol. Choose Anthropic only for relays that offer nothing but the native Claude /v1/messages API.",
+        "ja": "ほとんどの中継サービス（new-api、one-api など）は OpenAI 互換方式で GPT・Claude・Grok・Gemini を利用できます。Claude ネイティブの /v1/messages だけを提供する中継の場合のみ Anthropic を選んでください。",
+        "ru": "Большинство ретрансляторов (new-api, one-api и аналоги) отдают GPT, Claude, Grok и Gemini по протоколу, совместимому с OpenAI. Выбирайте Anthropic только для ретрансляторов, у которых есть лишь нативный API Claude /v1/messages.",
+        "ko": "대부분의 중계 서비스(new-api, one-api 등)는 OpenAI 호환 방식으로 GPT, Claude, Grok, Gemini를 제공합니다. Claude 네이티브 /v1/messages만 제공하는 중계일 때만 Anthropic을 선택하세요.",
+    },
+    "model_list_refresh": {
+        "zh-CN": "刷新模型列表",
+        "en": "Refresh model list",
+        "ja": "モデル一覧を更新",
+        "ru": "Обновить список моделей",
+        "ko": "모델 목록 새로 고침",
+    },
+    "model_list_refreshing": {
+        "zh-CN": "正在读取模型列表…",
+        "en": "Reading the model list…",
+        "ja": "モデル一覧を読み込み中…",
+        "ru": "Загрузка списка моделей…",
+        "ko": "모델 목록을 불러오는 중…",
+    },
+    "model_list_loaded": {
+        "zh-CN": "已从服务商读取 {count} 个可用模型，可在下拉列表中选择或输入搜索。",
+        "en": "Read {count} usable models from the provider. Pick one from the list or type to search.",
+        "ja": "サービスから利用できるモデルを {count} 件読み込みました。一覧から選ぶか、入力して検索できます。",
+        "ru": "Получено доступных моделей от провайдера: {count}. Выберите из списка или начните вводить для поиска.",
+        "ko": "서비스에서 사용 가능한 모델 {count}개를 불러왔습니다. 목록에서 고르거나 입력해 검색하세요.",
+    },
+    "model_list_saved": {
+        "zh-CN": "显示的是上次从服务商读取的模型列表（{count} 个）。",
+        "en": "Showing the model list last read from the provider ({count} models).",
+        "ja": "前回サービスから読み込んだモデル一覧（{count} 件）を表示しています。",
+        "ru": "Показан список моделей, полученный от провайдера в прошлый раз ({count}).",
+        "ko": "지난번에 서비스에서 불러온 모델 목록({count}개)을 표시합니다.",
+    },
+    "model_list_builtin": {
+        "zh-CN": "当前显示内置推荐模型；填写 API Key 后点击“刷新模型列表”即可读取服务商的最新模型。",
+        "en": "Showing the built-in recommendations. Enter the API key and click \u201cRefresh model list\u201d to read the provider\u2019s current models.",
+        "ja": "組み込みのおすすめモデルを表示しています。API キーを入力して「モデル一覧を更新」を押すと、最新のモデルを読み込みます。",
+        "ru": "Показаны встроенные рекомендации. Введите API-ключ и нажмите «Обновить список моделей», чтобы получить актуальные модели провайдера.",
+        "ko": "기본 추천 모델을 표시합니다. API 키를 입력하고 \u2018모델 목록 새로 고침\u2019을 누르면 최신 모델을 불러옵니다.",
+    },
+    "model_list_relay_empty": {
+        "zh-CN": "填写中转站地址和 API Key 后点击“刷新模型列表”，即可读取中转站提供的模型。",
+        "en": "Enter the relay URL and API key, then click \u201cRefresh model list\u201d to read the models the relay serves.",
+        "ja": "中継サービスの URL と API キーを入力して「モデル一覧を更新」を押すと、利用できるモデルを読み込みます。",
+        "ru": "Введите адрес ретранслятора и API-ключ, затем нажмите «Обновить список моделей», чтобы получить его модели.",
+        "ko": "중계 서비스 주소와 API 키를 입력한 뒤 \u2018모델 목록 새로 고침\u2019을 누르면 제공 모델을 불러옵니다.",
+    },
+    "model_list_failed": {
+        "zh-CN": "无法读取模型列表：{reason}已显示内置推荐模型，也可以直接输入模型 ID。",
+        "en": "Could not read the model list: {reason} Showing the built-in recommendations; you can also type a model id.",
+        "ja": "モデル一覧を読み込めませんでした：{reason}組み込みのおすすめを表示しています。モデル ID を直接入力することもできます。",
+        "ru": "Не удалось получить список моделей: {reason} Показаны встроенные рекомендации; можно ввести ID модели вручную.",
+        "ko": "모델 목록을 불러오지 못했습니다: {reason} 기본 추천 모델을 표시하며, 모델 ID를 직접 입력할 수도 있습니다.",
+    },
+    "model_list_unsupported": {
+        "zh-CN": "该服务商不提供模型列表接口，显示的是内置推荐模型。",
+        "en": "This provider does not publish a model list; showing the built-in recommendations.",
+        "ja": "このサービスはモデル一覧を提供していないため、組み込みのおすすめを表示しています。",
+        "ru": "Этот провайдер не публикует список моделей; показаны встроенные рекомендации.",
+        "ko": "이 서비스는 모델 목록을 제공하지 않아 기본 추천 모델을 표시합니다.",
+    },
+    "model_list_reason_auth": {
+        "zh-CN": "API Key 无效或没有权限。",
+        "en": "the API key was rejected or lacks permission.",
+        "ja": "API キーが無効か、権限がありません。",
+        "ru": "API-ключ отклонён или не имеет прав.",
+        "ko": "API 키가 거부되었거나 권한이 없습니다.",
+    },
+    "model_list_reason_endpoint": {
+        "zh-CN": "该地址没有提供模型列表接口（请检查 Base URL 是否正确，通常以 /v1 结尾）。",
+        "en": "this address does not offer a model list (check the Base URL; it usually ends with /v1).",
+        "ja": "このアドレスにはモデル一覧がありません（Base URL を確認してください。通常は /v1 で終わります）。",
+        "ru": "по этому адресу нет списка моделей (проверьте Base URL — обычно он оканчивается на /v1).",
+        "ko": "이 주소는 모델 목록을 제공하지 않습니다(Base URL을 확인하세요. 보통 /v1로 끝납니다).",
+    },
+    "model_list_reason_network": {
+        "zh-CN": "网络连接失败或超时。",
+        "en": "the connection failed or timed out.",
+        "ja": "接続に失敗したか、タイムアウトしました。",
+        "ru": "не удалось подключиться или истекло время ожидания.",
+        "ko": "연결에 실패했거나 시간이 초과되었습니다.",
+    },
+    "model_list_reason_quota": {
+        "zh-CN": "请求过于频繁或额度不足。",
+        "en": "the provider is rate-limiting the key or the quota is used up.",
+        "ja": "リクエストが多すぎるか、利用枠が不足しています。",
+        "ru": "провайдер ограничивает частоту запросов или исчерпана квота.",
+        "ko": "요청이 너무 많거나 사용량이 부족합니다.",
+    },
+    "model_list_reason_empty": {
+        "zh-CN": "服务商没有返回可用于翻译的聊天模型。",
+        "en": "the provider returned no chat models usable for translation.",
+        "ja": "翻訳に使えるチャットモデルが返されませんでした。",
+        "ru": "провайдер не вернул чат-моделей, пригодных для перевода.",
+        "ko": "번역에 사용할 수 있는 채팅 모델이 반환되지 않았습니다.",
+    },
+    "model_list_reason_other": {
+        "zh-CN": "服务商返回了无法识别的响应。",
+        "en": "the provider sent a response Mio could not read.",
+        "ja": "サービスから読み取れない応答が返されました。",
+        "ru": "провайдер вернул ответ, который Mio не смогла разобрать.",
+        "ko": "서비스가 읽을 수 없는 응답을 보냈습니다.",
+    },
+    "model_list_reason_provider": {
+        "zh-CN": "服务商暂时出错（例如没有可用的渠道），请稍后再试。",
+        "en": "the provider reported a temporary error (for example, no available channel); try again later.",
+        "ja": "サービス側で一時的なエラーが発生しました（利用できるチャネルがない場合など）。しばらくしてから再試行してください。",
+        "ru": "у провайдера временная ошибка (например, нет доступного канала); повторите попытку позже.",
+        "ko": "서비스에 일시적인 오류가 발생했습니다(예: 사용 가능한 채널 없음). 잠시 후 다시 시도하세요.",
+    },
+    # The relay and Local AI have no built-in list to fall back to, so their
+    # messages must not claim to show built-in recommendations.
+    "model_list_failed_manual": {
+        "zh-CN": "无法读取模型列表：{reason}可以直接输入模型 ID。",
+        "en": "Could not read the model list: {reason} You can type a model id instead.",
+        "ja": "モデル一覧を読み込めませんでした：{reason}モデル ID を直接入力することもできます。",
+        "ru": "Не удалось получить список моделей: {reason} Можно ввести ID модели вручную.",
+        "ko": "모델 목록을 불러오지 못했습니다: {reason} 모델 ID를 직접 입력할 수도 있습니다.",
+    },
+    "model_list_manual": {
+        "zh-CN": "点击“刷新模型列表”即可读取该地址提供的模型，也可以直接输入模型 ID。",
+        "en": "Click “Refresh model list” to read the models this address offers, or type a model id.",
+        "ja": "「モデル一覧を更新」を押すと、このアドレスで使えるモデルを読み込みます。モデル ID を直接入力することもできます。",
+        "ru": "Нажмите «Обновить список моделей», чтобы получить модели по этому адресу, или введите ID модели вручную.",
+        "ko": "‘모델 목록 새로 고침’을 누르면 이 주소에서 제공하는 모델을 불러옵니다. 모델 ID를 직접 입력할 수도 있습니다.",
+    },
+    "model_list_refresh_failed_kept": {
+        "zh-CN": "刷新模型列表失败：{reason}当前显示的是之前读取的列表。",
+        "en": "Refreshing the model list failed: {reason} Showing the list read earlier.",
+        "ja": "モデル一覧の更新に失敗しました：{reason}前回読み込んだ一覧を表示しています。",
+        "ru": "Не удалось обновить список моделей: {reason} Показан список, полученный ранее.",
+        "ko": "모델 목록을 새로 고치지 못했습니다: {reason} 이전에 불러온 목록을 표시합니다.",
+    },
+    "model_list_pick_model": {
+        "zh-CN": "中转站的列表中没有默认模型 {model}，请从下拉列表中选择一个模型。",
+        "en": "The relay does not list the default model {model}; pick a model from the list.",
+        "ja": "中継サービスの一覧に既定のモデル {model} がありません。一覧からモデルを選んでください。",
+        "ru": "Ретранслятор не предлагает модель по умолчанию {model}; выберите модель из списка.",
+        "ko": "중계 서비스 목록에 기본 모델 {model}이(가) 없습니다. 목록에서 모델을 선택하세요.",
     },
 })
 _BACKEND_API_HINT_KEYS = {
     backend: f"backend_api_hint_{backend}"
     for backend in (
         "openai_compatible",
-        "grok_compatible",
         "local_ai",
         "deepl",
         "libretranslate",
@@ -2142,7 +2601,6 @@ _BACKEND_MODEL_HINT_KEYS = {
     backend: f"backend_model_hint_{backend}"
     for backend in (
         "openai_compatible",
-        "grok_compatible",
         "local_ai",
         "google_web",
         "microsoft_edge_web",
@@ -2163,99 +2621,91 @@ for _backend, _key in _BACKEND_MODEL_HINT_KEYS.items():
 
 _BACKEND_HINT_TRANSLATIONS = {
     "zh-CN": {
-        "backend_api_hint_openai_compatible": "用于兼容 OpenAI 的代理或转发服务。请填写服务商提供的 Base URL 和模型 ID。",
-        "backend_api_hint_grok_compatible": "可使用 xAI 密钥或任意 Grok 兼容中继服务提供的凭据。Base URL 不限于 xAI 官方端点。",
+        "backend_api_hint_openai_compatible": "填写中转站的 Base URL 和 API Key。Mio 会自动读取该中转站提供的全部模型（GPT、Claude、Grok、Gemini 等）供你选择。",
         "backend_api_hint_local_ai": "本地服务不需要密钥时请留空；只有服务器要求时才填写。",
         "backend_api_hint_deepl": "请使用 DeepL API Free 密钥；付费密钥应改用 https://api.deepl.com/v2。",
         "backend_api_hint_libretranslate": "可选。本地或自建 LibreTranslate 不需要密钥时请留空。",
         "backend_api_hint_qianwen": "中国大陆使用 DashScope 大陆端点；海外优先使用国际端点或就近代理。",
-        "backend_api_hint_hunyuan": "填写腾讯混元 API Key。公共免密服务不稳定时，这是适合中国大陆的兼容方案。",
+        "backend_api_hint_hunyuan": "填写所选站点（中国站或国际站）的腾讯 TokenHub API Key。旧的混元控制台密钥已不能使用。",
         "backend_api_hint_xiaomi": "填写与所选区域匹配的 Xiaomi MiMo API Key；按量付费密钥不能与 Token Plan 集群混用。",
         "backend_api_hint_deepseek": "填写 DeepSeek 开放平台 API Key；代理或第三方转发密钥请选择自定义区域并填写对应 Base URL。",
         "backend_api_hint_nvidia": "托管端点使用 NVIDIA API Catalog 密钥；自建 NIM 或代理请选择自定义。",
-        "backend_model_hint_openai_compatible": "选择代理公开的模型 ID；已保存的自定义模型会继续保留在列表中。",
-        "backend_model_hint_grok_compatible": "默认模型为 grok-4.6，也可选择 grok-4.5。中继服务的自定义模型名称会按输入内容原样保存，不会被改写。",
+        "backend_model_hint_openai_compatible": "从中转站读取的模型列表中选择，也可以直接输入模型 ID。修改地址、密钥或接口协议后请点击“刷新模型列表”。",
         "backend_model_hint_local_ai": "填写本地 OpenAI 兼容服务器公开的模型名称。",
         "backend_model_hint_google_web": "无需 API Key。使用 Google 公共网页翻译；可访问地区质量较好，中国大陆连接可能不稳定。",
         "backend_model_hint_microsoft_edge_web": "无需 API Key。使用 Microsoft Edge 网页翻译服务；并非 Azure 官方 API，服务可用性不提供保证。",
         "backend_model_hint_mymemory": "无需 API Key。适合作为零配置备用方案，但公共配额和不同语种的质量会波动。",
         "backend_model_hint_deepl": "DeepL 专用翻译 API；模型字段仅用于说明。",
         "backend_model_hint_libretranslate": "自建 LibreTranslate 不受服务商配额限制；公共实例可能要求密钥或限制请求频率。",
-        "backend_model_hint_hunyuan": "hunyuan-turbos-latest 是实时翻译推荐的低延迟默认模型。",
-        "backend_model_hint_xiaomi": "mimo-v2.5-pro 默认质量更高；更重视延迟时可改用 mimo-v2-flash。",
-        "backend_model_hint_doubao": "请填写当前可用的方舟模型 ID，例如 doubao-seed-2-0-pro-260215。",
+        "backend_model_hint_hunyuan": "hy3 是低延迟默认模型；hy-mt2-plus 和 hy-mt2-lite 是腾讯的专用翻译模型。",
+        "backend_model_hint_xiaomi": "mimo-v2.6-flash 是低延迟默认模型；mimo-v2.6-pro 质量更高，ultraspeed 版本价格约为 10 倍。",
+        "backend_model_hint_doubao": "选择当前可用的方舟模型，或直接输入方舟控制台中的任意模型 ID 或 ep- 推理接入点 ID。",
         "backend_model_hint_nvidia": "托管 NIM 使用 provider/model 格式；自建 NIM 请填写该部署公开的模型 ID。",
     },
     "ja": {
-        "backend_api_hint_openai_compatible": "OpenAI 互換のプロキシ／中継サービス向けです。提供元の Base URL とモデル ID を入力してください。",
-        "backend_api_hint_grok_compatible": "xAI キーまたは任意の Grok 互換中継サービスの認証情報を使用できます。Base URL は xAI 公式エンドポイントに限定されません。",
+        "backend_api_hint_openai_compatible": "中継サービス（中转站）の Base URL と API キーを入力してください。Mio がその中継サービスで使える全モデル（GPT・Claude・Grok・Gemini など）を自動で読み込みます。",
         "backend_api_hint_local_ai": "ローカルサーバーが API キーを要求しない場合は空欄にしてください。",
         "backend_api_hint_deepl": "DeepL API Free キーを使用します。有料キーでは https://api.deepl.com/v2 を指定してください。",
         "backend_api_hint_libretranslate": "任意指定です。ローカル／自前の LibreTranslate がキー不要なら空欄にします。",
         "backend_api_hint_qianwen": "中国本土では DashScope 中国本土、海外では国際エンドポイントまたは近隣プロキシを使用してください。",
-        "backend_api_hint_hunyuan": "Tencent Hunyuan API キーを使用します。公開のキー不要サービスが不安定な中国本土向けの選択肢です。",
+        "backend_api_hint_hunyuan": "選択したサイト（中国またはグローバル）の Tencent TokenHub API キーを入力してください。旧 Hunyuan コンソールのキーは使えません。",
         "backend_api_hint_xiaomi": "選択地域に対応する Xiaomi MiMo API キーを使用し、従量課金キーと Token Plan を混在させないでください。",
         "backend_api_hint_deepseek": "DeepSeek Open Platform の API キーを使用します。プロキシ／中継キーではカスタム地域と対応する Base URL を指定してください。",
         "backend_api_hint_nvidia": "ホスト型は NVIDIA API Catalog キー、自前の NIM／プロキシはカスタムを使用します。",
-        "backend_model_hint_openai_compatible": "プロキシが公開するモデル ID を選びます。保存済みのカスタム ID も一覧に残ります。",
-        "backend_model_hint_grok_compatible": "既定は grok-4.6 で、grok-4.5 も選択できます。中継サービス固有のモデル名は入力どおり保存され、書き換えられません。",
+        "backend_model_hint_openai_compatible": "中継サービスから読み込んだ一覧から選ぶか、モデル ID を直接入力します。URL・キー・接続方式を変えたら「モデル一覧を更新」を押してください。",
         "backend_model_hint_local_ai": "ローカルの OpenAI 互換サーバーが公開するモデル名を入力します。",
         "backend_model_hint_google_web": "API キー不要の Google 公開翻訳です。利用可能地域では高品質ですが、中国本土では接続が不安定な場合があります。",
         "backend_model_hint_microsoft_edge_web": "API キー不要の Microsoft Edge ウェブ翻訳です。Azure の公式 API ではなく、可用性保証はありません。",
         "backend_model_hint_mymemory": "API キー不要の予備手段です。公開枠と翻訳メモリの品質は言語ペアにより変動します。",
         "backend_model_hint_deepl": "DeepL 専用翻訳 API です。モデル欄は情報表示用です。",
         "backend_model_hint_libretranslate": "自前の LibreTranslate は提供元の割り当てなしで使えます。公開サーバーはキーや速度制限がある場合があります。",
-        "backend_model_hint_hunyuan": "hunyuan-turbos-latest はリアルタイム翻訳向けの低遅延な推奨モデルです。",
-        "backend_model_hint_xiaomi": "品質優先は mimo-v2.5-pro、遅延優先は mimo-v2-flash を使用します。",
-        "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 など、現在有効な Ark モデル ID を入力してください。",
+        "backend_model_hint_hunyuan": "hy3 は低遅延の既定モデルです。hy-mt2-plus と hy-mt2-lite は Tencent の翻訳専用モデルです。",
+        "backend_model_hint_xiaomi": "mimo-v2.6-flash は低遅延の既定モデルです。mimo-v2.6-pro はより高品質で、ultraspeed 版は約 10 倍の料金です。",
+        "backend_model_hint_doubao": "現在有効な Ark モデルを選ぶか、Ark コンソールの任意のモデル ID または ep- 推論エンドポイント ID を入力してください。",
         "backend_model_hint_nvidia": "ホスト型 NIM は provider/model 形式、自前の NIM はその環境が公開するモデル ID を入力します。",
     },
     "ru": {
-        "backend_api_hint_openai_compatible": "Для прокси и шлюзов, совместимых с OpenAI. Укажите Base URL и идентификатор модели от провайдера.",
-        "backend_api_hint_grok_compatible": "Можно использовать ключ xAI или учётные данные любого Grok-совместимого шлюза. Base URL не ограничен официальными адресами xAI.",
+        "backend_api_hint_openai_compatible": "Укажите Base URL и API-ключ вашего ретранслятора. Mio сам загрузит все модели, которые он предоставляет (GPT, Claude, Grok, Gemini и другие).",
         "backend_api_hint_local_ai": "Оставьте пустым, если локальный сервер не требует API-ключ.",
         "backend_api_hint_deepl": "Используйте ключ DeepL API Free; для платного ключа задайте https://api.deepl.com/v2.",
         "backend_api_hint_libretranslate": "Необязательно. Оставьте пустым для локального LibreTranslate без API-ключа.",
         "backend_api_hint_qianwen": "В Китае используйте материковый DashScope; за рубежом — международный адрес или ближайший прокси.",
-        "backend_api_hint_hunyuan": "Укажите ключ Tencent Hunyuan. Это надёжный вариант для материкового Китая, когда публичные сервисы нестабильны.",
+        "backend_api_hint_hunyuan": "Укажите ключ Tencent TokenHub с выбранного сайта (China или Global). Ключи из старой консоли Hunyuan больше не работают.",
         "backend_api_hint_xiaomi": "Используйте ключ Xiaomi MiMo выбранного региона; не смешивайте pay-as-you-go и кластеры Token Plan.",
         "backend_api_hint_deepseek": "Используйте ключ DeepSeek Open Platform; для прокси выберите пользовательский регион и соответствующий Base URL.",
         "backend_api_hint_nvidia": "Для хостинга используйте ключ NVIDIA API Catalog; для своего NIM или прокси выберите пользовательский адрес.",
-        "backend_model_hint_openai_compatible": "Выберите ID модели, доступный через прокси. Сохранённые пользовательские ID остаются в списке.",
-        "backend_model_hint_grok_compatible": "Модель по умолчанию — grok-4.6; также доступна grok-4.5. Пользовательские имена моделей шлюза сохраняются без изменений.",
+        "backend_model_hint_openai_compatible": "Выберите модель из списка, загруженного с ретранслятора, или введите ID вручную. После смены адреса, ключа или протокола нажмите «Обновить список моделей».",
         "backend_model_hint_local_ai": "Введите имя модели, которое предоставляет локальный OpenAI-совместимый сервер.",
         "backend_model_hint_google_web": "API-ключ не нужен. Используется публичный перевод Google; в Китае доступ может быть нестабильным.",
         "backend_model_hint_microsoft_edge_web": "API-ключ не нужен. Используется веб-служба Microsoft Edge, а не официальный Azure API; доступность не гарантируется.",
         "backend_model_hint_mymemory": "API-ключ не нужен. Удобный резерв без настройки, но квота и качество зависят от языковой пары.",
         "backend_model_hint_deepl": "Специализированный API DeepL; поле модели носит информационный характер.",
         "backend_model_hint_libretranslate": "Свой LibreTranslate работает без квоты провайдера; публичные серверы могут требовать ключ или ограничивать запросы.",
-        "backend_model_hint_hunyuan": "hunyuan-turbos-latest — рекомендуемая низколатентная модель Hunyuan для живого перевода.",
-        "backend_model_hint_xiaomi": "mimo-v2.5-pro — вариант по качеству; приоритет скорости — mimo-v2-flash.",
-        "backend_model_hint_doubao": "Введите актуальный ID модели Ark, например doubao-seed-2-0-pro-260215.",
+        "backend_model_hint_hunyuan": "hy3 — низколатентная модель по умолчанию; hy-mt2-plus и hy-mt2-lite — специализированные модели перевода Tencent.",
+        "backend_model_hint_xiaomi": "mimo-v2.6-flash — низколатентная модель по умолчанию; mimo-v2.6-pro даёт более высокое качество, а вариант ultraspeed стоит примерно в 10 раз дороже.",
+        "backend_model_hint_doubao": "Выберите актуальную модель Ark или введите любой ID модели либо ID конечной точки ep- из консоли Ark.",
         "backend_model_hint_nvidia": "Хостинговые NIM используют формат provider/model; для своего NIM введите ID, открытый этим развёртыванием.",
     },
     "ko": {
-        "backend_api_hint_openai_compatible": "OpenAI 호환 프록시 또는 중계 서비스용입니다. 서비스가 제공한 Base URL과 모델 ID를 입력하세요.",
-        "backend_api_hint_grok_compatible": "xAI 키 또는 Grok 호환 중계 서비스가 발급한 자격 증명을 사용할 수 있습니다. Base URL은 xAI 공식 엔드포인트로 제한되지 않습니다.",
+        "backend_api_hint_openai_compatible": "중계 서비스의 Base URL과 API 키를 입력하세요. Mio가 해당 중계 서비스에서 쓸 수 있는 모든 모델(GPT, Claude, Grok, Gemini 등)을 자동으로 불러옵니다.",
         "backend_api_hint_local_ai": "로컬 서버가 API 키를 요구하지 않으면 비워 두세요.",
         "backend_api_hint_deepl": "DeepL API Free 키를 사용합니다. 유료 키는 https://api.deepl.com/v2 를 지정하세요.",
         "backend_api_hint_libretranslate": "선택 사항입니다. 로컬 또는 자체 LibreTranslate가 키를 요구하지 않으면 비워 두세요.",
         "backend_api_hint_qianwen": "중국 본토는 DashScope 본토 엔드포인트, 해외는 국제 엔드포인트 또는 가까운 프록시를 사용하세요.",
-        "backend_api_hint_hunyuan": "Tencent Hunyuan API 키를 사용합니다. 공개 무키 서비스가 불안정한 중국 본토 환경에 적합합니다.",
+        "backend_api_hint_hunyuan": "선택한 사이트(중국 또는 글로벌)의 Tencent TokenHub API 키를 입력하세요. 기존 Hunyuan 콘솔의 키는 사용할 수 없습니다.",
         "backend_api_hint_xiaomi": "선택 지역과 일치하는 Xiaomi MiMo API 키를 사용하고 pay-as-you-go 키와 Token Plan을 섞지 마세요.",
         "backend_api_hint_deepseek": "DeepSeek Open Platform API 키를 사용합니다. 프록시 키는 사용자 지정 지역과 해당 Base URL을 선택하세요.",
         "backend_api_hint_nvidia": "호스팅은 NVIDIA API Catalog 키를, 자체 NIM 또는 프록시는 사용자 지정을 사용합니다.",
-        "backend_model_hint_openai_compatible": "프록시가 제공하는 모델 ID를 선택합니다. 저장한 사용자 모델 ID도 목록에 유지됩니다.",
-        "backend_model_hint_grok_compatible": "기본 모델은 grok-4.6이며 grok-4.5도 선택할 수 있습니다. 중계 서비스의 사용자 지정 모델 이름은 입력한 그대로 저장되며 변경되지 않습니다.",
+        "backend_model_hint_openai_compatible": "중계 서비스에서 불러온 목록에서 고르거나 모델 ID를 직접 입력하세요. 주소·키·프로토콜을 바꾼 뒤에는 '모델 목록 새로 고침'을 누르세요.",
         "backend_model_hint_local_ai": "로컬 OpenAI 호환 서버가 제공하는 모델 이름을 입력합니다.",
         "backend_model_hint_google_web": "API 키가 필요 없는 Google 공개 번역입니다. 사용 가능한 지역에서는 품질이 좋지만 중국 본토에서는 불안정할 수 있습니다.",
         "backend_model_hint_microsoft_edge_web": "API 키가 필요 없는 Microsoft Edge 웹 번역입니다. 공식 Azure API가 아니며 가용성 보장은 없습니다.",
         "backend_model_hint_mymemory": "API 키가 필요 없는 대체 수단입니다. 공개 할당량과 번역 메모리 품질은 언어 조합에 따라 달라집니다.",
         "backend_model_hint_deepl": "DeepL 전용 번역 API이며 모델 필드는 정보용입니다.",
         "backend_model_hint_libretranslate": "자체 LibreTranslate는 서비스 할당량 없이 동작합니다. 공개 서버는 키를 요구하거나 요청을 제한할 수 있습니다.",
-        "backend_model_hint_hunyuan": "hunyuan-turbos-latest는 실시간 번역에 권장되는 저지연 Hunyuan 모델입니다.",
-        "backend_model_hint_xiaomi": "품질 기본값은 mimo-v2.5-pro이며 지연이 더 중요하면 mimo-v2-flash를 사용합니다.",
-        "backend_model_hint_doubao": "doubao-seed-2-0-pro-260215 같은 현재 Ark 모델 ID를 입력하세요.",
+        "backend_model_hint_hunyuan": "hy3는 저지연 기본 모델이며, hy-mt2-plus와 hy-mt2-lite는 Tencent의 번역 전용 모델입니다.",
+        "backend_model_hint_xiaomi": "mimo-v2.6-flash는 저지연 기본 모델이고, mimo-v2.6-pro는 품질이 더 높으며 ultraspeed 버전은 약 10배 비쌉니다.",
+        "backend_model_hint_doubao": "현재 Ark 모델을 고르거나 Ark 콘솔의 모델 ID 또는 ep- 추론 엔드포인트 ID를 직접 입력하세요.",
         "backend_model_hint_nvidia": "호스팅 NIM은 provider/model 형식을 사용합니다. 자체 NIM은 해당 배포가 제공하는 모델 ID를 입력하세요.",
     },
 }
@@ -2343,11 +2793,11 @@ QT_SETTINGS_COPY.update({
         "ko": "음성 클로닝",
     },
     "voice_clone_privacy_notice": {
-        "zh-CN": "声音克隆需要把你的参考录音上传到你自己配置的阿里云百炼账号。录音会保存在该服务上，未使用满一年会被自动删除。不要上传他人未授权的声音。",
-        "en": "Voice cloning uploads your reference recording to the Alibaba Cloud Model Studio account you configured. The recording is stored by that service and is deleted automatically after a year without use. Do not upload anyone else's voice without their permission.",
-        "ja": "音声クローンは、設定した Alibaba Cloud Model Studio アカウントに参照録音をアップロードします。録音はそのサービス上に保存され、1 年間使用されないと自動的に削除されます。他人の声を許可なくアップロードしないでください。",
-        "ru": "Клонирование голоса загружает эталонную запись в настроенный вами аккаунт Alibaba Cloud Model Studio. Запись хранится в этом сервисе и удаляется автоматически после года без использования. Не загружайте чужой голос без разрешения.",
-        "ko": "음성 클로닝은 설정한 Alibaba Cloud Model Studio 계정으로 참조 녹음을 업로드합니다. 녹음은 해당 서비스에 저장되며 1년간 사용되지 않으면 자동으로 삭제됩니다. 타인의 목소리를 허락 없이 업로드하지 마세요.",
+        "zh-CN": "声音克隆需要把你的参考录音上传到你自己配置的阿里云百炼账号：录音先进入该账号的临时存储（48 小时后自动删除），再用来创建音色。音色保存在该服务上，一年未使用会被自动删除。不要上传他人未授权的声音。",
+        "en": "Voice cloning uploads your reference recording to the Alibaba Cloud Model Studio account you configured. The recording first goes to that account's temporary storage, which deletes it after 48 hours, and is then used to create the voice. The voice is stored by that service and is deleted automatically after a year without use. Do not upload anyone else's voice without their permission.",
+        "ja": "音声クローンは、設定した Alibaba Cloud Model Studio アカウントに参照録音をアップロードします。録音はまずそのアカウントの一時ストレージ（48 時間後に自動削除）に置かれ、音声の作成に使われます。作成した音声はサービス上に保存され、1 年間使用されないと自動的に削除されます。他人の声を許可なくアップロードしないでください。",
+        "ru": "Клонирование голоса загружает эталонную запись в настроенный вами аккаунт Alibaba Cloud Model Studio. Сначала запись попадает во временное хранилище этого аккаунта, которое удаляет её через 48 часов, и из неё создаётся голос. Голос хранится в сервисе и удаляется автоматически после года без использования. Не загружайте чужой голос без разрешения.",
+        "ko": "음성 클로닝은 설정한 Alibaba Cloud Model Studio 계정으로 참조 녹음을 업로드합니다. 녹음은 먼저 해당 계정의 임시 저장소(48시간 후 자동 삭제)에 올라간 뒤 음성 생성에 사용됩니다. 만든 음성은 서비스에 저장되며 1년간 사용되지 않으면 자동으로 삭제됩니다. 타인의 목소리를 허락 없이 업로드하지 마세요.",
     },
     "voice_clone_consent": {
         "zh-CN": "我已了解并同意上传录音用于声音克隆",
@@ -2441,11 +2891,11 @@ QT_SETTINGS_COPY.update({
         "ko": "녹음 오디오가 안전 제한을 초과하여 복제에 사용할 수 없습니다.",
     },
     "voice_clone_auth_failed": {
-        "zh-CN": "声音克隆服务拒绝了 API Key。请确认密钥有效，并且与所选服务区域一致。",
-        "en": "The voice cloning service rejected the API key. Check that it is valid and matches the selected service region.",
-        "ja": "音声クローンサービスが API キーを拒否しました。キーが有効で、選択したサービス地域と一致しているか確認してください。",
-        "ru": "Сервис клонирования голоса отклонил ключ API. Убедитесь, что он действителен и соответствует выбранному региону.",
-        "ko": "음성 클로닝 서비스가 API 키를 거부했습니다. 키가 유효하고 선택한 서비스 지역과 일치하는지 확인하세요.",
+        "zh-CN": "声音克隆服务拒绝了 API Key。声音克隆需要阿里云百炼北京地域（中国大陆）的有效 API Key，新加坡等其他地域的密钥不能使用。",
+        "en": "The voice cloning service rejected the API key. Voice cloning needs a valid Alibaba Cloud Model Studio key from the China (Beijing) region; keys from Singapore or other regions do not work.",
+        "ja": "音声クローンサービスが API キーを拒否しました。音声クローンには Alibaba Cloud Model Studio の中国（北京）リージョンの有効な API キーが必要です。シンガポールなど他のリージョンのキーは使えません。",
+        "ru": "Сервис клонирования голоса отклонил ключ API. Нужен действующий ключ Alibaba Cloud Model Studio из региона Китай (Пекин); ключи из Сингапура и других регионов не подходят.",
+        "ko": "음성 클로닝 서비스가 API 키를 거부했습니다. 음성 클로닝에는 Alibaba Cloud Model Studio 중국(베이징) 지역의 유효한 API 키가 필요합니다. 싱가포르 등 다른 지역의 키는 사용할 수 없습니다.",
     },
     "voice_clone_rate_limited": {
         "zh-CN": "声音克隆请求过于频繁，请稍后重试。",
@@ -2462,11 +2912,11 @@ QT_SETTINGS_COPY.update({
         "ko": "음성 클로닝 서비스에 연결할 수 없습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     },
     "voice_clone_request_rejected": {
-        "zh-CN": "声音克隆服务拒绝了这次请求。常见原因：所选模型在当前服务区域不可用，或参考音频不符合要求（单声道、24 kHz 以上、10–20 秒）。",
-        "en": "The voice cloning service rejected this request. Common causes: the selected model is not available in the current service region, or the reference audio does not meet the requirements (mono, 24 kHz or higher, 10-20 seconds).",
-        "ja": "音声クローンサービスがこのリクエストを拒否しました。よくある原因: 選択したモデルが現在のサービス地域で利用できない、または参照音声が要件（モノラル・24 kHz 以上・10～20 秒）を満たしていない。",
-        "ru": "Сервис клонирования голоса отклонил запрос. Частые причины: выбранная модель недоступна в текущем регионе или эталонное аудио не отвечает требованиям (моно, от 24 кГц, 10-20 секунд).",
-        "ko": "음성 클로닝 서비스가 이 요청을 거부했습니다. 흔한 원인: 선택한 모델을 현재 서비스 지역에서 사용할 수 없거나, 참조 오디오가 요구 사항(모노, 24 kHz 이상, 10~20초)을 충족하지 않습니다.",
+        "zh-CN": "声音克隆服务拒绝了这次请求。常见原因：所选模型不支持声音复刻，或参考音频不符合要求（16 kHz 以上、推荐 10–20 秒、最长 60 秒，并包含至少 5 秒连续清晰的朗读）。",
+        "en": "The voice cloning service rejected this request. Common causes: the selected model does not support voice cloning, or the reference audio does not meet the requirements (16 kHz or higher, 10-20 seconds recommended, 60 seconds at most, with at least 5 seconds of continuous clear speech).",
+        "ja": "音声クローンサービスがこのリクエストを拒否しました。よくある原因: 選択したモデルが音声クローンに対応していない、または参照音声が要件（16 kHz 以上、推奨 10～20 秒・最長 60 秒、5 秒以上連続した明瞭な発話）を満たしていない。",
+        "ru": "Сервис клонирования голоса отклонил запрос. Частые причины: выбранная модель не поддерживает клонирование или эталонное аудио не отвечает требованиям (от 16 кГц, рекомендуется 10-20 секунд, не более 60 секунд, не менее 5 секунд непрерывной чёткой речи).",
+        "ko": "음성 클로닝 서비스가 이 요청을 거부했습니다. 흔한 원인: 선택한 모델이 음성 복제를 지원하지 않거나, 참조 오디오가 요구 사항(16 kHz 이상, 권장 10~20초, 최대 60초, 5초 이상 연속된 선명한 발화)을 충족하지 않습니다.",
     },
     "listen_asr_edge_stt_warning": {
         "zh-CN": "⚠ Edge 语音识别会把听到的一切都按所选语言识别。反向翻译面对的是其他玩家，一旦对方说的不是这个语言，结果会变成音译乱码。若周围语言不固定，请改用 Qwen3-ASR 或 SenseVoice。",
@@ -2474,797 +2924,6 @@ QT_SETTINGS_COPY.update({
         "ja": "\u26a0 Edge 音声認識は聞こえたものをすべて選択した言語として認識します。逆翻訳は他のプレイヤーの声を扱うため、別の言語で話されると音訳された無意味な文字列になります。周囲の言語が一定でない場合は Qwen3-ASR または SenseVoice をお使いください。",
         "ru": "\u26a0 Edge Speech распознаёт всё услышанное только на выбранном языке. Обратный перевод слышит других игроков, поэтому речь на другом языке вернётся бессмысленной транслитерацией. Если языки вокруг разные, используйте Qwen3-ASR или SenseVoice.",
         "ko": "\u26a0 Edge 음성 인식은 들리는 모든 소리를 선택한 언어로 인식합니다. 역번역은 다른 플레이어의 말을 다루므로 다른 언어로 말하면 음차된 의미 없는 문자열이 됩니다. 주변 언어가 일정하지 않다면 Qwen3-ASR 또는 SenseVoice를 사용하세요.",
-    },
-    "screenshot_section": {
-        "zh-CN": "截图翻译",
-        "en": "Screenshot translation",
-        "ja": "スクリーンショット翻訳",
-        "ru": "Перевод по скриншоту",
-        "ko": "스크린샷 번역",
-    },
-    "screenshot_guide": {
-        "zh-CN": "VR 里最简单的方式是双手取景（像 VRHandsFrame）：两手按住握把，在面前摆成一个框（两手在对角），保持不动片刻，框里的文字就会被翻译并显示在原处；取景时扣扳机会把翻译留成一块面板，面板可以用扳机点按钮、按住握把拿起移动。也可以按住扳机和抓握键再按 B（右手）/ Y（左手）打开取景框，用扳机框选范围；再按一次 B/Y 翻译整个画面。按键可以在 SteamVR 的「控制器设置 → 管理绑定」里改。桌面上可以用下面的快捷键直接翻译整个画面。",
-        "en": "The easiest way in VR is the two-hand frame (as in VRHandsFrame): hold both grips and hold your hands up at opposite corners of a sign; keep still for a moment and the text inside is translated right where it is. Pull a trigger while framing to keep that translation as a panel; point at a panel and pull the trigger to use its buttons, or hold the grip to pick it up and move it. You can also hold the trigger and grip and press B (right) or Y (left) to open a frame and drag a region with the trigger; press B/Y again for the whole view. The buttons can be changed in SteamVR under Controller Settings, Manage Bindings. On the desktop, the hotkey below translates the whole view directly.",
-        "ja": "VR で一番簡単なのは両手フレーム（VRHandsFrame と同じ操作）です。両手のグリップを握って看板の対角に手を構え、少し静止すると枠内の文字がその場で翻訳されます。フレーム中にトリガーを引くと翻訳がパネルとして残り、パネルはトリガーでボタン操作、グリップで持ち上げて移動できます。トリガーとグリップを押したまま B（右手）／ Y（左手）を押して枠を開き、トリガーで範囲を囲むこともできます。もう一度 B/Y で画面全体を翻訳します。ボタンは SteamVR の「コントローラー設定 → バインドの管理」で変更できます。デスクトップでは下のホットキーで画面全体を翻訳できます。",
-        "ru": "Проще всего в VR — рамка руками (как в VRHandsFrame): зажмите оба грипа и поднимите руки к противоположным углам надписи; замрите на мгновение — текст внутри переведётся прямо на месте. Нажмите курок, держа рамку, чтобы сохранить перевод на панели; панелью управляют курком, а грипом её можно взять и перенести. Можно также удерживать триггер и захват и нажать B (правая) или Y (левая), чтобы открыть рамку и выделить область триггером; B/Y ещё раз — перевести весь экран. Кнопки меняются в SteamVR в разделе управления привязками. На рабочем столе горячая клавиша ниже сразу переводит весь экран.",
-        "ko": "VR에서 가장 쉬운 방법은 양손 프레임(VRHandsFrame과 같은 방식)입니다. 양손 그립을 쥐고 간판의 대각선 모서리에 손을 두고 잠시 가만히 있으면 프레임 안의 글자가 그 자리에서 번역됩니다. 프레임 중에 트리거를 당기면 번역이 패널로 남고, 패널은 트리거로 버튼을 누르거나 그립으로 들어 옮길 수 있습니다. 트리거와 그립을 누른 채 B(오른손) / Y(왼손)를 눌러 프레임을 열고 트리거로 범위를 지정할 수도 있으며, B/Y를 다시 누르면 화면 전체를 번역합니다. 버튼은 SteamVR의 컨트롤러 설정에서 바꿀 수 있습니다. 데스크톱에서는 아래 단축키로 화면 전체를 바로 번역합니다.",
-    },
-    "screenshot_enabled": {
-        "zh-CN": "启用截图翻译",
-        "en": "Enable screenshot translation",
-        "ja": "スクリーンショット翻訳を有効にする",
-        "ru": "Включить перевод по скриншоту",
-        "ko": "스크린샷 번역 사용",
-    },
-    "screenshot_hand": {
-        "zh-CN": "结果显示在",
-        "en": "Show the result on",
-        "ja": "結果を表示する手",
-        "ru": "Показывать результат на",
-        "ko": "결과를 표시할 손",
-    },
-    "screenshot_hand_left": {
-        "zh-CN": "左手",
-        "en": "Left hand",
-        "ja": "左手",
-        "ru": "Левой руке",
-        "ko": "왼손",
-    },
-    "screenshot_hand_right": {
-        "zh-CN": "右手",
-        "en": "Right hand",
-        "ja": "右手",
-        "ru": "Правой руке",
-        "ko": "오른손",
-    },
-    "screenshot_placement": {
-        "zh-CN": "结果显示方式",
-        "en": "Show the result",
-        "ja": "結果の表示方法",
-        "ru": "Показ результата",
-        "ko": "결과 표시 방식",
-    },
-    "screenshot_placement_card": {
-        "zh-CN": "翻译卡片（短暂显示，按任意键收起）",
-        "en": "A translation card (shown briefly, any button puts it away)",
-        "ja": "翻訳カード（短時間表示、どのボタンでも閉じる）",
-        "ru": "Карточка перевода (ненадолго, любая кнопка убирает)",
-        "ko": "번역 카드(잠시 표시, 아무 버튼으로 닫기)",
-    },
-    "screenshot_placement_hand": {
-        "zh-CN": "显示在手柄面板上",
-        "en": "On the hand panel",
-        "ja": "手のパネルに表示",
-        "ru": "На панели у руки",
-        "ko": "손 패널에 표시",
-    },
-    "screenshot_placement_panel": {
-        "zh-CN": "面板（挂在原文位置，关闭前一直保留）",
-        "en": "A panel (hangs where the text was until you close it)",
-        "ja": "パネル（元の文字の位置に、閉じるまで残る）",
-        "ru": "Панель (висит у текста, пока не закроете)",
-        "ko": "패널(원문 위치에 닫을 때까지 유지)",
-    },
-    "screenshot_frame_gesture": {
-        "zh-CN": "双手取景翻译",
-        "en": "Two-hand frame",
-        "ja": "両手フレーム翻訳",
-        "ru": "Перевод рамкой из рук",
-        "ko": "양손 프레임 번역",
-    },
-    "screenshot_frame_gesture_hint": {
-        "zh-CN": "两手按住握把、在面前摆成对角时出现取景框。两手都要按住握把并且拉开距离，平时玩游戏不容易误触；拿着东西举在面前时可能触发，可在手腕面板里随时关闭。",
-        "en": "A frame appears when both grips are held with the hands at opposite corners in front of you. Both grips and hands held apart make it hard to trigger in play; holding two things up in front of your face can still do it, so it can be switched off from the wrist panel at any time.",
-        "ja": "両手のグリップを握り、目の前で対角に構えるとフレームが出ます。両方のグリップと離した両手が必要なので普段のプレイでは誤作動しにくいですが、物を二つ顔の前に掲げると反応することがあります。手首パネルからいつでもオフにできます。",
-        "ru": "Рамка появляется, когда оба грипа зажаты, а руки подняты перед вами в противоположных углах. Два грипа и разведённые руки мешают случайному срабатыванию в игре; если поднести к лицу два предмета, рамка всё же может появиться — её можно выключить на панели на руке.",
-        "ko": "양손 그립을 쥐고 눈앞에서 대각선으로 손을 두면 프레임이 나타납니다. 두 그립과 벌린 두 손이 필요해 평소 플레이 중에는 잘 오작동하지 않지만, 물건 두 개를 얼굴 앞에 들면 반응할 수 있습니다. 손목 패널에서 언제든 끌 수 있습니다.",
-    },
-    "screenshot_auto_translate": {
-        "zh-CN": "取景后保持不动自动翻译（关闭后需扣扳机）",
-        "en": "Translate when the frame is held still (off: pull the trigger)",
-        "ja": "静止したら自動で翻訳（オフ：トリガーを引く）",
-        "ru": "Переводить, когда рамка неподвижна (выкл.: нажать курок)",
-        "ko": "가만히 있으면 자동 번역(끄면 트리거로)",
-    },
-    "screenshot_still_seconds": {
-        "zh-CN": "保持不动多久开始翻译",
-        "en": "Hold still for",
-        "ja": "静止してから翻訳までの時間",
-        "ru": "Сколько держать неподвижно",
-        "ko": "번역 전 정지 시간",
-    },
-    "vr_wrist_show_mode": {
-        "zh-CN": "手腕面板出现方式",
-        "en": "Show the wrist panel",
-        "ja": "手首パネルの表示方法",
-        "ru": "Как показывать панель",
-        "ko": "손목 패널 표시 방식",
-    },
-    "vr_wrist_show_twist": {
-        "zh-CN": "快速扭两下手腕（再扭两下收起）",
-        "en": "Twist the wrist twice (twice more to hide)",
-        "ja": "手首を 2 回ひねる（もう 2 回で閉じる）",
-        "ru": "Дважды повернуть запястье (ещё дважды — скрыть)",
-        "ko": "손목을 두 번 비틀기(다시 두 번 비틀어 숨김)",
-    },
-    "vr_wrist_show_look": {
-        "zh-CN": "抬起手腕看向手背（像看手表）",
-        "en": "Raise the wrist and look at it (like a watch)",
-        "ja": "手首を上げて手の甲を見る（腕時計のように）",
-        "ru": "Поднять запястье и посмотреть (как на часы)",
-        "ko": "손목을 들어 손등 보기(손목시계처럼)",
-    },
-    "vr_wrist_show_always": {
-        "zh-CN": "一直显示",
-        "en": "Always shown",
-        "ja": "常に表示",
-        "ru": "Всегда показывать",
-        "ko": "항상 표시",
-    },
-    "vr_feedback_haptics": {
-        "zh-CN": "手柄振动反馈",
-        "en": "Controller vibration",
-        "ja": "コントローラーの振動",
-        "ru": "Вибрация контроллеров",
-        "ko": "컨트롤러 진동",
-    },
-    "vr_feedback_sounds": {
-        "zh-CN": "提示音",
-        "en": "Sound cues",
-        "ja": "効果音",
-        "ru": "Звуковые сигналы",
-        "ko": "알림음",
-    },
-    "vr_feedback_volume": {
-        "zh-CN": "提示音音量",
-        "en": "Cue volume",
-        "ja": "効果音の音量",
-        "ru": "Громкость сигналов",
-        "ko": "알림음 볼륨",
-    },
-    "vr_feedback_volume_value": {
-        "zh-CN": "{value}%",
-        "en": "{value}%",
-        "ja": "{value}%",
-        "ru": "{value}%",
-        "ko": "{value}%",
-    },
-    "vr_feedback_hint": {
-        "zh-CN": "取景框出现、开始识别、出结果、点按钮时手柄会轻振并播放短提示音，不用等画面出现就知道手势是否被识别。",
-        "en": "The controllers buzz and a short sound plays when the frame appears, a read starts, a result arrives and a button is clicked, so you know a gesture registered before anything shows.",
-        "ja": "フレームの表示、読み取り開始、結果の表示、ボタン操作のたびにコントローラーが軽く振動し短い音が鳴るので、何かが表示される前にジェスチャーが認識されたか分かります。",
-        "ru": "Контроллеры вибрируют и звучит короткий сигнал, когда появляется рамка, начинается чтение, приходит результат и нажата кнопка — так понятно, что жест распознан, ещё до появления картинки.",
-        "ko": "프레임이 나타날 때, 읽기를 시작할 때, 결과가 나올 때, 버튼을 누를 때 컨트롤러가 가볍게 진동하고 짧은 소리가 나서 화면이 뜨기 전에 제스처가 인식됐는지 알 수 있습니다.",
-    },
-    "vr_push_to_talk": {
-        "zh-CN": "按住手柄键说话（松开即静音）",
-        "en": "Hold a controller button to talk (muted when released)",
-        "ja": "コントローラーのボタンを押している間だけ話す",
-        "ru": "Говорить, удерживая кнопку контроллера",
-        "ko": "컨트롤러 버튼을 누르는 동안만 말하기",
-    },
-    "vr_push_to_talk_hint": {
-        "zh-CN": "默认没有绑定按键（游戏已占用常用键）：点下面的按钮打开 SteamVR 绑定页，给“按住说话”选一个键。开启后 Mio 的麦克风只在按住时收音，VRChat 的静音状态不会再同步过来。",
-        "en": "No button is bound by default, since the game already uses the obvious ones: open the SteamVR binding page below and pick one for Push to talk. While on, Mio hears the mic only while it is held, and VRChat's mute no longer syncs to Mio.",
-        "ja": "ゲームがよく使うボタンを使っているため、既定ではボタンを割り当てていません。下のボタンで SteamVR のバインド画面を開き、「押して話す」にボタンを選んでください。オンの間、Mio は押している間だけマイクを聞き、VRChat のミュート状態は同期しません。",
-        "ru": "По умолчанию кнопка не назначена — игра уже занимает очевидные. Откройте страницу привязок SteamVR кнопкой ниже и выберите кнопку для «Говорить по кнопке». Пока режим включён, Mio слышит микрофон только при удержании, а выключение микрофона в VRChat больше не синхронизируется.",
-        "ko": "게임이 자주 쓰는 버튼을 이미 사용하므로 기본으로는 버튼이 지정되어 있지 않습니다. 아래 버튼으로 SteamVR 바인딩 화면을 열어 '누르고 말하기'에 버튼을 지정하세요. 켜 두면 Mio는 누르는 동안만 마이크를 듣고, VRChat 음소거 상태는 동기화하지 않습니다.",
-    },
-    "vr_open_bindings": {
-        "zh-CN": "打开 SteamVR 按键绑定",
-        "en": "Open SteamVR controller bindings",
-        "ja": "SteamVR のバインド画面を開く",
-        "ru": "Открыть привязки SteamVR",
-        "ko": "SteamVR 컨트롤러 바인딩 열기",
-    },
-    "vr_open_bindings_failed": {
-        "zh-CN": "SteamVR 未运行或还没接管手柄，打开 SteamVR 后再试。",
-        "en": "SteamVR is not running or has not handed over the controllers yet; try again with SteamVR running.",
-        "ja": "SteamVR が起動していないか、まだコントローラーを渡していません。SteamVR を起動してからもう一度お試しください。",
-        "ru": "SteamVR не запущен или ещё не передал контроллеры; повторите, когда SteamVR будет работать.",
-        "ko": "SteamVR가 실행 중이 아니거나 아직 컨트롤러를 넘기지 않았습니다. SteamVR를 켠 뒤 다시 시도하세요.",
-    },
-    "screenshot_view_eye": {
-        "zh-CN": "主视眼（读取哪只眼的画面）",
-        "en": "Dominant eye (whose view is read)",
-        "ja": "利き目（どちらの目の映像を読むか）",
-        "ru": "Ведущий глаз (чей вид читается)",
-        "ko": "주시안(어느 눈의 화면을 읽을지)",
-    },
-    "screenshot_view_eye_left": {
-        "zh-CN": "左眼",
-        "en": "Left eye",
-        "ja": "左目",
-        "ru": "Левый глаз",
-        "ko": "왼쪽 눈",
-    },
-    "screenshot_view_eye_right": {
-        "zh-CN": "右眼",
-        "en": "Right eye",
-        "ja": "右目",
-        "ru": "Правый глаз",
-        "ko": "오른쪽 눈",
-    },
-    "screenshot_view_eye_hint": {
-        "zh-CN": "双手取景时，框里对准的是主视眼看到的东西。不知道是哪只眼：两眼睁开用手指对准远处一点，轮流闭上一只眼，指尖仍对准的那只就是主视眼。选错了，框住的和读到的会偏开一截。",
-        "en": "When you frame something with your hands, what lines up inside the frame is what your dominant eye sees. To find it: point a finger at something far away with both eyes open, then close each eye in turn; the eye that still sees the finger on target is the dominant one. The wrong eye makes reads land beside what you framed.",
-        "ja": "両手で枠を作ったとき、枠の中に合って見えるのは利き目の映像です。調べ方：両目を開けて遠くの一点を指さし、片目ずつ閉じます。指先が合ったままの目が利き目です。違う目を選ぶと、囲んだ場所と読み取る場所がずれます。",
-        "ru": "Когда вы берёте что-то в рамку руками, внутри рамки совпадает то, что видит ведущий глаз. Как узнать: с открытыми глазами наведите палец на далёкую точку и закрывайте глаза по очереди; глаз, для которого палец остаётся на точке, и есть ведущий. С неправильным глазом прочитанное смещается от рамки.",
-        "ko": "양손으로 프레임을 만들면 프레임 안에 맞춰 보이는 것은 주시안의 화면입니다. 확인 방법: 두 눈을 뜨고 먼 곳의 한 점을 손가락으로 가리킨 뒤 한쪽 눈씩 감아 보세요. 손가락이 그대로 맞는 눈이 주시안입니다. 잘못 고르면 감싼 곳과 읽는 곳이 어긋납니다.",
-    },
-    "screenshot_gesture_sensitivity": {
-        "zh-CN": "手势灵敏度",
-        "en": "Gesture sensitivity",
-        "ja": "ジェスチャーの感度",
-        "ru": "Чувствительность жеста",
-        "ko": "제스처 감도",
-    },
-    "screenshot_frame_arm": {
-        "zh-CN": "取景框出现前保持",
-        "en": "Hold before the frame appears",
-        "ja": "枠が出るまでの保持時間",
-        "ru": "Удержание до появления рамки",
-        "ko": "프레임이 나타나기 전 유지",
-    },
-    "screenshot_frame_release": {
-        "zh-CN": "松手后取景框保留",
-        "en": "Frame stays after letting go",
-        "ja": "手を離した後に枠が残る時間",
-        "ru": "Рамка после отпускания",
-        "ko": "손을 뗀 뒤 프레임 유지",
-    },
-    "screenshot_quick_frame": {
-        "zh-CN": "快速模式（双手同时按住扳机和握把也能开框）",
-        "en": "Quick mode (trigger + grip on both hands opens a frame)",
-        "ja": "クイックモード（両手でトリガーとグリップを押すと枠が出る）",
-        "ru": "Быстрый режим (курок + грип на обеих руках открывают рамку)",
-        "ko": "빠른 모드(양손 트리거+그립으로 프레임 열기)",
-    },
-    "screenshot_quick_frame_hint": {
-        "zh-CN": "姿势总认不出来时打开：不用摆对角，两手同时按住扳机和握把就会出现取景框（太小会自动放大），出现后松开扳机、只按住握把即可移动；再扣一下扳机保留为面板。",
-        "en": "For when the pose is not recognised: no diagonal needed - hold trigger and grip on both hands and a frame appears (padded when too small). Once it is up, let go of the triggers and move it with the grips held; pull a trigger again to keep it as a panel.",
-        "ja": "ポーズが認識されにくいときに：対角に構えなくても、両手でトリガーとグリップを押せば枠が出ます（小さすぎる場合は広げます）。出た後はトリガーを離し、グリップだけで動かせます。もう一度トリガーを引くとパネルとして残ります。",
-        "ru": "Если поза не распознаётся: диагональ не нужна — зажмите курок и грип на обеих руках, и появится рамка (слишком маленькая расширяется). После этого отпустите курки и двигайте её, держа грипы; нажмите курок ещё раз, чтобы сохранить панель.",
-        "ko": "자세가 잘 인식되지 않을 때: 대각선으로 두지 않아도 양손 트리거와 그립을 함께 누르면 프레임이 나타납니다(너무 작으면 넓혀 줍니다). 나타난 뒤에는 트리거를 놓고 그립만 쥔 채 움직일 수 있고, 트리거를 다시 당기면 패널로 남습니다.",
-    },
-    "vr_block_game_input": {
-        "zh-CN": "取景和操作面板时不把扳机、握把交给游戏",
-        "en": "Keep trigger and grip from the game while framing or using a panel",
-        "ja": "枠やパネルの操作中はトリガーとグリップをゲームに渡さない",
-        "ru": "Не передавать курок и грип игре во время рамки и работы с панелью",
-        "ko": "프레임·패널 조작 중에는 트리거와 그립을 게임에 넘기지 않기",
-    },
-    "vr_block_game_input_hint": {
-        "zh-CN": "和 VRHandsFrame 一样：摆取景手势时握把不会在游戏里抓东西，激光指着面板时扣扳机也不会在游戏里触发。只在这些时候接管，平时不影响游戏。需要 SteamVR 已启用 Mio 的按键绑定。",
-        "en": "As in VRHandsFrame: the grips do not grab things in the game while you frame, and a trigger pulled at a panel does not also fire in the game. Only then - the game keeps its buttons otherwise. Needs SteamVR to have Mio's bindings active.",
-        "ja": "VRHandsFrame と同じく、枠を作っている間はグリップでゲーム内の物をつかまず、パネルを指してトリガーを引いてもゲーム側では反応しません。その間だけで、普段はゲームの操作を奪いません。SteamVR で Mio のバインドが有効になっている必要があります。",
-        "ru": "Как в VRHandsFrame: пока вы держите рамку, грипы ничего не хватают в игре, а курок, нажатый на панели, не срабатывает в игре. Только в эти моменты — в остальное время игра получает все кнопки. Нужны активные привязки Mio в SteamVR.",
-        "ko": "VRHandsFrame처럼 프레임을 만드는 동안 그립으로 게임 속 물건을 잡지 않고, 패널을 가리킨 채 트리거를 당겨도 게임에서는 반응하지 않습니다. 그때만 가져오며 평소에는 게임 조작에 영향을 주지 않습니다. SteamVR에서 Mio 바인딩이 활성화되어 있어야 합니다.",
-    },
-    "vr_trigger_threshold": {
-        "zh-CN": "扳机按到多深算按下",
-        "en": "Trigger counts as pressed at",
-        "ja": "トリガーを押したとみなす深さ",
-        "ru": "Курок считается нажатым с",
-        "ko": "트리거를 누른 것으로 볼 깊이",
-    },
-    "vr_grip_threshold": {
-        "zh-CN": "握把握到多紧算按下",
-        "en": "Grip counts as held at",
-        "ja": "グリップを握ったとみなす強さ",
-        "ru": "Грип считается зажатым с",
-        "ko": "그립을 쥔 것으로 볼 세기",
-    },
-    "vr_thresholds_hint": {
-        "zh-CN": "Index 手柄要用力捏握把才算“按下”，取景手势很难保持时把握把调低；误触多时调高。不能读出力度的手柄（如 Vive 手柄的握把）仍按“按下 / 松开”判断。",
-        "en": "Index controllers need a hard squeeze before the grip counts as pressed: lower the grip value if the frame is hard to hold, raise it if it opens by accident. Controllers that cannot report how hard (such as Vive wand grips) still count a click.",
-        "ja": "Index コントローラーはグリップを強く握らないと「押した」になりません。枠を保ちにくいときは下げ、誤作動が多いときは上げてください。強さを読めないコントローラー（Vive のグリップなど）は押した／離したで判断します。",
-        "ru": "На Index грип засчитывается только при сильном сжатии: уменьшите значение, если рамку трудно удерживать, увеличьте при ложных срабатываниях. Контроллеры без измерения силы (грип Vive) по-прежнему считают нажатие.",
-        "ko": "Index 컨트롤러는 그립을 세게 쥐어야 '누름'으로 인식됩니다. 프레임을 유지하기 어려우면 낮추고, 오작동이 잦으면 높이세요. 세기를 읽지 못하는 컨트롤러(Vive 그립 등)는 누름/뗌으로 판단합니다.",
-    },
-    "vr_swap_trigger_grip": {
-        "zh-CN": "扳机和握把对调",
-        "en": "Swap trigger and grip",
-        "ja": "トリガーとグリップを入れ替える",
-        "ru": "Поменять местами курок и грип",
-        "ko": "트리거와 그립 바꾸기",
-    },
-    "screenshot_match_colors": {
-        "zh-CN": "译文使用原文的颜色（字色和底色）",
-        "en": "Draw translations in the sign's own colours",
-        "ja": "訳文を元の文字色・背景色で表示",
-        "ru": "Перевод в цветах самой надписи",
-        "ko": "번역을 원문의 글자색·배경색으로 표시",
-    },
-    "screenshot_recognize_only": {
-        "zh-CN": "只识别文字，不翻译",
-        "en": "Only read the text, do not translate",
-        "ja": "文字を読み取るだけで翻訳しない",
-        "ru": "Только распознавать текст, без перевода",
-        "ko": "글자만 인식하고 번역하지 않기",
-    },
-    "screenshot_ignore_line_breaks": {
-        "zh-CN": "忽略换行：框选区域里的文字合成一段翻译",
-        "en": "Ignore line breaks: translate a framed area as one paragraph",
-        "ja": "改行を無視：囲んだ範囲の文字を一段落として翻訳",
-        "ru": "Игнорировать переносы: переводить выделенное одним абзацем",
-        "ko": "줄바꿈 무시: 선택 영역의 글자를 한 문단으로 번역",
-    },
-    "screenshot_auto_copy": {
-        "zh-CN": "每次识别结果自动复制到剪贴板",
-        "en": "Copy every read to the clipboard",
-        "ja": "読み取るたびに結果をクリップボードへコピー",
-        "ru": "Копировать каждый результат в буфер обмена",
-        "ko": "인식할 때마다 결과를 클립보드에 복사",
-    },
-    "screenshot_scan_codes": {
-        "zh-CN": "同时识别二维码（面板上可在电脑浏览器里打开链接）",
-        "en": "Read QR codes too (a panel can open the link in the PC browser)",
-        "ja": "QR コードも読み取る（パネルから PC のブラウザでリンクを開けます）",
-        "ru": "Читать и QR-коды (панель откроет ссылку в браузере на ПК)",
-        "ko": "QR 코드도 인식(패널에서 PC 브라우저로 링크 열기)",
-    },
-    "screenshot_stick_scaling": {
-        "zh-CN": "取景时用摇杆缩放取景框（取景时摇杆不交给游戏）",
-        "en": "Scale the frame with the stick while framing (the stick is kept from the game then)",
-        "ja": "フレーム中はスティックで枠を拡大縮小（その間スティックはゲームに渡さない）",
-        "ru": "Масштабировать рамку стиком (в это время стик не передаётся игре)",
-        "ko": "프레임 중 스틱으로 프레임 크기 조절(그동안 스틱은 게임에 넘기지 않음)",
-    },
-    "vr_thumbrest_taps": {
-        "zh-CN": "连点拇指托几下触发",
-        "en": "Thumb-rest taps in a row",
-        "ja": "サムレストの連続タップ回数",
-        "ru": "Касаний упора для пальца подряд",
-        "ko": "엄지 받침 연속 탭 횟수",
-    },
-    "vr_thumbrest_action": {
-        "zh-CN": "连点拇指托时",
-        "en": "Tapping the thumb rest",
-        "ja": "サムレストを連続タップしたとき",
-        "ru": "Касания упора для пальца",
-        "ko": "엄지 받침 연속 탭 시",
-    },
-    "vr_thumbrest_action_frame": {
-        "zh-CN": "开关双手取景",
-        "en": "Switch the hand frame",
-        "ja": "両手フレームのオン／オフ",
-        "ru": "Вкл./выкл. рамку руками",
-        "ko": "양손 프레임 켜기/끄기",
-    },
-    "vr_thumbrest_action_gather": {
-        "zh-CN": "把面板收拢到面前",
-        "en": "Gather the panels",
-        "ja": "パネルを集める",
-        "ru": "Собрать панели",
-        "ko": "패널 모으기",
-    },
-    "vr_thumbrest_action_close": {
-        "zh-CN": "关闭全部面板",
-        "en": "Close every panel",
-        "ja": "パネルをすべて閉じる",
-        "ru": "Закрыть все панели",
-        "ko": "패널 모두 닫기",
-    },
-    "vr_thumbrest_action_none": {
-        "zh-CN": "不做任何事",
-        "en": "Nothing",
-        "ja": "何もしない",
-        "ru": "Ничего",
-        "ko": "아무것도 안 함",
-    },
-    "vr_thumbrest_hint": {
-        "zh-CN": "拇指托只有 Quest / Rift 手柄有。其他手柄可以在 SteamVR 绑定页给“开关双手取景”“把面板收拢到面前”“关闭全部面板”各指定一个按键（默认都不绑定）。",
-        "en": "Only Quest / Rift controllers have a thumb rest. On others, bind \"Switch the hand frame\", \"Gather the panels\" and \"Close every panel\" to buttons in the SteamVR binding page (none is bound by default).",
-        "ja": "サムレストは Quest / Rift のコントローラーのみです。その他は SteamVR のバインド画面で「両手フレームのオン／オフ」「パネルを目の前に集める」「パネルをすべて閉じる」にボタンを割り当てられます（既定では未割り当て）。",
-        "ru": "Упор для пальца есть только у контроллеров Quest / Rift. На других назначьте кнопки для «Вкл./выкл. рамку», «Собрать панели» и «Закрыть все панели» на странице привязок SteamVR (по умолчанию не назначены).",
-        "ko": "엄지 받침은 Quest / Rift 컨트롤러에만 있습니다. 다른 컨트롤러는 SteamVR 바인딩 화면에서 '양손 프레임 켜기/끄기', '패널 모으기', '패널 모두 닫기'에 버튼을 지정할 수 있습니다(기본은 지정 안 됨).",
-    },
-    "vr_custom_sounds": {
-        "zh-CN": "打开自定义提示音文件夹",
-        "en": "Open the custom cue sound folder",
-        "ja": "カスタム効果音フォルダーを開く",
-        "ru": "Открыть папку своих звуков",
-        "ko": "사용자 알림음 폴더 열기",
-    },
-    "vr_custom_sounds_hint": {
-        "zh-CN": "放入同名 WAV 文件即可替换提示音：ready（取景框出现）、done（出结果）、shutter（保留面板）、error、click、toggle、talk_on、talk_off，例如 done.wav。自定义声音不受音量滑块影响。",
-        "en": "Put a WAV file with the cue's name there to replace it: ready (frame appears), done (result), shutter (kept as a panel), error, click, toggle, talk_on, talk_off - for example done.wav. Custom sounds ignore the volume slider.",
-        "ja": "同じ名前の WAV ファイルを置くと効果音を置き換えられます：ready（枠の表示）、done（結果）、shutter（パネルとして保存）、error、click、toggle、talk_on、talk_off（例：done.wav）。カスタム音には音量スライダーは効きません。",
-        "ru": "Положите туда WAV-файл с именем сигнала, чтобы заменить его: ready (рамка), done (результат), shutter (панель), error, click, toggle, talk_on, talk_off — например, done.wav. Громкость на свои звуки не влияет.",
-        "ko": "같은 이름의 WAV 파일을 넣으면 알림음을 바꿀 수 있습니다: ready(프레임 표시), done(결과), shutter(패널로 남김), error, click, toggle, talk_on, talk_off — 예: done.wav. 사용자 소리에는 볼륨 슬라이더가 적용되지 않습니다.",
-    },
-    "vr_panels_section": {
-        "zh-CN": "头显里的翻译面板",
-        "en": "Panels in the headset",
-        "ja": "ヘッドセット内の翻訳パネル",
-        "ru": "Панели в шлеме",
-        "ko": "헤드셋의 번역 패널",
-    },
-    "vr_panels_preset": {
-        "zh-CN": "面板配色",
-        "en": "Panel colours",
-        "ja": "パネルの配色",
-        "ru": "Цвета панели",
-        "ko": "패널 색상",
-    },
-    "vr_panels_preset_default": {
-        "zh-CN": "默认",
-        "en": "Default",
-        "ja": "既定",
-        "ru": "По умолчанию",
-        "ko": "기본",
-    },
-    "vr_panels_preset_dark": {
-        "zh-CN": "深色",
-        "en": "Dark",
-        "ja": "ダーク",
-        "ru": "Тёмная",
-        "ko": "어둡게",
-    },
-    "vr_panels_preset_light": {
-        "zh-CN": "浅色",
-        "en": "Light",
-        "ja": "ライト",
-        "ru": "Светлая",
-        "ko": "밝게",
-    },
-    "vr_panels_opacity": {
-        "zh-CN": "面板背景不透明度",
-        "en": "Panel background opacity",
-        "ja": "パネル背景の不透明度",
-        "ru": "Непрозрачность фона панели",
-        "ko": "패널 배경 불투명도",
-    },
-    "vr_panels_tooltips": {
-        "zh-CN": "激光停在按钮上时显示说明",
-        "en": "Explain a button while the laser rests on it",
-        "ja": "レーザーをボタンに合わせると説明を表示",
-        "ru": "Пояснять кнопку под лучом",
-        "ko": "레이저가 버튼에 있으면 설명 표시",
-    },
-    "vr_panels_show_time": {
-        "zh-CN": "面板标题显示时间",
-        "en": "Show the time in the panel title",
-        "ja": "パネルのタイトルに時刻を表示",
-        "ru": "Показывать время в заголовке",
-        "ko": "패널 제목에 시간 표시",
-    },
-    "vr_panels_default_width": {
-        "zh-CN": "从记录打开的面板宽度",
-        "en": "Width of panels opened from the reads",
-        "ja": "履歴から開くパネルの幅",
-        "ru": "Ширина панелей из истории",
-        "ko": "기록에서 여는 패널 너비",
-    },
-    "vr_panels_two_hand_left": {
-        "zh-CN": "双手抓着面板时左扳机",
-        "en": "Left trigger while both hands hold a panel",
-        "ja": "両手でパネルを持った状態の左トリガー",
-        "ru": "Левый курок, когда панель в обеих руках",
-        "ko": "양손으로 패널을 잡았을 때 왼쪽 트리거",
-    },
-    "vr_panels_two_hand_right": {
-        "zh-CN": "双手抓着面板时右扳机",
-        "en": "Right trigger while both hands hold a panel",
-        "ja": "両手でパネルを持った状態の右トリガー",
-        "ru": "Правый курок, когда панель в обеих руках",
-        "ko": "양손으로 패널을 잡았을 때 오른쪽 트리거",
-    },
-    "vr_panels_same_hand_gather": {
-        "zh-CN": "单手抓着面板时扣同一只手的扳机：收拢所有面板",
-        "en": "Pull the trigger of the hand holding a panel: gather all panels",
-        "ja": "片手でパネルを持ったまま同じ手のトリガー：パネルを集める",
-        "ru": "Курок руки, держащей панель: собрать все панели",
-        "ko": "한 손으로 패널을 잡은 채 같은 손 트리거: 모든 패널 모으기",
-    },
-    "vr_panels_two_hand_hint": {
-        "zh-CN": "面板操作和 VRHandsFrame 一样：指着面板按住握把拿起；另一只手也握住后拉开或合拢双手即可缩放。",
-        "en": "Panels work as in VRHandsFrame: point and hold the grip to pick one up; grip it with the other hand too and pull your hands apart or together to resize it.",
-        "ja": "パネル操作は VRHandsFrame と同じです：指してグリップで持ち上げ、もう片方の手でも握って手を広げたり縮めたりすると大きさが変わります。",
-        "ru": "Панели работают как в VRHandsFrame: наведите и зажмите грип, чтобы взять; возьмите второй рукой и разводите или сводите руки, чтобы менять размер.",
-        "ko": "패널 조작은 VRHandsFrame과 같습니다: 가리키고 그립으로 들어 올리고, 다른 손으로도 쥔 채 손을 벌리거나 모으면 크기가 바뀝니다.",
-    },
-    "vr_panel_action_none": {
-        "zh-CN": "不做任何事",
-        "en": "Nothing",
-        "ja": "何もしない",
-        "ru": "Ничего",
-        "ko": "아무것도 안 함",
-    },
-    "vr_panel_action_page_prev": {
-        "zh-CN": "上一页",
-        "en": "Previous page",
-        "ja": "前のページ",
-        "ru": "Предыдущая страница",
-        "ko": "이전 페이지",
-    },
-    "vr_panel_action_page_next": {
-        "zh-CN": "下一页",
-        "en": "Next page",
-        "ja": "次のページ",
-        "ru": "Следующая страница",
-        "ko": "다음 페이지",
-    },
-    "vr_panel_action_next_or_close": {
-        "zh-CN": "下一页，最后一页时关闭",
-        "en": "Next page, close on the last",
-        "ja": "次のページ（最後なら閉じる）",
-        "ru": "Следующая страница, на последней — закрыть",
-        "ko": "다음 페이지(마지막이면 닫기)",
-    },
-    "vr_panel_action_close": {
-        "zh-CN": "关闭面板",
-        "en": "Close the panel",
-        "ja": "パネルを閉じる",
-        "ru": "Закрыть панель",
-        "ko": "패널 닫기",
-    },
-    "vr_panel_action_pin": {
-        "zh-CN": "收藏",
-        "en": "Keep",
-        "ja": "保存",
-        "ru": "Сохранить",
-        "ko": "보관",
-    },
-    "vr_panel_action_copy": {
-        "zh-CN": "复制",
-        "en": "Copy",
-        "ja": "コピー",
-        "ru": "Копировать",
-        "ko": "복사",
-    },
-    "vr_panel_action_chatbox": {
-        "zh-CN": "发到聊天框",
-        "en": "Send to the chatbox",
-        "ja": "チャットボックスへ送る",
-        "ru": "Отправить в чат",
-        "ko": "채팅박스로 보내기",
-    },
-    "screenshot_selection_mode": {
-        "zh-CN": "按键后先用扳机框选范围",
-        "en": "Frame a region with the trigger first",
-        "ja": "ボタンの後にトリガーで範囲を囲む",
-        "ru": "Сначала выделять область триггером",
-        "ko": "버튼 후 트리거로 범위 선택",
-    },
-    "screenshot_depth": {
-        "zh-CN": "翻译卡片距离",
-        "en": "Card distance",
-        "ja": "カードの距離",
-        "ru": "Расстояние до карточки",
-        "ko": "카드 거리",
-    },
-    "screenshot_depth_value": {
-        "zh-CN": "{value} 米",
-        "en": "{value} m",
-        "ja": "{value} m",
-        "ru": "{value} м",
-        "ko": "{value} m",
-    },
-    "screenshot_hotkey": {
-        "zh-CN": "桌面截图翻译快捷键",
-        "en": "Desktop screenshot hotkey",
-        "ja": "デスクトップ用ホットキー",
-        "ru": "Горячая клавиша (рабочий стол)",
-        "ko": "데스크톱 단축키",
-    },
-    "screenshot_local_ocr_ready": {
-        "zh-CN": "✓ 内置文字识别已就绪：中文、英文、日文、韩文可以混合识别，不需要安装 Windows 语言包。",
-        "en": "\u2713 Built-in text recognition is ready: Chinese, English, Japanese and Korean can be read together, with no Windows language pack needed.",
-        "ja": "\u2713 内蔵の文字認識が使用可能です。中国語・英語・日本語・韓国語を混在したまま読み取れ、Windows の言語パックは不要です。",
-        "ru": "\u2713 Встроенное распознавание текста готово: китайский, английский, японский и корейский читаются вместе, языковые пакеты Windows не нужны.",
-        "ko": "\u2713 내장 문자 인식이 준비되었습니다. 중국어·영어·일본어·한국어를 함께 인식하며 Windows 언어 팩이 필요 없습니다.",
-    },
-    "screenshot_languages": {
-        "zh-CN": "Windows 已安装的文字识别语言：{languages}。要识别别的语言，请在 Windows 设置里为该语言添加「光学字符识别」可选功能。",
-        "en": "Text recognition languages installed in Windows: {languages}. To read another language, add its Optical Character Recognition optional feature in Windows Settings.",
-        "ja": "Windows にインストールされている文字認識言語：{languages}。他の言語を読み取るには、Windows の設定でその言語の「光学式文字認識」機能を追加してください。",
-        "ru": "Языки распознавания текста, установленные в Windows: {languages}. Чтобы читать другой язык, добавьте для него компонент оптического распознавания в параметрах Windows.",
-        "ko": "Windows에 설치된 문자 인식 언어: {languages}. 다른 언어를 읽으려면 Windows 설정에서 해당 언어의 광학 문자 인식 기능을 추가하세요.",
-    },
-    "screenshot_runtime_missing": {
-        "zh-CN": "⚠ 这个安装里缺少文字识别组件（winrt），截图翻译无法工作。请重新安装程序，或从源码运行时重建运行环境。",
-        "en": "⚠ This install is missing the text recognition component (winrt), so screenshot translation cannot work. Reinstall the app, or rebuild the environment when running from source.",
-        "ja": "⚠ このインストールには文字認識コンポーネント（winrt）がなく、スクリーンショット翻訳は動作しません。アプリを再インストールするか、ソースから実行している場合は環境を再構築してください。",
-        "ru": "⚠ В этой установке нет компонента распознавания текста (winrt), поэтому перевод по скриншоту не работает. Переустановите приложение или пересоберите окружение при запуске из исходников.",
-        "ko": "⚠ 이 설치에는 문자 인식 구성 요소(winrt)가 없어 스크린샷 번역이 작동하지 않습니다. 앱을 다시 설치하거나, 소스에서 실행 중이라면 환경을 다시 빌드하세요.",
-    },
-    "screenshot_no_languages": {
-        "zh-CN": "⚠ Windows 没有安装任何文字识别语言，截图翻译无法工作。请在 Windows 设置 → 语言 → 可选功能里添加「光学字符识别」。",
-        "en": "\u26a0 Windows has no text recognition language installed, so screenshot translation cannot work. Add Optical Character Recognition under Windows Settings, Language, Optional features.",
-        "ja": "\u26a0 Windows に文字認識言語がインストールされていないため、スクリーンショット翻訳は動作しません。Windows の設定の言語のオプション機能から「光学式文字認識」を追加してください。",
-        "ru": "\u26a0 В Windows не установлен ни один язык распознавания текста, поэтому перевод по скриншоту не работает. Добавьте оптическое распознавание в параметрах языка Windows.",
-        "ko": "\u26a0 Windows에 문자 인식 언어가 설치되어 있지 않아 스크린샷 번역이 작동하지 않습니다. Windows 설정의 언어 선택적 기능에서 광학 문자 인식을 추가하세요.",
-    },
-    "vr_overlay_section": {
-        "zh-CN": "VR 头显字幕",
-        "en": "Headset subtitles",
-        "ja": "VR ヘッドセット字幕",
-        "ru": "Субтитры в шлеме",
-        "ko": "VR 헤드셋 자막",
-    },
-    "vr_overlay_guide": {
-        "zh-CN": "把反向翻译的字幕直接显示在 VR 头显里，戴着头显也能看。需要先启动 SteamVR。这个开关和上面的「PC 桌面悬浮窗」互不影响：可以只开其中一个，也可以两边同时显示。用手柄激光指向字幕板、按住扳机不放即可拖动位置，松手自动保存。",
-        "en": "Shows the reverse-translation subtitles inside the headset, so they are readable with the visor on. SteamVR has to be running. This switch is independent of the desktop floating window above: use either one alone, or both at once. Point a controller at the panel and hold the trigger to drag it; letting go saves the position.",
-        "ja": "逆翻訳の字幕をVRヘッドセット内に直接表示します。ヘッドセットを着けたままでも読めます。SteamVR の起動が必要です。このスイッチは上の「PC デスクトップの字幕ウィンドウ」とは独立しており、片方だけでも両方同時でも使えます。コントローラーで字幕板を指してトリガーを長押しすると移動でき、離すと位置が保存されます。",
-        "ru": "Показывает субтитры обратного перевода прямо в шлеме, чтобы их было видно в VR. SteamVR должен быть запущен. Этот переключатель не зависит от окна на рабочем столе выше: можно включить только одно из них или оба сразу. Наведите контроллер на панель и удерживайте триггер, чтобы перетащить её; после отпускания позиция сохраняется.",
-        "ko": "역번역 자막을 VR 헤드셋 안에 직접 표시하여 헤드셋을 쓴 채로도 읽을 수 있습니다. SteamVR이 실행 중이어야 합니다. 이 스위치는 위의 「PC 데스크톱 자막 창」과 독립적이며, 하나만 켜거나 둘 다 동시에 켤 수 있습니다. 컨트롤러로 자막판을 가리키고 트리거를 길게 누르면 이동할 수 있으며, 놓으면 위치가 저장됩니다.",
-    },
-    "vr_overlay_enabled": {
-        "zh-CN": "在 VR 头显中显示",
-        "en": "Show in the headset",
-        "ja": "VR ヘッドセットに表示",
-        "ru": "Показывать в шлеме",
-        "ko": "헤드셋에 표시",
-    },
-    "vr_overlay_width": {
-        "zh-CN": "字幕板宽度",
-        "en": "Panel width",
-        "ja": "字幕板の幅",
-        "ru": "Ширина панели",
-        "ko": "자막판 너비",
-    },
-    "vr_overlay_width_value": {
-        "zh-CN": "{value} 米",
-        "en": "{value} m",
-        "ja": "{value} m",
-        "ru": "{value} м",
-        "ko": "{value} m",
-    },
-    "vr_overlay_opacity": {
-        "zh-CN": "底板不透明度",
-        "en": "Plate opacity",
-        "ja": "背景の不透明度",
-        "ru": "Непрозрачность подложки",
-        "ko": "배경 불투명도",
-    },
-    "vr_overlay_font_scale": {
-        "zh-CN": "字幕字号",
-        "en": "Subtitle text size",
-        "ja": "字幕の文字サイズ",
-        "ru": "Размер текста субтитров",
-        "ko": "자막 글자 크기",
-    },
-    "vr_overlay_speaker_marks": {
-        "zh-CN": "译文前加形状标记（● 自己 / ◆ 他人，色弱也能分清）",
-        "en": "Shape marks before translations (● you / ◆ others, readable without colour)",
-        "ja": "訳文の前に形の印を付ける（● 自分 / ◆ 他人、色に頼らず区別）",
-        "ru": "Значки перед переводом (● вы / ◆ другие, различимо без цвета)",
-        "ko": "번역 앞에 모양 표시(● 나 / ◆ 다른 사람, 색 없이도 구분)",
-    },
-    "vr_overlay_opacity_hint": {
-        "zh-CN": "只影响字幕后面的底板，文字始终保持不透明，压得再低也不会影响阅读。",
-        "en": "Affects only the plate behind the subtitles. The text always stays fully opaque, so lowering this never costs readability.",
-        "ja": "字幕の背景だけに影響します。文字は常に不透明なままなので、下げても読みやすさは損なわれません。",
-        "ru": "Влияет только на подложку за субтитрами. Текст всегда остаётся непрозрачным, поэтому читаемость не страдает.",
-        "ko": "자막 뒤 배경에만 적용됩니다. 글자는 항상 불투명하게 유지되므로 낮춰도 가독성이 떨어지지 않습니다.",
-    },
-    "vr_overlay_distance": {
-        "zh-CN": "字幕板距离",
-        "en": "Panel distance",
-        "ja": "字幕板の距離",
-        "ru": "Расстояние до панели",
-        "ko": "자막판 거리",
-    },
-    "vr_overlay_yaw": {
-        "zh-CN": "左右角度",
-        "en": "Left / right angle",
-        "ja": "左右の角度",
-        "ru": "Угол влево / вправо",
-        "ko": "좌우 각도",
-    },
-    "vr_overlay_pitch": {
-        "zh-CN": "上下角度",
-        "en": "Up / down angle",
-        "ja": "上下の角度",
-        "ru": "Угол вверх / вниз",
-        "ko": "상하 각도",
-    },
-    "vr_overlay_angle_value": {
-        "zh-CN": "{value}°",
-        "en": "{value}°",
-        "ja": "{value}°",
-        "ru": "{value}°",
-        "ko": "{value}°",
-    },
-    "vr_overlay_geometry_hint": {
-        "zh-CN": "字幕板围绕头部放置：距离是离头的米数，角度是相对正前方的偏转。在头显里用扳机拖动后，这里的数值会跟着变。",
-        "en": "The panel sits around your head: distance in metres from it, angles relative to straight ahead. Dragging the panel in the headset updates these numbers.",
-        "ja": "字幕板は頭の周りに置かれます。距離は頭からのメートル、角度は正面からのずれです。ヘッドセット内でドラッグするとここの値も変わります。",
-        "ru": "Панель располагается вокруг головы: расстояние в метрах от неё, углы относительно направления прямо. Перетаскивание в шлеме обновляет эти значения.",
-        "ko": "자막판은 머리를 중심으로 배치됩니다. 거리는 머리로부터의 미터, 각도는 정면 기준의 편차입니다. 헤드셋에서 드래그하면 이 값도 함께 바뀝니다.",
-    },
-    "vr_overlay_size_presets": {
-        "zh-CN": "字幕板大小预设",
-        "en": "Panel size presets",
-        "ja": "字幕板のサイズ",
-        "ru": "Размер панели",
-        "ko": "자막판 크기",
-    },
-    "vr_overlay_size_small": {
-        "zh-CN": "小",
-        "en": "Small",
-        "ja": "小",
-        "ru": "Мелкий",
-        "ko": "작게",
-    },
-    "vr_overlay_size_medium": {
-        "zh-CN": "中",
-        "en": "Medium",
-        "ja": "中",
-        "ru": "Средний",
-        "ko": "보통",
-    },
-    "vr_overlay_size_large": {
-        "zh-CN": "大",
-        "en": "Large",
-        "ja": "大",
-        "ru": "Крупный",
-        "ko": "크게",
-    },
-    "vr_overlay_size_xlarge": {
-        "zh-CN": "特大",
-        "en": "Huge",
-        "ja": "特大",
-        "ru": "Огромный",
-        "ko": "아주 크게",
-    },
-    "vr_overlay_move_button": {
-        "zh-CN": "在 VR 里移动字幕板（进入编辑模式 20 秒）",
-        "en": "Move the panel in VR (edit mode for 20 s)",
-        "ja": "VR で字幕板を移動する（20 秒間の編集モード）",
-        "ru": "Переместить панель в VR (режим правки на 20 с)",
-        "ko": "VR에서 자막판 이동(20초 편집 모드)",
-    },
-    "vr_overlay_move_hint": {
-        "zh-CN": "平时字幕板不会截取手柄操作，游戏照常玩。只有在编辑模式里，用手柄指向字幕板、按住扳机才能拖动；松手或超时后手柄自动交还给游戏。在 SteamVR 菜单的 Mio 面板里也有这个按钮。",
-        "en": "Normally the panel never takes the controllers, so the game plays as usual. Only in edit mode can you point at the panel and hold the trigger to drag it; letting go or timing out hands the controllers back. The same button is on the Mio tab in the SteamVR menu.",
-        "ja": "通常、字幕板はコントローラーの操作を奪わないため、ゲームはそのまま遊べます。編集モードの間だけ、字幕板を指してトリガーを押したまま動かせます。離すか時間切れになるとコントローラーはゲームに戻ります。SteamVR メニューの Mio タブにも同じボタンがあります。",
-        "ru": "Обычно панель не перехватывает контроллеры, и игра идёт как обычно. Только в режиме правки можно навести на панель и, удерживая триггер, перетащить её; после отпускания или по таймауту контроллеры возвращаются игре. Та же кнопка есть на вкладке Mio в меню SteamVR.",
-        "ko": "평소에는 자막판이 컨트롤러 입력을 가로채지 않아 게임을 그대로 즐길 수 있습니다. 편집 모드에서만 자막판을 가리키고 트리거를 누른 채 드래그할 수 있으며, 놓거나 시간이 지나면 컨트롤러가 게임으로 돌아갑니다. SteamVR 메뉴의 Mio 탭에도 같은 버튼이 있습니다.",
-    },
-    "vr_overlay_locked": {
-        "zh-CN": "锁定字幕板位置",
-        "en": "Lock the panel in place",
-        "ja": "字幕板の位置を固定",
-        "ru": "Закрепить панель на месте",
-        "ko": "자막판 위치 잠금",
-    },
-    "vr_overlay_locked_hint": {
-        "zh-CN": "锁定后不会进入编辑模式，这里和头显里的“移动”按钮都不再起作用；距离和角度滑块仍可用。SteamVR 菜单的 Mio 面板和手腕面板上也有同样的开关。",
-        "en": "While locked, edit mode cannot start: the move button here and in the headset does nothing, though the distance and angle sliders still work. The same switch is on the Mio tab and the wrist panel.",
-        "ja": "固定中は編集モードに入れず、ここやヘッドセット内の移動ボタンは効きません。距離と角度のスライダーは使えます。SteamVR メニューの Mio タブと手首パネルにも同じスイッチがあります。",
-        "ru": "Пока панель закреплена, режим правки не включается: кнопка перемещения здесь и в шлеме не действует, но ползунки расстояния и углов работают. Тот же переключатель есть во вкладке Mio и на панели на запястье.",
-        "ko": "잠금 상태에서는 편집 모드로 들어갈 수 없어 여기와 헤드셋의 이동 버튼이 동작하지 않지만, 거리와 각도 슬라이더는 계속 사용할 수 있습니다. SteamVR 메뉴의 Mio 탭과 손목 패널에도 같은 스위치가 있습니다.",
-    },
-    "vr_dashboard_enabled": {
-        "zh-CN": "在 SteamVR 菜单里显示 Mio 面板",
-        "en": "Show a Mio tab in the SteamVR menu",
-        "ja": "SteamVR メニューに Mio タブを表示",
-        "ru": "Показывать вкладку Mio в меню SteamVR",
-        "ko": "SteamVR 메뉴에 Mio 탭 표시",
-    },
-    "vr_dashboard_hint": {
-        "zh-CN": "按手柄的菜单键打开 SteamVR 菜单，在底栏点 Mio 图标：可以开始/停止监听、切换翻译服务和朗读模型、调整字幕板大小和位置、触发截图翻译，不用摘头显。",
-        "en": "Open the SteamVR menu with the controller's menu button and pick the Mio icon in the bar: start or stop listening, switch services and voice engines, size and move the panel, and trigger screenshot translation without taking the headset off.",
-        "ja": "コントローラーのメニューボタンで SteamVR メニューを開き、下のバーで Mio アイコンを選びます。ヘッドセットを外さずに、リスニングの開始／停止、サービスや読み上げエンジンの切替、字幕板のサイズと位置、スクリーンショット翻訳の起動ができます。",
-        "ru": "Откройте меню SteamVR кнопкой меню на контроллере и выберите значок Mio на панели: запуск и остановка прослушивания, смена сервисов и озвучки, размер и положение панели, перевод по скриншоту — не снимая шлем.",
-        "ko": "컨트롤러의 메뉴 버튼으로 SteamVR 메뉴를 열고 하단 바에서 Mio 아이콘을 선택하세요. 헤드셋을 벗지 않고 듣기 시작/중지, 서비스와 음성 엔진 전환, 자막판 크기와 위치 조정, 스크린샷 번역 실행이 가능합니다.",
-    },
-    "vr_wrist_enabled": {
-        "zh-CN": "手腕控制面板",
-        "en": "Wrist control panel",
-        "ja": "手首コントロールパネル",
-        "ru": "Панель на запястье",
-        "ko": "손목 제어 패널",
-    },
-    "vr_wrist_hand": {
-        "zh-CN": "面板戴在哪只手",
-        "en": "Wrist panel hand",
-        "ja": "パネルを付ける手",
-        "ru": "Рука для панели",
-        "ko": "패널을 붙일 손",
     },
     "edge_stt_fallback_enabled": {
         "zh-CN": "网络故障时自动改用本地识别（SenseVoice）",
@@ -3343,27 +3002,6 @@ QT_SETTINGS_COPY.update({
         "ru": "Не удалось подключиться: {error}",
         "ko": "연결 실패: {error}",
     },
-    "screenshot_auto_hide": {
-        "zh-CN": "翻译显示时长",
-        "en": "How long the translation stays",
-        "ja": "翻訳の表示時間",
-        "ru": "Время показа перевода",
-        "ko": "번역 표시 시간",
-    },
-    "screenshot_auto_hide_value": {
-        "zh-CN": "{value} 秒",
-        "en": "{value} s",
-        "ja": "{value} 秒",
-        "ru": "{value} с",
-        "ko": "{value}초",
-    },
-    "screenshot_auto_hide_hint": {
-        "zh-CN": "从看到卡片那一刻开始计时；按任意手柄键可随时收起。",
-        "en": "Counted from the moment you look at the card; any controller button puts it away sooner.",
-        "ja": "カードを見た時点から数えます。コントローラーのどのボタンでもすぐに閉じられます。",
-        "ru": "Отсчёт идёт с момента, когда вы посмотрели на карточку; любая кнопка контроллера уберёт её раньше.",
-        "ko": "카드를 본 순간부터 계산하며, 컨트롤러의 아무 버튼이나 누르면 바로 사라집니다.",
-    },
     "max_segment_hint": {
         "zh-CN": "到达这个长度后，会在下一次换气处断句，而不是硬切；最长不超过它的 2.5 倍。",
         "en": "Past this length the sentence ends at the next breath instead of being cut mid-word, up to 2.5 times this value.",
@@ -3371,131 +3009,19 @@ QT_SETTINGS_COPY.update({
         "ru": "После этой длины фраза завершается на ближайшем вдохе, а не обрывается на полуслове; максимум в 2,5 раза больше.",
         "ko": "이 길이를 넘으면 단어 중간에서 끊지 않고 다음 숨 고르기에서 문장을 나눕니다(최대 2.5배까지).",
     },
-    "vr_wrist_hint": {
-        "zh-CN": "面板像手表一样挂在所选手柄的手腕上方，按下面的方式出现。用另一只手柄指着它（有蓝色激光和光标）扣扳机即可操作；“翻译记录”页里能找回本次读过的内容、收拢或关闭面板、开关双手取景。游戏不会失去手柄。",
-        "en": "The panel sits over the wrist of the chosen controller like a watch and comes up as chosen below. Point the other controller at it (a blue laser and a dot show where you aim) and pull the trigger. Its Reads page brings back what you read this session, gathers or closes panels and switches the hand frame. The game keeps the controllers.",
-        "ja": "パネルは選んだコントローラーの手首の上に腕時計のように付き、下で選んだ方法で表示されます。もう一方のコントローラーで指して（青いレーザーと点が狙いを示します）トリガーを引いて操作します。「履歴」ページでは読んだ内容の呼び出し、パネルの整列・一括終了、両手フレームの切り替えができます。ゲームの操作は奪いません。",
-        "ru": "Панель сидит над запястьем выбранного контроллера, как часы, и появляется выбранным ниже способом. Наведите другой контроллер (синий луч и точка показывают, куда вы целитесь) и нажмите триггер. На странице «История» можно вернуть прочитанное за сеанс, собрать или закрыть панели и включить рамку руками. Игра не теряет контроллеры.",
-        "ko": "패널은 선택한 컨트롤러의 손목 위에 손목시계처럼 붙고 아래에서 고른 방식으로 나타납니다. 다른 컨트롤러로 가리키고(파란 레이저와 점이 조준 위치를 표시) 트리거를 당겨 조작합니다. '기록' 페이지에서 이번에 읽은 내용을 다시 열고, 패널을 모으거나 닫고, 양손 프레임을 켜고 끌 수 있습니다. 게임은 컨트롤러를 계속 사용합니다.",
-    },
-    "screenshot_ocr_gpu": {
-        "zh-CN": "文字识别使用显卡加速",
-        "en": "Run text recognition on the GPU",
-        "ja": "文字認識に GPU を使う",
-        "ru": "Распознавание текста на GPU",
-        "ko": "문자 인식에 GPU 사용",
-    },
-    "screenshot_ocr_gpu_hint": {
-        "zh-CN": "通过 DirectML 使用任何 DirectX 12 显卡，识别整个视野快两倍以上；首次识别会多等一两秒预热。显卡不支持时自动回到 CPU。",
-        "en": "Uses any DirectX 12 GPU through DirectML: reading the whole view is more than twice as fast, and the first read warms up for a second or two. Falls back to the CPU when the GPU refuses.",
-        "ja": "DirectML 経由で DirectX 12 対応の GPU を使い、視野全体の読み取りが 2 倍以上速くなります。初回は 1〜2 秒のウォームアップがあります。GPU が使えない場合は CPU に戻ります。",
-        "ru": "Через DirectML используется любая видеокарта с DirectX 12: чтение всего обзора более чем вдвое быстрее, первый запуск прогревается секунду-две. Если GPU недоступен, используется CPU.",
-        "ko": "DirectML로 DirectX 12 GPU를 사용해 전체 시야 인식이 두 배 이상 빨라집니다. 첫 인식은 1~2초 예열이 필요합니다. GPU를 쓸 수 없으면 CPU로 돌아갑니다.",
-    },
-    "vr_gesture_enabled": {
-        "zh-CN": "手柄贴耳手势",
-        "en": "Controller-at-the-ear gesture",
-        "ja": "コントローラーを耳に当てるジェスチャー",
-        "ru": "Жест «контроллер у уха»",
-        "ko": "컨트롤러를 귀에 대는 제스처",
-    },
-    "vr_gesture_hint": {
-        "zh-CN": "把任一手柄举到耳边短按扳机，打开截图翻译取景框。不依赖 B/Y 键绑定，PICO 等绑定不生效的头显也能用；长按没有任何作用，不会误停监听。",
-        "en": "Hold either controller up to your ear and give the trigger a short pull to open the screenshot frame. Needs no B/Y binding, so it works on headsets whose bindings never activate; a long pull does nothing, so listening is never stopped by accident.",
-        "ja": "どちらかのコントローラーを耳元に上げてトリガーを短く引くと、スクリーンショット枠が開きます。B/Y のバインドに依存しないため、バインドが有効にならないヘッドセットでも使えます。長押しには何も割り当てていないので、リスニングが誤って止まることはありません。",
-        "ru": "Поднесите любой контроллер к уху и коротко нажмите триггер, чтобы открыть рамку скриншота. Не зависит от привязки B/Y, поэтому работает и на шлемах, где привязки не активируются; долгое нажатие ничего не делает, так что прослушивание случайно не остановится.",
-        "ko": "컨트롤러를 귀 옆으로 올리고 트리거를 짧게 당기면 스크린샷 프레임이 열립니다. B/Y 바인딩이 필요 없어 바인딩이 안 되는 헤드셋에서도 되며, 길게 당겨도 아무 동작이 없어 듣기가 실수로 멈추지 않습니다.",
-    },
-    "steamvr_autolaunch_enabled": {
-        "zh-CN": "随 SteamVR 启动（由 SteamVR 拉起 Mio）",
-        "en": "Start with SteamVR (SteamVR launches Mio)",
-        "ja": "SteamVR と一緒に起動（SteamVR が Mio を起動）",
-        "ru": "Запускать вместе со SteamVR (SteamVR запускает Mio)",
-        "ko": "SteamVR과 함께 시작(SteamVR이 Mio를 실행)",
-    },
-    "steamvr_autolaunch_hint": {
-        "zh-CN": "勾选后会把 Mio 登记为 SteamVR 的覆盖层应用，SteamVR 启动时自动拉起 Mio。需要 SteamVR 正在运行时勾选才会生效；Mio 自己永远不会去启动 SteamVR。",
-        "en": "Registers Mio as a SteamVR overlay app so SteamVR starts it along with itself. Takes effect while SteamVR is running; Mio itself never launches SteamVR.",
-        "ja": "Mio を SteamVR のオーバーレイアプリとして登録し、SteamVR の起動時に Mio も起動します。SteamVR が動作中に切り替えたときに有効になります。Mio 自身が SteamVR を起動することはありません。",
-        "ru": "Регистрирует Mio как оверлей-приложение SteamVR, и SteamVR запускает его вместе с собой. Применяется, пока SteamVR запущен; сам Mio никогда не запускает SteamVR.",
-        "ko": "Mio를 SteamVR 오버레이 앱으로 등록해 SteamVR이 시작될 때 Mio도 함께 실행합니다. SteamVR이 실행 중일 때 켜야 적용되며, Mio가 SteamVR을 실행하는 일은 없습니다.",
-    },
-    "screenshot_binding_active": {
-        "zh-CN": "✓ SteamVR 已把手柄按键交给 Mio：按住扳机和抓握键，再按右手 B / 左手 Y 即可触发。",
-        "en": "\u2713 SteamVR is delivering the controller buttons to Mio: hold the trigger and grip, then press B (right) or Y (left).",
-        "ja": "\u2713 SteamVR がコントローラーのボタンを Mio に渡しています：トリガーとグリップを押したまま右 B / 左 Y で起動できます。",
-        "ru": "\u2713 SteamVR передаёт кнопки контроллера в Mio: удерживайте триггер и захват, затем нажмите B (правая) или Y (левая).",
-        "ko": "\u2713 SteamVR이 컨트롤러 버튼을 Mio에 전달하고 있습니다: 트리거와 그립을 누른 채 오른손 B / 왼손 Y 를 누르세요.",
-    },
-    "screenshot_binding_inactive": {
-        "zh-CN": "⚠ SteamVR 没有把手柄按键交给 Mio（部分头显驱动不给第三方覆盖层按键）。可以改用 SteamVR 菜单里 Mio 面板的按钮、桌面快捷键，或角色菜单里的 OSC 参数触发。",
-        "en": "\u26a0 SteamVR is not delivering the controller button to Mio (some headset drivers give third-party overlays no buttons). Use the button on the Mio tab in the SteamVR menu, the desktop hotkey, or the OSC parameter from your avatar menu instead.",
-        "ja": "\u26a0 SteamVR がコントローラーのボタンを Mio に渡していません（一部のヘッドセットドライバーはサードパーティのオーバーレイにボタンを渡しません）。SteamVR メニューの Mio タブのボタン、デスクトップのホットキー、またはアバターメニューの OSC パラメータをお使いください。",
-        "ru": "\u26a0 SteamVR не передаёт кнопку контроллера в Mio (некоторые драйверы шлемов не дают кнопок сторонним оверлеям). Используйте кнопку на вкладке Mio в меню SteamVR, горячую клавишу на рабочем столе или OSC-параметр из меню аватара.",
-        "ko": "\u26a0 SteamVR이 컨트롤러 버튼을 Mio에 전달하지 않습니다(일부 헤드셋 드라이버는 타사 오버레이에 버튼을 주지 않습니다). SteamVR 메뉴의 Mio 탭 버튼, 데스크톱 단축키 또는 아바타 메뉴의 OSC 매개변수를 사용하세요.",
-    },
-    "osc_param_toggle_screenshot": {
-        "zh-CN": "角色里“截图翻译”的名字",
-        "en": "Screenshot Trigger Param",
-        "ja": "スクリーンショット翻訳パラメータ",
-        "ru": "Параметр перевода по скриншоту",
-        "ko": "스크린샷 번역 매개변수",
-    },
-    "vr_overlay_reset_position": {
-        "zh-CN": "把字幕板放回正前方",
-        "en": "Reset panel position",
-        "ja": "字幕板を正面に戻す",
-        "ru": "Вернуть панель вперёд",
-        "ko": "자막판을 정면으로 되돌리기",
-    },
-    "vr_overlay_status_not_running": {
-        "zh-CN": "⚠ SteamVR 没有运行。启动 SteamVR 后字幕会自动出现在头显里。",
-        "en": "\u26a0 SteamVR is not running. Start it and the subtitles will appear in the headset.",
-        "ja": "\u26a0 SteamVR が起動していません。起動すると字幕がヘッドセットに表示されます。",
-        "ru": "\u26a0 SteamVR не запущен. Запустите его, и субтитры появятся в шлеме.",
-        "ko": "\u26a0 SteamVR이 실행되고 있지 않습니다. 실행하면 자막이 헤드셋에 표시됩니다.",
-    },
-    "vr_overlay_status_not_installed": {
-        "zh-CN": "⚠ 没有找到 SteamVR。请先安装 SteamVR 再打开这个开关。",
-        "en": "\u26a0 SteamVR was not found. Install it before turning this on.",
-        "ja": "\u26a0 SteamVR が見つかりません。インストールしてからオンにしてください。",
-        "ru": "\u26a0 SteamVR не найден. Установите его, прежде чем включать эту настройку.",
-        "ko": "\u26a0 SteamVR을 찾을 수 없습니다. 설치한 뒤에 켜 주세요.",
-    },
-    "vr_overlay_status_no_headset": {
-        "zh-CN": "⚠ 没有检测到头显。请先连接头显。",
-        "en": "\u26a0 No headset detected. Connect one first.",
-        "ja": "\u26a0 ヘッドセットが検出されません。接続してください。",
-        "ru": "\u26a0 Шлем не обнаружен. Сначала подключите его.",
-        "ko": "\u26a0 헤드셋이 감지되지 않았습니다. 먼저 연결해 주세요.",
-    },
-    "vr_overlay_status_missing_runtime": {
-        "zh-CN": "⚠ 这个安装里缺少 VR 组件（openvr），头显显示无法启动。请重新安装程序，或从源码运行时重建运行环境。",
-        "en": "⚠ This install is missing the VR component (openvr), so the headset panel cannot start. Reinstall the app, or rebuild the environment when running from source.",
-        "ja": "⚠ このインストールには VR コンポーネント（openvr）がなく、ヘッドセット表示を開始できません。アプリを再インストールするか、ソースから実行している場合は環境を再構築してください。",
-        "ru": "⚠ В этой установке нет VR-компонента (openvr), поэтому панель в шлеме не запускается. Переустановите приложение или пересоберите окружение при запуске из исходников.",
-        "ko": "⚠ 이 설치에는 VR 구성 요소(openvr)가 없어 헤드셋 표시를 시작할 수 없습니다. 앱을 다시 설치하거나, 소스에서 실행 중이라면 환경을 다시 빌드하세요.",
-    },
-    "vr_overlay_status_failed": {
-        "zh-CN": "⚠ 无法在头显中显示字幕。桌面悬浮窗不受影响，仍然正常工作。",
-        "en": "\u26a0 The headset panel could not start. The desktop overlay is unaffected and still works.",
-        "ja": "\u26a0 ヘッドセットへの表示を開始できませんでした。デスクトップの字幕は影響を受けず、通常どおり動作します。",
-        "ru": "\u26a0 Не удалось запустить панель в шлеме. Субтитры на рабочем столе продолжают работать.",
-        "ko": "\u26a0 헤드셋 표시를 시작할 수 없습니다. 데스크톱 자막은 영향을 받지 않고 정상 작동합니다.",
-    },
     "voice_clone_region_fallback": {
-        "zh-CN": "你的 Qwen TTS 使用的服务区域不提供声音克隆接口，克隆已改用「{region}」区域。请在上方为该区域单独填写 API Key——不同区域的密钥不能通用。",
-        "en": "Your Qwen TTS service region does not offer voice cloning, so cloning uses the \u201c{region}\u201d region instead. Enter an API key for that region above; keys are not shared across regions.",
-        "ja": "お使いの Qwen TTS のサービス地域では音声クローンを利用できないため、クローンは「{region}」地域を使用します。上でその地域用の API キーを入力してください。キーは地域間で共通ではありません。",
-        "ru": "Регион вашего Qwen TTS не предоставляет клонирование голоса, поэтому используется регион \u00ab{region}\u00bb. Введите выше ключ API для этого региона: ключи не работают между регионами.",
-        "ko": "사용 중인 Qwen TTS 서비스 지역에서는 음성 클로닝을 제공하지 않아 \u2018{region}\u2019 지역을 사용합니다. 위에서 해당 지역용 API 키를 입력하세요. 키는 지역 간에 공용이 아닙니다.",
+        "zh-CN": "你的 Qwen TTS 使用的服务区域暂不支持声音克隆，克隆固定使用「{region}」区域。请在上方填写该区域的 API Key——不同区域的密钥不能通用。",
+        "en": "Voice cloning is not supported in your Qwen TTS service region yet, so cloning always uses the “{region}” region. Enter an API key for that region above; keys are not shared across regions.",
+        "ja": "お使いの Qwen TTS のサービス地域はまだ音声クローンに対応していないため、クローンは常に「{region}」地域を使用します。上でその地域用の API キーを入力してください。キーは地域間で共通ではありません。",
+        "ru": "Регион вашего Qwen TTS пока не поддерживает клонирование голоса, поэтому всегда используется регион «{region}». Введите выше ключ API для этого региона: ключи не работают между регионами.",
+        "ko": "사용 중인 Qwen TTS 서비스 지역은 아직 음성 클로닝을 지원하지 않아 항상 ‘{region}’ 지역을 사용합니다. 위에서 해당 지역용 API 키를 입력하세요. 키는 지역 간에 공용이 아닙니다.",
     },
     "voice_clone_region_unsupported": {
-        "zh-CN": "当前服务区域没有提供声音克隆接口。请在上方的 API 设置中改用新加坡或北京区域后重试。",
-        "en": "The current service region does not provide the voice cloning endpoint. Switch to the Singapore or Beijing region in the API settings above and try again.",
-        "ja": "現在のサービス地域では音声クローンのエンドポイントが提供されていません。上の API 設定でシンガポールまたは北京地域に変更して再試行してください。",
-        "ru": "В текущем регионе нет конечной точки клонирования голоса. Переключитесь на регион Сингапур или Пекин в настройках API выше и повторите попытку.",
-        "ko": "현재 서비스 지역에서는 음성 클로닝 엔드포인트를 제공하지 않습니다. 위의 API 설정에서 싱가포르 또는 베이징 지역으로 변경한 뒤 다시 시도하세요.",
+        "zh-CN": "当前服务地址没有提供声音克隆接口。声音克隆目前仅支持阿里云百炼北京地域（中国大陆），新加坡等地域暂不支持。请在上方的 API 设置中选择中国大陆区域后重试。",
+        "en": "The current service address does not provide the voice cloning endpoint. Voice cloning currently works only in the Alibaba Cloud Model Studio China (Beijing) region; Singapore and other regions are not supported yet. Select the Mainland China region in the API settings above and try again.",
+        "ja": "現在のサービスアドレスでは音声クローンのエンドポイントが提供されていません。音声クローンは現在 Alibaba Cloud Model Studio の中国（北京）リージョンのみ対応で、シンガポールなど他のリージョンはまだ対応していません。上の API 設定で中国本土の地域を選んで再試行してください。",
+        "ru": "По текущему адресу сервиса нет конечной точки клонирования голоса. Клонирование пока работает только в регионе Alibaba Cloud Model Studio Китай (Пекин); Сингапур и другие регионы пока не поддерживаются. Выберите регион «Китайский материк» в настройках API выше и повторите попытку.",
+        "ko": "현재 서비스 주소에서는 음성 클로닝 엔드포인트를 제공하지 않습니다. 음성 클로닝은 현재 Alibaba Cloud Model Studio 중국(베이징) 지역에서만 동작하며, 싱가포르 등 다른 지역은 아직 지원하지 않습니다. 위의 API 설정에서 중국 본토 지역을 선택한 뒤 다시 시도하세요.",
     },
     "voice_clone_provider_unavailable": {
         "zh-CN": "声音克隆服务暂时不可用。请稍后重试。",
@@ -3709,6 +3235,91 @@ FIELD_HINTS.update({
         "ko": "호스팅 API는 NVIDIA API Catalog 주소를 사용합니다. 자체 NIM, 프록시, 엔터프라이즈 게이트웨이는 사용자 지정을 선택하세요.",
     },
 })
+
+
+# Voice cloning (voice-enrollment, Beijing only) and Tencent TokenHub sites.
+QT_SETTINGS_COPY.update({
+    "voice_clone_created_reviewing": {
+        "zh-CN": "已提交克隆音色「{voice}」，服务正在审核，通常几分钟内完成。审核通过前无法朗读，可稍后点「同步云端音色」查看状态。",
+        "en": "Cloned voice “{voice}” was submitted and is being reviewed by the service, which usually takes a few minutes. It cannot speak until the review passes; press Sync Cloud Voices later to check.",
+        "ja": "クローン音声「{voice}」を送信しました。サービスが審査中で、通常は数分で完了します。審査に通るまでは読み上げに使えません。後で「クラウド音声を同期」を押して状態を確認してください。",
+        "ru": "Клонированный голос «{voice}» отправлен и проходит проверку сервисом, обычно это занимает несколько минут. До окончания проверки им нельзя озвучивать; позже нажмите «Синхронизировать голоса», чтобы проверить статус.",
+        "ko": "복제 음성 ‘{voice}’을(를) 제출했습니다. 서비스가 심사 중이며 보통 몇 분 안에 끝납니다. 심사를 통과하기 전에는 낭독에 사용할 수 없으니 나중에 '클라우드 음성 동기화'를 눌러 상태를 확인하세요.",
+    },
+    "voice_clone_reviewing": {
+        "zh-CN": "所选克隆音色仍在服务审核中，通过后才能朗读。可稍后点「同步云端音色」查看状态。",
+        "en": "The selected cloned voice is still being reviewed by the service and can speak once it passes. Press Sync Cloud Voices later to check.",
+        "ja": "選択したクローン音声はまだサービスの審査中で、通過すると読み上げに使えます。後で「クラウド音声を同期」を押して確認してください。",
+        "ru": "Выбранный клонированный голос ещё проходит проверку сервисом и заработает после неё. Позже нажмите «Синхронизировать голоса», чтобы проверить.",
+        "ko": "선택한 복제 음성은 아직 서비스 심사 중이며 통과하면 낭독할 수 있습니다. 나중에 '클라우드 음성 동기화'를 눌러 확인하세요.",
+    },
+    "voice_clone_review_rejected": {
+        "zh-CN": "服务在审核中拒绝了这段录音，没有创建音色。请换一段只有你本人清晰朗读、没有背景音乐和杂音的录音再试。",
+        "en": "The service rejected this recording during review, so no voice was created. Try again with a recording of only your own clear speech, without background music or noise.",
+        "ja": "サービスが審査でこの録音を拒否したため、音声は作成されませんでした。背景音楽や雑音のない、ご自身の明瞭な発話だけの録音で再試行してください。",
+        "ru": "Сервис отклонил эту запись при проверке, голос не создан. Попробуйте запись только своей чёткой речи без фоновой музыки и шума.",
+        "ko": "서비스가 심사에서 이 녹음을 거부해 음성이 만들어지지 않았습니다. 배경 음악이나 잡음 없이 본인의 선명한 발화만 담긴 녹음으로 다시 시도하세요.",
+    },
+    "voice_clone_model_unsupported": {
+        "zh-CN": "所选模型不能使用克隆音色。请在上方选择 Qwen-Audio-TTS 模型（例如 {model}）。",
+        "en": "The selected model cannot use cloned voices. Choose a Qwen-Audio-TTS model above, such as {model}.",
+        "ja": "選択したモデルではクローン音声を使えません。上で Qwen-Audio-TTS モデル（例: {model}）を選んでください。",
+        "ru": "Выбранная модель не может использовать клонированные голоса. Выберите выше модель Qwen-Audio-TTS, например {model}.",
+        "ko": "선택한 모델은 복제 음성을 사용할 수 없습니다. 위에서 Qwen-Audio-TTS 모델(예: {model})을 선택하세요.",
+    },
+    "voice_clone_upload_failed": {
+        "zh-CN": "录音上传到阿里云百炼临时存储失败。请检查网络后重试。",
+        "en": "Uploading the recording to Alibaba Cloud Model Studio's temporary storage failed. Check your network and try again.",
+        "ja": "Alibaba Cloud Model Studio の一時ストレージへの録音のアップロードに失敗しました。ネットワークを確認して再試行してください。",
+        "ru": "Не удалось загрузить запись во временное хранилище Alibaba Cloud Model Studio. Проверьте сеть и повторите попытку.",
+        "ko": "Alibaba Cloud Model Studio 임시 저장소로 녹음을 업로드하지 못했습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+    },
+    "voice_clone_status_reviewing": {
+        "zh-CN": "审核中",
+        "en": "in review",
+        "ja": "審査中",
+        "ru": "на проверке",
+        "ko": "심사 중",
+    },
+    # HTTP 403 (AccessDenied, Unpurchased, FreeTierOnly): the key is valid but
+    # the account may not use the model, so "check the key" would mislead.
+    "voice_clone_access_denied": {
+        "zh-CN": "声音克隆服务拒绝了访问。请确认该账号已开通阿里云百炼，并有权使用声音复刻模型；如果账号开启了“仅使用免费额度”，免费额度用完后请求也会被拒绝。",
+        "en": "The voice cloning service denied access. Check that Alibaba Cloud Model Studio is activated for this account and that the account may use the voice cloning models; an account limited to its free quota is refused once that quota is used up.",
+        "ja": "音声クローンサービスがアクセスを拒否しました。このアカウントで Alibaba Cloud Model Studio が有効化され、音声クローンのモデルを利用できるか確認してください。「無料枠のみ」に制限したアカウントは、無料枠を使い切るとリクエストが拒否されます。",
+        "ru": "Сервис клонирования голоса отказал в доступе. Убедитесь, что для аккаунта активирован Alibaba Cloud Model Studio и разрешено использовать модели клонирования голоса; если аккаунт ограничен бесплатной квотой, после её исчерпания запросы отклоняются.",
+        "ko": "음성 클로닝 서비스가 접근을 거부했습니다. 이 계정에서 Alibaba Cloud Model Studio가 활성화되어 있고 음성 클로닝 모델을 사용할 수 있는지 확인하세요. 무료 할당량만 쓰도록 제한한 계정은 할당량을 다 쓰면 요청이 거부됩니다.",
+    },
+    "hunyuan_region_china": {
+        "zh-CN": "TokenHub 中国站",
+        "en": "TokenHub China",
+        "ja": "TokenHub 中国サイト",
+        "ru": "TokenHub Китай",
+        "ko": "TokenHub 중국 사이트",
+    },
+    "hunyuan_region_global": {
+        "zh-CN": "TokenHub 国际站",
+        "en": "TokenHub Global",
+        "ja": "TokenHub グローバルサイト",
+        "ru": "TokenHub (международный)",
+        "ko": "TokenHub 글로벌 사이트",
+    },
+    "hunyuan_region_custom": {
+        "zh-CN": "自定义服务地址（高级）",
+        "en": "Custom Base URL",
+        "ja": "カスタムのベース URL",
+        "ru": "Пользовательский базовый URL",
+        "ko": "사용자 지정 Base URL",
+    },
+})
+
+FIELD_HINTS["hunyuan_translation_region"] = {
+    "zh-CN": "腾讯混元已迁移到 TokenHub，旧的混元控制台密钥已失效。大陆玩家选中国站，海外玩家选国际站；两个站点的 API Key 不能通用。",
+    "en": "Tencent Hunyuan moved to TokenHub and keys from the old Hunyuan console no longer work. Choose China in mainland China and Global elsewhere; the two sites issue separate API keys.",
+    "ja": "Tencent Hunyuan は TokenHub に移行し、旧 Hunyuan コンソールのキーは使えなくなりました。中国本土では中国サイト、それ以外ではグローバルサイトを選んでください。両サイトの API キーは共通ではありません。",
+    "ru": "Tencent Hunyuan перешёл на TokenHub, ключи из старой консоли Hunyuan больше не работают. В материковом Китае выберите China, в других странах — Global; у сайтов разные ключи API.",
+    "ko": "Tencent Hunyuan은 TokenHub로 이전했으며 기존 Hunyuan 콘솔의 키는 더 이상 작동하지 않습니다. 중국 본토에서는 중국 사이트, 그 밖에서는 글로벌 사이트를 선택하세요. 두 사이트의 API 키는 공용이 아닙니다.",
+}
 
 FIELD_HINTS["asr_backend"].update({
     "ru": "Определяет, как речь с микрофона превращается в текст. Распознавание Edge (по умолчанию) бесплатно и не требует загрузки; Qwen3-ASR — облачный вариант с API-ключом; SenseVoice после загрузки работает на этом ПК и лучше всего подходит для китайского и кантонского.",
@@ -3948,6 +3559,7 @@ class SettingsWindow(QDialog):
     update_check_failed = Signal(str)
     tts_test_finished = Signal(int, bool, str)
     translation_connection_test_finished = Signal(int, bool, object)
+    model_list_fetch_finished = Signal(int, object)
     edge_link_test_finished = Signal(int, object)
     ui_callback_requested = Signal()
 
@@ -4024,8 +3636,27 @@ class SettingsWindow(QDialog):
         self._backend_retries_var = _StrVar()
         self._backend_custom_headers_var = _StrVar()
         self._backend_streaming_var = _BoolVar(False)
+        self._backend_protocol_var = _StrVar()
+        self._backend_protocol_codes: dict[str, str] = {}
         self._backend_draft_configs: dict[str, dict[str, object]] = {}
         self._active_backend_form = ""
+        # Model lists read from the provider: (backend, source key) -> (model
+        # ids, origin) where origin is "remote" (this session) or "saved".
+        # Every endpoint keeps its own list, so a late answer for an old Base
+        # URL can never replace the list of the one now in the form.
+        self._remote_model_lists: dict[tuple[str, str], tuple[tuple[str, ...], str]] = {}
+        self._model_list_fetch_generation = 0
+        # Source key -> generation of the newest request still running for it.
+        self._model_list_inflight: dict[str, int] = {}
+        # Source key -> generation of the newest answer applied for it; older
+        # answers that arrive later are dropped.
+        self._model_list_applied_generation: dict[str, int] = {}
+        self._model_list_auto_attempted: set[str] = set()
+        # Source key -> (kind, reason copy key); kind is "error" or "unsupported".
+        self._model_list_status: dict[str, tuple[str, str]] = {}
+        self._backend_model_combo: NoWheelComboBox | None = None
+        self._model_list_refresh_btn: QPushButton | None = None
+        self._model_list_status_label: QLabel | None = None
         self._fallback_backends_var = _StrVar()
         self._auto_free_fallback_var = _BoolVar(True)
         self._qwen_translation_region_var = _StrVar()
@@ -4079,6 +3710,7 @@ class SettingsWindow(QDialog):
         self._tts_device_var = _StrVar()
         self._tts_bert_language_var = _StrVar()
         self._voice_clone_consent_var = _BoolVar(False)
+        self._tts_persona_instructions_var = _BoolVar(False)
         self._tts_rate_var = _FloatVar(1.0)
         self._tts_volume_var = _FloatVar(0.8)
         self._vrc_listen_enabled_var = _BoolVar(False)
@@ -4088,75 +3720,12 @@ class SettingsWindow(QDialog):
         self._vrc_listen_src_var = _StrVar()
         self._vrc_listen_tgt_var = _StrVar()
         self._mic_send_to_chatbox_var = _BoolVar(True)
-        self._vr_overlay_enabled_var = _BoolVar(False)
-        self._vr_overlay_locked_var = _BoolVar(False)
         self._edge_fallback_var = _BoolVar(True)
         self._edge_proxy_var = _BoolVar(False)
         self._edge_link_test_generation = 0
         self._edge_link_testing = False
         self._edge_link_test_btn: QPushButton | None = None
         self._edge_link_result_label: QLabel | None = None
-        self._vr_dashboard_enabled_var = _BoolVar(True)
-        self._vr_wrist_enabled_var = _BoolVar(True)
-        self._vr_wrist_hand_var = _StrVar("")
-        self._vr_gesture_enabled_var = _BoolVar(True)
-        self._steamvr_autolaunch_var = _BoolVar(False)
-        self._ocr_gpu_var = _BoolVar(True)
-        self._vr_overlay_distance = 1.5
-        self._vr_overlay_yaw = 0.0
-        self._vr_overlay_pitch = -12.0
-        self._osc_toggle_screenshot_var = _StrVar()
-        self._screenshot_enabled_var = _BoolVar(False)
-        self._screenshot_hand_var = _StrVar("")
-        self._screenshot_placement_var = _StrVar("")
-        self._screenshot_selection_var = _BoolVar(True)
-        self._screenshot_hotkey_var = _StrVar()
-        self._screenshot_depth = 1.5
-        self._screenshot_auto_hide = 1.5
-        self._screenshot_frame_gesture_var = _BoolVar(True)
-        self._vr_overlay_font_scale = 1.0
-        self._vr_speaker_marks_var = _BoolVar(True)
-        self._screenshot_auto_translate_var = _BoolVar(True)
-        self._screenshot_still_seconds = 0.6
-        self._vr_wrist_show_mode_var = _StrVar("")
-        self._vr_wrist_show_codes: dict[str, str] = {}
-        self._vr_feedback_haptics_var = _BoolVar(True)
-        self._vr_feedback_sounds_var = _BoolVar(True)
-        self._vr_feedback_volume = 0.5
-        self._push_to_talk_var = _BoolVar(False)
-        self._screenshot_view_eye_var = _StrVar("")
-        self._screenshot_view_eye_codes: dict[str, str] = {}
-        self._screenshot_quick_frame_var = _BoolVar(False)
-        self._gesture_sensitivity = 0.5
-        self._frame_arm_seconds = 0.3
-        self._frame_release_seconds = 0.25
-        self._block_game_input_var = _BoolVar(True)
-        self._swap_trigger_grip_var = _BoolVar(False)
-        self._trigger_threshold = 0.5
-        self._grip_threshold = 0.4
-        self._shot_flag_vars = {
-            key: _BoolVar(default)
-            for key, default in (
-                ("match_colors", True),
-                ("recognize_only", False),
-                ("ignore_line_breaks", False),
-                ("auto_copy", False),
-                ("scan_codes", True),
-                ("stick_scaling", True),
-            )
-        }
-        self._thumbrest_taps = 4
-        self._thumbrest_action_var = _StrVar("")
-        self._thumbrest_action_codes: dict[str, str] = {}
-        self._panel_preset_var = _StrVar("")
-        self._panel_preset_codes: dict[str, str] = {}
-        self._panel_opacity = 1.0
-        self._panel_default_width = 0.42
-        self._panel_flag_vars = {
-            key: _BoolVar(True) for key in ("tooltips", "show_time", "same_hand_gather")
-        }
-        self._two_hand_vars = {"two_hand_left": _StrVar(""), "two_hand_right": _StrVar("")}
-        self._two_hand_codes: dict[str, str] = {}
         self._text_input_hotkey_var = _StrVar()
         self._mic_mute_hotkey_var = _StrVar()
         self._output_format_var = _StrVar()
@@ -4306,6 +3875,7 @@ class SettingsWindow(QDialog):
         self.translation_connection_test_finished.connect(
             self._finish_translation_connection_test
         )
+        self.model_list_fetch_finished.connect(self._finish_model_list_fetch)
         self.edge_link_test_finished.connect(self._finish_edge_link_test)
         self.ui_callback_requested.connect(self._drain_ui_callback_queue)
         if self._preloaded:
@@ -4502,185 +4072,6 @@ class SettingsWindow(QDialog):
         self._vrc_listen_enabled_var.set(bool(vrc_cfg.get("enabled", False)))
         self._vrc_listen_overlay_var.set(bool(vrc_cfg.get("show_overlay", False)))
         self._vrc_listen_send_var.set(bool(vrc_cfg.get("send_to_chatbox", True)))
-        vr_cfg = vrc_cfg.get("vr_overlay", {})
-        if not isinstance(vr_cfg, dict):
-            vr_cfg = {}
-        self._vr_overlay_enabled_var.set(bool(vr_cfg.get("enabled", False)))
-        self._vr_overlay_locked_var.set(bool(vr_cfg.get("locked", False)))
-        dash_cfg = vrc_cfg.get("vr_dashboard", {})
-        if not isinstance(dash_cfg, dict):
-            dash_cfg = {}
-        self._vr_dashboard_enabled_var.set(bool(dash_cfg.get("enabled", True)))
-        self._vr_overlay_width = float(vr_cfg.get("width_meters", 1.6) or 1.6)
-        self._vr_overlay_opacity = float(vr_cfg.get("plate_opacity", 0.50) or 0.50)
-        try:
-            self._vr_overlay_font_scale = max(0.7, min(1.8, float(vr_cfg.get("font_scale", 1.0) or 1.0)))
-        except (TypeError, ValueError):
-            self._vr_overlay_font_scale = 1.0
-        self._vr_speaker_marks_var.set(bool(vr_cfg.get("speaker_marks", True)))
-        self._load_vr_geometry(vr_cfg.get("position"))
-        for attr, section in (("_vr_gesture_enabled_var", "vr_gesture"),):
-            section_cfg = vrc_cfg.get(section, {})
-            if not isinstance(section_cfg, dict):
-                section_cfg = {}
-            getattr(self, attr).set(bool(section_cfg.get("enabled", True)))
-        self._steamvr_autolaunch_var.set(bool(vrc_cfg.get("steamvr_autolaunch", False)))
-        shot_cfg = vrc_cfg.get("screenshot_translation", {})
-        if not isinstance(shot_cfg, dict):
-            shot_cfg = {}
-        self._screenshot_enabled_var.set(bool(shot_cfg.get("enabled", False)))
-        self._screenshot_hand_codes = {
-            self._copy("screenshot_hand_left"): "left",
-            self._copy("screenshot_hand_right"): "right",
-        }
-        hand = str(shot_cfg.get("hand", "left") or "left")
-        self._screenshot_hand_var.set(
-            self._label_for_code(
-                [(label, code) for label, code in self._screenshot_hand_codes.items()],
-                hand,
-            )
-        )
-        self._screenshot_placement_codes = {
-            self._copy("screenshot_placement_panel"): "panel",
-            self._copy("screenshot_placement_card"): "card",
-            self._copy("screenshot_placement_hand"): "hand",
-        }
-        placement = str(shot_cfg.get("placement", "panel") or "panel")
-        if placement not in self._screenshot_placement_codes.values():
-            placement = "panel"
-        self._screenshot_placement_var.set(
-            self._label_for_code(
-                [(label, code) for label, code in self._screenshot_placement_codes.items()],
-                placement,
-            )
-        )
-        self._screenshot_selection_var.set(bool(shot_cfg.get("selection_mode", True)))
-        self._ocr_gpu_var.set(bool(shot_cfg.get("ocr_gpu", True)))
-        self._screenshot_frame_gesture_var.set(bool(shot_cfg.get("frame_gesture", True)))
-        self._screenshot_auto_translate_var.set(bool(shot_cfg.get("auto_translate", True)))
-        try:
-            self._screenshot_still_seconds = max(0.2, min(3.0, float(shot_cfg.get("still_seconds", 0.6))))
-        except (TypeError, ValueError):
-            self._screenshot_still_seconds = 0.6
-        wrist_cfg = vrc_cfg.get("vr_wrist", {})
-        if not isinstance(wrist_cfg, dict):
-            wrist_cfg = {}
-        self._vr_wrist_enabled_var.set(bool(wrist_cfg.get("enabled", True)))
-        self._vr_wrist_hand_var.set(
-            self._label_for_code(
-                [(label, code) for label, code in self._screenshot_hand_codes.items()],
-                str(wrist_cfg.get("hand", "left") or "left"),
-            )
-        )
-        self._vr_wrist_show_codes = {
-            self._copy("vr_wrist_show_twist"): "twist",
-            self._copy("vr_wrist_show_look"): "look",
-            self._copy("vr_wrist_show_always"): "always",
-        }
-        self._vr_wrist_show_mode_var.set(
-            self._label_for_code(
-                [(label, code) for label, code in self._vr_wrist_show_codes.items()],
-                str(wrist_cfg.get("show_mode", "twist") or "twist"),
-            )
-        )
-        feedback_cfg = vrc_cfg.get("vr_feedback", {})
-        if not isinstance(feedback_cfg, dict):
-            feedback_cfg = {}
-        self._vr_feedback_haptics_var.set(bool(feedback_cfg.get("haptics", True)))
-        self._vr_feedback_sounds_var.set(bool(feedback_cfg.get("sounds", True)))
-        try:
-            self._vr_feedback_volume = max(0.0, min(1.0, float(feedback_cfg.get("volume", 0.5))))
-        except (TypeError, ValueError):
-            self._vr_feedback_volume = 0.5
-        audio_section = self._config.get("audio", {})
-        self._push_to_talk_var.set(
-            bool(isinstance(audio_section, dict) and audio_section.get("push_to_talk", False))
-        )
-        self._screenshot_view_eye_codes = {
-            self._copy("screenshot_view_eye_right"): "right",
-            self._copy("screenshot_view_eye_left"): "left",
-        }
-        self._screenshot_view_eye_var.set(
-            self._label_for_code(
-                [(label, code) for label, code in self._screenshot_view_eye_codes.items()],
-                str(shot_cfg.get("view_eye", "right") or "right"),
-            )
-        )
-        self._screenshot_quick_frame_var.set(bool(shot_cfg.get("quick_frame", False)))
-
-        def number(section, key, default, low, high):
-            try:
-                return max(low, min(high, float(section.get(key, default))))
-            except (TypeError, ValueError):
-                return default
-
-        self._gesture_sensitivity = number(shot_cfg, "gesture_sensitivity", 0.5, 0.0, 1.0)
-        self._frame_arm_seconds = number(shot_cfg, "frame_arm_seconds", 0.3, 0.1, 1.0)
-        self._frame_release_seconds = number(shot_cfg, "frame_release_seconds", 0.25, 0.1, 1.0)
-        controls_cfg = vrc_cfg.get("vr_controls", {})
-        if not isinstance(controls_cfg, dict):
-            controls_cfg = {}
-        self._block_game_input_var.set(bool(controls_cfg.get("block_game_input", True)))
-        self._swap_trigger_grip_var.set(bool(controls_cfg.get("swap_trigger_grip", False)))
-        self._trigger_threshold = number(controls_cfg, "trigger_threshold", 0.5, 0.05, 1.0)
-        self._grip_threshold = number(controls_cfg, "grip_threshold", 0.4, 0.05, 1.0)
-        for key, var in self._shot_flag_vars.items():
-            var.set(bool(shot_cfg.get(key, key in {"match_colors", "scan_codes", "stick_scaling"})))
-        self._thumbrest_taps = int(number(controls_cfg, "thumbrest_taps", 4, 2, 6))
-        self._thumbrest_action_codes = {
-            self._copy("vr_thumbrest_action_frame"): "frame_gesture",
-            self._copy("vr_thumbrest_action_gather"): "gather",
-            self._copy("vr_thumbrest_action_close"): "close_panels",
-            self._copy("vr_thumbrest_action_none"): "none",
-        }
-        self._thumbrest_action_var.set(
-            self._label_for_code(
-                list(self._thumbrest_action_codes.items()),
-                str(controls_cfg.get("thumbrest_action", "frame_gesture") or "frame_gesture"),
-            )
-        )
-        panels_cfg = vrc_cfg.get("vr_panels", {})
-        if not isinstance(panels_cfg, dict):
-            panels_cfg = {}
-        self._panel_preset_codes = {
-            self._copy("vr_panels_preset_default"): "default",
-            self._copy("vr_panels_preset_dark"): "dark",
-            self._copy("vr_panels_preset_light"): "light",
-        }
-        self._panel_preset_var.set(
-            self._label_for_code(
-                list(self._panel_preset_codes.items()),
-                str(panels_cfg.get("color_preset", "default") or "default"),
-            )
-        )
-        self._panel_opacity = number(panels_cfg, "opacity", 1.0, 0.3, 1.0)
-        self._panel_default_width = number(panels_cfg, "default_width", 0.42, 0.28, 0.7)
-        for key, var in self._panel_flag_vars.items():
-            var.set(bool(panels_cfg.get(key, True)))
-        self._two_hand_codes = {
-            self._copy("vr_panel_action_none"): "none",
-            self._copy("vr_panel_action_page_prev"): "page_prev",
-            self._copy("vr_panel_action_page_next"): "page_next",
-            self._copy("vr_panel_action_next_or_close"): "next_or_close",
-            self._copy("vr_panel_action_close"): "close",
-            self._copy("vr_panel_action_pin"): "pin",
-            self._copy("vr_panel_action_copy"): "copy",
-            self._copy("vr_panel_action_chatbox"): "chatbox",
-        }
-        for key, default in (("two_hand_left", "page_prev"), ("two_hand_right", "next_or_close")):
-            self._two_hand_vars[key].set(
-                self._label_for_code(
-                    list(self._two_hand_codes.items()), str(panels_cfg.get(key, default) or default)
-                )
-            )
-        try:
-            self._screenshot_depth = float(shot_cfg.get("depth_meters", 1.5) or 1.5)
-        except (TypeError, ValueError):
-            self._screenshot_depth = 1.5
-        try:
-            self._screenshot_auto_hide = max(0.5, min(120.0, float(shot_cfg.get("auto_hide_seconds", 1.5) or 1.5)))
-        except (TypeError, ValueError):
-            self._screenshot_auto_hide = 1.5
         self._listen_self_suppress_var.set(bool(vrc_cfg.get("self_suppress", False)))
         self._listen_self_suppress_seconds_var.set(self._format_numeric_input(vrc_cfg.get("self_suppress_seconds", 0.65)))
         self._listen_segment_duration_var.set(
@@ -4725,12 +4116,9 @@ class SettingsWindow(QDialog):
             )
         )
 
-        from src.utils.global_hotkey import DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_SCREENSHOT_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
+        from src.utils.global_hotkey import DEFAULT_MIC_MUTE_HOTKEY, DEFAULT_TEXT_INPUT_HOTKEY
         self._text_input_hotkey_var.set(str(text_input_cfg.get("hotkey", DEFAULT_TEXT_INPUT_HOTKEY) or ""))
         self._mic_mute_hotkey_var.set(str(hotkey_cfg.get("mic_mute", DEFAULT_MIC_MUTE_HOTKEY) or ""))
-        self._screenshot_hotkey_var.set(
-            str(hotkey_cfg.get("screenshot_translate", DEFAULT_SCREENSHOT_HOTKEY) or "")
-        )
         self._roleplay_enabled_var.set(str(social_cfg.get("mode", "standard")) == "roleplay")
         preset = str(social_cfg.get("persona_preset", "custom") or "custom")
         if preset not in ROLEPLAY_PRESETS:
@@ -4770,7 +4158,6 @@ class SettingsWindow(QDialog):
         self._osc_toggle_listen_var.set(str(control_params.get("listen", f"{prefix}ToggleListen") or f"{prefix}ToggleListen"))
         self._osc_toggle_tts_var.set(str(control_params.get("tts", f"{prefix}ToggleTts") or f"{prefix}ToggleTts"))
         self._osc_toggle_overlay_var.set(str(control_params.get("overlay", f"{prefix}ToggleOverlay") or f"{prefix}ToggleOverlay"))
-        self._osc_toggle_screenshot_var.set(str(control_params.get("screenshot", f"{prefix}Screenshot") or f"{prefix}Screenshot"))
 
         self._avatar_sync_enabled_var.set(bool(avatar_cfg.get("enabled", False)))
         self._avatar_translating_var.set(str(avatar_params.get("translating", "MioTranslating") or "MioTranslating"))
@@ -4904,7 +4291,6 @@ class SettingsWindow(QDialog):
             "vrc_listen": "listen_others_section",
             "tts": "tts_section",
             "advanced": "vrchat_advanced_section",
-            "vr_integration": "vr_integration_section",
             "roleplay": "roleplay_section",
             "avatar": "vr_integration_section",
             "hotkeys": "hotkey_voice_section",
@@ -5166,6 +4552,8 @@ class SettingsWindow(QDialog):
             "custom_headers_text": self._backend_custom_headers_var.value(),
             "streaming": self._backend_streaming_var.value(),
         }
+        if get_backend_spec(backend).get("protocol_input"):
+            draft["protocol"] = self._selected_relay_protocol()
         if backend_has_service_regions(backend):
             region = self._qwen_translation_region_codes.get(
                 self._qwen_translation_region_var.value(),
@@ -5306,6 +4694,20 @@ class SettingsWindow(QDialog):
         else:
             self._qwen_translation_region_codes = {}
             self._qwen_translation_region_var.set("")
+        protocol_options = self._relay_protocol_options()
+        self._backend_protocol_codes = {label: code for label, code in protocol_options}
+        if spec.get("protocol_input"):
+            protocol = normalize_relay_protocol(
+                draft.get("protocol") if draft is not None else backend_cfg.get("protocol")
+            )
+            self._backend_protocol_var.set(self._label_for_code(protocol_options, protocol))
+        else:
+            self._backend_protocol_var.set("")
+        saved_key = backend_config_source_key(backend, backend_cfg)
+        if (backend, saved_key) not in self._remote_model_lists:
+            saved = saved_remote_model_list(backend, backend_cfg)
+            if saved:
+                self._remote_model_lists[(backend, saved_key)] = (saved, "saved")
         self._active_backend_form = backend
 
     def _qwen_translation_region_options(self) -> list[tuple[str, str]]:
@@ -5320,7 +4722,9 @@ class SettingsWindow(QDialog):
     def _set_qwen_translation_region_vars(self, trans_cfg: dict) -> None:
         self._set_backend_region_vars("qianwen", trans_cfg)
 
-    def _set_backend_region_vars(self, backend: str, trans_cfg: dict) -> None:
+    def _saved_backend_region(self, backend: str, trans_cfg: dict) -> tuple[str, str]:
+        """Region and effective Base URL of a regional backend as saved."""
+
         backend_cfg = (
             trans_cfg.get(backend, {})
             if isinstance(trans_cfg.get(backend, {}), dict)
@@ -5337,6 +4741,10 @@ class SettingsWindow(QDialog):
             )
         else:
             region = backend_region_from_base_url(backend, base_url) or default_region
+        return region, get_backend_region_base_url(backend, region) or base_url
+
+    def _set_backend_region_vars(self, backend: str, trans_cfg: dict) -> None:
+        region, base_url = self._saved_backend_region(backend, trans_cfg)
         options = self._backend_region_options(backend)
         if not options:
             self._qwen_translation_region_codes = {}
@@ -5346,8 +4754,7 @@ class SettingsWindow(QDialog):
         self._qwen_translation_region_var.set(
             next((label for label, code in options if code == region), options[0][0])
         )
-        regional_base_url = get_backend_region_base_url(backend, region)
-        self._backend_base_url_var.set(regional_base_url or base_url)
+        self._backend_base_url_var.set(base_url)
 
     def _init_asr_provider_vars(self, asr_cfg: dict) -> None:
         qwen_cfg = asr_cfg.get("qwen3_asr", {}) if isinstance(asr_cfg.get("qwen3_asr", {}), dict) else {}
@@ -5368,10 +4775,12 @@ class SettingsWindow(QDialog):
 
         model_options = [
             (
-                f"qwen3-asr-flash-2026-02-10 ({self._copy('recommended')})",
-                "qwen3-asr-flash-2026-02-10",
-            ),
-            ("qwen3-asr-flash", "qwen3-asr-flash"),
+                f"{QWEN3_ASR_DEFAULT_MODEL} ({self._copy('recommended')})"
+                if code == QWEN3_ASR_DEFAULT_MODEL
+                else code,
+                code,
+            )
+            for code in QWEN3_ASR_MODEL_CHOICES
         ]
         self._qwen_model_codes = {label: code for label, code in model_options}
         self._qwen_model_var.set(next((label for label, code in model_options if code == qwen_model), model_options[0][0]))
@@ -5439,6 +4848,7 @@ class SettingsWindow(QDialog):
             "connect_timeout_seconds": self._tts_api_connect_timeout_var.value(),
             "read_timeout_seconds": self._tts_api_read_timeout_var.value(),
             "wall_timeout_seconds": self._tts_api_wall_timeout_var.value(),
+            "use_persona_instructions": bool(self._tts_persona_instructions_var.value()),
         }
 
     def _init_tts_api_vars(self, tts_cfg: dict, engine: str) -> None:
@@ -5482,6 +4892,9 @@ class SettingsWindow(QDialog):
             self._tts_api_wall_timeout_var.set(
                 draft.get("wall_timeout_seconds", "")
             )
+            self._tts_persona_instructions_var.set(
+                bool(draft.get("use_persona_instructions", False))
+            )
             self._active_tts_api_engine = engine
             return
 
@@ -5496,6 +4909,9 @@ class SettingsWindow(QDialog):
         self._tts_api_region_var.set(self._label_for_code(region_options, current_region))
         self._tts_api_base_url_var.set(str(resolved.get("base_url", "") or ""))
         self._tts_api_model_var.set(str(resolved.get("model", "") or ""))
+        self._tts_persona_instructions_var.set(
+            bool(resolved.get("use_persona_instructions", False))
+        )
         request_timeout = resolved.get("timeout_seconds", 30)
         try:
             request_timeout_number = float(request_timeout)
@@ -5595,6 +5011,7 @@ class SettingsWindow(QDialog):
             return
         visible = self._selected_tts_api_engine() in TTS_API_ENGINE_IDS
         frame.setVisible(visible)
+        self._refresh_tts_persona_visibility()
         if visible:
             api_entry = getattr(self, "_tts_api_key_entry", None)
             if api_entry is not None and not self._qt_widget_is_alive(api_entry):
@@ -5911,6 +5328,7 @@ class SettingsWindow(QDialog):
             self._animate_page_switch(previous_row, row)
         else:
             self._page_stack.setCurrentIndex(row)
+        self._schedule_model_list_auto_refresh()
         if focus_target:
             QTimer.singleShot(
                 0,
@@ -6419,7 +5837,6 @@ class SettingsWindow(QDialog):
         self._vrc_listen_send_check.toggled.connect(lambda value: self._emit_listen_state(send_to_chatbox=value))
         self._row_layout(layout, self._copy("vrc_listen_send"), self._vrc_listen_send_check)
 
-        self._build_vr_overlay_section(layout)
 
         # Desktop Audio & ASR Section
         self._section_title(layout, self._copy("audio_device_asr_section"))
@@ -6472,1093 +5889,11 @@ class SettingsWindow(QDialog):
         diag_row.addStretch(1)
         layout.addLayout(diag_row)
 
-    def _build_vr_overlay_section(self, layout: QVBoxLayout) -> None:
-        """Subtitles inside the headset, with the sizing controls next to them."""
-
-        self._section_title(layout, self._copy("vr_overlay_section"))
-
-        guide = QLabel(self._copy("vr_overlay_guide"))
-        guide.setObjectName("hintLabel")
-        guide.setWordWrap(True)
-        layout.addWidget(guide)
-
-        self._vr_overlay_check = self._check("vr_overlay", self._vr_overlay_enabled_var)
-        self._vr_overlay_check.toggled.connect(self._on_vr_overlay_toggled)
-        self._row_layout(layout, self._copy("vr_overlay_enabled"), self._vr_overlay_check)
-
-        self._vr_overlay_status_label = QLabel("")
-        self._vr_overlay_status_label.setObjectName("warningLabel")
-        self._vr_overlay_status_label.setWordWrap(True)
-        self._vr_overlay_status_label.setVisible(False)
-        layout.addWidget(self._vr_overlay_status_label)
-
-        width_row = QHBoxLayout()
-        width_row.setSpacing(10)
-        width_label = QLabel(self._copy("vr_overlay_width"))
-        width_label.setObjectName("fieldLabel")
-        width_label.setMinimumWidth(170)
-        width_row.addWidget(width_label)
-        self._vr_width_slider = QSlider()
-        self._vr_width_slider.setOrientation(Qt.Orientation.Horizontal)
-        self._vr_width_slider.setRange(30, 400)
-        self._vr_width_slider.setValue(int(round(self._vr_overlay_width * 100)))
-        self._vr_width_slider.valueChanged.connect(self._on_vr_width_changed)
-        width_row.addWidget(self._vr_width_slider, 1)
-        self._vr_width_value = QLabel("")
-        width_row.addWidget(self._vr_width_value)
-        layout.addLayout(width_row)
-
-        opacity_row = QHBoxLayout()
-        opacity_row.setSpacing(10)
-        opacity_label = QLabel(self._copy("vr_overlay_opacity"))
-        opacity_label.setObjectName("fieldLabel")
-        opacity_label.setMinimumWidth(170)
-        opacity_row.addWidget(opacity_label)
-        self._vr_opacity_slider = QSlider()
-        self._vr_opacity_slider.setOrientation(Qt.Orientation.Horizontal)
-        self._vr_opacity_slider.setRange(0, 95)
-        self._vr_opacity_slider.setValue(int(round(self._vr_overlay_opacity * 100)))
-        self._vr_opacity_slider.valueChanged.connect(self._on_vr_opacity_changed)
-        opacity_row.addWidget(self._vr_opacity_slider, 1)
-        self._vr_opacity_value = QLabel("")
-        opacity_row.addWidget(self._vr_opacity_value)
-        layout.addLayout(opacity_row)
-
-        opacity_hint = QLabel(self._copy("vr_overlay_opacity_hint"))
-        opacity_hint.setObjectName("hintLabel")
-        opacity_hint.setWordWrap(True)
-        layout.addWidget(opacity_hint)
-
-        font_row = QHBoxLayout()
-        font_row.setSpacing(10)
-        font_label = QLabel(self._copy("vr_overlay_font_scale"))
-        font_label.setObjectName("fieldLabel")
-        font_label.setMinimumWidth(170)
-        font_row.addWidget(font_label)
-        self._vr_font_slider = QSlider()
-        self._vr_font_slider.setOrientation(Qt.Orientation.Horizontal)
-        self._vr_font_slider.setRange(70, 180)
-        self._vr_font_slider.setValue(int(round(self._vr_overlay_font_scale * 100)))
-        self._vr_font_slider.valueChanged.connect(self._on_vr_font_scale_changed)
-        font_row.addWidget(self._vr_font_slider, 1)
-        self._vr_font_value = QLabel("")
-        font_row.addWidget(self._vr_font_value)
-        layout.addLayout(font_row)
-        self._vr_speaker_marks_check = self._check("vr_overlay_speaker_marks", self._vr_speaker_marks_var)
-        self._vr_speaker_marks_check.toggled.connect(self._on_vr_speaker_marks_toggled)
-        self._row_layout(layout, self._copy("vr_overlay_speaker_marks"), self._vr_speaker_marks_check)
-
-        for attr, label_key, minimum, maximum, handler in (
-            ("distance", "vr_overlay_distance", 50, 500, self._on_vr_distance_changed),
-            ("yaw", "vr_overlay_yaw", -90, 90, self._on_vr_yaw_changed),
-            ("pitch", "vr_overlay_pitch", -60, 60, self._on_vr_pitch_changed),
-        ):
-            geometry_row = QHBoxLayout()
-            geometry_row.setSpacing(10)
-            geometry_label = QLabel(self._copy(label_key))
-            geometry_label.setObjectName("fieldLabel")
-            geometry_label.setMinimumWidth(170)
-            geometry_row.addWidget(geometry_label)
-            slider = QSlider()
-            slider.setOrientation(Qt.Orientation.Horizontal)
-            slider.setRange(minimum, maximum)
-            slider.setValue(self._vr_geometry_slider_value(attr))
-            slider.valueChanged.connect(handler)
-            geometry_row.addWidget(slider, 1)
-            value_label = QLabel("")
-            geometry_row.addWidget(value_label)
-            layout.addLayout(geometry_row)
-            setattr(self, f"_vr_{attr}_slider", slider)
-            setattr(self, f"_vr_{attr}_value", value_label)
-        geometry_hint = QLabel(self._copy("vr_overlay_geometry_hint"))
-        geometry_hint.setObjectName("hintLabel")
-        geometry_hint.setWordWrap(True)
-        layout.addWidget(geometry_hint)
-
-        reset_row = QHBoxLayout()
-        reset_row.setSpacing(10)
-        reset_row.addStretch(1)
-        preset_row = QHBoxLayout()
-        preset_row.setSpacing(10)
-        preset_label = QLabel(self._copy("vr_overlay_size_presets"))
-        preset_label.setObjectName("fieldLabel")
-        preset_label.setMinimumWidth(170)
-        preset_row.addWidget(preset_label)
-        self._vr_preset_buttons = {}
-        for key, label_key in (
-            ("small", "vr_overlay_size_small"),
-            ("medium", "vr_overlay_size_medium"),
-            ("large", "vr_overlay_size_large"),
-            ("xlarge", "vr_overlay_size_xlarge"),
-        ):
-            button = QPushButton(self._copy(label_key))
-            button.setObjectName("secondaryButton")
-            button.setMinimumHeight(32)
-            button.clicked.connect(lambda _checked=False, k=key: self._on_vr_size_preset(k))
-            preset_row.addWidget(button, 1)
-            self._vr_preset_buttons[key] = button
-        layout.addLayout(preset_row)
-
-        self._vr_move_button = QPushButton(self._copy("vr_overlay_move_button"))
-        self._vr_move_button.setObjectName("secondaryButton")
-        self._vr_move_button.setMinimumHeight(32)
-        self._vr_move_button.clicked.connect(self._on_vr_move_panel)
-        layout.addWidget(self._vr_move_button)
-        move_hint = QLabel(self._copy("vr_overlay_move_hint"))
-        move_hint.setObjectName("hintLabel")
-        move_hint.setWordWrap(True)
-        layout.addWidget(move_hint)
-
-        self._vr_overlay_locked_check = self._check("vr_overlay_locked", self._vr_overlay_locked_var)
-        self._vr_overlay_locked_check.toggled.connect(self._on_vr_overlay_locked_toggled)
-        self._row_layout(layout, self._copy("vr_overlay_locked"), self._vr_overlay_locked_check)
-        locked_hint = QLabel(self._copy("vr_overlay_locked_hint"))
-        locked_hint.setObjectName("hintLabel")
-        locked_hint.setWordWrap(True)
-        layout.addWidget(locked_hint)
-
-        self._vr_dashboard_check = self._check("vr_dashboard", self._vr_dashboard_enabled_var)
-        self._vr_dashboard_check.toggled.connect(self._on_vr_dashboard_toggled)
-        self._row_layout(layout, self._copy("vr_dashboard_enabled"), self._vr_dashboard_check)
-        dash_hint = QLabel(self._copy("vr_dashboard_hint"))
-        dash_hint.setObjectName("hintLabel")
-        dash_hint.setWordWrap(True)
-        layout.addWidget(dash_hint)
-
-        self._vr_wrist_check = self._check("vr_wrist", self._vr_wrist_enabled_var)
-        self._vr_wrist_check.toggled.connect(self._on_vr_wrist_toggled)
-        self._row_layout(layout, self._copy("vr_wrist_enabled"), self._vr_wrist_check)
-        self._vr_wrist_hand_combo = self._combo(
-            "vr_wrist_hand",
-            self._vr_wrist_hand_var,
-            list(self._screenshot_hand_codes.keys()),
-            self._on_vr_wrist_hand_changed,
-        )
-        self._row_layout(layout, self._copy("vr_wrist_hand"), self._vr_wrist_hand_combo)
-        self._vr_wrist_show_combo = self._combo(
-            "vr_wrist_show_mode",
-            self._vr_wrist_show_mode_var,
-            list(self._vr_wrist_show_codes.keys()),
-            self._on_vr_wrist_show_mode_changed,
-        )
-        self._row_layout(layout, self._copy("vr_wrist_show_mode"), self._vr_wrist_show_combo)
-        wrist_hint = QLabel(self._copy("vr_wrist_hint"))
-        wrist_hint.setObjectName("hintLabel")
-        wrist_hint.setWordWrap(True)
-        layout.addWidget(wrist_hint)
-
-        self._vr_gesture_check = self._check("vr_gesture", self._vr_gesture_enabled_var)
-        self._vr_gesture_check.toggled.connect(self._on_vr_gesture_toggled)
-        self._row_layout(layout, self._copy("vr_gesture_enabled"), self._vr_gesture_check)
-        gesture_hint = QLabel(self._copy("vr_gesture_hint"))
-        gesture_hint.setObjectName("hintLabel")
-        gesture_hint.setWordWrap(True)
-        layout.addWidget(gesture_hint)
-
-        self._vr_haptics_check = self._check("vr_feedback_haptics", self._vr_feedback_haptics_var)
-        self._vr_haptics_check.toggled.connect(self._on_vr_feedback_haptics_toggled)
-        self._row_layout(layout, self._copy("vr_feedback_haptics"), self._vr_haptics_check)
-        self._vr_sounds_check = self._check("vr_feedback_sounds", self._vr_feedback_sounds_var)
-        self._vr_sounds_check.toggled.connect(self._on_vr_feedback_sounds_toggled)
-        self._row_layout(layout, self._copy("vr_feedback_sounds"), self._vr_sounds_check)
-        volume_row = QHBoxLayout()
-        volume_row.setSpacing(10)
-        volume_label = QLabel(self._copy("vr_feedback_volume"))
-        volume_label.setObjectName("fieldLabel")
-        volume_label.setMinimumWidth(170)
-        volume_row.addWidget(volume_label)
-        self._vr_volume_slider = QSlider()
-        self._vr_volume_slider.setOrientation(Qt.Orientation.Horizontal)
-        self._vr_volume_slider.setRange(0, 100)
-        self._vr_volume_slider.setValue(int(round(self._vr_feedback_volume * 100)))
-        self._vr_volume_slider.valueChanged.connect(self._on_vr_feedback_volume_changed)
-        volume_row.addWidget(self._vr_volume_slider, 1)
-        self._vr_volume_value = QLabel("")
-        volume_row.addWidget(self._vr_volume_value)
-        layout.addLayout(volume_row)
-        feedback_hint = QLabel(self._copy("vr_feedback_hint"))
-        feedback_hint.setObjectName("hintLabel")
-        feedback_hint.setWordWrap(True)
-        layout.addWidget(feedback_hint)
-
-        self._push_to_talk_check = self._check("vr_push_to_talk", self._push_to_talk_var)
-        self._push_to_talk_check.toggled.connect(self._on_push_to_talk_toggled)
-        self._row_layout(layout, self._copy("vr_push_to_talk"), self._push_to_talk_check)
-        ptt_hint = QLabel(self._copy("vr_push_to_talk_hint"))
-        ptt_hint.setObjectName("hintLabel")
-        ptt_hint.setWordWrap(True)
-        layout.addWidget(ptt_hint)
-        bindings_row = QHBoxLayout()
-        self._vr_bindings_button = QPushButton(self._copy("vr_open_bindings"))
-        self._vr_bindings_button.setObjectName("secondaryButton")
-        self._vr_bindings_button.clicked.connect(self._on_open_vr_bindings)
-        bindings_row.addWidget(self._vr_bindings_button)
-        self._vr_bindings_status = QLabel("")
-        self._vr_bindings_status.setObjectName("hintLabel")
-        self._vr_bindings_status.setWordWrap(True)
-        bindings_row.addWidget(self._vr_bindings_status, 1)
-        layout.addLayout(bindings_row)
-
-        self._block_game_input_check = self._check("vr_block_game_input", self._block_game_input_var)
-        self._block_game_input_check.toggled.connect(self._on_block_game_input_toggled)
-        self._row_layout(layout, self._copy("vr_block_game_input"), self._block_game_input_check)
-        block_hint = QLabel(self._copy("vr_block_game_input_hint"))
-        block_hint.setObjectName("hintLabel")
-        block_hint.setWordWrap(True)
-        layout.addWidget(block_hint)
-        self._trigger_threshold_slider, self._trigger_threshold_value = self._value_slider(
-            layout, "vr_trigger_threshold", 5, 100,
-            int(round(self._trigger_threshold * 100)), self._on_trigger_threshold_changed,
-        )
-        self._grip_threshold_slider, self._grip_threshold_value = self._value_slider(
-            layout, "vr_grip_threshold", 5, 100,
-            int(round(self._grip_threshold * 100)), self._on_grip_threshold_changed,
-        )
-        thresholds_hint = QLabel(self._copy("vr_thresholds_hint"))
-        thresholds_hint.setObjectName("hintLabel")
-        thresholds_hint.setWordWrap(True)
-        layout.addWidget(thresholds_hint)
-        self._swap_trigger_grip_check = self._check("vr_swap_trigger_grip", self._swap_trigger_grip_var)
-        self._swap_trigger_grip_check.toggled.connect(self._on_swap_trigger_grip_toggled)
-        self._row_layout(layout, self._copy("vr_swap_trigger_grip"), self._swap_trigger_grip_check)
-
-        self._thumbrest_action_combo = self._combo(
-            "vr_thumbrest_action",
-            self._thumbrest_action_var,
-            list(self._thumbrest_action_codes.keys()),
-            self._on_thumbrest_action_changed,
-        )
-        self._row_layout(layout, self._copy("vr_thumbrest_action"), self._thumbrest_action_combo)
-        self._thumbrest_taps_slider, self._thumbrest_taps_value = self._value_slider(
-            layout, "vr_thumbrest_taps", 2, 6, self._thumbrest_taps, self._on_thumbrest_taps_changed,
-        )
-        thumbrest_hint = QLabel(self._copy("vr_thumbrest_hint"))
-        thumbrest_hint.setObjectName("hintLabel")
-        thumbrest_hint.setWordWrap(True)
-        layout.addWidget(thumbrest_hint)
-        sounds_row = QHBoxLayout()
-        self._custom_sounds_button = QPushButton(self._copy("vr_custom_sounds"))
-        self._custom_sounds_button.setObjectName("secondaryButton")
-        self._custom_sounds_button.clicked.connect(self._on_open_custom_sounds)
-        sounds_row.addWidget(self._custom_sounds_button)
-        sounds_row.addStretch(1)
-        layout.addLayout(sounds_row)
-        sounds_hint = QLabel(self._copy("vr_custom_sounds_hint"))
-        sounds_hint.setObjectName("hintLabel")
-        sounds_hint.setWordWrap(True)
-        layout.addWidget(sounds_hint)
-
-        self._section_title(layout, self._copy("vr_panels_section"))
-        panels_hint = QLabel(self._copy("vr_panels_two_hand_hint"))
-        panels_hint.setObjectName("hintLabel")
-        panels_hint.setWordWrap(True)
-        layout.addWidget(panels_hint)
-        self._panel_preset_combo = self._combo(
-            "vr_panels_preset",
-            self._panel_preset_var,
-            list(self._panel_preset_codes.keys()),
-            self._on_panel_preset_changed,
-        )
-        self._row_layout(layout, self._copy("vr_panels_preset"), self._panel_preset_combo)
-        self._panel_opacity_slider, self._panel_opacity_value = self._value_slider(
-            layout, "vr_panels_opacity", 30, 100,
-            int(round(self._panel_opacity * 100)), self._on_panel_opacity_changed,
-        )
-        self._panel_width_slider, self._panel_width_value = self._value_slider(
-            layout, "vr_panels_default_width", 28, 70,
-            int(round(self._panel_default_width * 100)), self._on_panel_width_changed,
-        )
-        for key, label_key in (
-            ("tooltips", "vr_panels_tooltips"),
-            ("show_time", "vr_panels_show_time"),
-            ("same_hand_gather", "vr_panels_same_hand_gather"),
-        ):
-            check = self._check(f"vr_panels_{key}", self._panel_flag_vars[key])
-            check.toggled.connect(lambda enabled, k=key: self._on_panel_flag_toggled(k, enabled))
-            self._row_layout(layout, self._copy(label_key), check)
-        for key, label_key in (
-            ("two_hand_left", "vr_panels_two_hand_left"),
-            ("two_hand_right", "vr_panels_two_hand_right"),
-        ):
-            combo = self._combo(
-                f"vr_panels_{key}",
-                self._two_hand_vars[key],
-                list(self._two_hand_codes.keys()),
-                lambda _label, k=key: self._on_two_hand_changed(k),
-            )
-            self._row_layout(layout, self._copy(label_key), combo)
-
-        self._steamvr_autolaunch_check = self._check("steamvr_autolaunch", self._steamvr_autolaunch_var)
-        self._steamvr_autolaunch_check.toggled.connect(self._on_steamvr_autolaunch_toggled)
-        self._row_layout(
-            layout, self._copy("steamvr_autolaunch_enabled"), self._steamvr_autolaunch_check
-        )
-        autolaunch_hint = QLabel(self._copy("steamvr_autolaunch_hint"))
-        autolaunch_hint.setObjectName("hintLabel")
-        autolaunch_hint.setWordWrap(True)
-        layout.addWidget(autolaunch_hint)
-
-        self._vr_reset_button = QPushButton(self._copy("vr_overlay_reset_position"))
-        self._vr_reset_button.setObjectName("secondaryButton")
-        self._vr_reset_button.clicked.connect(self._on_vr_reset_position)
-        reset_row.addWidget(self._vr_reset_button)
-        layout.addLayout(reset_row)
-
-        self._build_screenshot_section(layout)
-
-        self._refresh_vr_overlay_labels()
-        self._refresh_vr_overlay_controls()
-
-    def _build_screenshot_section(self, layout: QVBoxLayout) -> None:
-        """Translate what is on screen with one controller button."""
-
-        self._section_title(layout, self._copy("screenshot_section"))
-
-        guide = QLabel(self._copy("screenshot_guide"))
-        guide.setObjectName("hintLabel")
-        guide.setWordWrap(True)
-        layout.addWidget(guide)
-
-        self._screenshot_check = self._check(
-            "screenshot_enabled", self._screenshot_enabled_var
-        )
-        self._screenshot_check.toggled.connect(self._on_screenshot_toggled)
-        self._row_layout(
-            layout, self._copy("screenshot_enabled"), self._screenshot_check
-        )
-
-        self._screenshot_frame_gesture_check = self._check(
-            "screenshot_frame_gesture", self._screenshot_frame_gesture_var
-        )
-        self._screenshot_frame_gesture_check.toggled.connect(self._on_screenshot_frame_gesture_toggled)
-        self._row_layout(
-            layout, self._copy("screenshot_frame_gesture"), self._screenshot_frame_gesture_check
-        )
-        frame_hint = QLabel(self._copy("screenshot_frame_gesture_hint"))
-        frame_hint.setObjectName("hintLabel")
-        frame_hint.setWordWrap(True)
-        layout.addWidget(frame_hint)
-        self._screenshot_auto_translate_check = self._check(
-            "screenshot_auto_translate", self._screenshot_auto_translate_var
-        )
-        self._screenshot_auto_translate_check.toggled.connect(self._on_screenshot_auto_translate_toggled)
-        self._row_layout(
-            layout, self._copy("screenshot_auto_translate"), self._screenshot_auto_translate_check
-        )
-        still_row = QHBoxLayout()
-        still_row.setSpacing(10)
-        still_label = QLabel(self._copy("screenshot_still_seconds"))
-        still_label.setObjectName("fieldLabel")
-        still_label.setMinimumWidth(170)
-        still_row.addWidget(still_label)
-        self._screenshot_still_slider = QSlider()
-        self._screenshot_still_slider.setOrientation(Qt.Orientation.Horizontal)
-        # Tenths of a second.
-        self._screenshot_still_slider.setRange(2, 30)
-        self._screenshot_still_slider.setValue(int(round(self._screenshot_still_seconds * 10)))
-        self._screenshot_still_slider.valueChanged.connect(self._on_screenshot_still_changed)
-        still_row.addWidget(self._screenshot_still_slider, 1)
-        self._screenshot_still_value = QLabel("")
-        still_row.addWidget(self._screenshot_still_value)
-        layout.addLayout(still_row)
-
-        self._screenshot_view_eye_combo = self._combo(
-            "screenshot_view_eye",
-            self._screenshot_view_eye_var,
-            list(self._screenshot_view_eye_codes.keys()),
-            self._on_screenshot_view_eye_changed,
-        )
-        self._row_layout(layout, self._copy("screenshot_view_eye"), self._screenshot_view_eye_combo)
-        eye_hint = QLabel(self._copy("screenshot_view_eye_hint"))
-        eye_hint.setObjectName("hintLabel")
-        eye_hint.setWordWrap(True)
-        layout.addWidget(eye_hint)
-        self._gesture_sensitivity_slider, self._gesture_sensitivity_value = self._value_slider(
-            layout, "screenshot_gesture_sensitivity", 0, 100,
-            int(round(self._gesture_sensitivity * 100)), self._on_gesture_sensitivity_changed,
-        )
-        self._frame_arm_slider, self._frame_arm_value = self._value_slider(
-            layout, "screenshot_frame_arm", 1, 10,
-            int(round(self._frame_arm_seconds * 10)), self._on_frame_arm_changed,
-        )
-        self._frame_release_slider, self._frame_release_value = self._value_slider(
-            layout, "screenshot_frame_release", 1, 10,
-            int(round(self._frame_release_seconds * 10)), self._on_frame_release_changed,
-        )
-        self._screenshot_quick_frame_check = self._check(
-            "screenshot_quick_frame", self._screenshot_quick_frame_var
-        )
-        self._screenshot_quick_frame_check.toggled.connect(self._on_screenshot_quick_frame_toggled)
-        self._row_layout(
-            layout, self._copy("screenshot_quick_frame"), self._screenshot_quick_frame_check
-        )
-        quick_hint = QLabel(self._copy("screenshot_quick_frame_hint"))
-        quick_hint.setObjectName("hintLabel")
-        quick_hint.setWordWrap(True)
-        layout.addWidget(quick_hint)
-
-        self._shot_flag_checks = {}
-        for key, label_key in (
-            ("stick_scaling", "screenshot_stick_scaling"),
-            ("match_colors", "screenshot_match_colors"),
-            ("recognize_only", "screenshot_recognize_only"),
-            ("ignore_line_breaks", "screenshot_ignore_line_breaks"),
-            ("auto_copy", "screenshot_auto_copy"),
-            ("scan_codes", "screenshot_scan_codes"),
-        ):
-            check = self._check(f"screenshot_{key}", self._shot_flag_vars[key])
-            check.toggled.connect(lambda enabled, k=key: self._on_screenshot_flag_toggled(k, enabled))
-            self._row_layout(layout, self._copy(label_key), check)
-            self._shot_flag_checks[key] = check
-
-        self._screenshot_hand_combo = self._combo(
-            "screenshot_hand",
-            self._screenshot_hand_var,
-            list(self._screenshot_hand_codes.keys()),
-            self._on_screenshot_hand_changed,
-        )
-        self._row_layout(
-            layout, self._copy("screenshot_hand"), self._screenshot_hand_combo
-        )
-
-        self._screenshot_placement_combo = self._combo(
-            "screenshot_placement",
-            self._screenshot_placement_var,
-            list(self._screenshot_placement_codes.keys()),
-            self._on_screenshot_placement_changed,
-        )
-        self._row_layout(
-            layout, self._copy("screenshot_placement"), self._screenshot_placement_combo
-        )
-
-        self._screenshot_selection_check = self._check(
-            "screenshot_selection", self._screenshot_selection_var
-        )
-        self._screenshot_selection_check.toggled.connect(self._on_screenshot_selection_toggled)
-        self._row_layout(
-            layout, self._copy("screenshot_selection_mode"), self._screenshot_selection_check
-        )
-
-        self._ocr_gpu_check = self._check("screenshot_ocr_gpu", self._ocr_gpu_var)
-        self._ocr_gpu_check.toggled.connect(self._on_ocr_gpu_toggled)
-        self._row_layout(layout, self._copy("screenshot_ocr_gpu"), self._ocr_gpu_check)
-        gpu_hint = QLabel(self._copy("screenshot_ocr_gpu_hint"))
-        gpu_hint.setObjectName("hintLabel")
-        gpu_hint.setWordWrap(True)
-        layout.addWidget(gpu_hint)
-
-        depth_row = QHBoxLayout()
-        depth_row.setSpacing(10)
-        depth_label = QLabel(self._copy("screenshot_depth"))
-        depth_label.setObjectName("fieldLabel")
-        depth_label.setMinimumWidth(170)
-        depth_row.addWidget(depth_label)
-        self._screenshot_depth_slider = QSlider()
-        self._screenshot_depth_slider.setOrientation(Qt.Orientation.Horizontal)
-        self._screenshot_depth_slider.setRange(80, 500)
-        self._screenshot_depth_slider.setValue(int(round(self._screenshot_depth * 100)))
-        self._screenshot_depth_slider.valueChanged.connect(self._on_screenshot_depth_changed)
-        depth_row.addWidget(self._screenshot_depth_slider, 1)
-        self._screenshot_depth_value = QLabel("")
-        depth_row.addWidget(self._screenshot_depth_value)
-        layout.addLayout(depth_row)
-
-        hide_row = QHBoxLayout()
-        hide_row.setSpacing(10)
-        hide_label = QLabel(self._copy("screenshot_auto_hide"))
-        hide_label.setObjectName("fieldLabel")
-        hide_label.setMinimumWidth(170)
-        hide_row.addWidget(hide_label)
-        self._screenshot_auto_hide_slider = QSlider()
-        self._screenshot_auto_hide_slider.setOrientation(Qt.Orientation.Horizontal)
-        # Tenths of a second, half a second to a minute.
-        self._screenshot_auto_hide_slider.setRange(5, 600)
-        self._screenshot_auto_hide_slider.setValue(int(round(self._screenshot_auto_hide * 10)))
-        self._screenshot_auto_hide_slider.valueChanged.connect(self._on_screenshot_auto_hide_changed)
-        hide_row.addWidget(self._screenshot_auto_hide_slider, 1)
-        self._screenshot_auto_hide_value = QLabel("")
-        hide_row.addWidget(self._screenshot_auto_hide_value)
-        layout.addLayout(hide_row)
-        hide_hint = QLabel(self._copy("screenshot_auto_hide_hint"))
-        hide_hint.setObjectName("hintLabel")
-        hide_hint.setWordWrap(True)
-        layout.addWidget(hide_hint)
-
-        self._row_layout(
-            layout,
-            self._copy("screenshot_hotkey"),
-            self._line_edit("screenshot_hk", self._screenshot_hotkey_var, 220),
-        )
-        self._refresh_screenshot_labels()
-
-        status = QLabel(self._screenshot_language_text())
-        status.setObjectName("hintLabel")
-        status.setWordWrap(True)
-        self._screenshot_language_label = status
-        layout.addWidget(status)
-
-        binding = QLabel("")
-        binding.setObjectName("hintLabel")
-        binding.setWordWrap(True)
-        binding.setVisible(False)
-        self._screenshot_binding_label = binding
-        layout.addWidget(binding)
-
-        self._refresh_screenshot_controls()
-
-    def _screenshot_language_text(self) -> str:
-        """Say which recognizers Windows has, because it decides what works."""
-
-        try:
-            from src.core.local_ocr import local_ocr_available
-
-            if local_ocr_available():
-                return self._copy("screenshot_local_ocr_ready")
-        except Exception:
-            pass
-        try:
-            from src.core.screen_ocr import available_ocr_languages, ocr_runtime_available
-
-            if not ocr_runtime_available():
-                return self._copy("screenshot_runtime_missing")
-            languages = available_ocr_languages()
-        except Exception:
-            languages = []
-        if not languages:
-            return self._copy("screenshot_no_languages")
-        return self._copy("screenshot_languages", languages=", ".join(languages))
-
-    def _refresh_screenshot_controls(self) -> None:
-        enabled = self._screenshot_enabled_var.value()
-        for widget in (
-            getattr(self, "_screenshot_hand_combo", None),
-            getattr(self, "_screenshot_placement_combo", None),
-            getattr(self, "_screenshot_selection_check", None),
-            getattr(self, "_screenshot_depth_slider", None),
-            getattr(self, "_ocr_gpu_check", None),
-            getattr(self, "_screenshot_frame_gesture_check", None),
-        ):
-            if widget is not None:
-                widget.setEnabled(enabled)
-        framing = enabled and self._screenshot_frame_gesture_var.value()
-        auto_check = getattr(self, "_screenshot_auto_translate_check", None)
-        if auto_check is not None:
-            auto_check.setEnabled(framing)
-        for attr in (
-            "_gesture_sensitivity_slider",
-            "_frame_arm_slider",
-            "_frame_release_slider",
-            "_screenshot_quick_frame_check",
-        ):
-            widget = getattr(self, attr, None)
-            if widget is not None:
-                widget.setEnabled(framing)
-        eye_combo = getattr(self, "_screenshot_view_eye_combo", None)
-        if eye_combo is not None:
-            eye_combo.setEnabled(enabled)
-        still_slider = getattr(self, "_screenshot_still_slider", None)
-        if still_slider is not None:
-            still_slider.setEnabled(framing and self._screenshot_auto_translate_var.value())
-
-    def _refresh_screenshot_labels(self) -> None:
-        depth_value = getattr(self, "_screenshot_depth_value", None)
-        if depth_value is not None:
-            depth_value.setText(
-                self._copy(
-                    "screenshot_depth_value",
-                    value=format_locale_number(
-                        self._screenshot_depth, self._ui_lang, decimals=1
-                    ),
-                )
-            )
-        hide_value = getattr(self, "_screenshot_auto_hide_value", None)
-        if hide_value is not None:
-            hide_value.setText(
-                self._copy(
-                    "screenshot_auto_hide_value",
-                    value=format_locale_number(
-                        self._screenshot_auto_hide, self._ui_lang, decimals=1
-                    ),
-                )
-            )
-        still_value = getattr(self, "_screenshot_still_value", None)
-        if still_value is not None:
-            still_value.setText(
-                self._copy(
-                    "screenshot_auto_hide_value",
-                    value=format_locale_number(
-                        self._screenshot_still_seconds, self._ui_lang, decimals=1
-                    ),
-                )
-            )
-        taps_value = getattr(self, "_thumbrest_taps_value", None)
-        if taps_value is not None:
-            taps_value.setText(format_locale_number(self._thumbrest_taps, self._ui_lang, decimals=0))
-        width_value = getattr(self, "_panel_width_value", None)
-        if width_value is not None:
-            width_value.setText(
-                self._copy(
-                    "vr_overlay_width_value",
-                    value=format_locale_number(self._panel_default_width, self._ui_lang, decimals=2),
-                )
-            )
-        for attr, value in (
-            ("_gesture_sensitivity_value", self._gesture_sensitivity),
-            ("_trigger_threshold_value", self._trigger_threshold),
-            ("_grip_threshold_value", self._grip_threshold),
-            ("_panel_opacity_value", self._panel_opacity),
-        ):
-            label = getattr(self, attr, None)
-            if label is not None:
-                label.setText(format_locale_percent(value * 100, self._ui_lang))
-        for attr, seconds in (
-            ("_frame_arm_value", self._frame_arm_seconds),
-            ("_frame_release_value", self._frame_release_seconds),
-        ):
-            label = getattr(self, attr, None)
-            if label is not None:
-                label.setText(
-                    self._copy(
-                        "screenshot_auto_hide_value",
-                        value=format_locale_number(seconds, self._ui_lang, decimals=1),
-                    )
-                )
-        volume_value = getattr(self, "_vr_volume_value", None)
-        if volume_value is not None:
-            volume_value.setText(
-                self._copy("vr_feedback_volume_value", value=int(round(self._vr_feedback_volume * 100)))
-            )
-
-    def _on_screenshot_frame_gesture_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["frame_gesture"] = bool(enabled)
-        self._refresh_screenshot_controls()
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_auto_translate_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["auto_translate"] = bool(enabled)
-        self._refresh_screenshot_controls()
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_still_changed(self, value: int) -> None:
-        self._screenshot_still_seconds = max(0.2, min(3.0, float(value) / 10.0))
-        self._screenshot_config()["still_seconds"] = self._screenshot_still_seconds
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _value_slider(self, layout, label_key: str, minimum: int, maximum: int, value: int, handler):
-        """A labelled horizontal slider with its value shown on the right."""
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        label = QLabel(self._copy(label_key))
-        label.setObjectName("fieldLabel")
-        label.setMinimumWidth(170)
-        row.addWidget(label)
-        slider = QSlider()
-        slider.setOrientation(Qt.Orientation.Horizontal)
-        slider.setRange(minimum, maximum)
-        slider.setValue(max(minimum, min(maximum, int(value))))
-        slider.valueChanged.connect(handler)
-        row.addWidget(slider, 1)
-        value_label = QLabel("")
-        row.addWidget(value_label)
-        layout.addLayout(row)
-        return slider, value_label
-
-    def _vr_controls_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        cfg = listen_cfg.setdefault("vr_controls", {})
-        if not isinstance(cfg, dict):
-            cfg = {}
-            listen_cfg["vr_controls"] = cfg
-        return cfg
-
-    def _vr_panels_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        cfg = listen_cfg.setdefault("vr_panels", {})
-        if not isinstance(cfg, dict):
-            cfg = {}
-            listen_cfg["vr_panels"] = cfg
-        return cfg
-
-    def _on_screenshot_flag_toggled(self, key: str, enabled: bool) -> None:
-        self._screenshot_config()[key] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_thumbrest_action_changed(self, _label: str) -> None:
-        code = self._thumbrest_action_codes.get(self._thumbrest_action_var.value(), "frame_gesture")
-        self._vr_controls_config()["thumbrest_action"] = code
-        self._notify_vr_overlay_changed()
-
-    def _on_thumbrest_taps_changed(self, value: int) -> None:
-        self._thumbrest_taps = max(2, min(6, int(value)))
-        self._vr_controls_config()["thumbrest_taps"] = self._thumbrest_taps
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_open_custom_sounds(self) -> None:
-        owner = self._owner_window()
-        finder = getattr(owner, "custom_cue_sound_dir", None)
-        folder = finder() if callable(finder) else None
-        if folder is not None:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
-
-    def _on_panel_preset_changed(self, _label: str) -> None:
-        self._vr_panels_config()["color_preset"] = self._panel_preset_codes.get(
-            self._panel_preset_var.value(), "default"
-        )
-        self._notify_vr_overlay_changed()
-
-    def _on_panel_opacity_changed(self, value: int) -> None:
-        self._panel_opacity = max(0.3, min(1.0, float(value) / 100.0))
-        self._vr_panels_config()["opacity"] = self._panel_opacity
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_panel_width_changed(self, value: int) -> None:
-        self._panel_default_width = max(0.28, min(0.7, float(value) / 100.0))
-        self._vr_panels_config()["default_width"] = self._panel_default_width
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_panel_flag_toggled(self, key: str, enabled: bool) -> None:
-        self._vr_panels_config()[key] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_two_hand_changed(self, key: str) -> None:
-        default = "page_prev" if key == "two_hand_left" else "next_or_close"
-        self._vr_panels_config()[key] = self._two_hand_codes.get(self._two_hand_vars[key].value(), default)
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_view_eye_changed(self, _label: str) -> None:
-        code = self._screenshot_view_eye_codes.get(self._screenshot_view_eye_var.value(), "right")
-        self._screenshot_config()["view_eye"] = code
-        self._notify_vr_overlay_changed()
-
-    def _on_gesture_sensitivity_changed(self, value: int) -> None:
-        self._gesture_sensitivity = max(0.0, min(1.0, float(value) / 100.0))
-        self._screenshot_config()["gesture_sensitivity"] = self._gesture_sensitivity
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_frame_arm_changed(self, value: int) -> None:
-        self._frame_arm_seconds = max(0.1, min(1.0, float(value) / 10.0))
-        self._screenshot_config()["frame_arm_seconds"] = self._frame_arm_seconds
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_frame_release_changed(self, value: int) -> None:
-        self._frame_release_seconds = max(0.1, min(1.0, float(value) / 10.0))
-        self._screenshot_config()["frame_release_seconds"] = self._frame_release_seconds
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_quick_frame_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["quick_frame"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_block_game_input_toggled(self, enabled: bool) -> None:
-        self._vr_controls_config()["block_game_input"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_swap_trigger_grip_toggled(self, enabled: bool) -> None:
-        self._vr_controls_config()["swap_trigger_grip"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_trigger_threshold_changed(self, value: int) -> None:
-        self._trigger_threshold = max(0.05, min(1.0, float(value) / 100.0))
-        self._vr_controls_config()["trigger_threshold"] = self._trigger_threshold
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_grip_threshold_changed(self, value: int) -> None:
-        self._grip_threshold = max(0.05, min(1.0, float(value) / 100.0))
-        self._vr_controls_config()["grip_threshold"] = self._grip_threshold
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _vr_feedback_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        cfg = listen_cfg.setdefault("vr_feedback", {})
-        if not isinstance(cfg, dict):
-            cfg = {}
-            listen_cfg["vr_feedback"] = cfg
-        return cfg
-
-    def _on_vr_feedback_haptics_toggled(self, enabled: bool) -> None:
-        self._vr_feedback_config()["haptics"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_feedback_sounds_toggled(self, enabled: bool) -> None:
-        self._vr_feedback_config()["sounds"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_feedback_volume_changed(self, value: int) -> None:
-        self._vr_feedback_volume = max(0.0, min(1.0, float(value) / 100.0))
-        self._vr_feedback_config()["volume"] = self._vr_feedback_volume
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_push_to_talk_toggled(self, enabled: bool) -> None:
-        audio_cfg = self._config.setdefault("audio", {})
-        if isinstance(audio_cfg, dict):
-            audio_cfg["push_to_talk"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_open_vr_bindings(self) -> None:
-        owner = self._owner_window()
-        opener = getattr(owner, "open_vr_binding_ui", None)
-        opened = False
-        if callable(opener):
-            try:
-                opened = bool(opener())
-            except Exception:
-                logger.debug("Could not open the SteamVR binding page", exc_info=True)
-        status = getattr(self, "_vr_bindings_status", None)
-        if status is not None:
-            status.setText("" if opened else self._copy("vr_open_bindings_failed"))
-
-    def _on_vr_wrist_show_mode_changed(self, _label: str) -> None:
-        code = self._vr_wrist_show_codes.get(self._vr_wrist_show_mode_var.value(), "twist")
-        self._vr_wrist_config()["show_mode"] = code
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_placement_changed(self, _label: str) -> None:
-        code = self._screenshot_placement_codes.get(
-            self._screenshot_placement_var.value(), "panel"
-        )
-        self._screenshot_config()["placement"] = code
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_selection_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["selection_mode"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_ocr_gpu_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["ocr_gpu"] = bool(enabled)
-        try:
-            from src.core.local_ocr import set_gpu_preference
-
-            set_gpu_preference(bool(enabled))
-        except Exception:
-            logger.debug("Could not apply the OCR GPU preference", exc_info=True)
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_depth_changed(self, value: int) -> None:
-        self._screenshot_depth = max(0.8, min(5.0, float(value) / 100.0))
-        self._screenshot_config()["depth_meters"] = self._screenshot_depth
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_auto_hide_changed(self, value: int) -> None:
-        self._screenshot_auto_hide = max(0.5, min(120.0, float(value) / 10.0))
-        self._screenshot_config()["auto_hide_seconds"] = self._screenshot_auto_hide
-        self._refresh_screenshot_labels()
-        self._notify_vr_overlay_changed()
-
-    def _screenshot_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        cfg = listen_cfg.setdefault("screenshot_translation", {})
-        if not isinstance(cfg, dict):
-            cfg = {}
-            listen_cfg["screenshot_translation"] = cfg
-        return cfg
-
-    def _on_screenshot_toggled(self, enabled: bool) -> None:
-        self._screenshot_config()["enabled"] = bool(enabled)
-        self._refresh_screenshot_controls()
-        self._notify_vr_overlay_changed()
-
-    def _on_screenshot_hand_changed(self, _label: str) -> None:
-        code = self._screenshot_hand_codes.get(self._screenshot_hand_var.value(), "left")
-        self._screenshot_config()["hand"] = code
-        self._notify_vr_overlay_changed()
-
     # ------------------------------------------------------------ VR handlers
-    def _vr_overlay_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        vr_cfg = listen_cfg.setdefault("vr_overlay", {})
-        if not isinstance(vr_cfg, dict):
-            vr_cfg = {}
-            listen_cfg["vr_overlay"] = vr_cfg
-        return vr_cfg
 
-    def _notify_vr_overlay_changed(self) -> None:
-        owner = self._owner_window()
-        notifier = getattr(owner, "on_vr_overlay_settings_changed", None)
-        if callable(notifier):
-            try:
-                notifier()
-            except Exception:
-                logger.debug("VR overlay change notification failed", exc_info=True)
 
     def _owner_window(self):
         return self.parent()
-
-    def _refresh_vr_overlay_labels(self) -> None:
-        self._vr_width_value.setText(
-            self._copy(
-                "vr_overlay_width_value",
-                value=format_locale_number(
-                    self._vr_overlay_width, self._ui_lang, decimals=2
-                ),
-            )
-        )
-        self._vr_opacity_value.setText(
-            format_locale_percent(self._vr_overlay_opacity * 100, self._ui_lang)
-        )
-        font_value = getattr(self, "_vr_font_value", None)
-        if font_value is not None:
-            font_value.setText(format_locale_percent(self._vr_overlay_font_scale * 100, self._ui_lang))
-        distance_value = getattr(self, "_vr_distance_value", None)
-        if distance_value is not None:
-            distance_value.setText(
-                self._copy(
-                    "vr_overlay_width_value",
-                    value=format_locale_number(self._vr_overlay_distance, self._ui_lang, decimals=1),
-                )
-            )
-        for attr, degrees in (("yaw", self._vr_overlay_yaw), ("pitch", self._vr_overlay_pitch)):
-            value_label = getattr(self, f"_vr_{attr}_value", None)
-            if value_label is not None:
-                value_label.setText(
-                    self._copy(
-                        "vr_overlay_angle_value",
-                        value=format_locale_number(degrees, self._ui_lang, decimals=0),
-                    )
-                )
-
-    def _refresh_vr_overlay_controls(self) -> None:
-        enabled = self._vr_overlay_enabled_var.value()
-        for widget in (
-            getattr(self, "_vr_width_slider", None),
-            getattr(self, "_vr_opacity_slider", None),
-            getattr(self, "_vr_font_slider", None),
-            getattr(self, "_vr_speaker_marks_check", None),
-            getattr(self, "_vr_distance_slider", None),
-            getattr(self, "_vr_yaw_slider", None),
-            getattr(self, "_vr_pitch_slider", None),
-            getattr(self, "_vr_reset_button", None),
-        ):
-            if widget is not None:
-                widget.setEnabled(enabled)
-        move_button = getattr(self, "_vr_move_button", None)
-        if move_button is not None:
-            # A locked panel is not dragged: the button would only refuse.
-            move_button.setEnabled(enabled and not self._vr_overlay_locked_var.value())
-
-    def _on_vr_overlay_toggled(self, enabled: bool) -> None:
-        self._vr_overlay_config()["enabled"] = bool(enabled)
-        self._refresh_vr_overlay_controls()
-        if not enabled:
-            self._vr_overlay_status_label.setVisible(False)
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_overlay_locked_toggled(self, locked: bool) -> None:
-        self._vr_overlay_config()["locked"] = bool(locked)
-        self._refresh_vr_overlay_controls()
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_width_changed(self, value: int) -> None:
-        self._vr_overlay_width = max(0.3, min(4.0, float(value) / 100.0))
-        self._vr_overlay_config()["width_meters"] = self._vr_overlay_width
-        self._refresh_vr_overlay_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_opacity_changed(self, value: int) -> None:
-        self._vr_overlay_opacity = max(0.0, min(0.95, float(value) / 100.0))
-        self._vr_overlay_config()["plate_opacity"] = self._vr_overlay_opacity
-        self._refresh_vr_overlay_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_font_scale_changed(self, value: int) -> None:
-        self._vr_overlay_font_scale = max(0.7, min(1.8, float(value) / 100.0))
-        self._vr_overlay_config()["font_scale"] = self._vr_overlay_font_scale
-        self._refresh_vr_overlay_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_speaker_marks_toggled(self, enabled: bool) -> None:
-        self._vr_overlay_config()["speaker_marks"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_reset_position(self) -> None:
-        self._vr_overlay_config()["position"] = [0.0, -0.32, -1.5]
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_size_preset(self, key: str) -> None:
-        from src.core.steamvr_overlay import SIZE_PRESETS
-
-        for preset_key, meters in SIZE_PRESETS:
-            if preset_key == key:
-                slider = getattr(self, "_vr_width_slider", None)
-                if slider is not None:
-                    # The slider handler stores the value and notifies.
-                    slider.setValue(int(round(meters * 100)))
-                else:
-                    self._vr_overlay_width = meters
-                    self._vr_overlay_config()["width_meters"] = meters
-                    self._refresh_vr_overlay_labels()
-                    self._notify_vr_overlay_changed()
-                return
-
-    def _on_vr_move_panel(self) -> None:
-        owner = self._owner_window()
-        starter = getattr(owner, "_begin_vr_edit_mode", None)
-        if callable(starter):
-            try:
-                starter()
-            except Exception:
-                logger.debug("Failed to start VR edit mode from settings", exc_info=True)
-
-    def _vr_dashboard_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        dash_cfg = listen_cfg.setdefault("vr_dashboard", {})
-        if not isinstance(dash_cfg, dict):
-            dash_cfg = {}
-            listen_cfg["vr_dashboard"] = dash_cfg
-        return dash_cfg
-
-    def _on_vr_dashboard_toggled(self, enabled: bool) -> None:
-        self._vr_dashboard_config()["enabled"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _vr_wrist_config(self) -> dict:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        wrist_cfg = listen_cfg.setdefault("vr_wrist", {})
-        if not isinstance(wrist_cfg, dict):
-            wrist_cfg = {}
-            listen_cfg["vr_wrist"] = wrist_cfg
-        return wrist_cfg
-
-    def _on_vr_wrist_toggled(self, enabled: bool) -> None:
-        self._vr_wrist_config()["enabled"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_wrist_hand_changed(self, _label: str) -> None:
-        code = self._screenshot_hand_codes.get(self._vr_wrist_hand_var.value(), "left")
-        self._vr_wrist_config()["hand"] = code
-        self._notify_vr_overlay_changed()
 
     def _vrc_section_config(self, section: str) -> dict:
         listen_cfg = self._config.setdefault("vrc_listen", {})
@@ -7571,159 +5906,7 @@ class SettingsWindow(QDialog):
             listen_cfg[section] = cfg
         return cfg
 
-    def _on_vr_gesture_toggled(self, enabled: bool) -> None:
-        self._vrc_section_config("vr_gesture")["enabled"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
-    def _on_steamvr_autolaunch_toggled(self, enabled: bool) -> None:
-        listen_cfg = self._config.setdefault("vrc_listen", {})
-        if not isinstance(listen_cfg, dict):
-            listen_cfg = {}
-            self._config["vrc_listen"] = listen_cfg
-        listen_cfg["steamvr_autolaunch"] = bool(enabled)
-        self._notify_vr_overlay_changed()
-
     # ------------------------------------------------ panel geometry
-    def _load_vr_geometry(self, position: object) -> None:
-        from src.core.vr_geometry import angles_of
-
-        try:
-            x, y, z = (float(v) for v in position)  # type: ignore[union-attr]
-            yaw, pitch, radius = angles_of((x, y, z))
-        except (TypeError, ValueError):
-            yaw, pitch, radius = 0.0, -12.0, 1.5
-        self._vr_overlay_yaw = yaw
-        self._vr_overlay_pitch = pitch
-        self._vr_overlay_distance = radius
-
-    def _vr_geometry_slider_value(self, attr: str) -> int:
-        if attr == "distance":
-            return int(round(self._vr_overlay_distance * 100))
-        if attr == "yaw":
-            return int(round(self._vr_overlay_yaw))
-        return int(round(self._vr_overlay_pitch))
-
-    def _write_vr_position(self) -> None:
-        from src.core.vr_geometry import position_from_angles
-
-        position = position_from_angles(
-            self._vr_overlay_yaw, self._vr_overlay_pitch, self._vr_overlay_distance
-        )
-        self._vr_overlay_config()["position"] = [float(v) for v in position]
-        self._refresh_vr_overlay_labels()
-        self._notify_vr_overlay_changed()
-
-    def _on_vr_distance_changed(self, value: int) -> None:
-        self._vr_overlay_distance = max(0.5, min(5.0, float(value) / 100.0))
-        self._write_vr_position()
-
-    def _on_vr_yaw_changed(self, value: int) -> None:
-        self._vr_overlay_yaw = max(-90.0, min(90.0, float(value)))
-        self._write_vr_position()
-
-    def _on_vr_pitch_changed(self, value: int) -> None:
-        self._vr_overlay_pitch = max(-60.0, min(60.0, float(value)))
-        self._write_vr_position()
-
-    def _sync_vr_geometry_sliders(self) -> None:
-        for attr in ("distance", "yaw", "pitch"):
-            slider = getattr(self, f"_vr_{attr}_slider", None)
-            if slider is None:
-                continue
-            blocked = slider.blockSignals(True)
-            slider.setValue(self._vr_geometry_slider_value(attr))
-            slider.blockSignals(blocked)
-
-    def sync_vr_overlay_from_config(self) -> None:
-        """Reflect changes made from the headset (dashboard tab) in the controls."""
-
-        vr_cfg = self._vr_overlay_config()
-        enabled = bool(vr_cfg.get("enabled", False))
-        self._vr_overlay_enabled_var.set(enabled)
-        check = getattr(self, "_vr_overlay_check", None)
-        if check is not None:
-            blocked = check.blockSignals(True)
-            check.setChecked(enabled)
-            check.blockSignals(blocked)
-        locked = bool(vr_cfg.get("locked", False))
-        self._vr_overlay_locked_var.set(locked)
-        check = getattr(self, "_vr_overlay_locked_check", None)
-        if check is not None:
-            blocked = check.blockSignals(True)
-            check.setChecked(locked)
-            check.blockSignals(blocked)
-        try:
-            self._vr_overlay_width = float(
-                vr_cfg.get("width_meters", self._vr_overlay_width) or self._vr_overlay_width
-            )
-        except (TypeError, ValueError):
-            pass
-        slider = getattr(self, "_vr_width_slider", None)
-        if slider is not None:
-            blocked = slider.blockSignals(True)
-            slider.setValue(int(round(self._vr_overlay_width * 100)))
-            slider.blockSignals(blocked)
-        # The wrist panel can switch the hand frame (and with it screenshot
-        # reads) on: the checkboxes follow.
-        shot_cfg = self._screenshot_config()
-        for check_attr, var, value in (
-            ("_screenshot_check", self._screenshot_enabled_var, bool(shot_cfg.get("enabled", False))),
-            (
-                "_screenshot_frame_gesture_check",
-                self._screenshot_frame_gesture_var,
-                bool(shot_cfg.get("frame_gesture", True)),
-            ),
-        ):
-            var.set(value)
-            check = getattr(self, check_attr, None)
-            if check is not None:
-                blocked = check.blockSignals(True)
-                check.setChecked(value)
-                check.blockSignals(blocked)
-        self._refresh_screenshot_controls()
-        # A drag in the headset moved the panel: the angle sliders follow.
-        self._load_vr_geometry(vr_cfg.get("position"))
-        self._sync_vr_geometry_sliders()
-        self._refresh_vr_overlay_labels()
-        self._refresh_vr_overlay_controls()
-
-    def sync_screenshot_binding_state(self, *, bound: bool | None) -> None:
-        """Say whether SteamVR is delivering the controller button at all.
-
-        None means the runtime is not up, so there is nothing to report.
-        """
-
-        label = getattr(self, "_screenshot_binding_label", None)
-        if label is None:
-            return
-        if bound is None or not self._screenshot_enabled_var.value():
-            label.setVisible(False)
-            return
-        label.setText(
-            self._copy("screenshot_binding_active" if bound else "screenshot_binding_inactive")
-        )
-        label.setVisible(True)
-
-    def sync_vr_overlay_state(self, *, available: bool, reason: str = "") -> None:
-        """Show why the headset panel is not up, when it is not."""
-
-        label = getattr(self, "_vr_overlay_status_label", None)
-        if label is None:
-            return
-        if available or not self._vr_overlay_enabled_var.value():
-            label.setVisible(False)
-            return
-        reason = str(reason or "")
-        if reason.startswith("openvr import failed"):
-            key = "vr_overlay_status_missing_runtime"
-        else:
-            key = {
-                "steamvr_not_running": "vr_overlay_status_not_running",
-                "steamvr_not_installed": "vr_overlay_status_not_installed",
-                "headset_not_found": "vr_overlay_status_no_headset",
-            }.get(reason, "vr_overlay_status_failed")
-        label.setText(self._copy(key))
-        label.setVisible(True)
 
     def _build_translation_page(self, layout: QVBoxLayout) -> None:
         """Translation Settings Page - ONLY languages and output format (NO API config)"""
@@ -7805,10 +5988,12 @@ class SettingsWindow(QDialog):
         record_voice_btn = QPushButton(tr(self._ui_lang, "record_voice"))
         record_voice_btn.clicked.connect(self._on_record_voice_for_clone)
         voice_btn_row.addWidget(record_voice_btn)
+        self._record_clone_voice_btn = record_voice_btn
 
         import_voice_btn = QPushButton(tr(self._ui_lang, "import_voice"))
         import_voice_btn.clicked.connect(self._on_import_voice_for_clone)
         voice_btn_row.addWidget(import_voice_btn)
+        self._import_clone_voice_btn = import_voice_btn
 
         voice_btn_row.addStretch(1)
         clone_layout.addLayout(voice_btn_row)
@@ -7860,6 +6045,7 @@ class SettingsWindow(QDialog):
         self._bert_download_btn.clicked.connect(self._download_bert_model)
         bert_layout.addWidget(self._bert_download_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         sbv2_layout.addWidget(self._bert_info_frame)
+        self._build_hololive_preset_row(sbv2_layout)
         layout.addWidget(self._sbv2_options_frame)
         self._refresh_sbv2_options_visibility()
 
@@ -8194,7 +6380,6 @@ class SettingsWindow(QDialog):
         self._row_layout(layout, self._copy("osc_param_toggle_listen"), self._line_edit("osc_toggle_listen", self._osc_toggle_listen_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_tts"), self._line_edit("osc_toggle_tts", self._osc_toggle_tts_var, 260))
         self._row_layout(layout, self._copy("osc_param_toggle_overlay"), self._line_edit("osc_toggle_overlay", self._osc_toggle_overlay_var, 260))
-        self._row_layout(layout, self._copy("osc_param_toggle_screenshot"), self._line_edit("osc_toggle_screenshot", self._osc_toggle_screenshot_var, 260))
 
         # Hotkeys Section
         self._section_title(layout, self._copy("global_hotkeys_section"))
@@ -8323,6 +6508,7 @@ class SettingsWindow(QDialog):
             hint = self._copy(hint_key) if hint_key else ""
             api = self._line_edit("backend_api_key", self._backend_api_key_var)
             api.setEchoMode(QLineEdit.EchoMode.Password)
+            api.editingFinished.connect(self._on_backend_api_key_edited)
             self._backend_api_key_entry = api
             self._row_layout(self._backend_fields_layout, self._copy("api_key"), api)
             if hint:
@@ -8366,18 +6552,59 @@ class SettingsWindow(QDialog):
         )
         self._backend_base_url_entry = base
         self._row_layout(self._backend_fields_layout, self._copy("base_url"), base)
+        base.editingFinished.connect(self._on_backend_endpoint_edited)
 
-        model_options = list(get_backend_model_options(backend, self._backend_model_var.value()))
-        if backend_model_is_selectable(backend) and model_options:
+        if spec.get("protocol_input"):
+            self._row_layout(
+                self._backend_fields_layout,
+                self._copy("relay_protocol"),
+                self._combo(
+                    "backend_protocol",
+                    self._backend_protocol_var,
+                    list(self._backend_protocol_codes.keys()),
+                    self._on_relay_protocol_changed,
+                ),
+            )
+            protocol_hint = QLabel(self._copy("relay_protocol_hint"))
+            protocol_hint.setObjectName("hintLabel")
+            protocol_hint.setWordWrap(True)
+            self._backend_fields_layout.addWidget(protocol_hint)
+
+        self._backend_model_combo = None
+        self._model_list_refresh_btn = None
+        self._model_list_status_label = None
+        lists_models = backend_supports_model_listing(backend)
+        model_options = list(self._backend_model_options(backend))
+        if (backend_model_is_selectable(backend) or lists_models) and model_options:
             model_widget = self._combo("backend_model", self._backend_model_var, model_options, self._on_backend_model_changed)
-            if backend_model_is_editable(backend):
+            if backend_model_is_editable(backend) or lists_models:
                 model_widget.setEditable(True)
                 model_widget.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-            self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
+                model_widget.setEditText(self._backend_model_var.value())
+                model_widget.enable_contains_completer()
+            self._backend_model_combo = model_widget
+            model_row = self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
         else:
             model_widget = self._line_edit("backend_model", self._backend_model_var)
             model_widget.textChanged.connect(lambda _text: self._refresh_backend_model_info())
-            self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
+            model_row = self._row_layout(self._backend_fields_layout, tr(self._ui_lang, "model"), model_widget)
+        if lists_models:
+            refresh_btn = QPushButton(self._copy("model_list_refresh"))
+            refresh_btn.setObjectName("secondaryButton")
+            self._fit_button_to_text(refresh_btn, min_width=120, height=32, padding=28)
+            refresh_btn.clicked.connect(lambda _checked=False: self._refresh_backend_model_list())
+            model_row.addWidget(refresh_btn, 0)
+            self._model_list_refresh_btn = refresh_btn
+            status_label = QLabel("")
+            status_label.setObjectName("hintLabel")
+            status_label.setWordWrap(True)
+            self._backend_fields_layout.addWidget(status_label)
+            self._model_list_status_label = status_label
+            self._sync_model_list_refresh_button(backend)
+            self._update_model_list_status(backend)
+            # Only the saved endpoint is read automatically (see
+            # _auto_refresh_backend_model_list); edits wait for Refresh.
+            QTimer.singleShot(0, lambda b=backend: self._auto_refresh_backend_model_list(b))
 
         model_hint_key = _BACKEND_MODEL_HINT_KEYS.get(backend)
         model_hint = self._copy(model_hint_key) if model_hint_key else ""
@@ -8670,11 +6897,11 @@ class SettingsWindow(QDialog):
             else:
                 backend_cfg["base_url"] = (
                     str(draft.get("base_url", "") or "").strip()
-                    or get_backend_value(backend, "base_url")
+                    or self._backend_default_value(backend, "base_url", draft.get("protocol"))
                 )
             backend_cfg["model"] = (
                 str(draft.get("model", "") or "").strip()
-                or get_backend_value(backend, "model")
+                or self._backend_default_value(backend, "model", draft.get("protocol"))
             )
             backend_cfg["timeout_s"] = self._parse_float_range(
                 str(draft.get("timeout_s", "") or ""),
@@ -8730,6 +6957,21 @@ class SettingsWindow(QDialog):
                     ) from exc
             if spec.get("streaming_input"):
                 backend_cfg["streaming"] = bool(draft.get("streaming", False))
+            if spec.get("protocol_input"):
+                backend_cfg["protocol"] = normalize_relay_protocol(draft.get("protocol"))
+            self._store_remote_model_list(backend, backend_cfg)
+
+    def _store_remote_model_list(self, backend: str, backend_cfg: dict) -> None:
+        """Save the list read from the provider so selectors can offer it later."""
+
+        source_key = backend_config_source_key(backend, backend_cfg)
+        entry = self._remote_model_lists.get((backend, source_key))
+        if entry is not None and entry[0]:
+            backend_cfg["remote_models"] = list(entry[0])
+            backend_cfg["remote_models_source"] = source_key
+        elif str(backend_cfg.get("remote_models_source", "") or "") != source_key:
+            backend_cfg.pop("remote_models", None)
+            backend_cfg.pop("remote_models_source", None)
 
     def _translation_connection_config(self) -> dict:
         cfg = copy.deepcopy(self._config)
@@ -8756,14 +6998,12 @@ class SettingsWindow(QDialog):
                     label="Qwen Tokyo workspace API",
                 )
         else:
-            backend_cfg["base_url"] = (
-                self._backend_base_url_var.value().strip()
-                or get_backend_value(backend, "base_url")
-            )
+            # Same address the model-list source key names, so a list read
+            # here is stored for the endpoint that was really asked.
+            backend_cfg["base_url"] = self._current_backend_base_url(backend)
         self._validate_backend_base_url(backend, backend_cfg["base_url"])
-        backend_cfg["model"] = (
-            self._backend_model_var.value().strip()
-            or get_backend_value(backend, "model")
+        backend_cfg["model"] = self._backend_model_var.value().strip() or (
+            self._backend_default_value(backend, "model", self._selected_relay_protocol())
         )
         backend_cfg["timeout_s"] = self._parse_float_range(
             self._backend_timeout_var.value(),
@@ -8794,7 +7034,587 @@ class SettingsWindow(QDialog):
                 raise ValueError(tr(self._ui_lang, "invalid_custom_headers")) from exc
         if spec.get("streaming_input"):
             backend_cfg["streaming"] = self._backend_streaming_var.value()
+        if spec.get("protocol_input"):
+            backend_cfg["protocol"] = self._selected_relay_protocol()
         return cfg
+
+    # ----------------------------------------------------------------
+    # Provider model lists
+    # ----------------------------------------------------------------
+    def _relay_protocol_options(self) -> list[tuple[str, str]]:
+        return [
+            (self._copy("relay_protocol_openai"), RELAY_PROTOCOL_OPENAI),
+            (self._copy("relay_protocol_anthropic"), RELAY_PROTOCOL_ANTHROPIC),
+        ]
+
+    def _selected_relay_protocol(self) -> str:
+        return normalize_relay_protocol(
+            self._backend_protocol_codes.get(self._backend_protocol_var.value(), "")
+        )
+
+    @staticmethod
+    def _backend_default_value(backend: str, key: str, protocol: object = "") -> str:
+        """Default ``key`` of a backend; the relay's follows its protocol."""
+
+        if backend == RELAY_BACKEND:
+            return relay_protocol_default(protocol, key)
+        return get_backend_value(backend, key)
+
+    def _current_backend_base_url(self, backend: str) -> str:
+        """Base URL the form points at now (the region's URL when it has one)."""
+
+        if backend_has_service_regions(backend):
+            return (
+                get_backend_region_base_url(backend, self._selected_qwen_translation_region())
+                or self._backend_base_url_var.value().strip()
+            )
+        return self._backend_base_url_var.value().strip() or self._backend_default_value(
+            backend,
+            "base_url",
+            self._selected_relay_protocol(),
+        )
+
+    def _current_model_list_source_key(self, backend: str) -> str:
+        protocol = (
+            self._selected_relay_protocol()
+            if get_backend_spec(backend).get("protocol_input")
+            else ""
+        )
+        return model_list_source_key(
+            backend,
+            self._current_backend_base_url(backend),
+            protocol,
+        )
+
+    @staticmethod
+    def _canonical_custom_headers(value: object) -> str | None:
+        """Comparable form of custom request headers; None when invalid."""
+
+        try:
+            headers = normalize_openai_custom_headers(value)
+        except ValueError:
+            return None
+        return json.dumps(headers, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _saved_backend_endpoint(self, backend: str) -> tuple[object, ...]:
+        """Where the saved config sends this backend's requests, and with what.
+
+        (backend, region, Base URL, protocol, API key, custom headers), read
+        the way the form loads them from the saved config.
+        """
+
+        trans_cfg = self._config.get("translation", {})
+        if not isinstance(trans_cfg, dict):
+            trans_cfg = {}
+        backend_cfg = trans_cfg.get(backend, {})
+        if not isinstance(backend_cfg, dict):
+            backend_cfg = {}
+        spec = get_backend_spec(backend)
+        region = ""
+        if backend_has_service_regions(backend):
+            region, base_url = self._saved_backend_region(backend, trans_cfg)
+        else:
+            base_url = get_backend_config_value(trans_cfg, backend, "base_url")
+        protocol = (
+            normalize_relay_protocol(backend_cfg.get("protocol"))
+            if spec.get("protocol_input")
+            else ""
+        )
+        headers = (
+            self._canonical_custom_headers(backend_cfg.get("custom_headers"))
+            if spec.get("custom_headers_input")
+            else ""
+        )
+        return (
+            backend,
+            region,
+            str(base_url or "").strip().rstrip("/"),
+            protocol,
+            get_backend_config_value(trans_cfg, backend, "api_key"),
+            headers,
+        )
+
+    def _current_backend_endpoint(self, backend: str) -> tuple[object, ...]:
+        """The same identity for the values now in the form."""
+
+        spec = get_backend_spec(backend)
+        region = (
+            self._selected_qwen_translation_region()
+            if backend_has_service_regions(backend)
+            else ""
+        )
+        protocol = self._selected_relay_protocol() if spec.get("protocol_input") else ""
+        headers = (
+            self._canonical_custom_headers(self._backend_custom_headers_var.value())
+            if spec.get("custom_headers_input")
+            else ""
+        )
+        return (
+            backend,
+            region,
+            self._current_backend_base_url(backend).strip().rstrip("/"),
+            protocol,
+            self._backend_api_key_var.value().strip(),
+            headers,
+        )
+
+    def _backend_form_matches_saved_endpoint(self, backend: str) -> bool:
+        """Whether a model-list request may go out without a button press.
+
+        The request carries the API key and custom headers. It is sent
+        unprompted only while the form still names the saved endpoint with the
+        saved credentials; a typed Base URL, another region or protocol, a new
+        key or new headers wait for Refresh (or Test connection), which the
+        player presses knowingly.
+        """
+
+        current = self._current_backend_endpoint(backend)
+        saved = self._saved_backend_endpoint(backend)
+        return None not in current and None not in saved and current == saved
+
+    def _backend_model_options(self, backend: str) -> tuple[str, ...]:
+        current = self._backend_model_var.value().strip()
+        entry = self._remote_model_lists.get(
+            (backend, self._current_model_list_source_key(backend))
+        )
+        if entry is not None and entry[0]:
+            models = list(entry[0])
+            if current and current not in models:
+                models.insert(0, current)
+            return tuple(models)
+        # An emptied relay box falls back to the default of the protocol in
+        # the form (claude-opus-5 over Anthropic), not the saved one.
+        backend_cfg = (
+            {"protocol": self._selected_relay_protocol()}
+            if backend == RELAY_BACKEND
+            else None
+        )
+        return get_backend_model_options(backend, current, backend_cfg)
+
+    @staticmethod
+    def _backend_has_builtin_model_list(backend: str) -> bool:
+        """Whether the backend has built-in recommendations besides its default.
+
+        The relay and Local AI only know their default model, so their
+        messages must not promise built-in recommendations.
+        """
+
+        return len(get_backend_model_options(backend)) > 1
+
+    @staticmethod
+    def _relay_model_placeholders() -> frozenset[str]:
+        """Default models of both relay protocols: untouched placeholders."""
+
+        return frozenset(
+            relay_protocol_default(protocol, "model")
+            for protocol in (RELAY_PROTOCOL_OPENAI, RELAY_PROTOCOL_ANTHROPIC)
+        )
+
+    @staticmethod
+    def _relay_placeholder_replacement(
+        placeholder: str,
+        models: tuple[str, ...],
+        protocol: object = RELAY_PROTOCOL_OPENAI,
+    ) -> str:
+        """A model the relay serves that can stand in for the default placeholder.
+
+        The same model under the relay's own spelling wins
+        (``openai/gpt-6-luna`` for ``gpt-6-luna``), then the first entry of the
+        relay spec's ``model_list_priority`` the relay serves; over the
+        Anthropic protocol only its Claude entries count, so claude-opus-5 is
+        never swapped for a GPT model. Nothing else is picked: the first entry
+        of a relay list is often an embedding model or an arbitrary aggregator
+        id.
+        """
+
+        for model in models:
+            if same_model_family(model, placeholder):
+                return model
+        priority = get_backend_spec(RELAY_BACKEND).get("model_list_priority")
+        if not isinstance(priority, (list, tuple)):
+            return ""
+        wanted_models = [str(wanted) for wanted in priority]
+        if normalize_relay_protocol(protocol) == RELAY_PROTOCOL_ANTHROPIC:
+            wanted_models = [
+                wanted
+                for wanted in wanted_models
+                if model_family_id(wanted).startswith("claude-")
+            ]
+        for wanted in wanted_models:
+            for model in models:
+                if same_model_family(model, wanted):
+                    return model
+        return ""
+
+    def _relay_unserved_placeholder(
+        self,
+        backend: str,
+        entry: tuple[tuple[str, ...], str] | None,
+    ) -> str:
+        """The relay default still in the form although the relay does not serve it."""
+
+        if backend != RELAY_BACKEND or entry is None or entry[1] != "remote" or not entry[0]:
+            return ""
+        current = self._backend_model_var.value().strip()
+        if current not in self._relay_model_placeholders() or current in entry[0]:
+            return ""
+        if self._relay_placeholder_replacement(
+            current,
+            entry[0],
+            self._selected_relay_protocol(),
+        ):
+            return ""
+        return current
+
+    def _join_copy_sentences(self, first: str, second: str) -> str:
+        separator = "" if self._ui_lang in {"zh-CN", "ja"} else " "
+        return f"{first}{separator}{second}"
+
+    def _model_list_status_text(self, backend: str) -> str:
+        key = self._current_model_list_source_key(backend)
+        if key in self._model_list_inflight:
+            return self._copy("model_list_refreshing")
+        entry = self._remote_model_lists.get((backend, key))
+        status = self._model_list_status.get(key)
+        failure_reason = (
+            self._copy(status[1]) if status is not None and status[0] == "error" else ""
+        )
+        if entry is not None and entry[0]:
+            if failure_reason:
+                # The older list stays usable, but the failed refresh must not
+                # look like a success until a later refresh works.
+                return self._copy("model_list_refresh_failed_kept", reason=failure_reason)
+            models, origin = entry
+            text = self._copy(
+                "model_list_loaded" if origin == "remote" else "model_list_saved",
+                count=format_locale_number(len(models), self._ui_lang, grouping=True),
+            )
+            placeholder = self._relay_unserved_placeholder(backend, entry)
+            if placeholder:
+                text = self._join_copy_sentences(
+                    text,
+                    self._copy("model_list_pick_model", model=placeholder),
+                )
+            return text
+        if failure_reason:
+            failed_key = (
+                "model_list_failed"
+                if self._backend_has_builtin_model_list(backend)
+                else "model_list_failed_manual"
+            )
+            return self._copy(failed_key, reason=failure_reason)
+        if status is not None:
+            return self._copy("model_list_unsupported")
+        if backend == RELAY_BACKEND:
+            return self._copy("model_list_relay_empty")
+        if not self._backend_has_builtin_model_list(backend):
+            return self._copy("model_list_manual")
+        return self._copy("model_list_builtin")
+
+    def _update_model_list_status(self, backend: str, text: str | None = None) -> None:
+        label = self._model_list_status_label
+        if label is None or not self._qt_widget_is_alive(label):
+            return
+        label.setText(self._model_list_status_text(backend) if text is None else text)
+
+    def _sync_model_list_refresh_button(self, backend: str) -> None:
+        """Allow Refresh unless a request for this endpoint is still running."""
+
+        button = self._model_list_refresh_btn
+        if button is None or not self._qt_widget_is_alive(button):
+            return
+        button.setEnabled(
+            self._current_model_list_source_key(backend) not in self._model_list_inflight
+        )
+
+    def _model_list_credentials_ready(self, backend: str) -> bool:
+        if self._backend_api_key_var.value().strip():
+            return True
+        if not backend_api_key_is_required(backend):
+            return True
+        # A relay on this PC or the LAN may run without a key, but only over
+        # the OpenAI protocol: the Anthropic path always requires a key.
+        return (
+            backend == RELAY_BACKEND
+            and self._selected_relay_protocol() == RELAY_PROTOCOL_OPENAI
+            and should_bypass_environment_proxies(self._backend_base_url_var.value())
+        )
+
+    def _current_page_id(self) -> str:
+        stack = self._page_stack
+        if stack is None:
+            return ""
+        index = stack.currentIndex()
+        return NAV_ITEMS[index][0] if 0 <= index < len(NAV_ITEMS) else ""
+
+    def _schedule_model_list_auto_refresh(self) -> None:
+        """Let the API page read the saved endpoint's list once it is on screen."""
+
+        if self._current_page_id() != "api_config":
+            return
+        QTimer.singleShot(0, lambda: self._auto_refresh_backend_model_list(self._backend_code()))
+
+    def _auto_refresh_backend_model_list(self, backend: str) -> None:
+        """Read the saved endpoint's list once per session while its page is open.
+
+        Only the endpoint saved in the config, with the saved key and headers,
+        is contacted without a button press (_backend_form_matches_saved_endpoint).
+        A preloaded window that is still hidden waits until the player opens
+        the API page.
+        """
+
+        if getattr(self, "_closing", False) or getattr(self, "_lifecycle_disposed", False):
+            return
+        if backend != self._backend_code() or not backend_supports_model_listing(backend):
+            return
+        label = self._model_list_status_label
+        if label is None or not self._qt_widget_is_alive(label):
+            return
+        try:
+            visible = self.isVisible()
+        except RuntimeError:
+            return
+        if not visible or self._current_page_id() != "api_config":
+            return
+        if not self._backend_form_matches_saved_endpoint(backend):
+            return
+        key = self._current_model_list_source_key(backend)
+        entry = self._remote_model_lists.get((backend, key))
+        if entry is not None and entry[1] == "remote":
+            return
+        if (
+            key in self._model_list_auto_attempted
+            or key in self._model_list_inflight
+            or not self._model_list_credentials_ready(backend)
+        ):
+            return
+        self._model_list_auto_attempted.add(key)
+        self._refresh_backend_model_list(auto=True)
+
+    def _on_backend_endpoint_edited(self) -> None:
+        """Follow an edited Base URL, region or protocol without contacting it.
+
+        The saved key and headers must never reach an endpoint the player has
+        not confirmed, so this only shows the list known for the new endpoint
+        and leaves the status asking for Refresh.
+        """
+
+        backend = self._backend_code()
+        if backend_supports_model_listing(backend):
+            self._repopulate_backend_model_combo(backend)
+            self._sync_model_list_refresh_button(backend)
+            self._update_model_list_status(backend)
+
+    def _on_backend_api_key_edited(self) -> None:
+        """A new key may fix a failed refresh: drop that error, send nothing."""
+
+        entry = self._backend_api_key_entry
+        if entry is not None and self._qt_widget_is_alive(entry):
+            if not entry.isModified():
+                return
+            entry.setModified(False)
+        backend = self._backend_code()
+        if not backend_supports_model_listing(backend):
+            return
+        key = self._current_model_list_source_key(backend)
+        status = self._model_list_status.get(key)
+        if status is not None and status[0] == "error":
+            self._model_list_status.pop(key, None)
+        self._update_model_list_status(backend)
+
+    def _on_relay_protocol_changed(self, _label: str) -> None:
+        """Swap untouched protocol defaults when the relay protocol changes.
+
+        A Base URL or model still equal to the other protocol's default is a
+        placeholder (an OpenAI URL never answers the Anthropic protocol), so it
+        follows the protocol; anything the player typed is kept.
+        """
+        protocol = self._selected_relay_protocol()
+        other = (
+            RELAY_PROTOCOL_OPENAI
+            if protocol == RELAY_PROTOCOL_ANTHROPIC
+            else RELAY_PROTOCOL_ANTHROPIC
+        )
+        current_url = self._backend_base_url_var.value().strip().rstrip("/")
+        if not current_url or current_url == relay_protocol_default(other, "base_url").rstrip("/"):
+            self._backend_base_url_var.set(relay_protocol_default(protocol, "base_url"))
+            entry = getattr(self, "_backend_base_url_entry", None)
+            if entry is not None and self._qt_widget_is_alive(entry):
+                entry.setText(self._backend_base_url_var.value())
+        current_model = self._backend_model_var.value().strip()
+        if not current_model or current_model == relay_protocol_default(other, "model"):
+            self._backend_model_var.set(relay_protocol_default(protocol, "model"))
+        self._on_backend_endpoint_edited()
+
+    def _refresh_backend_model_list(self, *, auto: bool = False) -> None:
+        backend = self._backend_code()
+        if not backend_supports_model_listing(backend):
+            self._update_model_list_status(backend, self._copy("model_list_unsupported"))
+            return
+        if not self._model_list_credentials_ready(backend):
+            if not auto:
+                self._prompt_for_missing_credential("translation")
+            self._update_model_list_status(backend)
+            return
+        key = self._current_model_list_source_key(backend)
+        if key in self._model_list_inflight:
+            return
+        try:
+            snapshot = self._translation_connection_config()
+        except ValueError as exc:
+            # Same validation messages the connection test shows (already
+            # localized by the form parsers).
+            message = str(exc)
+            if not auto:
+                QMessageBox.warning(self, self._copy("model_list_refresh"), message)
+            return
+        self._model_list_fetch_generation += 1
+        generation = self._model_list_fetch_generation
+        self._model_list_inflight[key] = generation
+        self._sync_model_list_refresh_button(backend)
+        self._update_model_list_status(backend)
+        window_ref = weakref.ref(self)
+
+        def worker() -> None:
+            from src.translators.model_list_service import fetch_backend_models
+
+            try:
+                result = fetch_backend_models(snapshot)
+            except Exception as exc:  # pragma: no cover - fetch reports errors itself
+                result = exc
+            window = window_ref()
+            if window is not None and not getattr(window, "_closing", False):
+                window.model_list_fetch_finished.emit(generation, (backend, key, result))
+
+        threading.Thread(target=worker, name="translation-model-list", daemon=True).start()
+
+    def _model_list_failure_reason_key(self, backend: str, error: object) -> str:
+        """Copy key explaining why a model-list request failed."""
+
+        text = str(error or "").casefold()
+        if "no available channel" in text or "无可用渠道" in text:
+            # new-api / one-api: the relay has no upstream channel right now.
+            return "model_list_reason_provider"
+        if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)) or (
+            "unexpected shape" in text
+        ):
+            # Not a model list at all; usually the relay's web console (HTML)
+            # because the Base URL lacks /v1.
+            return "model_list_reason_endpoint"
+        try:
+            category = format_translation_error(
+                error,
+                backend=backend,
+                ui_language=self._ui_lang,
+            ).category
+        except Exception:
+            category = ""
+        key = {
+            "auth": "model_list_reason_auth",
+            "endpoint": "model_list_reason_endpoint",
+            "model": "model_list_reason_endpoint",
+            "network": "model_list_reason_network",
+            "quota": "model_list_reason_quota",
+            "empty": "model_list_reason_empty",
+            "provider": "model_list_reason_provider",
+        }.get(category)
+        if key is not None:
+            return key
+        status = getattr(error, "status_code", None)
+        if status == 404:
+            return "model_list_reason_endpoint"
+        if isinstance(status, int) and 500 <= status <= 599:
+            return "model_list_reason_provider"
+        if "no usable chat models" in text:
+            return "model_list_reason_empty"
+        if "timeout" in type(error).__name__.casefold():
+            return "model_list_reason_network"
+        return "model_list_reason_other"
+
+    def _model_list_failure_reason(self, backend: str, error: object) -> str:
+        return self._copy(self._model_list_failure_reason_key(backend, error))
+
+    def _apply_model_list_result(self, backend: str, key: str, result: object) -> None:
+        models = tuple(getattr(result, "models", ()) or ())
+        if getattr(result, "source", "") == "remote" and models:
+            self._remote_model_lists[(backend, key)] = (models, "remote")
+            self._model_list_status.pop(key, None)
+        elif isinstance(result, BaseException) or getattr(result, "error", None) is not None:
+            error = result if isinstance(result, BaseException) else result.error
+            self._model_list_status[key] = (
+                "error",
+                self._model_list_failure_reason_key(backend, error),
+            )
+        else:
+            self._model_list_status[key] = ("unsupported", "")
+
+    def _finish_model_list_fetch(self, generation: int, payload: object) -> None:
+        try:
+            backend, key, result = payload
+        except (TypeError, ValueError):
+            return
+        if self._model_list_inflight.get(key) == generation:
+            self._model_list_inflight.pop(key, None)
+        if generation < self._model_list_applied_generation.get(key, 0):
+            # A newer answer for this endpoint is already shown; this one
+            # would put an older list back. Forget the automatic attempt so
+            # the endpoint can be read again when its form opens.
+            self._model_list_auto_attempted.discard(key)
+        else:
+            # Stored whatever form is open now: a late answer for another
+            # backend or an old Base URL belongs to that endpoint only.
+            self._model_list_applied_generation[key] = generation
+            self._apply_model_list_result(backend, key, result)
+        if backend != self._backend_code() or self._active_backend_form != backend:
+            return
+        self._sync_model_list_refresh_button(backend)
+        if key == self._current_model_list_source_key(backend):
+            self._repopulate_backend_model_combo(backend)
+        self._update_model_list_status(backend)
+
+    def _repopulate_backend_model_combo(self, backend: str) -> None:
+        combo = self._backend_model_combo
+        if combo is None or not self._qt_widget_is_alive(combo):
+            return
+        current = self._backend_model_var.value().strip()
+        options = list(self._backend_model_options(backend))
+        entry = self._remote_model_lists.get(
+            (backend, self._current_model_list_source_key(backend))
+        )
+        if (
+            backend == RELAY_BACKEND
+            and entry is not None
+            and entry[1] == "remote"
+            and entry[0]
+            and current in self._relay_model_placeholders()
+            and current not in entry[0]
+        ):
+            # The relay default is only a placeholder. Once the relay's own
+            # list is known, start from the same model under the relay's
+            # spelling or from a recommended model it serves; without either,
+            # keep it and let the status ask the player to pick one.
+            replacement = self._relay_placeholder_replacement(
+                current,
+                entry[0],
+                self._selected_relay_protocol(),
+            )
+            if replacement:
+                current = replacement
+                options = list(entry[0])
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(options)
+            index = combo.findText(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            if combo.isEditable():
+                combo.setEditText(current)
+        finally:
+            combo.blockSignals(False)
+        if current != self._backend_model_var.value().strip():
+            self._backend_model_var.set(current)
+        self._refresh_backend_model_info()
 
     def _validate_backend_base_url(self, backend: str, value: object) -> None:
         if not backend_base_url_is_editable(backend):
@@ -8808,7 +7628,6 @@ class SettingsWindow(QDialog):
                     "local_ai",
                     "libretranslate",
                     "openai_compatible",
-                    "grok_compatible",
                 },
             )
         except ValueError as exc:
@@ -8902,7 +7721,15 @@ class SettingsWindow(QDialog):
     def _refresh_backend_model_info(self) -> None:
         if self._backend_model_info_title_label is None or self._backend_model_info_note_label is None:
             return
-        profile = get_backend_model_profile(self._backend_code(), self._backend_model_var.value())
+        backend = self._backend_code()
+        # An empty box means the default model, which for the relay follows
+        # the protocol selected in the form.
+        model = self._backend_model_var.value().strip() or self._backend_default_value(
+            backend,
+            "model",
+            self._selected_relay_protocol(),
+        )
+        profile = get_backend_model_profile(backend, model)
         try:
             score = format_locale_number(
                 float(profile.get("score", 6.5)),
@@ -8956,6 +7783,10 @@ class SettingsWindow(QDialog):
                 not backend_base_url_is_editable(backend)
                 or bool(regional_base_url)
             )
+        # The model list belongs to the region's endpoint: without this the
+        # old region's list stayed in the combo and one of its models could be
+        # saved for the new region.
+        self._on_backend_endpoint_edited()
 
     def _asr_hint_text(self, engine: str) -> str:
         if engine == "edge-stt":
@@ -9405,7 +8236,7 @@ class SettingsWindow(QDialog):
             return self._selected_tts_bert_language()
         if engine == "voicevox":
             return "jp"
-        if engine == "qwen_tts":
+        if engine in {"qwen_tts", "qwen_vc"}:
             target = str(self._config.get("translation", {}).get("target_language", "") or "").strip().lower()
             if target in {"ja", "jp"}:
                 return "jp"
@@ -9556,6 +8387,10 @@ class SettingsWindow(QDialog):
                 or str(get_tts_api_default_value(engine, "model") or "")
             )
             engine_cfg.update(self._tts_api_timeout_values_from_draft(draft))
+            if engine == "qwen_tts":
+                engine_cfg["use_persona_instructions"] = bool(
+                    draft.get("use_persona_instructions", False)
+                )
 
     def _current_tts_engine_config(self, engine: str) -> dict[str, object]:
         tts_cfg = self._config.get("tts", {}) if isinstance(self._config.get("tts", {}), dict) else {}
@@ -9585,10 +8420,28 @@ class SettingsWindow(QDialog):
                 get_tts_api_default_value(engine, "model") or ""
             )
             engine_cfg.update(self._tts_api_timeout_values())
-            if engine == "qwen_tts":
+            if engine in {"qwen_tts", "qwen_vc"}:
+                # CJK test text is read in the translation target's language;
+                # without the hint kanji-only Japanese is spoken as Chinese.
                 engine_cfg["language_type"] = self._qwen_tts_language_type_from_code(
                     self._selected_tts_test_language()
                 )
+            if engine == "qwen_tts":
+                engine_cfg["use_persona_instructions"] = bool(
+                    self._tts_persona_instructions_var.value()
+                )
+                if engine_cfg["use_persona_instructions"] and not str(
+                    engine_cfg.get("instructions") or ""
+                ).strip():
+                    from src.tts.persona_instructions import (
+                        build_qwen_tts_persona_instructions,
+                        qwen_tts_model_supports_instructions,
+                    )
+
+                    if qwen_tts_model_supports_instructions(str(engine_cfg.get("model") or "")):
+                        persona = build_qwen_tts_persona_instructions(self._config)
+                        if persona:
+                            engine_cfg["instructions"] = persona
         return engine_cfg
 
     @staticmethod
@@ -9635,7 +8488,7 @@ class SettingsWindow(QDialog):
         if self._selected_tts_engine() != "style_bert_vits2":
             frame.hide()
             return
-        language_code = self._selected_tts_bert_language()
+        language_code = self._selected_style_bert_runtime_language()
         model_id = style_bert_bert_model_id(language_code)
         language_label = self._style_bert_language_label(language_code)
         ready = model_is_complete(model_id)
@@ -9670,10 +8523,198 @@ class SettingsWindow(QDialog):
         button.setEnabled(True)
         button.show()
 
+    # ── Hololive preset voices (Style-Bert-VITS2) ───────────────────────────
+
+    def _build_hololive_preset_row(self, layout: QVBoxLayout) -> None:
+        """Offer the catalog voice packs for download next to the folder import."""
+        presets = load_style_bert_vits2_presets()
+        if not presets:
+            return
+        frame = QFrame()
+        frame.setObjectName("runtimeNotice")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(12, 9, 12, 9)
+        frame_layout.setSpacing(8)
+
+        hint = QLabel(self._copy("tts_hololive_hint"))
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        frame_layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(QLabel(self._copy("tts_hololive_preset")))
+        combo = QComboBox()
+        combo.setObjectName("tts_hololive_preset")
+        language_names = {
+            "EN": tr(self._ui_lang, "tts_bert_language_en"),
+            "JP": tr(self._ui_lang, "tts_bert_language_jp"),
+            "ZH": tr(self._ui_lang, "tts_bert_language_zh"),
+        }
+        for preset in presets:
+            language_label = language_names.get(preset.language.upper(), preset.language)
+            combo.addItem(f"{preset.title} ({language_label})", preset.key)
+        combo.currentIndexChanged.connect(lambda _index: self._refresh_hololive_preset_status())
+        row.addWidget(combo, 1)
+        self._hololive_preset_combo = combo
+
+        self._hololive_download_btn = QPushButton(self._copy("tts_hololive_download_btn"))
+        self._hololive_download_btn.setObjectName("primaryButton")
+        self._fit_button_to_text(self._hololive_download_btn, min_width=132, height=34, padding=32)
+        self._hololive_download_btn.clicked.connect(self._download_hololive_preset)
+        row.addWidget(self._hololive_download_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        frame_layout.addLayout(row)
+
+        self._hololive_status_label = QLabel("")
+        self._hololive_status_label.setObjectName("hintLabel")
+        self._hololive_status_label.setWordWrap(True)
+        frame_layout.addWidget(self._hololive_status_label)
+        layout.addWidget(frame)
+        self._hololive_preset_frame = frame
+        self._refresh_hololive_preset_status()
+
+    def _selected_hololive_preset(self):
+        combo = getattr(self, "_hololive_preset_combo", None)
+        if not self._qt_widget_is_alive(combo):
+            return None
+        key = combo.currentData()
+        for preset in load_style_bert_vits2_presets():
+            if preset.key == key:
+                return preset
+        return None
+
+    def _refresh_hololive_preset_status(self) -> None:
+        label = getattr(self, "_hololive_status_label", None)
+        button = getattr(self, "_hololive_download_btn", None)
+        preset = self._selected_hololive_preset()
+        if label is None or button is None or preset is None:
+            return
+        try:
+            downloader_state = get_hololive_downloader(preset.model_path).state
+        except Exception:
+            downloader_state = DownloadState.IDLE
+        if downloader_state in (DownloadState.DOWNLOADING, DownloadState.PAUSED):
+            label.setText(self._copy("tts_hololive_downloading", title=preset.title))
+            button.setEnabled(False)
+            return
+        try:
+            complete = hololive_bundle_is_complete(preset.model_path)
+        except Exception:
+            complete = False
+        if complete:
+            label.setText(
+                self._copy("tts_hololive_downloaded", title=preset.title, pack=preset.model_path)
+            )
+        else:
+            label.setText(self._copy("tts_hololive_not_downloaded", pack=preset.model_path))
+        button.setEnabled(True)
+        button.setText(
+            self._copy("tts_hololive_redownload_btn" if complete else "tts_hololive_download_btn")
+        )
+        self._fit_button_to_text(button, min_width=132, height=34, padding=32, max_width=220)
+
+    def _download_hololive_preset(self) -> None:
+        preset = self._selected_hololive_preset()
+        if preset is None:
+            return
+        from src.ui_qt.model_download_dialog import DownloadProgressWidget
+
+        try:
+            downloader = get_hololive_downloader(preset.model_path)
+        except Exception as exc:
+            logger.warning("Failed to prepare Hololive voice download: %s", exc)
+            QMessageBox.warning(
+                self,
+                self._copy("save_failed"),
+                self._copy("model_download_open_failed"),
+            )
+            return
+
+        title = self._copy("tts_hololive_download_title", title=preset.title)
+        win = QDialog(self)
+        win.setWindowTitle(title)
+        win.setWindowModality(Qt.WindowModality.ApplicationModal)
+        win.resize(520, 230)
+        root = QVBoxLayout(win)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+        header = QLabel(title)
+        header.setObjectName("pageTitle")
+        root.addWidget(header)
+        detail = QLabel(self._copy("tts_hololive_not_downloaded", pack=preset.model_path))
+        detail.setObjectName("hintLabel")
+        detail.setWordWrap(True)
+        root.addWidget(detail)
+
+        model_path = preset.model_path
+        speaker_id = preset.speaker_id
+
+        def on_completed() -> None:
+            self._on_hololive_preset_downloaded(model_path, speaker_id)
+            QTimer.singleShot(1200, win.accept)
+
+        def on_cancelled() -> None:
+            self._refresh_hololive_preset_status()
+
+        progress = DownloadProgressWidget(
+            win,
+            "style_bert_vits2",
+            downloader=downloader,
+            model_id=model_path,
+            on_completed=on_completed,
+            on_cancelled=on_cancelled,
+            ui_lang=self._ui_lang,
+        )
+        root.addWidget(progress)
+        win.finished.connect(lambda _result: self._refresh_hololive_preset_status())
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        downloader.start()
+        self._refresh_hololive_preset_status()
+
+    def _on_hololive_preset_downloaded(self, model_path: str, speaker_id: str) -> None:
+        """Select the downloaded talent and refresh the voice list and BERT prompt."""
+        self._tts_voices_loaded.pop("style_bert_vits2", None)
+        try:
+            available = list_style_bert_vits2_voices(self._selected_tts_bert_language())
+        except Exception:
+            available = []
+        prefix = style_bert_voice_id(model_path, speaker_id, "")
+        candidates = [voice.id for voice in available if voice.id.startswith(prefix)]
+        preferred = next(
+            (voice_id for voice_id in candidates if voice_id.endswith("Neutral")),
+            candidates[0] if candidates else "",
+        )
+        if preferred:
+            self._tts_voice_var.set(preferred)
+        self._load_tts_voices()
+        self._refresh_tts_runtime_card()
+        self._refresh_hololive_preset_status()
+        # The BERT prompt follows the voice's language (EN talents need the
+        # English BERT model even when the global setting says Japanese).
+        self._refresh_bert_model_prompt()
+
+    def _selected_style_bert_runtime_language(self) -> str:
+        """BERT language the selected voice will actually be spoken with.
+
+        A JP-Extra model or a catalog (Hololive) voice overrides the global
+        BERT language setting, so the download prompt has to follow the voice
+        or the player downloads a BERT model the voice never uses.
+        """
+        fallback = self._selected_tts_bert_language()
+        voice_id = str(self._selected_tts_voice_id() or "").strip()
+        if not voice_id or self._is_tts_placeholder(voice_id):
+            return fallback
+        try:
+            return style_bert_voice_language(voice_id, fallback)
+        except Exception:
+            return fallback
+
     def _download_bert_model(self) -> None:
-        language_code = self._selected_tts_bert_language()
+        language_code = self._selected_style_bert_runtime_language()
         model_id = style_bert_bert_model_id(language_code)
-        language_label = self._tts_bert_language_var.value()
+        language_label = self._style_bert_language_label(language_code)
         button = getattr(self, "_bert_download_btn", None)
         if button is not None:
             button.setEnabled(False)
@@ -9772,7 +8813,15 @@ class SettingsWindow(QDialog):
             delete_btn.setEnabled(has_voices)
 
     def _voice_clone_busy(self, busy: bool) -> None:
-        for name in ("_refresh_clone_voices_btn", "_delete_clone_voice_btn"):
+        # Record/import stay disabled too: a second click during an upload
+        # enrolled (and billed) a duplicate voice.
+        self._voice_clone_task_active = bool(busy)
+        for name in (
+            "_refresh_clone_voices_btn",
+            "_delete_clone_voice_btn",
+            "_record_clone_voice_btn",
+            "_import_clone_voice_btn",
+        ):
             button = getattr(self, name, None)
             if button is not None:
                 button.setEnabled(not busy)
@@ -9808,6 +8857,12 @@ class SettingsWindow(QDialog):
             engine_cfg["base_url"] = (
                 get_tts_api_base_url("qwen_vc", region)
                 or self._tts_api_base_url_var.value().strip().rstrip("/")
+            )
+            # The enrollment target model must be the model the voice will
+            # later be synthesized with; an edited-but-unsaved model box
+            # otherwise produced voices DashScope rejects with HTTP 400.
+            engine_cfg["model"] = self._tts_api_model_var.value().strip() or str(
+                get_tts_api_default_value("qwen_vc", "model") or ""
             )
 
     def _on_record_voice_for_clone(self) -> None:
@@ -9958,8 +9013,11 @@ class SettingsWindow(QDialog):
                         window, window._copy("voice_clone_title"), message
                     )
                     return
-                window._load_tts_voices_async()
+                # The voice list is cached per engine; without dropping the
+                # cache the combo kept showing the pre-enrollment list.
+                window._tts_voices_loaded.pop("qwen_vc", None)
                 on_success(window, result)
+                window._load_tts_voices_async()
 
             window = window_ref()
             if window is not None and not window._closing:
@@ -9980,10 +9038,23 @@ class SettingsWindow(QDialog):
 
         def on_success(window, voice) -> None:
             created = getattr(voice, "display_name", "") or getattr(voice, "voice_id", "")
+            voice_id = str(getattr(voice, "voice_id", "") or "").strip()
+            if voice_id:
+                # Select the new voice so Save keeps the service's choice
+                # instead of writing the previous selection back.
+                window._tts_voice_var.set(voice_id)
+            # The card was refreshed for the previous selection when the task
+            # ended; it has to describe the new voice (usually "in review").
+            window._refresh_tts_runtime_card()
+            # New voices are reviewed by the service before they can speak.
+            reviewing = str(getattr(voice, "status", "") or "").upper() == "DEPLOYING"
             QMessageBox.information(
                 window,
                 window._copy("voice_clone_title"),
-                window._copy("voice_clone_created", voice=created),
+                window._copy(
+                    "voice_clone_created_reviewing" if reviewing else "voice_clone_created",
+                    voice=created,
+                ),
             )
 
         self._run_voice_clone_task(
@@ -10044,45 +9115,122 @@ class SettingsWindow(QDialog):
             return
 
         self._sync_voice_clone_consent()
+
+        def on_success(window, _result) -> None:
+            window._tts_voice_var.set("")
+            QMessageBox.information(
+                window,
+                window._copy("voice_clone_title"),
+                window._copy("voice_clone_deleted", voice=label),
+            )
+
         self._run_voice_clone_task(
             lambda: voice_clone_service.delete_voice(self._config, voice_id),
-            lambda _window, _result: None,
+            on_success,
             "voice-clone-delete",
         )
 
-    def _voice_clone_region_warning(self) -> str | None:
-        """Warn when the Qwen TTS region cannot be reused for cloning.
+    def _selected_cloned_voice_status(self) -> str:
+        """Review status of the cloned voice selected in the voice box."""
+        voice_id = str(self._selected_tts_voice_id() or "").strip()
+        if self._is_tts_placeholder(voice_id):
+            # "Loading..." or "No voices" while the list is (re)loading.
+            voice_id = ""
+        stored = voice_clone_service.stored_voices(self._config)
+        if not voice_id and stored:
+            voice_id = str(
+                voice_clone_service.voice_clone_config(self._config).get("voice") or ""
+            ).strip()
+        for voice in stored:
+            if voice["voice_id"] == voice_id:
+                return str(voice.get("status") or "").upper()
+        return ""
 
-        Tokyo has no enrollment endpoint, so cloning falls back to another
-        region. Its key is not carried over, and without this the player only
-        sees an "invalid key" error for a region they never chose.
+    def _voice_clone_region_warning(self) -> str | None:
+        """Warn when the Qwen TTS region or its key cannot be used for cloning.
+
+        Cloning only works in China (Beijing). A Qwen TTS key from another
+        region is not carried over, and without this the player only sees an
+        "invalid key" error for a region they never chose. Older releases did
+        copy a Singapore key into cloning; a cloning key that still equals the
+        Qwen TTS key of such a region can never work either. Only regions known
+        to be outside Beijing count (_qwen_tts_region_is_outside_beijing).
         """
 
         tts_cfg = self._config.get("tts")
         preset_cfg = tts_cfg.get("qwen_tts") if isinstance(tts_cfg, dict) else None
         if not isinstance(preset_cfg, dict):
             return None
-        preset_region = str(preset_cfg.get("region", "") or "").strip()
-        if not preset_region or region_supports_voice_cloning(preset_region):
-            return None
         resolved = voice_clone_service.voice_clone_config(self._config)
+        clone_key = str(resolved.get("api_key", "") or "").strip()
+        preset_key = str(preset_cfg.get("api_key", "") or "").strip()
+        preset_region = str(preset_cfg.get("region", "") or "").strip()
+        if clone_key:
+            if clone_key != preset_key:
+                # A key of its own was entered for cloning.
+                return None
+            if not preset_region:
+                preset_region = str(
+                    resolve_tts_api_config("qwen_tts", preset_cfg).get("region") or ""
+                )
+        if not preset_region or not self._qwen_tts_region_is_outside_beijing(
+            preset_region,
+            preset_cfg,
+        ):
+            return None
         return self._copy(
             "voice_clone_region_fallback",
             region=self._tts_api_region_label("qwen_vc", str(resolved.get("region") or "")),
+        )
+
+    @staticmethod
+    def _qwen_tts_region_is_outside_beijing(region: str, preset_cfg: dict) -> bool:
+        """Whether the Qwen TTS region, and so its key, is known not to be Beijing.
+
+        Singapore and Tokyo never are. A custom address counts only when its
+        host clearly names another region: Alibaba recommends the Beijing
+        workspace domain ({WorkspaceId}.cn-beijing.maas.aliyuncs.com), and a
+        proxy's key may be a Beijing key, so neither may block cloning.
+        """
+
+        if region_supports_voice_cloning(region):
+            return False
+        if normalize_tts_api_region("qwen_tts", region) != "custom":
+            # Singapore, Tokyo, or an unknown value the engine resolves to
+            # the default (Singapore) endpoint.
+            return True
+        return _dashscope_url_is_outside_beijing(
+            resolve_tts_api_config("qwen_tts", preset_cfg).get("base_url")
         )
 
     def _voice_clone_preflight_error(self) -> str | None:
         """Explain, before synthesis, why cloning cannot run yet."""
         self._sync_voice_clone_consent()
         resolved = voice_clone_service.voice_clone_config(self._config)
+        region_warning = self._voice_clone_region_warning()
         if not str(resolved.get("api_key", "") or "").strip():
-            region_warning = self._voice_clone_region_warning()
-            if region_warning:
-                return region_warning
-            return self._copy("voice_clone_api_key_required")
+            return region_warning or self._copy("voice_clone_api_key_required")
+        if region_warning:
+            return region_warning
         if not voice_clone_service.stored_voices(self._config):
             return self._copy("voice_clone_no_voices")
+        if self._selected_cloned_voice_status() == "DEPLOYING":
+            return self._copy("voice_clone_reviewing")
         return None
+
+    def _voice_clone_test_failure_message(self, error_code: str) -> str:
+        """Localized text for a failed cloned-voice test synthesis."""
+
+        copy_key = _VOICE_CLONE_TEST_FAILURE_KEYS.get(error_code)
+        if copy_key == "voice_clone_model_unsupported":
+            return self._copy(copy_key, model=QWEN_VC_DEFAULT_MODEL)
+        if copy_key:
+            return self._copy(copy_key)
+        return self._copy(
+            "tts_engine_test_failed",
+            engine=get_tts_engine_label("qwen_vc", self._ui_lang),
+            reason=self._copy(_TTS_TEST_REASON_KEYS.get(error_code, "tts_reason_provider")),
+        )
 
     def _tts_api_region_label(self, engine: str, region: str) -> str:
         """Localized name of a TTS API service region, falling back to its code."""
@@ -10103,9 +9251,12 @@ class SettingsWindow(QDialog):
             return self._copy("voice_clone_consent_required")
         if isinstance(error, voice_clone_service.VoiceCloneNotConfiguredError):
             return self._copy("voice_clone_api_key_required")
+        if isinstance(error, voice_clone_service.VoiceCloneModelUnsupportedError):
+            return self._copy("voice_clone_model_unsupported", model=QWEN_VC_DEFAULT_MODEL)
 
         status_code = getattr(error, "status_code", None)
         provider_code = str(getattr(error, "provider_code", "") or "")
+        provider_folded = provider_code.casefold()
         text = str(error or "").casefold()
         logger.warning(
             "Voice cloning failed: %s",
@@ -10123,12 +9274,37 @@ class SettingsWindow(QDialog):
                 exc_info=error,
             )
 
-        if (
-            status_code in (401, 403)
-            or "http 401" in text
-            or "http 403" in text
-            or "api key" in text
+        if provider_code.upper() == "UNDEPLOYED":
+            message = self._copy("voice_clone_review_rejected")
+        elif "uploading the reference recording failed" in text or (
+            "could not upload the reference recording" in text
         ):
+            # The temporary-storage host answers with its own status codes;
+            # a 403 there is an expired upload policy, not a bad API key.
+            message = self._copy("voice_clone_upload_failed")
+        elif "upload credential is incomplete" in text:
+            message = self._copy("voice_clone_region_unsupported")
+        elif (
+            status_code == 401
+            or "http 401" in text
+            or "invalidapikey" in provider_folded
+        ):
+            # Only a rejected key gets the "use a Beijing key" explanation.
+            message = self._copy("voice_clone_auth_failed")
+        elif (
+            status_code == 403
+            or "http 403" in text
+            or any(
+                token in provider_folded
+                for token in ("accessdenied", "unpurchased", "freetieronly")
+            )
+        ):
+            # DashScope answers 403 for a valid key that may not use the
+            # model: not activated, not purchased, or free tier only.
+            message = self._copy("voice_clone_access_denied")
+        elif "api key is not configured" in text or "requires an api key" in text:
+            message = self._copy("voice_clone_api_key_required")
+        elif "api key" in text or "api-key" in text:
             message = self._copy("voice_clone_auth_failed")
         elif status_code == 429 or "http 429" in text or "rate limit" in text:
             message = self._copy("voice_clone_rate_limited")
@@ -10343,6 +9519,7 @@ class SettingsWindow(QDialog):
                 self._ensure_page_built(NAV_ITEMS[row][0])
             self._page_stack.setCurrentIndex(row)
             self._animate_page_switch(previous_row, row)
+            self._schedule_model_list_auto_refresh()
 
     def _animate_page_switch(self, previous_row: int, row: int) -> None:
         if self._page_stack is None:
@@ -10574,10 +9751,31 @@ class SettingsWindow(QDialog):
 
     def _on_tts_api_model_changed(self, text: str) -> None:
         self._tts_api_model_var.set(text)
+        self._refresh_tts_persona_visibility()
         self._prompt_for_missing_credential("tts")
+
+    def _refresh_tts_persona_visibility(self) -> None:
+        """Offer persona reading guidance only where the model can use it.
+
+        Only Qwen instruct models accept instructions. Alibaba retired the
+        last listed one (qwen3-tts-instruct-flash) on 2026-10-10, so the
+        switch stays hidden unless the player types an instruct model.
+        """
+        persona_frame = getattr(self, "_tts_persona_frame", None)
+        if persona_frame is None or not self._qt_widget_is_alive(persona_frame):
+            return
+        from src.tts.persona_instructions import qwen_tts_model_supports_instructions
+
+        persona_frame.setVisible(
+            self._selected_tts_api_engine() == "qwen_tts"
+            and qwen_tts_model_supports_instructions(self._tts_api_model_var.value())
+        )
 
     def _on_tts_voice_changed(self, _text: str) -> None:
         self._refresh_bert_model_prompt()
+        if self._selected_tts_engine() == "qwen_vc":
+            # The card says whether the selected cloned voice is still in review.
+            self._refresh_tts_runtime_card()
 
     def _on_tts_bert_language_changed(self, _text: str) -> None:
         self._tts_voices_loaded.pop("style_bert_vits2", None)
@@ -10649,9 +9847,30 @@ class SettingsWindow(QDialog):
         model.setMaximumHeight(32)
         model.setEditText(self._tts_api_model_var.value())
         model.currentTextChanged.connect(self._tts_api_model_var.set)
+        model.currentTextChanged.connect(
+            lambda _text: self._refresh_tts_persona_visibility()
+        )
         model.textActivated.connect(self._on_tts_api_model_changed)
         self._tts_api_model_entry = model
         self._row_layout(frame_layout, self._copy("tts_api_model"), model)
+
+        # Qwen instruct models accept reading guidance; let the roleplay
+        # persona drive it on request instead of silently (opt-in only).
+        persona_frame = QFrame()
+        persona_layout = QVBoxLayout(persona_frame)
+        persona_layout.setContentsMargins(0, 0, 0, 0)
+        persona_layout.setSpacing(4)
+        self._build_switch_row(
+            persona_layout,
+            self._copy("tts_persona_instructions"),
+            self._tts_persona_instructions_var,
+        )
+        persona_hint = QLabel(self._copy("tts_persona_instructions_hint"))
+        persona_hint.setObjectName("hintLabel")
+        persona_hint.setWordWrap(True)
+        persona_layout.addWidget(persona_hint)
+        frame_layout.addWidget(persona_frame)
+        self._tts_persona_frame = persona_frame
 
         layout.addWidget(self._tts_api_frame)
         self._refresh_tts_api_visibility()
@@ -10673,13 +9892,19 @@ class SettingsWindow(QDialog):
         if engine == "qwen_vc":
             button.setVisible(False)
             resolved = voice_clone_service.voice_clone_config(self._config)
+            region_warning = self._voice_clone_region_warning()
             if not str(resolved.get("api_key", "") or "").strip():
                 label.setText(
-                    self._voice_clone_region_warning()
-                    or self._copy("voice_clone_api_key_required")
+                    region_warning or self._copy("voice_clone_api_key_required")
                 )
+            elif region_warning:
+                # The cloning key is a copy of a Qwen TTS key from a region
+                # that cannot clone.
+                label.setText(region_warning)
             elif not voice_clone_service.stored_voices(self._config):
                 label.setText(self._copy("voice_clone_no_voices"))
+            elif self._selected_cloned_voice_status() == "DEPLOYING":
+                label.setText(self._copy("voice_clone_reviewing"))
             else:
                 label.setText(self._copy("voice_clone_ready"))
         elif engine == "voicevox":
@@ -10941,8 +10166,38 @@ class SettingsWindow(QDialog):
             return False
         return True
 
+    def _label_cloned_voice_entries(self, entries: list) -> list[tuple[str, str]]:
+        """Mark cloned voices the service is still reviewing in their labels.
+
+        Only the label changes; the label-to-id mapping still yields the id.
+        """
+
+        reviewing = {
+            voice["voice_id"]
+            for voice in voice_clone_service.stored_voices(self._config)
+            if str(voice.get("status") or "").upper() == "DEPLOYING"
+        }
+        if not reviewing:
+            return [(str(display), str(voice_id)) for display, voice_id in entries]
+        status = self._copy("voice_clone_status_reviewing")
+        template = "{name}（{status}）" if self._ui_lang in {"zh-CN", "ja"} else "{name} ({status})"
+        return [
+            (
+                template.format(name=display, status=status)
+                if str(voice_id) in reviewing
+                else str(display),
+                str(voice_id),
+            )
+            for display, voice_id in entries
+        ]
+
     def _apply_tts_voices(self, engine: str, entries: list) -> None:
         preferred = self._tts_voice_var.value().strip()
+        if engine == "qwen_vc":
+            entries = self._label_cloned_voice_entries(entries)
+            # The label carries the review state, which may have changed since
+            # it was shown; keep the selection through its voice id.
+            preferred = self._tts_voice_display_to_id.get(preferred, preferred)
         choices = [e[0] for e in entries] if entries else [self._copy("tts_voice_none")]
         display_to_id = {str(d): str(vid) for d, vid in entries}
         id_to_display: dict[str, str] = {}
@@ -10962,18 +10217,21 @@ class SettingsWindow(QDialog):
         self._tts_voice_display_to_id.update(display_to_id)
         self._tts_voice_var.set(selected_display)
         combo = getattr(self, "_tts_voice_combo", None)
-        if not self._qt_widget_is_alive(combo):
-            if combo is getattr(self, "_tts_voice_combo", None):
-                self._tts_voice_combo = None
-            return
-        blocked = combo.blockSignals(True)
-        try:
-            combo.clear()
-            combo.addItems(choices)
-            combo.setCurrentText(selected_display)
-        finally:
-            if self._qt_widget_is_alive(combo):
-                combo.blockSignals(blocked)
+        if self._qt_widget_is_alive(combo):
+            blocked = combo.blockSignals(True)
+            try:
+                combo.clear()
+                combo.addItems(choices)
+                combo.setCurrentText(selected_display)
+            finally:
+                if self._qt_widget_is_alive(combo):
+                    combo.blockSignals(blocked)
+        elif combo is getattr(self, "_tts_voice_combo", None):
+            self._tts_voice_combo = None
+        if engine == "qwen_vc":
+            # Signals were blocked above, so the selection handler did not run;
+            # the card must describe the voice now selected.
+            self._refresh_tts_runtime_card()
 
     def _localized_reference_problem(
         self,
@@ -11181,10 +10439,18 @@ class SettingsWindow(QDialog):
             )
             if engine == "qwen_vc":
                 message = self._localized_voice_clone_error(e)
-            elif engine == "qwen_tts":
-                message = tts_error_token(tts_error_code(e))
-            else:
-                message = self._copy("tts_test_failed")
+                # _finish_tts_test only explains error tokens; this message is
+                # already localized, so show it once the test has ended, as
+                # the other engines' failures are shown.
+                show_message = self._tts_test_manager is not None
+                self.tts_test_finished.emit(generation, False, message)
+                if show_message:
+                    QMessageBox.warning(self, tr(self._ui_lang, "tts_test"), message)
+                return
+            # Keep the error category for every engine so the result dialog
+            # can say why (missing BERT model, JP-Extra language mismatch,
+            # ...) instead of a bare "test failed".
+            message = tts_error_token(tts_error_code(e))
             self.tts_test_finished.emit(generation, False, message)
 
     def _on_tts_stop(self) -> None:
@@ -11262,12 +10528,49 @@ class SettingsWindow(QDialog):
                         "playback": "qwen_tts_playback_failed",
                         "safety": "qwen_tts_safety_failed",
                         "invalid_input": "qwen_tts_input_failed",
+                        # DashScope's 403 for an overdue balance, an unpurchased
+                        # model or free-tier-only quota: retrying never helps.
+                        "billing": "qwen_tts_billing_failed",
                         "provider": "qwen_tts_provider_failed",
                     }.get(error_code, "qwen_tts_provider_failed")
                     QMessageBox.warning(
                         self,
                         tr(self._ui_lang, "tts_test"),
                         self._copy(message_key),
+                    )
+            elif (
+                manager_was_active
+                and self._selected_tts_engine() == "qwen_vc"
+                and str(message or "").startswith(TTS_ERROR_TOKEN_PREFIX)
+            ):
+                # A failed cloned-voice synthesis used to end silently.
+                error_code = tts_error_code(message)
+                if error_code not in {"cancelled", "stopped"}:
+                    QMessageBox.warning(
+                        self,
+                        tr(self._ui_lang, "tts_test"),
+                        self._voice_clone_test_failure_message(error_code),
+                    )
+            elif (
+                manager_was_active
+                and self._selected_tts_engine() != "qwen_vc"
+                # Only engine-classified failures get the reason dialog; the
+                # timeout/stop paths pass localized copy and already show it.
+                and str(message or "").startswith(TTS_ERROR_TOKEN_PREFIX)
+            ):
+                error_code = tts_error_code(message)
+                if error_code not in {"cancelled", "stopped"}:
+                    from src.utils.i18n import get_tts_engine_label
+
+                    reason_key = _TTS_TEST_REASON_KEYS.get(error_code, "tts_reason_provider")
+                    QMessageBox.warning(
+                        self,
+                        tr(self._ui_lang, "tts_test"),
+                        self._copy(
+                            "tts_engine_test_failed",
+                            engine=get_tts_engine_label(self._selected_tts_engine(), self._ui_lang),
+                            reason=self._copy(reason_key),
+                        ),
                     )
 
     def _stop_tts_test_manager(self) -> None:
@@ -11616,6 +10919,16 @@ class SettingsWindow(QDialog):
     # Save
     # ----------------------------------------------------------------
     def _save(self) -> None:
+        if getattr(self, "_voice_clone_task_active", False):
+            # The enrollment worker mutates tts.qwen_vc while it runs; a
+            # deepcopy racing it raised "dictionary changed size during
+            # iteration" and the save failed with a generic message.
+            QMessageBox.information(
+                self,
+                self._copy("voice_clone_title"),
+                self._copy("voice_clone_busy_wait"),
+            )
+            return
         self._capture_backend_draft()
         self._capture_tts_api_draft()
         cfg = copy.deepcopy(self._config)
@@ -11832,20 +11145,6 @@ class SettingsWindow(QDialog):
         vrc_cfg["enabled"] = self._vrc_listen_enabled_var.value()
         vrc_cfg["show_overlay"] = self._vrc_listen_overlay_var.value()
         vrc_cfg["send_to_chatbox"] = self._vrc_listen_send_var.value()
-        vr_cfg = vrc_cfg.setdefault("vr_overlay", {})
-        if isinstance(vr_cfg, dict):
-            vr_cfg["enabled"] = self._vr_overlay_enabled_var.value()
-            vr_cfg["locked"] = self._vr_overlay_locked_var.value()
-            vr_cfg["width_meters"] = self._vr_overlay_width
-            vr_cfg["plate_opacity"] = self._vr_overlay_opacity
-            vr_cfg["font_scale"] = self._vr_overlay_font_scale
-            vr_cfg["speaker_marks"] = self._vr_speaker_marks_var.value()
-        shot_cfg = vrc_cfg.setdefault("screenshot_translation", {})
-        if isinstance(shot_cfg, dict):
-            shot_cfg["enabled"] = self._screenshot_enabled_var.value()
-            shot_cfg["hand"] = self._screenshot_hand_codes.get(
-                self._screenshot_hand_var.value(), "left"
-            )
         loopback_device = self._loopback_device_var.value().strip()
         if loopback_device in {self._copy("vrc_listen_device_default"), self._copy("vrc_listen_device_missing")}:
             loopback_device = ""
@@ -11884,7 +11183,6 @@ class SettingsWindow(QDialog):
         control_params["listen"] = self._osc_toggle_listen_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleListen"
         control_params["tts"] = self._osc_toggle_tts_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleTts"
         control_params["overlay"] = self._osc_toggle_overlay_var.value().strip() or f"{osc_cfg['control_prefix']}ToggleOverlay"
-        control_params["screenshot"] = self._osc_toggle_screenshot_var.value().strip() or f"{osc_cfg['control_prefix']}Screenshot"
         avatar_cfg = osc_cfg.get("avatar_sync")
         if not isinstance(avatar_cfg, dict):
             avatar_cfg = {}
@@ -11922,19 +11220,6 @@ class SettingsWindow(QDialog):
             )
             return
 
-        screenshot_hotkey = self._screenshot_hotkey_var.value().strip()
-        try:
-            hotkey_cfg["screenshot_translate"] = (
-                normalize_hotkey(screenshot_hotkey) if screenshot_hotkey else ""
-            )
-        except HotkeyError as exc:
-            logger.warning("Invalid screenshot hotkey: %s", exc)
-            QMessageBox.warning(
-                self,
-                self._copy("hotkey_error"),
-                self._copy("hotkey_invalid", field=self._copy("screenshot_hotkey")),
-            )
-            return
 
         # Translation personas were consolidated into the shared rewrite-style
         # selector. Keep legacy fields for migration/debugging, but never
@@ -12121,6 +11406,9 @@ class SettingsWindow(QDialog):
         super().showEvent(event)
         if not self._audio_device_refresh_timer.isActive():
             self._audio_device_refresh_timer.start()
+        # A preloaded window built the API page while hidden and did not read
+        # the model list then.
+        self._schedule_model_list_auto_refresh()
 
     def hideEvent(self, event) -> None:  # noqa: N802
         timer = getattr(self, "_audio_device_refresh_timer", None)

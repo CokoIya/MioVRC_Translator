@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-08-21",
+  "updated": "2026-10-13",
   "translation_backends": {
     "openai": {
       "label": "GPT",
@@ -391,5 +391,302 @@
     "deepseek": "official",
     "xiaomi": "global",
     "nvidia": "global"
+  },
+  "translation_v2": {
+    "backends": {
+      "openai": {
+        "label": "GPT",
+        "model": "gpt-6-luna",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable"
+      },
+      "openai_compatible": {
+        "label": "Relay Compatible",
+        "model": "gpt-6-luna",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable",
+        "api_key_hint": "Enter the Base URL and API key of your relay station (中转站). Mio reads the relay's model list so you can pick any model it serves - GPT, Claude, Grok, Gemini and others.",
+        "model_hint": "Pick a model from the list read from your relay, or type a model id. Refresh the list after changing the Base URL, key or protocol."
+      },
+      "local_ai": {
+        "label": "Local AI",
+        "model": "qwen3:4b-instruct",
+        "timeout_s": 30.0,
+        "max_output_tokens": 256,
+        "max_retries": 0,
+        "model_input": "entry",
+        "api_key_hint": "Leave blank unless your local server requires an API key.",
+        "model_hint": "Pick a model your local OpenAI-compatible server (Ollama, LM Studio, llama.cpp, vLLM) reports, or type its exact name."
+      },
+      "google_web": {
+        "label": "Google Web",
+        "model": "google-web",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "model_hint": "No API key required. Uses Google's public web translation endpoint; quality is strong where Google services are reachable, but mainland China access may be unreliable."
+      },
+      "microsoft_edge_web": {
+        "label": "Bing Translate (Free)",
+        "model": "bing",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "model_hint": "No API key required. Uses Microsoft Edge's web translation service; it is not the supported Azure Translator API and has no availability SLA."
+      },
+      "mymemory": {
+        "label": "MyMemory",
+        "model": "mymemory",
+        "timeout_s": 8.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "model_hint": "No API key required. Good as a zero-setup fallback, with public quota and translation-memory quality that can vary by language pair."
+      },
+      "deepl": {
+        "label": "DeepL Free",
+        "model": "deepl-api",
+        "timeout_s": 10.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "api_key_hint": "Use a DeepL API Free key. The default endpoint is api-free.deepl.com; paid DeepL API keys should use https://api.deepl.com/v2.",
+        "model_hint": "Dedicated DeepL translation API. The model field is informational."
+      },
+      "libretranslate": {
+        "label": "LibreTranslate",
+        "model": "libretranslate",
+        "timeout_s": 10.0,
+        "max_output_tokens": 192,
+        "max_retries": 1,
+        "model_input": "select",
+        "api_key_hint": "Optional. Leave blank for a local/self-hosted LibreTranslate server that does not require an API key.",
+        "model_hint": "Use a local LibreTranslate server for no provider-side quota. Public instances may require an API key or rate-limit requests."
+      },
+      "qianwen": {
+        "label": "Qwen",
+        "model": "qwen-mt-flash",
+        "timeout_s": 20.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "api_key_hint": "Use the API key issued for the selected Qwen service region. Japan requires the workspace-specific Base URL issued by Model Studio."
+      },
+      "hunyuan": {
+        "label": "Tencent Hunyuan",
+        "model": "hy3",
+        "timeout_s": 20.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable",
+        "api_key_hint": "Use a Tencent TokenHub API key from the site you choose (China or Global). Keys from the retired Hunyuan console no longer work.",
+        "model_hint": "hy3 is the low-latency default; hy-mt2-plus and hy-mt2-lite are Tencent's dedicated translation models."
+      },
+      "xiaomi": {
+        "label": "Xiaomi AI",
+        "model": "mimo-v2.6-flash",
+        "timeout_s": 20.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "api_key_hint": "Use the Xiaomi MiMo API Key that matches the selected service region. Do not mix pay-as-you-go keys with Token Plan clusters.",
+        "model_hint": "mimo-v2.6-flash is the low-latency default; mimo-v2.6-pro gives higher quality, and the ultraspeed variant costs about 10x more."
+      },
+      "deepseek": {
+        "label": "DeepSeek",
+        "model": "deepseek-flash",
+        "timeout_s": 20.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "api_key_hint": "Use a DeepSeek Open Platform API Key. If you use a proxy or third-party relay key, choose Custom in Service Region and enter the matching Base URL."
+      },
+      "zhipu": {
+        "label": "GLM",
+        "model": "glm-4.7-flashx",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select"
+      },
+      "gemini": {
+        "label": "Gemini",
+        "model": "gemini-3.6-flash",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select"
+      },
+      "kimi": {
+        "label": "Kimi",
+        "model": "kimi-k2.6",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select"
+      },
+      "xai": {
+        "label": "xAI",
+        "model": "grok-4.3",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable"
+      },
+      "mistral": {
+        "label": "Mistral",
+        "model": "mistral-medium-3-5",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select"
+      },
+      "doubao": {
+        "label": "Doubao",
+        "model": "doubao-seed-2-1-lite-260915",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable",
+        "model_hint": "Pick a current Ark model or type any model id or ep- inference endpoint id from the Ark console."
+      },
+      "nvidia": {
+        "label": "NVIDIA AI",
+        "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "select",
+        "api_key_hint": "Use an NVIDIA API Catalog key for the hosted endpoint, or choose Custom for a self-hosted NIM/proxy endpoint.",
+        "model_hint": "Hosted NIM model ids use provider/model format. For self-hosted NIM endpoints, enter the model id exposed by that deployment."
+      },
+      "anthropic": {
+        "label": "Claude",
+        "model": "claude-opus-5",
+        "timeout_s": 15.0,
+        "max_output_tokens": 192,
+        "max_retries": 0,
+        "model_input": "editable"
+      }
+    },
+    "model_presets": {
+      "openai": ["gpt-6-luna", "gpt-6-sol", "gpt-5.4-mini", "gpt-5.6-luna"],
+      "openai_compatible": [],
+      "local_ai": [],
+      "google_web": ["google-web"],
+      "microsoft_edge_web": ["bing"],
+      "mymemory": ["mymemory"],
+      "deepl": ["deepl-api"],
+      "libretranslate": ["libretranslate"],
+      "deepseek": ["deepseek-flash"],
+      "zhipu": ["glm-4.7-flashx", "glm-4.7-flash", "glm-5.2", "glm-4.7", "glm-5.3-flash"],
+      "qianwen": ["qwen-mt-flash", "qwen-mt-lite", "qwen-mt-plus"],
+      "hunyuan": ["hy3", "hy-mt2-plus", "hy-mt2-lite", "hy4-preview"],
+      "xiaomi": ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"],
+      "gemini": ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"],
+      "kimi": ["kimi-k2.6", "kimi-k3"],
+      "xai": ["grok-4.3", "grok-4.20-0309-non-reasoning", "grok-4.7", "grok-4.6"],
+      "mistral": ["mistral-medium-3-5", "mistral-small-2603", "ministral-14b-2512", "ministral-8b-2512"],
+      "doubao": ["doubao-seed-2-1-lite-260915", "doubao-seed-2-0-mini-260428", "doubao-seed-2-1-turbo-260628", "doubao-seed-2-1-pro-260915", "deepseek-v4-1-flash-260910"],
+      "nvidia": ["nvidia/nemotron-3.5-lightning-30b-a3b", "deepseek-ai/deepseek-v4.1-flash", "google/gemma-4-31b-it", "nvidia/nemotron-3-super-120b-a12b"],
+      "anthropic": ["claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "claude-haiku-4-5"]
+    },
+    "model_profiles": {
+      "openai": {
+        "gpt-6-luna": {"speed": "very_fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "gpt-6-sol": {"speed": "fast", "quality": "very_high", "fit": "recommended", "note": "quality_first"},
+        "gpt-5.4-mini": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "economy_first"},
+        "gpt-5.6-luna": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "balanced_quality"}
+      },
+      "openai_compatible": {},
+      "google_web": {
+        "google-web": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "no_key_simple"}
+      },
+      "microsoft_edge_web": {
+        "bing": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "no_key_simple"}
+      },
+      "mymemory": {
+        "mymemory": {"speed": "fast", "quality": "balanced", "fit": "general", "note": "no_key_fallback"}
+      },
+      "deepl": {
+        "deepl-api": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "mt_quality"}
+      },
+      "libretranslate": {
+        "libretranslate": {"speed": "fast", "quality": "balanced", "fit": "recommended", "note": "self_hosted_free"}
+      },
+      "deepseek": {
+        "deepseek-flash": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"}
+      },
+      "zhipu": {
+        "glm-4.7-flashx": {"speed": "very_fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "glm-4.7-flash": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "glm-5.2": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "quality_first"},
+        "glm-4.7": {"speed": "balanced", "quality": "high", "fit": "recommended", "note": "general_high_quality"},
+        "glm-5.3-flash": {"speed": "balanced", "quality": "high", "fit": "general", "note": "balanced_quality"}
+      },
+      "qianwen": {
+        "qwen-mt-flash": {"speed": "very_fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "qwen-mt-lite": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "qwen-mt-plus": {"speed": "fast", "quality": "very_high", "fit": "recommended", "note": "mt_quality"}
+      },
+      "hunyuan": {
+        "hy3": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "hy-mt2-plus": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "mt_quality"},
+        "hy-mt2-lite": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "hy4-preview": {"speed": "balanced", "quality": "very_high", "fit": "general", "note": "quality_first"}
+      },
+      "xiaomi": {
+        "mimo-v2.6-flash": {"speed": "very_fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "mimo-v2.6-pro": {"speed": "fast", "quality": "very_high", "fit": "recommended", "note": "quality_first"},
+        "mimo-v2.6-pro-ultraspeed": {"speed": "very_fast", "quality": "very_high", "fit": "general", "note": "ultra_fast"}
+      },
+      "gemini": {
+        "gemini-3.6-flash": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "gemini-3.5-flash-lite": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "gemini-3.8-flash": {"speed": "balanced", "quality": "very_high", "fit": "recommended", "note": "quality_first"}
+      },
+      "kimi": {
+        "kimi-k2.6": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "kimi-k3": {"speed": "slow", "quality": "very_high", "fit": "general", "note": "quality_first"}
+      },
+      "xai": {
+        "grok-4.3": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "grok-4.20-0309-non-reasoning": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "ultra_fast"},
+        "grok-4.7": {"speed": "balanced", "quality": "very_high", "fit": "general", "note": "quality_first"},
+        "grok-4.6": {"speed": "balanced", "quality": "very_high", "fit": "general", "note": "general_high_quality"}
+      },
+      "mistral": {
+        "mistral-medium-3-5": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "mistral-small-2603": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "balanced_quality"},
+        "ministral-14b-2512": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "ministral-8b-2512": {"speed": "very_fast", "quality": "balanced", "fit": "general", "note": "ultra_fast"}
+      },
+      "nvidia": {
+        "nvidia/nemotron-3.5-lightning-30b-a3b": {"speed": "very_fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "deepseek-ai/deepseek-v4.1-flash": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "balanced_quality"},
+        "google/gemma-4-31b-it": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "general_high_quality"},
+        "nvidia/nemotron-3-super-120b-a12b": {"speed": "balanced", "quality": "very_high", "fit": "general", "note": "quality_first"}
+      },
+      "doubao": {
+        "doubao-seed-2-1-lite-260915": {"speed": "fast", "quality": "high", "fit": "very_recommended", "note": "live_default"},
+        "doubao-seed-2-0-mini-260428": {"speed": "very_fast", "quality": "balanced", "fit": "recommended", "note": "economy_first"},
+        "doubao-seed-2-1-turbo-260628": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "ultra_fast"},
+        "doubao-seed-2-1-pro-260915": {"speed": "balanced", "quality": "very_high", "fit": "recommended", "note": "quality_first"},
+        "deepseek-v4-1-flash-260910": {"speed": "fast", "quality": "high", "fit": "general", "note": "balanced_quality"}
+      },
+      "anthropic": {
+        "claude-opus-5": {"speed": "balanced", "quality": "very_high", "fit": "very_recommended", "note": "live_default"},
+        "claude-sonnet-5-5": {"speed": "fast", "quality": "very_high", "fit": "recommended", "note": "balanced_quality"},
+        "claude-haiku-5-5": {"speed": "very_fast", "quality": "high", "fit": "recommended", "note": "ultra_fast"},
+        "claude-sonnet-5": {"speed": "fast", "quality": "high", "fit": "recommended", "note": "general_high_quality"},
+        "claude-haiku-4-5": {"speed": "very_fast", "quality": "balanced", "fit": "general", "note": "economy_first"}
+      }
+    }
   }
 }

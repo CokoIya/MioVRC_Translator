@@ -13,7 +13,7 @@ from src.ui_qt.main_window import MainWindow, pipeline_config_fingerprint
 BASE = {
     "app_mode": "translation",
     "asr": {"engine": "sensevoice"},
-    "audio": {"push_to_talk": False, "vad_min_rms": 0.012},
+    "audio": {"vad_min_rms": 0.012},
     "translation": {"backend": "google_web", "send_to_chatbox": True},
     "tts": {"enabled": False, "engine": "edge"},
     "ui": {"language": "zh-CN", "theme": "dark"},
@@ -21,8 +21,6 @@ BASE = {
     "osc": {"sync_mute_self": True},
     "vrc_listen": {
         "enabled": True,
-        "vr_overlay": {"enabled": False},
-        "screenshot_translation": {"enabled": False},
         "send_to_chatbox": False,
     },
 }
@@ -42,9 +40,6 @@ def _changed(path, value):
     [
         (("ui", "theme"), "light"),
         (("hotkeys", "mic_mute"), "ctrl+k"),
-        (("vrc_listen", "vr_overlay", "enabled"), True),
-        (("vrc_listen", "screenshot_translation", "enabled"), True),
-        (("audio", "push_to_talk"), True),
         (("translation", "send_to_chatbox"), False),
         (("tts", "enabled"), True),
         (("osc", "sync_mute_self"), False),
@@ -85,7 +80,6 @@ _CALLS = (
     "_reset_tts_manager",
     "_resolve_virtual_output_async",
     "_restart_background_provider_initialization",
-    "_retheme_vr_panels",
     "_schedule_pipeline_start_retry",
     "_schedule_settings_preload",
     "_stop_hotkeys",

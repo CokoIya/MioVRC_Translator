@@ -362,7 +362,11 @@ class DownloadProgressWidget(QFrame):
             elif p.state == DownloadState.PAUSED:
                 self._status_label.setText(self._t("model_download_hint_paused"))
             elif p.state == DownloadState.ERROR:
-                self._status_label.setText(self._t("model_download_hint_error"))
+                # The localized hint alone hid the actual cause (for example
+                # a refused mirror URL); keep the technical reason visible.
+                hint = self._t("model_download_hint_error")
+                detail = str(p.error or "").strip()
+                self._status_label.setText(f"{hint}\n{detail}" if detail else hint)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -748,6 +752,8 @@ class SetupWindow(QDialog):
         if message:
             logger.error("Model setup download failed: %s", message)
         self._progress_widget._bar.setValue(0)
+        # The first-run setup window keeps the localized hint only; the
+        # technical reason stays in the log and in the progress widget.
         self._bottom_label.setText(self._t("model_download_hint_error"))
         self._retry_btn.show()
         self._exit_code = 1

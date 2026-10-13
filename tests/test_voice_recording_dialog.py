@@ -10,7 +10,7 @@ from src.ui_qt.voice_recording_dialog import VoiceRecordingDialog
 
 def _tone_wav_bytes(
     *,
-    duration_s: float = 3.0,
+    duration_s: float = 6.0,
     sample_rate: int = 24000,
     amplitude: float = 0.0005,
 ) -> bytes:
@@ -32,7 +32,7 @@ def _tone_wav_bytes(
     return output.getvalue()
 
 
-def _silent_wav_bytes(duration_s: float = 3.0, sample_rate: int = 24000) -> bytes:
+def _silent_wav_bytes(duration_s: float = 6.0, sample_rate: int = 24000) -> bytes:
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
         wav.setnchannels(1)
@@ -197,3 +197,24 @@ def test_voice_recording_dialog_reads_the_opener_theme(qtbot):
 
     assert module._parent_theme(FakeWindow()) == "light"
     assert module._parent_theme(object()) == "dark"
+
+
+def test_recording_instructions_state_the_service_minimum_in_every_language(qtbot):
+    """voice-enrollment needs at least 5 seconds; the copy used to say 3."""
+    from src.tts.reference_audio import REFERENCE_MIN_DURATION_SECONDS
+    from src.utils.i18n import tr
+
+    assert REFERENCE_MIN_DURATION_SECONDS == 5.0
+    expected = {
+        "zh-CN": "至少 5 秒",
+        "en": "5 seconds minimum",
+        "ja": "最低 5 秒",
+        "ru": "минимум 5;",
+        "ko": "최소 5초",
+    }
+    dialog = VoiceRecordingDialog(ui_lang="en", theme="dark")
+    qtbot.addWidget(dialog)
+    for language, phrase in expected.items():
+        assert phrase in tr(language, "voice_record_instructions")
+        dialog.update_language(language)
+        assert phrase in dialog._instructions_label.text()

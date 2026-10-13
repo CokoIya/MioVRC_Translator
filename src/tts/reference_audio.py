@@ -35,14 +35,14 @@ from src.utils.app_paths import (
 
 logger = logging.getLogger(__name__)
 
-# 24 kHz mono is both the recording format this app captures and the minimum
-# the DashScope enrollment endpoint accepts, so no resampling is needed on the
-# common path.
+# 24 kHz mono is the recording format this app captures and the rate the
+# DashScope voice-enrollment service recommends (it accepts 16 kHz and up), so
+# no resampling is needed on the common path.
 REFERENCE_SAMPLE_RATE = 24000
-# The service requires at least 3 seconds of speech and accepts up to 60, but
-# recommends 10-20.  Cap well inside the ceiling: longer clips only inflate the
-# base64 upload without improving the clone.
-REFERENCE_MIN_DURATION_SECONDS = 3.0
+# The service needs at least 5 seconds of continuous speech and accepts up to
+# 60, but recommends 10-20.  Cap well inside the ceiling: longer clips only
+# inflate the upload without improving the clone.
+REFERENCE_MIN_DURATION_SECONDS = 5.0
 REFERENCE_RECOMMENDED_DURATION_SECONDS = 10.0
 REFERENCE_MAX_DURATION_SECONDS = 30.0
 REFERENCE_MIN_PEAK = 0.015

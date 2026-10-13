@@ -70,6 +70,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "auth_hint_zhipu": "请填写有效的智谱 GLM API Key。",
         "auth_hint_qianwen": "请填写有效的阿里云 DashScope API Key。",
         "auth_hint_xiaomi": "请填写有效的 Xiaomi AI / MiMo API Key，并确保服务区域和计费方式匹配：按量付费使用 Global，Token Plan 选择对应 CN / SG / EU 集群。",
+        "auth_hint_hunyuan": "请填写在所选站点（TokenHub 中国站或国际站）申请的腾讯 TokenHub API Key；两个站点的 Key 不能通用，已下线的混元控制台签发的旧 Key 也不再可用。",
         "auth_hint_nvidia": "请填写有效的 NVIDIA API Catalog API Key；自托管 NIM 可使用自定义 Base URL。",
         "auth_hint_gemini": "请填写有效的 Google AI Studio / Gemini API Key。",
         "auth_hint_doubao": "请填写有效的火山引擎 Ark API Key，并在 Model 中填写模型 ID。",
@@ -129,6 +130,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "auth_hint_zhipu": "Please use a valid Zhipu GLM API key.",
         "auth_hint_qianwen": "Please use a valid Alibaba Cloud DashScope API key.",
         "auth_hint_xiaomi": "Please use a valid Xiaomi AI / MiMo API key, and match the service region to the billing type: pay-as-you-go uses Global; Token Plan uses the matching CN / SG / EU cluster.",
+        "auth_hint_hunyuan": "Use a Tencent TokenHub API key issued by the site selected in Settings (TokenHub China or Global); the two sites issue separate keys, and keys from the retired Hunyuan console no longer work.",
         "auth_hint_nvidia": "Please use a valid NVIDIA API Catalog API key; self-hosted NIM endpoints can use a custom Base URL.",
         "auth_hint_gemini": "Please use a valid Google AI Studio / Gemini API key.",
         "auth_hint_doubao": "Please use a valid Volcano Ark API key, and put your model ID in the Model field.",
@@ -188,6 +190,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "auth_hint_zhipu": "有効な Zhipu GLM API Key を入力してください。",
         "auth_hint_qianwen": "有効な Alibaba Cloud DashScope API Key を入力してください。",
         "auth_hint_xiaomi": "有効な Xiaomi AI / MiMo API Key を入力し、課金方式に合うサービス地域を選択してください。従量課金は Global、Token Plan は対応する CN / SG / EU クラスターを使います。",
+        "auth_hint_hunyuan": "設定で選んだサイト（TokenHub 中国サイトまたはグローバルサイト）で発行した Tencent TokenHub の API キーを入力してください。両サイトのキーは共通ではなく、終了した旧 Hunyuan コンソールのキーも使えません。",
         "auth_hint_nvidia": "有効な NVIDIA API Catalog API Key を入力してください。自前の NIM なら Base URL をカスタム指定できます。",
         "auth_hint_gemini": "有効な Google AI Studio / Gemini API Key を入力してください。",
         "auth_hint_doubao": "有効な Volcano Ark API Key を入力し、Model 欄にはモデル ID を設定してください。",
@@ -247,6 +250,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "auth_hint_zhipu": "Используйте действительный API-ключ Zhipu GLM.",
         "auth_hint_qianwen": "Используйте действительный API-ключ Alibaba Cloud DashScope.",
         "auth_hint_xiaomi": "Используйте действительный API-ключ Xiaomi AI / MiMo и выберите регион под тип оплаты: pay-as-you-go использует Global, а Token Plan - соответствующий кластер CN / SG / EU.",
+        "auth_hint_hunyuan": "Используйте API-ключ Tencent TokenHub, выданный сайтом, выбранным в настройках (TokenHub Китай или международный); ключи двух сайтов не взаимозаменяемы, а ключи из закрытой консоли Hunyuan больше не работают.",
         "auth_hint_nvidia": "Используйте действительный API-ключ NVIDIA API Catalog; для собственного NIM можно указать свой Base URL.",
         "auth_hint_gemini": "Используйте действительный API-ключ Google AI Studio / Gemini.",
         "auth_hint_doubao": "Используйте действительный API-ключ Volcano Ark и укажите ID модели в поле Model.",
@@ -306,6 +310,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "auth_hint_zhipu": "유효한 Zhipu GLM API 키를 입력해 주세요.",
         "auth_hint_qianwen": "유효한 Alibaba Cloud DashScope API 키를 입력해 주세요.",
         "auth_hint_xiaomi": "유효한 Xiaomi AI / MiMo API 키를 입력하고 결제 방식에 맞는 서비스 지역을 선택해 주세요. 종량제는 Global, Token Plan은 해당 CN / SG / EU 클러스터를 사용합니다.",
+        "auth_hint_hunyuan": "설정에서 선택한 사이트(TokenHub 중국 사이트 또는 글로벌 사이트)에서 발급한 Tencent TokenHub API 키를 입력해 주세요. 두 사이트의 키는 공용이 아니며, 종료된 기존 Hunyuan 콘솔의 키도 더 이상 사용할 수 없습니다.",
         "auth_hint_nvidia": "유효한 NVIDIA API Catalog API 키를 입력해 주세요. 자체 호스팅 NIM이면 Base URL을 사용자 지정할 수 있습니다.",
         "auth_hint_gemini": "유효한 Google AI Studio / Gemini API 키를 입력해 주세요.",
         "auth_hint_doubao": "유효한 Volcano Ark API 키를 입력하고 Model 필드에는 모델 ID를 입력해 주세요.",
@@ -321,31 +326,26 @@ _GROK_ERROR_TEXTS = {
         "endpoint_short": "翻译失败：API Base URL 无效",
         "endpoint_inline": "{prefix} API Base URL 无效或不安全，请检查设置。",
         "endpoint_detail": "API Base URL 无效。\n\n请填写中继服务提供的完整 HTTPS 地址；本机服务也可以使用 localhost HTTP。{detail_suffix}",
-        "auth_hint_grok_compatible": "请填写 xAI 或 Grok 兼容中继服务提供的有效 API Key，并确认自定义请求头配置正确。",
     },
     "en": {
         "endpoint_short": "Translation failed: invalid API Base URL",
         "endpoint_inline": "{prefix} The API Base URL is invalid or unsafe. Check Settings.",
         "endpoint_detail": "The API Base URL is invalid.\n\nEnter the complete HTTPS URL supplied by the relay. Localhost HTTP endpoints are also supported.{detail_suffix}",
-        "auth_hint_grok_compatible": "Use a valid xAI or Grok-compatible relay API key and verify any custom request headers.",
     },
     "ja": {
         "endpoint_short": "翻訳失敗：API Base URL が無効です",
         "endpoint_inline": "{prefix} API Base URL が無効または安全ではありません。設定を確認してください。",
         "endpoint_detail": "API Base URL が無効です。\n\n中継サービスから指定された完全な HTTPS URL を入力してください。ローカルホストの HTTP も使用できます。{detail_suffix}",
-        "auth_hint_grok_compatible": "xAI または Grok 互換中継サービスの有効な API キーを入力し、カスタムリクエストヘッダーも確認してください。",
     },
     "ru": {
         "endpoint_short": "Ошибка перевода: неверный API Base URL",
         "endpoint_inline": "{prefix} API Base URL неверен или небезопасен. Проверьте настройки.",
         "endpoint_detail": "API Base URL указан неверно.\n\nВведите полный HTTPS-адрес, предоставленный шлюзом. Для localhost также поддерживается HTTP.{detail_suffix}",
-        "auth_hint_grok_compatible": "Укажите действительный ключ xAI или Grok-совместимого шлюза и проверьте пользовательские заголовки.",
     },
     "ko": {
         "endpoint_short": "번역 실패: API Base URL이 잘못되었습니다",
         "endpoint_inline": "{prefix} API Base URL이 잘못되었거나 안전하지 않습니다. 설정을 확인하세요.",
         "endpoint_detail": "API Base URL이 잘못되었습니다.\n\n중계 서비스가 제공한 전체 HTTPS 주소를 입력하세요. localhost HTTP 엔드포인트도 지원합니다.{detail_suffix}",
-        "auth_hint_grok_compatible": "유효한 xAI 또는 Grok 호환 중계 서비스 API 키를 입력하고 사용자 지정 요청 헤더도 확인하세요.",
     },
 }
 for _language, _values in _GROK_ERROR_TEXTS.items():
@@ -354,27 +354,22 @@ for _language, _values in _GROK_ERROR_TEXTS.items():
 _COMPATIBLE_AUTH_HINTS = {
     "zh-CN": {
         "auth_hint_openai_compatible": "请填写中继服务提供的有效 API Key，并检查 Base URL 与自定义请求头。",
-        "auth_hint_anthropic_compatible": "请填写 Claude 兼容中继提供的有效 API Key，并检查 Base URL 与自定义请求头。",
         "auth_hint_xai": "请填写有效的 xAI API Key，并确认使用官方 xAI 端点。",
     },
     "en": {
         "auth_hint_openai_compatible": "Use the API key supplied by the relay, and verify the Base URL and custom request headers.",
-        "auth_hint_anthropic_compatible": "Use the API key supplied by the Claude-compatible relay, and verify the Base URL and custom request headers.",
         "auth_hint_xai": "Use a valid xAI API key and verify that the official xAI endpoint is selected.",
     },
     "ja": {
         "auth_hint_openai_compatible": "リレーが発行した有効な API Key を入力し、Base URL とカスタムリクエストヘッダーを確認してください。",
-        "auth_hint_anthropic_compatible": "Claude 互換リレーが発行した有効な API Key を入力し、Base URL とカスタムリクエストヘッダーを確認してください。",
         "auth_hint_xai": "有効な xAI API Key を入力し、xAI 公式エンドポイントが選択されていることを確認してください。",
     },
     "ru": {
         "auth_hint_openai_compatible": "Укажите API-ключ от шлюза и проверьте Base URL и пользовательские заголовки.",
-        "auth_hint_anthropic_compatible": "Укажите API-ключ Claude-совместимого шлюза и проверьте Base URL и пользовательские заголовки.",
         "auth_hint_xai": "Укажите действительный API-ключ xAI и убедитесь, что выбран официальный адрес xAI.",
     },
     "ko": {
         "auth_hint_openai_compatible": "중계 서비스가 제공한 유효한 API Key를 입력하고 Base URL과 사용자 지정 요청 헤더를 확인하세요.",
-        "auth_hint_anthropic_compatible": "Claude 호환 중계가 제공한 유효한 API Key를 입력하고 Base URL과 사용자 지정 요청 헤더를 확인하세요.",
         "auth_hint_xai": "유효한 xAI API Key를 입력하고 xAI 공식 엔드포인트가 선택되어 있는지 확인하세요.",
     },
 }
@@ -384,21 +379,20 @@ for _language, _values in _COMPATIBLE_AUTH_HINTS.items():
 
 _PROVIDER_NAMES = {
     "openai": "OpenAI",
-    "openai_compatible": "GPT Compatible",
+    "openai_compatible": "Relay Compatible",
     "local_ai": "Local AI",
     "deepseek": "DeepSeek",
     "zhipu": "GLM",
     "qianwen": "Qwen",
+    "hunyuan": "Tencent Hunyuan",
     "xiaomi": "Xiaomi AI",
     "gemini": "Gemini",
     "kimi": "Kimi",
     "xai": "xAI",
-    "grok_compatible": "Grok Compatible",
     "mistral": "Mistral",
     "doubao": "Doubao / Ark",
     "nvidia": "NVIDIA AI",
     "anthropic": "Claude",
-    "anthropic_compatible": "Claude Compatible",
 }
 
 _AUTH_KEYWORDS = (
@@ -641,7 +635,7 @@ def format_translation_error(
         status_code is not None
         and 500 <= status_code <= 599
         or (
-            normalized_backend in {"anthropic", "anthropic_compatible"}
+            normalized_backend in {"anthropic", "openai_compatible"}
             and _contains_any(combined, "overloaded_error", "overloaded")
             and status_code != 429
         )

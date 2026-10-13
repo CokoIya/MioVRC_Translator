@@ -8,6 +8,7 @@ from src.ui_qt.realtime_tweaks_panel import (
     RealtimeTweaksPanel,
 )
 from src.utils.i18n import tr
+from src.utils.ui_config import backend_config_source_key, get_backend_label
 
 
 def _quick_switch_config() -> dict:
@@ -180,7 +181,13 @@ def test_realtime_tweaks_panel_localizes_backend_qualifiers(qtbot):
     qtbot.addWidget(panel)
 
     provider_combo = panel._combos["translation_provider"]
-    assert provider_combo.currentText() == "GPT-совместимый сервис"
+    # The single relay backend ("Relay Compatible") carries a localized label.
+    assert provider_combo.currentText() == get_backend_label("openai_compatible", "ru")
+    assert provider_combo.currentText() != get_backend_label("openai_compatible", "en")
+    # The merged GPT/Grok/Claude-compatible backends are not offered separately.
+    codes = set(panel._combo_codes["translation_provider"].values())
+    assert "openai_compatible" in codes
+    assert not {"grok_compatible", "anthropic_compatible"} & codes
 
 
 def test_quick_panel_lists_voicevox_voices_from_the_running_engine(qtbot):
@@ -278,3 +285,136 @@ def test_quick_panel_hides_the_engine_picker_when_only_one_is_ready(qtbot):
     qtbot.addWidget(panel)
 
     assert panel._combos["tts_engine"].isVisibleTo(panel) is False
+
+
+RELAY_URL = "https://relay.example.com/v1"
+RELAY_MODELS = ["gpt-6-luna", "claude-opus-5", "deepseek-flash"]
+
+
+def _relay_config(*, source: str | None = None) -> dict:
+    relay_cfg = {
+        "api_key": "sk-relay",
+        "base_url": RELAY_URL,
+        "model": "gpt-6-luna",
+        "remote_models": list(RELAY_MODELS),
+    }
+    relay_cfg["remote_models_source"] = (
+        backend_config_source_key("openai_compatible", relay_cfg) if source is None else source
+    )
+    config = _quick_switch_config()
+    config["translation"]["backend"] = "openai_compatible"
+    config["translation"]["openai_compatible"] = relay_cfg
+    return config
+
+
+def _combo_items(combo) -> list[str]:
+    return [combo.itemText(index) for index in range(combo.count())]
+
+
+def test_quick_panel_offers_the_model_list_read_from_the_provider(qtbot):
+    """The relay has no built-in presets; only the fetched list has choices."""
+
+    panel = RealtimeTweaksPanel(None, _relay_config(), "en", "dark")
+    qtbot.addWidget(panel)
+
+    combo = panel._combos["translation_model"]
+    assert _combo_items(combo) == RELAY_MODELS
+    assert combo.currentText() == "gpt-6-luna"
+
+
+def test_quick_panel_ignores_a_model_list_read_from_another_endpoint(qtbot):
+    stale = _relay_config(source="openai_compatible|https://old-relay.example.com/v1|openai")
+    panel = RealtimeTweaksPanel(None, stale, "en", "dark")
+    qtbot.addWidget(panel)
+
+    assert _combo_items(panel._combos["translation_model"]) == ["gpt-6-luna"]
+
+
+def _dashboard_window(monkeypatch, config: dict):
+    from src.ui_qt.main_window import MainWindow
+
+    window = MainWindow.__new__(MainWindow)
+    window._config = config
+    switched: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        window, "_on_quick_switch_changed", lambda key, value: switched.append((key, value))
+    )
+    monkeypatch.setattr(window, "_refresh_vr_dashboard", lambda: None)
+    return MainWindow, window, switched
+
+
+
+
+VOICE_30 = "qwen-audio-3.0-tts-flash-mine-0a1b2c"
+VOICE_31 = "qwen-audio-3.1-tts-flash-mine-3d4e5f"
+VOICE_REJECTED = "qwen-audio-3.0-tts-flash-bad-6g7h8i"
+
+
+def _clone_voices(*voice_ids: str) -> list[dict]:
+    voices = {
+        VOICE_30: {
+            "voice_id": VOICE_30,
+            "display_name": "Mine 3.0",
+            "target_model": "qwen-audio-3.0-tts-flash",
+            "region": "china_mainland",
+            "status": "OK",
+        },
+        VOICE_31: {
+            "voice_id": VOICE_31,
+            "display_name": "Mine 3.1",
+            "target_model": "qwen-audio-3.1-tts-flash",
+            "region": "china_mainland",
+            "status": "OK",
+        },
+        VOICE_REJECTED: {
+            "voice_id": VOICE_REJECTED,
+            "display_name": "Rejected",
+            "target_model": "qwen-audio-3.0-tts-flash",
+            "region": "china_mainland",
+            "status": "UNDEPLOYED",
+        },
+    }
+    return [dict(voices[voice_id]) for voice_id in voice_ids]
+
+
+def test_quick_panel_offers_only_cloned_voices_the_current_model_can_speak(qtbot):
+    """A sync keeps voices of other Qwen-Audio models; they cannot speak here."""
+
+    config = _quick_switch_config()
+    config["tts"] = {
+        "engine": "qwen_vc",
+        "qwen_vc": {
+            "api_key": "sk-test",
+            "region": "china_mainland",
+            "model": "qwen-audio-3.0-tts-flash",
+            "voice": VOICE_30,
+            "custom_voices": _clone_voices(VOICE_31, VOICE_30, VOICE_REJECTED),
+        },
+    }
+    panel = RealtimeTweaksPanel(None, config, "en", "dark", lambda key, value: None)
+    qtbot.addWidget(panel)
+
+    combo = panel._combos["tts_voice"]
+    assert _combo_items(combo) == ["Mine 3.0"]
+    assert panel._combo_codes["tts_voice"] == {"Mine 3.0": VOICE_30}
+
+
+def test_quick_switch_offers_cloning_only_with_a_usable_voice(monkeypatch):
+    from src.ui_qt.main_window import MainWindow
+
+    window = MainWindow.__new__(MainWindow)
+    vc_cfg = {
+        "api_key": "sk-test",
+        "region": "china_mainland",
+        "model": "qwen-audio-3.0-tts-flash",
+        "custom_voices": _clone_voices(VOICE_31, VOICE_REJECTED),
+    }
+    window._config = {"tts": {"engine": "edge", "qwen_vc": vc_cfg}}
+
+    assert MainWindow._tts_engine_is_ready(window, "qwen_vc") is False
+
+    vc_cfg["custom_voices"] = _clone_voices(VOICE_31, VOICE_30)
+    assert MainWindow._tts_engine_is_ready(window, "qwen_vc") is True
+
+    vc_cfg["api_key"] = ""
+    assert MainWindow._tts_engine_is_ready(window, "qwen_vc") is False

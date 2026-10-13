@@ -194,8 +194,9 @@ class Qwen3ASRProvider(ASRProvider):
     ) -> None:
         provider_cfg = _cfg(config)
         self.api_key = str(provider_cfg.get("api_key", "") or "").strip()
-        self.model = str(provider_cfg.get("model", DEFAULT_MODEL) or DEFAULT_MODEL).strip()
-        if self.model in QWEN3_ASR_LEGACY_MODEL_IDS:
+        # A blank (or whitespace-only) saved model means the default model.
+        self.model = str(provider_cfg.get("model") or "").strip() or DEFAULT_MODEL
+        if self.model.lower() in QWEN3_ASR_LEGACY_MODEL_IDS:
             self.model = DEFAULT_MODEL
         self.region = normalize_qwen3_asr_region(provider_cfg.get("region", DEFAULT_REGION))
         self.base_url = str(provider_cfg.get("base_url", "") or "").strip()

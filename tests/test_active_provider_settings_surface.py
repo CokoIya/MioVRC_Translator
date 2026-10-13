@@ -8,17 +8,24 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel
 
+from src.translators.model_listing import ModelListResult
 from src.ui_qt import settings_window as settings_module
 from src.ui_qt.settings_window import SettingsWindow
 from src.utils.i18n import tr
-from src.utils.ui_config import get_backend_label
+from src.utils.ui_config import (
+    LEGACY_RELAY_BACKENDS,
+    RELAY_PROTOCOL_ANTHROPIC,
+    get_backend_label,
+)
 
 
+# Official GPT, Grok and Claude plus the one relay backend that replaced the
+# separate GPT-, Grok- and Claude-compatible relays.
 _REQUIRED_PROVIDER_PATHS = {
     "openai",
     "openai_compatible",
     "xai",
-    "grok_compatible",
+    "anthropic",
 }
 
 
@@ -137,12 +144,31 @@ def _patch_dialog_dependencies(monkeypatch) -> None:
         "dictionary_status",
         lambda: {"layers": [], "user_path": ""},
     )
+    # The model-list refresh must never reach the network from these tests.
+    monkeypatch.setattr(
+        "src.translators.model_list_service.fetch_backend_models",
+        lambda config, **_kwargs: ModelListResult(
+            backend=str(config["translation"]["backend"]),
+            models=(),
+            source="builtin",
+            error=RuntimeError("offline in tests"),
+        ),
+    )
 
 
 def _open_provider_page(dialog: SettingsWindow, backend: str) -> None:
     dialog.select_page("api_config")
     dialog._backend_var.set(get_backend_label(backend, dialog._ui_lang))
     dialog._render_backend_fields()
+
+
+def _select_relay_protocol(dialog: SettingsWindow, protocol: str) -> None:
+    label = next(
+        label
+        for label, code in dialog._backend_protocol_codes.items()
+        if code == protocol
+    )
+    dialog._backend_protocol_var.set(label)
 
 
 def _dispose(dialog: SettingsWindow, qapp: QApplication) -> None:
@@ -159,7 +185,10 @@ def test_active_settings_surface_exposes_official_and_compatible_paths(
     dialog = SettingsWindow(None, _config())
     try:
         dialog.select_page("api_config")
-        assert _REQUIRED_PROVIDER_PATHS <= set(dialog._backend_codes.values())
+        offered = set(dialog._backend_codes.values())
+        assert _REQUIRED_PROVIDER_PATHS <= offered
+        # The old per-vendor relays are aliases of the relay, not choices.
+        assert not set(LEGACY_RELAY_BACKENDS) & offered
         expected_timeout_labels = {
             tr(dialog._ui_lang, key)
             for key in (
@@ -242,19 +271,19 @@ def test_active_settings_surface_loads_and_tests_granular_timeouts(
         _dispose(dialog, qapp)
 
 
-@pytest.mark.parametrize(
-    "backend",
-    ("openai_compatible", "grok_compatible"),
-)
+@pytest.mark.parametrize("protocol", ("openai", "anthropic"))
 def test_active_relay_settings_reject_unsafe_public_http_base_urls(
     qapp,
     monkeypatch,
-    backend,
+    protocol,
 ):
     _patch_dialog_dependencies(monkeypatch)
-    dialog = SettingsWindow(None, _config(backend))
+    config = _config("openai_compatible")
+    config["translation"]["openai_compatible"]["protocol"] = protocol
+    dialog = SettingsWindow(None, config)
     try:
-        _open_provider_page(dialog, backend)
+        _open_provider_page(dialog, "openai_compatible")
+        assert dialog._selected_relay_protocol() == protocol
         dialog._backend_base_url_var.set("http://public.example/v1")
 
         with pytest.raises(ValueError):
@@ -268,10 +297,12 @@ def test_active_settings_save_persists_and_clears_timeout_overrides(
     monkeypatch,
 ):
     _patch_dialog_dependencies(monkeypatch)
-    config = _config("grok_compatible")
+    config = _config("openai_compatible")
     dialog = SettingsWindow(None, config)
     try:
-        _open_provider_page(dialog, "grok_compatible")
+        _open_provider_page(dialog, "openai_compatible")
+        # A Claude-only relay: the protocol is saved with the relay fields.
+        _select_relay_protocol(dialog, RELAY_PROTOCOL_ANTHROPIC)
         dialog._backend_connect_timeout_var.set("4")
         dialog._backend_pool_timeout_var.set("")
         dialog._backend_read_timeout_var.set("41")
@@ -279,14 +310,17 @@ def test_active_settings_save_persists_and_clears_timeout_overrides(
         dialog._backend_wall_timeout_var.set("56")
         dialog._save()
 
-        saved = config["translation"]["grok_compatible"]
+        saved = config["translation"]["openai_compatible"]
         assert saved["model"] == "Custom/Model:Preview-001"
         assert saved["base_url"] == "https://relay.example/v1/"
+        assert saved["protocol"] == RELAY_PROTOCOL_ANTHROPIC
+        assert saved["streaming"] is True
         assert saved["connect_timeout_s"] == 4.0
         assert "pool_timeout_s" not in saved
         assert saved["read_timeout_s"] == 41.0
         assert saved["write_timeout_s"] == 14.0
         assert saved["wall_timeout_s"] == 56.0
+        assert not set(LEGACY_RELAY_BACKENDS) & set(config["translation"])
     finally:
         _dispose(dialog, qapp)
 
@@ -297,9 +331,8 @@ def test_active_provider_switches_preserve_and_save_each_unsaved_draft(
 ):
     _patch_dialog_dependencies(monkeypatch)
     config = _config("openai_compatible")
-    config["translation"]["grok_compatible"] = {
+    config["translation"]["xai"] = {
         "api_key": "grok-old",
-        "base_url": "https://grok-relay.example/v1/",
         "model": "grok-old",
         "timeout_s": 20,
         "connect_timeout_s": 2,
@@ -314,40 +347,44 @@ def test_active_provider_switches_preserve_and_save_each_unsaved_draft(
     dialog = SettingsWindow(None, config)
     try:
         _open_provider_page(dialog, "openai_compatible")
-        dialog._backend_api_key_var.set("openai-unsaved")
-        dialog._backend_base_url_var.set("https://new-openai-relay.example/v1/")
+        dialog._backend_api_key_var.set("relay-unsaved")
+        dialog._backend_base_url_var.set("https://new-relay.example/v1/")
         dialog._backend_model_var.set("Org/Exact-GPT:Preview")
         dialog._backend_connect_timeout_var.set("3.5")
+        _select_relay_protocol(dialog, RELAY_PROTOCOL_ANTHROPIC)
 
-        _open_provider_page(dialog, "grok_compatible")
+        _open_provider_page(dialog, "xai")
         dialog._backend_api_key_var.set("grok-unsaved")
-        dialog._backend_base_url_var.set("https://new-grok-relay.example/v1/")
         dialog._backend_model_var.set("grok-custom-2026-07")
         dialog._backend_wall_timeout_var.set("58")
+        dialog._backend_custom_headers_var.set('{"X-Team":"grok"}')
 
         _open_provider_page(dialog, "openai_compatible")
-        assert dialog._backend_api_key_var.value() == "openai-unsaved"
-        assert (
-            dialog._backend_base_url_var.value()
-            == "https://new-openai-relay.example/v1/"
-        )
+        assert dialog._backend_api_key_var.value() == "relay-unsaved"
+        assert dialog._backend_base_url_var.value() == "https://new-relay.example/v1/"
         assert dialog._backend_model_var.value() == "Org/Exact-GPT:Preview"
         assert dialog._backend_connect_timeout_var.value() == "3.5"
+        assert dialog._selected_relay_protocol() == RELAY_PROTOCOL_ANTHROPIC
+
+        _open_provider_page(dialog, "xai")
+        assert dialog._backend_api_key_var.value() == "grok-unsaved"
+        assert dialog._backend_model_var.value() == "grok-custom-2026-07"
+        assert dialog._backend_custom_headers_var.value() == '{"X-Team":"grok"}'
+        _open_provider_page(dialog, "openai_compatible")
 
         dialog._save()
 
-        openai_saved = config["translation"]["openai_compatible"]
-        grok_saved = config["translation"]["grok_compatible"]
-        assert openai_saved["api_key"] == "openai-unsaved"
-        assert openai_saved["model"] == "Org/Exact-GPT:Preview"
-        assert openai_saved["connect_timeout_s"] == 3.5
+        relay_saved = config["translation"]["openai_compatible"]
+        grok_saved = config["translation"]["xai"]
+        assert relay_saved["api_key"] == "relay-unsaved"
+        assert relay_saved["base_url"] == "https://new-relay.example/v1/"
+        assert relay_saved["model"] == "Org/Exact-GPT:Preview"
+        assert relay_saved["connect_timeout_s"] == 3.5
+        assert relay_saved["protocol"] == RELAY_PROTOCOL_ANTHROPIC
         assert grok_saved["api_key"] == "grok-unsaved"
-        assert (
-            grok_saved["base_url"]
-            == "https://new-grok-relay.example/v1/"
-        )
         assert grok_saved["model"] == "grok-custom-2026-07"
         assert grok_saved["wall_timeout_s"] == 58.0
+        assert grok_saved["custom_headers"] == {"X-Team": "grok"}
     finally:
         _dispose(dialog, qapp)
 
@@ -357,25 +394,31 @@ def test_active_language_rebuild_preserves_unsaved_provider_fields(
     monkeypatch,
 ):
     _patch_dialog_dependencies(monkeypatch)
-    dialog = SettingsWindow(None, _config("grok_compatible"))
+    dialog = SettingsWindow(None, _config("openai_compatible"))
     try:
-        _open_provider_page(dialog, "grok_compatible")
-        dialog._backend_api_key_var.set("grok-unsaved")
+        _open_provider_page(dialog, "openai_compatible")
+        dialog._backend_api_key_var.set("relay-unsaved")
         dialog._backend_base_url_var.set("https://grok-relay.example/v1/")
         dialog._backend_model_var.set("grok/custom:latest")
         dialog._backend_timeout_var.set("27")
         dialog._backend_custom_headers_var.set('{"X-Relay":"player"}')
+        _select_relay_protocol(dialog, RELAY_PROTOCOL_ANTHROPIC)
 
         dialog._apply_ui_language("ja", emit_signal=False)
 
-        assert dialog._backend_code() == "grok_compatible"
-        assert dialog._backend_api_key_var.value() == "grok-unsaved"
+        assert dialog._backend_code() == "openai_compatible"
+        assert dialog._backend_api_key_var.value() == "relay-unsaved"
         assert dialog._backend_base_url_var.value() == "https://grok-relay.example/v1/"
         assert dialog._backend_model_var.value() == "grok/custom:latest"
         assert dialog._backend_timeout_var.value() == "27"
         assert (
             dialog._backend_custom_headers_var.value()
             == '{"X-Relay":"player"}'
+        )
+        # The protocol label is rebuilt in Japanese and still names Anthropic.
+        assert dialog._selected_relay_protocol() == RELAY_PROTOCOL_ANTHROPIC
+        assert dialog._backend_protocol_var.value() == dialog._copy(
+            "relay_protocol_anthropic"
         )
     finally:
         _dispose(dialog, qapp)

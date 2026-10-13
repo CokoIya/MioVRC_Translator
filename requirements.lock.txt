@@ -80,7 +80,6 @@ onnxruntime-directml==1.24.4
 openai-whisper==20250625
 openai==1.109.1
 opencv-python==4.11.0.86
-openvr==2.12.1401
 oss2==2.19.1
 packaging==26.2
 pefile==2024.8.26
@@ -112,7 +111,6 @@ pywin32-ctypes==0.2.3
 pywin32==311
 pyworld-prebuilt==0.3.5.post2
 PyYAML==6.0.3
-rapidocr-onnxruntime==1.4.4
 regex==2026.5.9
 requests==2.33.1
 rich==15.0.0
@@ -151,13 +149,5 @@ urllib3==2.7.0
 webrtcvad-wheels==2.0.14
 websockets==16.0
 win32_setctime==1.2.0
-winrt-runtime==3.2.1
-winrt-Windows.Foundation.Collections==3.2.1
-winrt-Windows.Foundation==3.2.1
-winrt-Windows.Globalization==3.2.1
-winrt-Windows.Graphics.Imaging==3.2.1
-winrt-Windows.Media.Ocr==3.2.1
-winrt-Windows.Storage.Streams==3.2.1
-winrt-Windows.Storage==3.2.1
 yarl==1.23.0
 zipp==3.23.1

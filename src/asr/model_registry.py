@@ -6,11 +6,10 @@ from src.utils.ui_config import DEFAULT_ASR_ENGINE
 
 SENSEVOICE_DEFAULT_MODEL = "iic/SenseVoiceSmall"
 SENSEVOICE_DEFAULT_REVISION = "70514a3da51f1160f51d18449dab6128bbd4928b"
-QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash-2026-02-10"
-QWEN3_ASR_MODEL_CHOICES = (
-    QWEN3_ASR_DEFAULT_MODEL,
-    "qwen3-asr-flash",
-)
+# Alibaba retired every dated qwen3-asr-flash snapshot on 2026-10-10; the
+# stable alias is the only model with OpenAI-compatible input_audio support.
+QWEN3_ASR_DEFAULT_MODEL = "qwen3-asr-flash"
+QWEN3_ASR_MODEL_CHOICES = (QWEN3_ASR_DEFAULT_MODEL,)
 QWEN3_ASR_DEFAULT_REGION = "singapore"
 QWEN3_ASR_REGION_BASE_URLS = {
     "singapore": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -33,6 +32,9 @@ QWEN3_ASR_LEGACY_MODEL_IDS = frozenset(
     {
         "qwen3-asr-0.6b",
         "qwen3-asr-1.7b",
+        # Dated snapshots retired 2026-10-10.
+        "qwen3-asr-flash-2026-02-10",
+        "qwen3-asr-flash-2025-09-08",
     }
 )
 ASR_ENGINE_FOLLOW_MAIN = "same_as_main"
@@ -173,19 +175,19 @@ def get_asr_runtime_spec(
         engine_cfg = {}
     if not base_spec.requires_local_model:
         model_id_key = "model" if "model" in engine_cfg else "model_id"
+        # A saved null must not become the model id "None".
         model_id = (
-            str(engine_cfg.get(model_id_key, base_spec.model_id)).strip()
-            or base_spec.model_id
+            str(engine_cfg.get(model_id_key) or "").strip() or base_spec.model_id
         )
-        if base_spec.engine == "qwen3-asr" and model_id in QWEN3_ASR_LEGACY_MODEL_IDS:
+        if (
+            base_spec.engine == "qwen3-asr"
+            and model_id.lower() in QWEN3_ASR_LEGACY_MODEL_IDS
+        ):
             model_id = QWEN3_ASR_DEFAULT_MODEL
         return replace(base_spec, model_id=model_id, required_file_sha256=())
-    model_id = (
-        str(engine_cfg.get("model_id", base_spec.model_id)).strip()
-        or base_spec.model_id
-    )
+    model_id = str(engine_cfg.get("model_id") or "").strip() or base_spec.model_id
     model_revision = (
-        str(engine_cfg.get("model_revision", base_spec.model_revision)).strip()
+        str(engine_cfg.get("model_revision") or "").strip()
         or base_spec.model_revision
     )
     if model_id == base_spec.model_id:

@@ -94,6 +94,9 @@ def _base(theme: object) -> str:
     QComboBox {{
         min-height: 18px;
         padding: 7px 34px 7px 12px;
+        /* Fusion otherwise opens read-only combo boxes as a menu as tall as
+           the screen; a list popup honours maxVisibleItems and scrolls. */
+        combobox-popup: 0;
     }}
     QComboBox::drop-down {{
         border: 0;

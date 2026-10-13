@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_RELEASE_VERSION = "1.4.1"
-EXPECTED_WINDOWS_NUMERIC_VERSION = "1.4.1.0"
+EXPECTED_RELEASE_VERSION = "1.5.0"
+EXPECTED_WINDOWS_NUMERIC_VERSION = "1.5.0.0"
 
 
 def _read(relative_path: str) -> str:
@@ -119,6 +119,45 @@ def test_release_notes_are_prepared_for_manifest_signing() -> None:
         localized = manifest["notes_i18n"]
         assert set(localized) == expected_languages
         assert all(str(note).startswith(expected_prefix) for note in localized.values())
+
+
+def test_v150_website_prioritizes_vr_in_every_language() -> None:
+    website = _read("docs/index.html")
+    for field in ("hero-eyebrow", "hero-sub", "spotlight-kicker"):
+        localized = re.findall(rf"'{field}': '([^\n]+)',", website)
+        assert len(localized) == 5
+        assert all("VR" in value for value in localized)
+    assert 'id="feature-1-title">截图翻译与独立语言' in website
+    assert 'id="feature-2-title">稳定字幕与可搬移面板' in website
+    assert 'id="feature-3-title">手腕书签、记录与扫码' in website
+    assert "松开后保持显示" in website
+    assert "仅保留于本次会话" in website
+    assert "v1.4.1" not in website
+    assert "SteamVR" in _read("docs/downloads/index.html")
+
+
+def test_release_build_preserves_existing_dist_outputs() -> None:
+    script = _read("build_release.ps1")
+    assert r'dist\release-v$releaseVersion' in script
+    assert r'build\release-v$releaseVersion' in script
+    assert "Refusing to overwrite an existing release output" in script
+    assert "Unsafe release output parent" in script
+    assert "--distpath $bundleDistPath --workpath $releaseWorkPath" in script
+    assert 'Join-Path $bundlePath "MioTranslator.exe"' in script
+    assert "--bundle $bundlePath" in script
+    assert '"/DSourceDir=$bundlePath"' in script
+    assert "#ifndef SourceDir" in _read("MioTranslator-installer.iss")
+
+
+def test_public_build_excludes_private_vr_modules() -> None:
+    spec = _read("MioTranslator.spec")
+    for module in (
+        "src.core.vr_handsframe",
+        "src.core.vr_head_anchor",
+        "src.core.vr_caption_anchor",
+        "src.ui_qt.vr_handsframe_style",
+    ):
+        assert f'"{module}"' not in spec
 
 
 def test_current_release_docs_describe_single_installer_and_custom_relays() -> None:

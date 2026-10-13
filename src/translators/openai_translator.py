@@ -4,12 +4,18 @@ import os
 import contextlib
 import logging
 import math
+import re
 import time
 import urllib.parse
 from collections.abc import Mapping
 
 import httpx
 
+from .anthropic_translator import (
+    ALWAYS_THINKING_CLAUDE_PREFIXES,
+    ALWAYS_THINKING_MIN_MAX_TOKENS,
+    provider_error_status,
+)
 from .base import (
     BaseTranslator,
     TransformationOutputRejected,
@@ -17,6 +23,7 @@ from .base import (
 )
 from .asr_rewriter import build_asr_rewrite_messages, normalize_asr_rewrite_style
 from src.utils.input_validation import validate_translation_text, ValidationError
+from src.utils.model_family import model_family_id
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.provider_diagnostics import (
     provider_endpoint_diagnostics,
@@ -34,6 +41,79 @@ from src.utils.qwen_endpoints import is_qwen_translation_api_host
 from src.utils.secure_http import validate_api_base_url
 
 logger = logging.getLogger(__name__)
+
+# OpenAI families that take ``reasoning_effort`` (GPT-5 and later).
+_OPENAI_REASONING_FAMILY_PREFIXES = ("gpt-5", "gpt-6", "gpt-7")
+# Models whose lowest effort is "low" (they cannot run without reasoning).
+_OPENAI_LOW_FLOOR_RE = re.compile(r"^gpt-\d+(\.\d+)?-astra|^gpt-6\.1-sol")
+# The original GPT-5 snapshots stop at "minimal".
+_OPENAI_MINIMAL_FLOOR_RE = re.compile(r"^gpt-5(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$")
+# Grok flagships after 4.3 always reason; "low" is their floor.
+_REASONING_ONLY_GROK_RE = re.compile(r"^grok-(4\.(5|6|7|8|9)|[5-9])(?!.*non-reasoning)")
+_MISTRAL_REASONING_RE = re.compile(
+    r"^(mistral-small-(2603|latest|4)|mistral-medium-(3|latest)|mistral-large-4)"
+)
+# Output headroom for models that think a little even at their lowest effort.
+_REASONING_OUTPUT_FLOORS = {"low": 1024, "minimal": 512}
+_TOKEN_LIMIT_FIELDS = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+# The single relay backend ("Relay Compatible", OpenAI protocol).
+_RELAY_PROVIDER_ID = "openai_compatible"
+_ZHIPU_HOST = "open.bigmodel.cn"
+_MOONSHOT_HOSTS = frozenset({"api.moonshot.cn", "api.moonshot.ai"})
+_OPENROUTER_HOST = "openrouter.ai"
+# OpenRouter offers no "none" effort for Claude. These always reason there
+# (lowest effort "low"); every other Claude model takes reasoning.enabled false.
+_OPENROUTER_REASONING_CLAUDE_PREFIXES = (
+    *ALWAYS_THINKING_CLAUDE_PREFIXES,
+    "claude-sonnet-5-5",
+)
+# Kimi K3 and the Kimi coding models always think and take no thinking switch.
+_KIMI_ALWAYS_THINKING_RE = re.compile(r"^kimi-k3|^kimi-.*-code")
+# OpenRouter's ``~vendor/<family>-latest`` aliases always point at the newest
+# model of a family, so no versioned rule matches them. Each one follows the
+# rules of the model that matches the alias's ``reasoning`` metadata in
+# OpenRouter's /models list: "none" accepted (Luna, Terra, Mini), or reasoning
+# mandatory with "low" as the lowest effort (the rest). Aliases whose own
+# family id already matches a rule (Claude Fable/Haiku, DeepSeek, Kimi,
+# Gemini) need no entry.
+_RELAY_ALIAS_RULE_MODELS = {
+    "gpt-luna-latest": "gpt-6-luna",
+    "gpt-terra-latest": "gpt-5.6-terra",
+    "gpt-mini-latest": "gpt-5.4-mini",
+    "gpt-sol-latest": "gpt-6.1-sol",
+    "gpt-astra-latest": "gpt-6-astra",
+    "grok-latest": "grok-4.7",
+    "claude-sonnet-latest": "claude-sonnet-5-5",
+    "claude-opus-latest": "claude-opus-5-5",
+    "glm-latest": "glm-5.3",
+    "glm-flash-latest": "glm-5.3-flash",
+}
+# Words that mark an error as a refused or unknown request parameter.
+_UNSUPPORTED_PARAMETER_MARKERS = (
+    "unsupported",
+    "unknown",
+    "unrecognized",
+    "not permitted",
+    "not allowed",
+    "extra_forbidden",
+    "unexpected",
+    "invalid parameter",
+    # xAI: "Argument not supported on this model: reasoningEffort".
+    "argument not supported",
+    "not supported on this model",
+)
+# OpenRouter's ``reasoning`` object named as a parameter (``reasoning``,
+# ``'reasoning.enabled'``), not a model id part (``-non-reasoning``) or
+# ``reasoning_effort`` (which the generic matcher already knows).
+_OPENROUTER_REASONING_PARAMETER_RE = re.compile(r"(?<![\w/-])reasoning(?![\w-])")
+# Words that mark an error as a refused effort VALUE (a higher one would be
+# accepted), as opposed to a refused or unknown parameter.
+_REJECTED_EFFORT_VALUE_MARKERS = ("unsupported_value", "supported values", "must be one of")
+# SDK errors repeat the provider's JSON as a Python repr, where a null field
+# reads ``'param': None``. That is not the effort value "none".
+_PY_NULL_FIELD_RE = re.compile(r"(:\s*)None\b")
+# OpenRouter answers 500 entries per page unless asked for more (max 1000).
+_OPENROUTER_MODEL_LIST_LIMIT = 1000
 
 OPENAI_HTTP_KEEPALIVE_EXPIRY_S = 60.0
 
@@ -225,6 +305,10 @@ class OpenAITranslator(BaseTranslator):
             urllib.parse.urlsplit(validated_base_url).hostname or ""
         ).rstrip(".").casefold()
         model_name = str(model).strip().casefold()
+        relay = self._provider_id == _RELAY_PROVIDER_ID
+        # Relays decorate ids (``openai/gpt-6-luna``, ``anthropic/claude-haiku-5.5``);
+        # their per-family rules match the bare family id.
+        family = self._family_model_id(model_name)
         self._is_qwen_api_endpoint = is_qwen_translation_api_host(
             self._base_hostname,
             provider_id=self._provider_id,
@@ -237,11 +321,11 @@ class OpenAITranslator(BaseTranslator):
         )
         self._uses_max_completion_tokens = (
             (
-                (self._is_openai_api or self._provider_id == "openai_compatible")
-                and model_name.startswith("gpt-5")
+                (self._is_openai_api or relay)
+                and family.startswith(_OPENAI_REASONING_FAMILY_PREFIXES)
             )
             or bool(prefer_max_completion_tokens)
-            or model_name.startswith("mimo-")
+            or family.startswith("mimo-")
         )
         self._uses_qwen_mt_translation_options = (
             self._is_qwen_api_endpoint and model_name.startswith("qwen-mt-")
@@ -262,9 +346,22 @@ class OpenAITranslator(BaseTranslator):
                 self._base_hostname == "api.deepseek.com"
                 and model_name == "deepseek-reasoner"
             )
-            or (self._is_openai_api and model_name.startswith("gpt-5"))
+            or (
+                (self._is_openai_api or relay)
+                and family.startswith(_OPENAI_REASONING_FAMILY_PREFIXES)
+            )
             or self._use_responses_api
+            # Kimi fixes its sampling parameters, Gemini 3 deprecated them,
+            # and Claude 5 / reasoning-only Grok reject non-default values.
+            or self._provider_id in {"kimi", "gemini"}
+            or (relay and family.startswith(("kimi-", "gemini-3", "claude-")))
+            or _REASONING_ONLY_GROK_RE.match(family) is not None
         )
+        # Set once a raised effort was accepted after the lowest one was refused.
+        self._reasoning_effort_override: str | None = None
+        # Set once Zhipu or OpenRouter answered that the model cannot stop
+        # thinking (and a request at low effort then succeeded).
+        self._thinking_required = False
         self._max_output_tokens = max(int(max_output_tokens), 32)
         self._managed_no_thinking_extra_keys: set[str] = set()
         self._no_thinking_request_supported = True
@@ -353,6 +450,38 @@ class OpenAITranslator(BaseTranslator):
             )
         return result.succeeded
 
+    def list_models(self, *, timeout_s: float = 12.0) -> list:
+        """Return the provider's model list (``GET {base_url}/models``).
+
+        Uses the same SDK client, headers, proxy and TLS settings as the
+        translation requests, so a relay that needs custom headers answers the
+        same way it does for chat. OpenRouter is asked for its largest page;
+        other relays get the plain request because unknown query parameters
+        are not safe on every relay.
+        """
+
+        from .model_listing import parse_model_list_payload
+
+        timeout = max(1.0, float(timeout_s))
+        list_options: dict[str, object] = {}
+        if self._is_openrouter_endpoint():
+            list_options["extra_query"] = {"limit": _OPENROUTER_MODEL_LIST_LIMIT}
+
+        def request():
+            client = self._client.with_options(timeout=timeout, max_retries=0)
+            raw = client.models.with_raw_response.list(**list_options)
+            http_response = getattr(raw, "http_response", None)
+            content = getattr(http_response, "content", None)
+            if content is None:
+                content = raw.parse().model_dump_json()
+            return parse_model_list_payload(content)
+
+        return self._run_with_wall_timeout(
+            request,
+            timeout_s=timeout + 2.0,
+            operation_name="model list request",
+        )
+
     def _raise_if_wall_timeout(self, started_at: float) -> None:
         wall_timeout = getattr(
             self,
@@ -387,31 +516,192 @@ class OpenAITranslator(BaseTranslator):
         return contextlib.nullcontext(None)
 
     def _translation_extra_body(self, extra_body: dict, model_name: str) -> dict:
+        """Provider/model specific switches that keep thinking off.
+
+        Every model is read from the provider's own list now, so the switch is
+        chosen per model: some families accept ``thinking: disabled``, some
+        must be told ``enabled`` (GLM-5.3 cannot think less than "low"),
+        translation-only models take no switch at all. OpenRouter takes one
+        ``reasoning`` object for every vendor instead of the vendors' switches.
+        """
+
         body = dict(extra_body)
-        hostname = str(getattr(self, "_base_hostname", "") or "").casefold()
-        if not hostname:
-            hostname = str(getattr(self, "_base_url", "") or "").casefold()
+        body.pop("enable_enhancement", None)
+        hostname = self._endpoint_hostname()
+        provider = self._provider_id
+        family = self._family_model_id(model_name)
         if (
-            self._provider_id in {"qianwen", "hunyuan"}
+            provider == "qianwen"
             or is_qwen_translation_api_host(
                 hostname,
-                provider_id=self._provider_id,
+                provider_id=provider,
             )
-        ) and not model_name.startswith("qwen-mt-"):
+        ) and not family.startswith("qwen-mt-"):
             body["enable_thinking"] = False
             self._managed_no_thinking_extra_keys.add("enable_thinking")
-        if (
-            self._provider_id
-            in {"deepseek", "xiaomi", "zhipu", "kimi", "doubao"}
-            or hostname == "api.deepseek.com"
-            or hostname == "api.moonshot.cn"
-            or hostname == "open.bigmodel.cn"
-        ):
-            body["thinking"] = {"type": "disabled"}
+
+        thinking_type = self._thinking_switch_type(family, hostname)
+        if self._is_openrouter_endpoint():
+            # The effort itself goes out per request (_apply_reasoning_effort);
+            # the key is registered so the no-thinking fallback can drop it.
+            # Models without a "none" effort there switch reasoning off instead
+            # (DeepSeek flash, Kimi K2.6, GLM, MiMo, most Claude models).
+            self._managed_no_thinking_extra_keys.add("reasoning")
+            if thinking_type == "disabled" or (
+                family.startswith("claude-")
+                and self._reasoning_effort_for(family) is None
+            ):
+                body["reasoning"] = {"enabled": False}
+        elif thinking_type is not None:
+            body["thinking"] = {"type": thinking_type}
             self._managed_no_thinking_extra_keys.add("thinking")
+
+        if provider == "nvidia" and self._reasoning_effort_for(family) is None:
+            # NIM chat templates (Nemotron 3.5, Gemma 4, DeepSeek) switch
+            # thinking off through template kwargs; templates ignore unknown keys.
+            body["chat_template_kwargs"] = {"enable_thinking": False, "thinking": False}
+            self._managed_no_thinking_extra_keys.add("chat_template_kwargs")
         return body
 
-    def _estimate_max_tokens(self, text: str) -> int:
+    def _thinking_switch_type(self, family: str, hostname: str) -> str | None:
+        """``thinking.type`` to send for a model, or None to send no switch."""
+
+        provider = self._provider_id
+        if provider == "zhipu" or hostname == _ZHIPU_HOST:
+            return self._glm_thinking_type(family)
+        if provider == "kimi" or hostname in _MOONSHOT_HOSTS:
+            return self._kimi_thinking_type(family)
+        if provider == "hunyuan":
+            # hy-mt2 translation models have no thinking mode at all.
+            return None if family.startswith("hy-mt") else "disabled"
+        if provider in {"deepseek", "xiaomi", "doubao"} or hostname == "api.deepseek.com":
+            return "disabled"
+        if provider == _RELAY_PROVIDER_ID:
+            # A relay serves every vendor; the family picks the vendor's switch.
+            if family.startswith("glm-"):
+                return self._glm_thinking_type(family)
+            if family.startswith("kimi-"):
+                return self._kimi_thinking_type(family)
+            if family.startswith(("deepseek", "mimo-")):
+                return "disabled"
+        return None
+
+    @staticmethod
+    def _glm_thinking_type(family: str) -> str:
+        # GLM-5.3 cannot stop thinking; it runs enabled at low effort instead.
+        return "enabled" if family.startswith("glm-5.3") else "disabled"
+
+    @staticmethod
+    def _kimi_thinking_type(family: str) -> str | None:
+        # kimi-k3 always thinks and is steered with reasoning_effort; the
+        # coding models always think and must not be sent a switch at all.
+        return None if _KIMI_ALWAYS_THINKING_RE.match(family) else "disabled"
+
+    def _family_model_id(self, model_name: object) -> str:
+        """Lower-cased model id the per-family rules match.
+
+        On the relay, vendor namespaces, OpenRouter's ``~`` alias marker and
+        ``:variant`` suffixes are removed (``anthropic/claude-haiku-5.5`` ->
+        ``claude-haiku-5-5``), and a ``<family>-latest`` alias takes the rules
+        of the model its OpenRouter metadata matches
+        (``~openai/gpt-sol-latest`` -> ``gpt-6.1-sol``). NVIDIA NIM, local
+        servers and vendor APIs keep the id as given: there the namespace or
+        tag is part of the model.
+        """
+
+        model = str(model_name or "").strip().lower()
+        if getattr(self, "_provider_id", "") == _RELAY_PROVIDER_ID:
+            family = model_family_id(model)
+            return _RELAY_ALIAS_RULE_MODELS.get(family, family)
+        return model
+
+    def _endpoint_hostname(self) -> str:
+        hostname = str(getattr(self, "_base_hostname", "") or "")
+        if not hostname:
+            base_url = str(getattr(self, "_base_url", "") or "")
+            hostname = urllib.parse.urlsplit(base_url).hostname or base_url
+        return hostname.rstrip(".").casefold()
+
+    def _is_openrouter_endpoint(self) -> bool:
+        """The relay pointed at OpenRouter (``https://openrouter.ai/api/v1``)."""
+
+        if getattr(self, "_provider_id", "") != _RELAY_PROVIDER_ID:
+            return False
+        host = self._endpoint_hostname()
+        return host == _OPENROUTER_HOST or host.endswith(f".{_OPENROUTER_HOST}")
+
+    def _is_zhipu_endpoint(self) -> bool:
+        return (
+            getattr(self, "_provider_id", "") == "zhipu"
+            or self._endpoint_hostname() == _ZHIPU_HOST
+        )
+
+    def _reasoning_effort_for(self, model_name: str) -> str | None:
+        """Lowest reasoning effort a model accepts, or None to send none at all."""
+
+        model = self._family_model_id(model_name)
+        provider = getattr(self, "_provider_id", "")
+        relay = provider == _RELAY_PROVIDER_ID
+        openai_like = bool(getattr(self, "_is_openai_api", False)) or relay
+        if openai_like and model.startswith(_OPENAI_REASONING_FAMILY_PREFIXES):
+            if _OPENAI_LOW_FLOOR_RE.match(model):
+                return "low"
+            if _OPENAI_MINIMAL_FLOOR_RE.match(model):
+                return "minimal"
+            return "none"
+        if provider == "gemini" or (relay and model.startswith("gemini-")):
+            if model.startswith("gemini-2.5") and "-pro" not in model:
+                return "none"
+            if model.startswith("gemini-3.8") or "-pro" in model or model.endswith("-latest"):
+                return "low"
+            return "minimal"
+        if provider == "xai" or (relay and model.startswith("grok-")):
+            if "non-reasoning" in model:
+                return None
+            if model.startswith("grok-4.3"):
+                return "none"
+            if _REASONING_ONLY_GROK_RE.match(model):
+                return "low"
+            if "reason" in model or "thinking" in model:
+                return "none"
+            return None
+        if provider == "kimi" or (relay and model.startswith("kimi-")):
+            return "low" if model.startswith("kimi-k3") else None
+        if provider == "zhipu" or (relay and model.startswith("glm-")):
+            return "low" if model.startswith("glm-5.3") else None
+        if provider == "mistral":
+            return "none" if _MISTRAL_REASONING_RE.match(model) else None
+        if provider == "nvidia":
+            if model.startswith(("nvidia/nemotron-3-super", "nvidia/nemotron-3-ultra")):
+                return "none"
+            if model.startswith("openai/gpt-oss"):
+                return "low"
+            return None
+        if relay and model.startswith("claude-"):
+            if self._is_openrouter_endpoint():
+                # OpenRouter has no "none" effort for Claude; the models that
+                # can stop thinking get reasoning.enabled false instead.
+                return (
+                    "low"
+                    if model.startswith(_OPENROUTER_REASONING_CLAUDE_PREFIXES)
+                    else None
+                )
+            # new-api style relays map this to Claude's thinking switch, and
+            # to the lowest setting on models that always think.
+            return "none"
+        return None
+
+    def _reasoning_effort_value(self) -> str | None:
+        override = getattr(self, "_reasoning_effort_override", None)
+        if override:
+            return override
+        if getattr(self, "_thinking_required", False):
+            return "low"
+        return self._reasoning_effort_for(str(getattr(self, "model", "") or ""))
+
+    def _estimated_output_tokens(self, text: str) -> int:
+        """Output tokens a reply to ``text`` needs, within max_output_tokens."""
+
         compact = "".join(str(text or "").split())
         if not compact:
             return min(self._max_output_tokens, 32)
@@ -430,21 +720,76 @@ class OpenAITranslator(BaseTranslator):
         estimated = cjk_chars + ((other_chars + 2) // 3) + 18
         return max(32, min(self._max_output_tokens, estimated))
 
-    def _uses_reasoning_effort_control(self) -> bool:
-        model_name = str(self.model or "").strip().lower()
-        if model_name.startswith("gpt-5"):
-            return bool(getattr(self, "_is_openai_api", False)) or (
-                getattr(self, "_provider_id", "") == "openai_compatible"
-            )
-        provider = getattr(self, "_provider_id", "")
-        if provider == "gemini":
+    def _estimate_max_tokens(self, text: str) -> int:
+        return self._with_output_floor(self._estimated_output_tokens(text))
+
+    def _with_output_floor(self, tokens: int) -> int:
+        """Raise a token cap to the headroom a thinking model needs.
+
+        Thinking tokens count against the cap on models that cannot stop
+        thinking; without headroom the reply would come back empty. Every
+        request applies this after clamping to max_output_tokens.
+        """
+
+        return max(int(tokens), self._output_token_floor())
+
+    def _output_token_floor(self) -> int:
+        floor = _REASONING_OUTPUT_FLOORS.get(self._reasoning_effort_value() or "", 0)
+        if self._thinking_cannot_be_disabled():
+            floor = max(floor, _REASONING_OUTPUT_FLOORS["low"])
+        if self._relay_model_always_thinks():
+            # Same headroom the Anthropic path gives these models.
+            floor = max(floor, ALWAYS_THINKING_MIN_MAX_TOKENS)
+        return floor
+
+    def _thinking_cannot_be_disabled(self) -> bool:
+        if getattr(self, "_thinking_required", False):
             return True
-        return provider == "xai" and (
-            "reason" in model_name or "thinking" in model_name
+        provider = getattr(self, "_provider_id", "")
+        model = self._family_model_id(getattr(self, "model", ""))
+        return provider in {"zhipu", _RELAY_PROVIDER_ID} and model.startswith("glm-5.3")
+
+    def _relay_model_always_thinks(self) -> bool:
+        """A Claude model that cannot stop thinking, called over the OpenAI protocol."""
+
+        if getattr(self, "_provider_id", "") != _RELAY_PROVIDER_ID:
+            return False
+        return self._family_model_id(getattr(self, "model", "")).startswith(
+            ALWAYS_THINKING_CLAUDE_PREFIXES
         )
+
+    def _uses_reasoning_effort_control(self) -> bool:
+        return self._reasoning_effort_value() is not None
+
+    def _apply_reasoning_effort(self, kwargs: dict) -> None:
+        """Add the model's lowest reasoning effort to a chat completions request.
+
+        OpenRouter reads the effort from its ``reasoning`` object (sent in
+        ``extra_body``); every other endpoint takes ``reasoning_effort``.
+        """
+
+        if not getattr(self, "_no_thinking_request_supported", True):
+            return
+        effort = self._reasoning_effort_value()
+        if effort is None:
+            return
+        if self._is_openrouter_endpoint():
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body["reasoning"] = {"effort": effort}
+            kwargs["extra_body"] = extra_body
+        else:
+            kwargs["reasoning_effort"] = effort
 
     def _request_extra_body(self) -> dict:
         body = dict(getattr(self, "_extra_body", {}) or {})
+        if getattr(self, "_thinking_required", False):
+            # The provider answered that this model cannot stop thinking.
+            if "thinking" in body:
+                body["thinking"] = {"type": "enabled"}
+            reasoning = body.get("reasoning")
+            if isinstance(reasoning, dict) and reasoning.get("enabled") is False:
+                # OpenRouter: run at low effort instead of switching it off.
+                body["reasoning"] = {"effort": "low"}
         if not getattr(self, "_no_thinking_request_supported", True):
             for key in getattr(self, "_managed_no_thinking_extra_keys", set()):
                 body.pop(key, None)
@@ -460,17 +805,7 @@ class OpenAITranslator(BaseTranslator):
             return False
         mentions_control = any(field in message for field in fields)
         unsupported = any(
-            marker in message
-            for marker in (
-                "unsupported",
-                "unknown",
-                "unrecognized",
-                "not permitted",
-                "not allowed",
-                "extra_forbidden",
-                "unexpected",
-                "invalid parameter",
-            )
+            marker in message for marker in _UNSUPPORTED_PARAMETER_MARKERS
         )
         return mentions_control and unsupported
 
@@ -478,7 +813,29 @@ class OpenAITranslator(BaseTranslator):
     def _unsupported_no_thinking_control(exc: Exception) -> bool:
         return OpenAITranslator._unsupported_request_parameter(
             exc,
-            ("reasoning_effort", "enable_thinking", "thinking"),
+            (
+                "reasoning_effort",
+                # camelCase spelling some providers echo back (xAI).
+                "reasoningeffort",
+                "enable_thinking",
+                "thinking",
+                "chat_template_kwargs",
+            ),
+        )
+
+    def _openrouter_rejected_reasoning(self, exc: Exception) -> bool:
+        """OpenRouter refused its ``reasoning`` object as an unsupported parameter.
+
+        Only a 400 that names ``reasoning`` itself (``Unsupported parameter:
+        reasoning``, ``'reasoning.enabled' ... invalid parameter``) counts; a
+        model id such as ``...-non-reasoning`` in an unrelated error does not.
+        """
+
+        if not self._is_openrouter_endpoint() or provider_error_status(exc) != 400:
+            return False
+        message = str(exc or "").lower()
+        return bool(_OPENROUTER_REASONING_PARAMETER_RE.search(message)) and any(
+            marker in message for marker in _UNSUPPORTED_PARAMETER_MARKERS
         )
 
     def _without_no_thinking_controls(self, kwargs: dict) -> dict:
@@ -496,19 +853,204 @@ class OpenAITranslator(BaseTranslator):
                 fallback.pop("extra_body", None)
         return fallback
 
+    @staticmethod
+    def _sent_effort(current: dict) -> str:
+        """The reasoning effort a request carries, wherever the endpoint wants it."""
+
+        effort = current.get("reasoning_effort")
+        if effort is None:
+            reasoning = current.get("reasoning")
+            if not isinstance(reasoning, dict):
+                extra_body = current.get("extra_body")
+                reasoning = (
+                    extra_body.get("reasoning") if isinstance(extra_body, dict) else None
+                )
+            if isinstance(reasoning, dict):
+                effort = reasoning.get("effort")
+        return str(effort or "")
+
+    @staticmethod
+    def _rejected_effort_value(exc: Exception, current: dict) -> str:
+        """Return the effort value the provider refused, if that is the error.
+
+        Only a refused VALUE counts (the message names the value as a word or
+        lists the supported values); a refused or unknown parameter is left to
+        the no-thinking fallback, which drops the control instead.
+        """
+
+        effort = OpenAITranslator._sent_effort(current)
+        if effort not in {"none", "minimal"}:
+            return ""
+        message = _PY_NULL_FIELD_RE.sub(r"\1null", str(exc or "")).lower()
+        if "reasoning" not in message and "effort" not in message and "thinking" not in message:
+            return ""
+        if re.search(rf"\b{re.escape(effort)}\b", message) or any(
+            marker in message for marker in _REJECTED_EFFORT_VALUE_MARKERS
+        ):
+            return effort
+        return ""
+
+    def _with_effort(self, current: dict, effort: str) -> dict:
+        updated = dict(current)
+        if "reasoning_effort" in updated:
+            updated["reasoning_effort"] = effort
+        if isinstance(updated.get("reasoning"), dict):
+            updated["reasoning"] = dict(updated["reasoning"], effort=effort)
+        extra_body = updated.get("extra_body")
+        if isinstance(extra_body, dict) and isinstance(extra_body.get("reasoning"), dict):
+            reasoning = extra_body["reasoning"]
+            if "effort" in reasoning:
+                updated["extra_body"] = dict(
+                    extra_body,
+                    reasoning=dict(reasoning, effort=effort),
+                )
+        return self._with_token_floor(updated, _REASONING_OUTPUT_FLOORS.get(effort, 0))
+
+    @staticmethod
+    def _with_token_floor(current: dict, floor: int) -> dict:
+        if not floor:
+            return current
+        updated = dict(current)
+        for field in _TOKEN_LIMIT_FIELDS:
+            if field in updated:
+                updated[field] = max(int(updated[field] or 0), floor)
+        return updated
+
+    def _without_raised_effort_headroom(self, current: dict, original: dict) -> dict:
+        """Token limits once a raised effort is dropped.
+
+        Starts from ``original`` (the request before this call raised the
+        effort), brings it back within max_output_tokens and adds only the
+        headroom the model itself still needs. A renamed token field keeps its
+        new name.
+        """
+
+        cap = int(getattr(self, "_max_output_tokens", 0) or 0)
+        limit = next(
+            (original[field] for field in _TOKEN_LIMIT_FIELDS if field in original),
+            None,
+        )
+        updated = dict(current)
+        for field in _TOKEN_LIMIT_FIELDS:
+            if field not in updated:
+                continue
+            value = int((updated[field] if limit is None else limit) or 0)
+            if cap:
+                value = min(value, cap)
+            updated[field] = self._with_output_floor(value)
+        return updated
+
+    def _model_requires_thinking(self, exc: Exception, current: dict) -> bool:
+        """The provider refused to switch thinking off: the model always thinks.
+
+        Zhipu reports this as a 400 whose message talks about thinking (思考);
+        its error code 1210 alone also covers max_tokens range errors.
+        OpenRouter answers ``reasoning: {"enabled": false}`` (or effort
+        "none") with a 400 "Reasoning is mandatory for this endpoint and
+        cannot be disabled".
+        """
+
+        extra_body = current.get("extra_body")
+        if not isinstance(extra_body, dict):
+            return False
+        if self._is_openrouter_endpoint():
+            reasoning = extra_body.get("reasoning")
+            if not isinstance(reasoning, dict) or not (
+                reasoning.get("enabled") is False or reasoning.get("effort") == "none"
+            ):
+                return False
+            if provider_error_status(exc) != 400:
+                return False
+            message = str(exc or "").lower()
+            return "reasoning" in message and (
+                "mandatory" in message or "cannot be disabled" in message
+            )
+        if not self._is_zhipu_endpoint():
+            return False
+        thinking = extra_body.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
+            return False
+        if provider_error_status(exc) != 400:
+            return False
+        message = str(exc or "")
+        return "思考" in message or "thinking" in message.lower()
+
+    def _with_required_thinking(self, current: dict) -> dict:
+        updated = dict(current)
+        if self._is_openrouter_endpoint():
+            # OpenRouter reads the effort from its reasoning object.
+            updated["extra_body"] = dict(
+                updated.get("extra_body") or {},
+                reasoning={"effort": "low"},
+            )
+        else:
+            updated["extra_body"] = dict(
+                updated.get("extra_body") or {},
+                thinking={"type": "enabled"},
+            )
+            updated["reasoning_effort"] = "low"
+        return self._with_token_floor(updated, _REASONING_OUTPUT_FLOORS["low"])
+
     def _create_with_control_fallback(self, create, kwargs: dict):
         current = dict(kwargs)
         removed_no_thinking = False
         swapped_token_parameter = False
+        escalated_effort = False
+        removed_temperature = False
+        required_thinking = False
+        # What a retry learned is kept only once a request with it succeeds.
+        accepted_effort: str | None = None
+        accepted_token_parameter = ""
         wall_started = time.perf_counter()
-        for _attempt in range(3):
+        for _attempt in range(6):
             self._raise_if_wall_timeout(wall_started)
             try:
                 response = create(**current)
                 self._raise_if_wall_timeout(wall_started)
-                return response
             except Exception as exc:
                 self._raise_if_wall_timeout(wall_started)
+                if not required_thinking and self._model_requires_thinking(exc, current):
+                    required_thinking = True
+                    current = self._with_required_thinking(current)
+                    logger.warning(
+                        "Translation provider requires thinking for this model; "
+                        "retrying with thinking enabled at low effort "
+                        "(model=%s endpoint=%s endpoint_id=%s)",
+                        self.model,
+                        self._log_endpoint,
+                        self._log_endpoint_id,
+                    )
+                    continue
+                rejected_effort = self._rejected_effort_value(exc, current)
+                if not escalated_effort and rejected_effort:
+                    escalated_effort = True
+                    accepted_effort = "low"
+                    current = self._with_effort(current, "low")
+                    logger.warning(
+                        "Translation provider rejected reasoning effort %s; retrying "
+                        "with low (model=%s endpoint=%s endpoint_id=%s)",
+                        rejected_effort,
+                        self.model,
+                        self._log_endpoint,
+                        self._log_endpoint_id,
+                    )
+                    continue
+                if (
+                    not removed_temperature
+                    and "temperature" in current
+                    and self._unsupported_request_parameter(exc, ("temperature",))
+                ):
+                    removed_temperature = True
+                    current = dict(current)
+                    current.pop("temperature", None)
+                    logger.warning(
+                        "Translation provider rejected temperature; retrying without "
+                        "it (model=%s endpoint=%s endpoint_id=%s)",
+                        self.model,
+                        self._log_endpoint,
+                        self._log_endpoint_id,
+                    )
+                    continue
                 extra_body = current.get("extra_body")
                 extra_keys = (
                     extra_body.keys() if isinstance(extra_body, dict) else ()
@@ -525,11 +1067,27 @@ class OpenAITranslator(BaseTranslator):
                 if (
                     not removed_no_thinking
                     and has_no_thinking_control
-                    and self._unsupported_no_thinking_control(exc)
+                    and (
+                        self._unsupported_no_thinking_control(exc)
+                        or self._openrouter_rejected_reasoning(exc)
+                    )
                 ):
                     removed_no_thinking = True
-                    self._no_thinking_request_supported = False
+                    # Without the controls there is no effort to raise: drop a
+                    # raised effort (this call's or an earlier one's) and the
+                    # token headroom it added.
+                    raised_effort = bool(
+                        escalated_effort
+                        or getattr(self, "_reasoning_effort_override", None)
+                    )
+                    self._reasoning_effort_override = None
+                    accepted_effort = None
                     current = self._without_no_thinking_controls(current)
+                    if raised_effort:
+                        current = self._without_raised_effort_headroom(
+                            current,
+                            kwargs if escalated_effort else current,
+                        )
                     logger.warning(
                         "Translation provider rejected no-thinking controls; retrying "
                         "without unsupported fields "
@@ -564,9 +1122,7 @@ class OpenAITranslator(BaseTranslator):
                     )
                     current = dict(current)
                     current[replacement] = current.pop(token_parameter)
-                    self._uses_max_completion_tokens = (
-                        replacement == "max_completion_tokens"
-                    )
+                    accepted_token_parameter = replacement
                     logger.warning(
                         "Translation provider rejected %s; retrying with %s "
                         "(model=%s endpoint=%s endpoint_id=%s)",
@@ -578,6 +1134,19 @@ class OpenAITranslator(BaseTranslator):
                     )
                     continue
                 raise
+            if removed_no_thinking:
+                self._no_thinking_request_supported = False
+            if accepted_effort:
+                self._reasoning_effort_override = accepted_effort
+            if required_thinking:
+                self._thinking_required = True
+            if removed_temperature:
+                self._omits_temperature = True
+            if accepted_token_parameter:
+                self._uses_max_completion_tokens = (
+                    accepted_token_parameter == "max_completion_tokens"
+                )
+            return response
         raise RuntimeError("Translation request compatibility retry limit exceeded")
 
     @staticmethod
@@ -893,9 +1462,11 @@ class OpenAITranslator(BaseTranslator):
             language_hint=language_hint,
         )
         messages = self._chat_messages_for_backend(base_messages)
-        output_tokens = min(
-            self._max_output_tokens,
-            max(32, self._estimate_max_tokens(text) + 12),
+        output_tokens = self._with_output_floor(
+            min(
+                self._max_output_tokens,
+                max(32, self._estimated_output_tokens(text) + 12),
+            )
         )
         self._record_translation_metrics(
             prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
@@ -926,7 +1497,7 @@ class OpenAITranslator(BaseTranslator):
                         getattr(self, "_no_thinking_request_supported", True)
                         and self._uses_reasoning_effort_control()
                     ):
-                        kwargs["reasoning"] = {"effort": "none"}
+                        kwargs["reasoning"] = {"effort": self._reasoning_effort_value()}
                     extra_body = self._request_extra_body()
                     if extra_body:
                         kwargs["extra_body"] = extra_body
@@ -958,14 +1529,10 @@ class OpenAITranslator(BaseTranslator):
                         kwargs["max_completion_tokens"] = output_tokens
                     else:
                         kwargs["max_tokens"] = output_tokens
-                    if (
-                        getattr(self, "_no_thinking_request_supported", True)
-                        and self._uses_reasoning_effort_control()
-                    ):
-                        kwargs["reasoning_effort"] = "none"
                     extra_body = self._request_extra_body()
                     if extra_body:
                         kwargs["extra_body"] = extra_body
+                    self._apply_reasoning_effort(kwargs)
                     output, response = self._chat_completion_request(kwargs)
         except Exception as exc:
             elapsed = max(0.0, time.perf_counter() - provider_started)
@@ -1111,14 +1678,10 @@ class OpenAITranslator(BaseTranslator):
                 kwargs["max_completion_tokens"] = output_tokens
             else:
                 kwargs["max_tokens"] = output_tokens
-        if (
-            not uses_translation_options
-            and getattr(self, "_no_thinking_request_supported", True)
-            and self._uses_reasoning_effort_control()
-        ):
-            kwargs["reasoning_effort"] = "none"
         if extra_body:
             kwargs["extra_body"] = extra_body
+        if not uses_translation_options:
+            self._apply_reasoning_effort(kwargs)
         self._record_translation_metrics(
             prompt_build_s=max(0.0, time.perf_counter() - prompt_started),
             prompt_chars=sum(
@@ -1338,9 +1901,11 @@ class OpenAITranslator(BaseTranslator):
             reason=reason,
         )
         retry_messages = self._chat_messages_for_backend(retry_messages)
-        retry_tokens = min(
-            self._max_output_tokens,
-            max(64, int(output_tokens) + 24),
+        retry_tokens = self._with_output_floor(
+            min(
+                self._max_output_tokens,
+                max(64, int(output_tokens) + 24),
+            )
         )
         kwargs: dict[str, object] = {
             "model": self.model,
@@ -1355,14 +1920,10 @@ class OpenAITranslator(BaseTranslator):
             kwargs["max_completion_tokens"] = retry_tokens
         else:
             kwargs["max_tokens"] = retry_tokens
-        if (
-            getattr(self, "_no_thinking_request_supported", True)
-            and self._uses_reasoning_effort_control()
-        ):
-            kwargs["reasoning_effort"] = "none"
         extra_body = self._request_extra_body()
         if extra_body:
             kwargs["extra_body"] = extra_body
+        self._apply_reasoning_effort(kwargs)
 
         started = time.perf_counter()
         http_capture = None
@@ -1420,9 +1981,11 @@ class OpenAITranslator(BaseTranslator):
             f"{str(message.get('role') or 'user').upper()}:\n{message.get('content', '')}"
             for message in retry_messages
         )
-        retry_tokens = min(
-            self._max_output_tokens,
-            max(64, int(output_tokens) + 24),
+        retry_tokens = self._with_output_floor(
+            min(
+                self._max_output_tokens,
+                max(64, int(output_tokens) + 24),
+            )
         )
         kwargs: dict[str, object] = {
             "model": self.model,
@@ -1438,7 +2001,7 @@ class OpenAITranslator(BaseTranslator):
             getattr(self, "_no_thinking_request_supported", True)
             and self._uses_reasoning_effort_control()
         ):
-            kwargs["reasoning"] = {"effort": "none"}
+            kwargs["reasoning"] = {"effort": self._reasoning_effort_value()}
         extra_body = self._request_extra_body()
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -1518,7 +2081,7 @@ class OpenAITranslator(BaseTranslator):
             "_no_thinking_request_supported",
             True,
         ) and self._uses_reasoning_effort_control():
-            kwargs["reasoning"] = {"effort": "none"}
+            kwargs["reasoning"] = {"effort": self._reasoning_effort_value()}
         extra_body = self._request_extra_body()
         if extra_body:
             kwargs["extra_body"] = extra_body

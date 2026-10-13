@@ -83,6 +83,17 @@ _PROBE_BYTES = 768 * 1024  # bytes pulled to measure throughput
 _PROBE_LOCALE_BONUS = 1.5  # locale-preferred mirror wins ties up to this ratio
 _CONNECT_TIMEOUT = 15
 _READ_TIMEOUT = 60
+# Mihomo/Clash-style TUN clients in fake-IP mode answer every public DNS name
+# from these reserved ranges and intercept the connection themselves.  They
+# are not routable mirror addresses, but refusing them made every model
+# download fail for players behind such a proxy ("URL is not trusted").  The
+# Qwen TTS audio path already accepts them; TLS still verifies the real
+# hostname and every file is checked against its pinned SHA-256, so the
+# download itself does not depend on where the socket is terminated.
+_PROXY_SYNTHETIC_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("fdfe:dcba:9876::/48"),
+)
 _MAX_MODEL_FILE_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_MODEL_TOTAL_BYTES = 16 * 1024 * 1024 * 1024
 _CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(\d+)$", re.IGNORECASE)
@@ -370,7 +381,18 @@ def _is_safe_model_download_url(url: str) -> bool:
                 addresses.append(address)
     else:
         addresses = [literal]
-    return bool(addresses) and all(address.is_global for address in addresses)
+    return bool(addresses) and all(
+        address.is_global or _is_proxy_synthetic_address(address)
+        for address in addresses
+    )
+
+
+def _is_proxy_synthetic_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return whether a resolved address is a fake-IP proxy interception target."""
+
+    return any(address in network for network in _PROXY_SYNTHETIC_NETWORKS)
 
 
 def _normalise_base_url(value: str) -> str:

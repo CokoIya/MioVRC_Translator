@@ -57,6 +57,9 @@ class StyleBertVits2ModelInfo:
     model_path: Path
     speakers: tuple[str, ...]
     styles: tuple[str, ...]
+    # JP-Extra checkpoints only accept Japanese text; the engine must not
+    # drive them with the player's global BERT language.
+    jp_extra: bool = False
 
 
 @dataclass(frozen=True)
@@ -380,6 +383,10 @@ def _inspect_from_snapshot(
         raise StyleBertVits2ModelError("No speakers were found in config.json.")
     if not styles:
         raise StyleBertVits2ModelError("No styles were found in config.json.")
+    version = str(raw_config.get("version", "") or "")
+    jp_extra = bool(data.get("use_jp_extra")) or version.strip().lower().endswith(
+        "jp-extra"
+    )
 
     return StyleBertVits2ModelInfo(
         name=directory.name,
@@ -389,6 +396,7 @@ def _inspect_from_snapshot(
         model_path=model_path,
         speakers=speakers,
         styles=styles,
+        jp_extra=jp_extra,
     )
 
 
@@ -901,6 +909,41 @@ def style_bert_preset_language(model_name: str, speaker: str) -> str | None:
         if preset.model_path == model_name and preset.speaker_id == speaker:
             return preset.language
     return None
+
+
+def resolve_style_bert_voice_language(
+    model_info: StyleBertVits2ModelInfo,
+    speaker: str,
+    fallback: object = "jp",
+) -> str:
+    """Return the SBV2 text language one imported voice must be driven with.
+
+    A JP-Extra model only accepts Japanese (upstream raises otherwise), a
+    catalog voice carries its own language, and anything else follows the
+    player's BERT language setting.
+    """
+    from src.utils.config_manager import normalize_style_bert_bert_language
+
+    if getattr(model_info, "jp_extra", False):
+        return "jp"
+    preset_language = style_bert_preset_language(model_info.name, speaker)
+    if preset_language:
+        return normalize_style_bert_bert_language(preset_language)
+    return normalize_style_bert_bert_language(fallback)
+
+
+def style_bert_voice_language(voice: object, fallback: object = "jp") -> str:
+    """Resolve the language for a configured voice id without loading torch."""
+    from src.utils.config_manager import normalize_style_bert_bert_language
+
+    try:
+        model_name, speaker_name, _style = parse_style_bert_voice_id(str(voice or ""))
+    except Exception:
+        return normalize_style_bert_bert_language(fallback)
+    for model in list_imported_style_bert_models():
+        if model.name == model_name:
+            return resolve_style_bert_voice_language(model, speaker_name, fallback)
+    return normalize_style_bert_bert_language(fallback)
 
 
 def hololive_preset_choice_rows() -> tuple[tuple[str, str], ...]:

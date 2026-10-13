@@ -134,15 +134,6 @@ class TestAvatarControls:
 
         assert calls == ["start", ("muted", False)]
 
-    def test_the_frame_switch_follows_the_avatar(self, monkeypatch):
-        window, _calls = self._control_window(monkeypatch)
-        toggled: list = []
-        monkeypatch.setattr(window, "_frame_gesture_enabled", lambda: False)
-        monkeypatch.setattr(window, "_set_frame_gesture_enabled", toggled.append)
-
-        MainWindow._handle_osc_avatar_parameter(window, "MioFrameGesture", True)
-
-        assert toggled == [True]
 
     def test_a_target_language_of_zero_leaves_it_alone(self, monkeypatch):
         window, _calls = self._control_window(monkeypatch)
@@ -158,7 +149,7 @@ class TestAvatarControls:
 
 
 class TestWizard:
-    def test_the_vr_mode_switches_on_the_board_and_the_hand_frame(self, monkeypatch):
+    def test_overlay_mode_enables_desktop_captions(self, monkeypatch):
         window = MainWindow.__new__(MainWindow)
         window._config = {"translation": {}, "vrc_listen": {}, "tts": {}, "ui": {}}
         for name in (
@@ -186,8 +177,9 @@ class TestWizard:
         MainWindow._apply_mode_wizard_result(window, "overlay")
 
         listen = window._config["vrc_listen"]
-        assert listen["vr_overlay"]["enabled"] is True
-        assert listen["screenshot_translation"]["enabled"] is True
-        assert listen["screenshot_translation"]["frame_gesture"] is True
+        assert listen["enabled"] is True
+        assert listen["show_overlay"] is True
+        assert "vr_overlay" not in listen
+        assert "screenshot_translation" not in listen
         # Other players' speech is not posted under the player's name.
         assert listen["send_to_chatbox"] is False

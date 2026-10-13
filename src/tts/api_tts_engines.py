@@ -18,13 +18,19 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 from .api_tts_config import (
-    get_cloned_voice_options,
     get_tts_api_voice_options,
+    normalize_cloned_voices,
     resolve_tts_api_config,
+    usable_cloned_voice_options,
 )
 from .base import BaseTTS, TTSVoice
 from .error_utils import is_tts_authentication_error
 from .persona_instructions import qwen_tts_model_supports_instructions
+from .wav_utils import (
+    concat_pcm16_wavs,
+    scale_wav_volume_pcm16,
+    time_stretch_pcm16_wav,
+)
 from src.translators.factory import _float_setting, _int_setting
 from src.utils.app_paths import read_secure_text, secure_file_path, writable_app_dir
 from src.utils.http_session_pool import ThreadLocalSessionPool
@@ -79,6 +85,36 @@ def _is_dashscope_proxy_synthetic_address(
 
 _QWEN_SYNTHESIS_RETRY_DELAYS = (0.2,)
 _QWEN_AUDIO_DOWNLOAD_RETRY_DELAYS = (0.25, 1.0, 2.0)
+# DashScope documents 600 characters per qwen3-tts request; longer text is
+# answered with InvalidParameter, so it is split at sentence boundaries.
+QWEN_TTS_MAX_TEXT_CHARS = 600
+# Qwen-Audio-TTS (cloned voices) uses the SpeechSynthesizer service instead of
+# multimodal-generation, and accepts a native speaking rate.
+QWEN_AUDIO_TTS_SYNTHESIS_PATH = "/services/audio/tts/SpeechSynthesizer"
+QWEN_AUDIO_TTS_SAMPLE_RATE = 24000
+QWEN_AUDIO_TTS_MIN_RATE = 0.5
+QWEN_AUDIO_TTS_MAX_RATE = 2.0
+# ``language_hints`` values Qwen-Audio-TTS accepts, keyed by the
+# ``language_type`` the shared Qwen language detection produces.
+_QWEN_AUDIO_LANGUAGE_HINTS = {
+    "Chinese": "zh",
+    "English": "en",
+    "Japanese": "ja",
+    "Korean": "ko",
+    "German": "de",
+    "French": "fr",
+    "Russian": "ru",
+    "Italian": "it",
+    "Spanish": "es",
+    "Portuguese": "pt",
+}
+# CJK sentence enders split anywhere; ASCII ones only before whitespace so
+# decimals and abbreviations ("3.5", "e.g.") stay intact.
+# Provider error codes are identifiers such as "AccessDenied.Unpurchased";
+# anything else in a ``code`` field is not repeated into the error detail.
+_PROVIDER_ERROR_CODE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[。！？；\n])|(?<=[.!?;])(?=\s)")
+_SOFT_SPLIT_RE = re.compile(r"(?<=[，,、\s])")
 _AUDIO_DNS_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 _REQUESTS_SESSION_CLASS = requests.sessions.Session
 _QWEN_NETWORK_ERROR_MESSAGE = (
@@ -458,15 +494,61 @@ class _APITTSBase(BaseTTS):
                 exc.__class__.__name__,
             )
             return
+        # The probe is a HEAD against a POST-only route, so any HTTP answer
+        # (typically 400) proves DNS/TCP/TLS work.  401/403 are the exception:
+        # the transport is fine but the key or region is wrong, and saying
+        # "finished" here hid that until the first sentence failed.
+        credentials_rejected = result.status_code in (401, 403)
         logger.log(
-            logging.INFO if result.succeeded else logging.WARNING,
-            "%s prewarm %s (status=%s elapsed_ms=%.0f error_type=%s)",
+            logging.WARNING if credentials_rejected or not result.succeeded else logging.INFO,
+            "%s prewarm %s (status=%s transport_ok=%s credentials_rejected=%s "
+            "elapsed_ms=%.0f error_type=%s)",
             self.ENGINE_LABEL,
-            "finished" if result.succeeded else "failed",
+            "finished" if result.succeeded and not credentials_rejected else "failed",
             result.status_code if result.status_code is not None else "unknown",
+            result.succeeded,
+            credentials_rejected,
             result.elapsed_s * 1000.0,
             result.error_type or "none",
         )
+
+    @staticmethod
+    def _apply_local_rate_volume(audio: bytes, rate: object, volume: object) -> bytes:
+        """Apply the player's rate/volume to WAV audio the service returned.
+
+        Neither DashScope qwen3-tts nor MiMo exposes a speed or gain
+        parameter, so the sliders are honoured here: WSOLA time-stretch for
+        the rate and a plain gain for the volume.  Non-WAV payloads are left
+        untouched.
+        """
+        try:
+            speed = float(rate)
+        except (TypeError, ValueError):
+            speed = 1.0
+        try:
+            loudness = float(volume)
+        except (TypeError, ValueError):
+            loudness = 1.0
+        speed = speed if speed > 0 else 1.0
+        loudness = max(0.0, min(1.0, loudness)) if loudness == loudness else 1.0
+        if abs(speed - 1.0) < 0.01 and abs(loudness - 1.0) < 0.01:
+            return audio
+        if not (audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"):
+            logger.debug("Skipping local rate/volume processing for non-WAV audio")
+            return audio
+        try:
+            processed = audio
+            if abs(speed - 1.0) >= 0.01:
+                processed = time_stretch_pcm16_wav(processed, speed)
+            if abs(loudness - 1.0) >= 0.01:
+                processed = scale_wav_volume_pcm16(processed, loudness)
+            return processed
+        except Exception as exc:
+            logger.warning(
+                "Local TTS rate/volume processing failed (%s); playing the original audio",
+                safe_exception_summary(exc),
+            )
+            return audio
 
     def _prewarm_url(self) -> str:
         return self.base_url
@@ -1194,14 +1276,31 @@ class MimoTTS(_APITTSBase):
                 {"role": "assistant", "content": clean_text},
             ],
         }
+        # Diagnostics also arm the wall-clock deadline; without them the
+        # configured wall timeout was ignored for MiMo.
+        self._begin_synthesis_diagnostics()
+        succeeded = False
         try:
-            return self._request_json_audio(f"{self.base_url}/chat/completions", payload)
+            audio = self._request_json_audio(f"{self.base_url}/chat/completions", payload)
+            audio = self._apply_local_rate_volume(audio, rate, volume)
+            succeeded = True
+            return audio
+        except _APITTSWallClockTimeout as exc:
+            logger.error("MiMo TTS synthesis exceeded its wall-clock deadline")
+            raise RuntimeError(
+                "MiMo TTS synthesis failed: request exceeded the configured wall-clock timeout"
+            ) from exc
+        except _APITTSCancelled as exc:
+            logger.info("MiMo TTS synthesis cancelled during shutdown")
+            raise RuntimeError("MiMo TTS synthesis was cancelled during shutdown") from exc
         except Exception as exc:
             logger.error(
                 "MiMo TTS synthesis failed (%s)",
                 safe_exception_summary(exc),
             )
             raise RuntimeError(f"MiMo TTS synthesis failed: {exc}") from exc
+        finally:
+            self._finish_synthesis_diagnostics(succeeded=succeeded)
 
 
 class QwenTTS(_APITTSBase):
@@ -1309,6 +1408,36 @@ class QwenTTS(_APITTSBase):
             return f"Qwen TTS unsupported model: {detail}".rstrip(": ")
         if status_code >= 500:
             return f"Qwen TTS provider failure (HTTP {status_code}): {detail}".rstrip(": ")
+        if status_code == 403 and any(
+            token in detail_lower
+            for token in (
+                "arrearage",
+                "unpurchased",
+                "insufficient balance",
+                "overdue",
+                # Model.AccessDenied / Workspace.AccessDenied: the key is valid
+                # but lacks permission for this model or workspace;
+                # AllocationQuota.FreeTierOnly: the free quota is used up and
+                # paid usage is switched off.
+                "accessdenied",
+                "access denied",
+                # AccessDenied.Unpurchased (Model Studio is not activated),
+                # DashScope's most common 403, also when only its prose
+                # survives a gateway.
+                "access to model denied",
+                "eligible for using the model",
+                "freetieronly",
+                "free tier",
+            )
+        ):
+            # DashScope uses 403 for an unpaid balance, an unsubscribed model
+            # or missing model permission as well; telling the player to check
+            # the key is wrong.
+            separator = " " if str(detail).endswith((".", "!", "?")) else ". "
+            return (
+                f"Qwen TTS account access denied (HTTP 403): {detail}{separator}"
+                "The DashScope account balance or model subscription needs attention"
+            )
         if status_code not in {401, 403} and not is_tts_authentication_error(
             f"status {status_code} {detail}"
         ):
@@ -1349,6 +1478,36 @@ class QwenTTS(_APITTSBase):
         logger.info("Upgrading Qwen TTS audio download URL to HTTPS")
         return urlunsplit(("https", host, parsed.path, parsed.query, parsed.fragment))
 
+    def _synthesis_url(self) -> str:
+        return f"{self.base_url}/services/aigc/multimodal-generation/generation"
+
+    def _synthesis_payload(
+        self,
+        chunk: str,
+        voice: str,
+        *,
+        language_type: str,
+        rate: object,
+    ) -> dict[str, Any]:
+        del rate  # qwen3-tts has no speed parameter; it is applied locally.
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": {
+                "text": chunk,
+                "voice": voice,
+                "language_type": language_type,
+            },
+        }
+        if self.instructions and qwen_tts_model_supports_instructions(self.model):
+            payload["input"]["instructions"] = self.instructions
+            payload["input"]["optimize_instructions"] = self.optimize_instructions
+        return payload
+
+    def _local_rate_factor(self, rate: object) -> object:
+        """Speed change still to apply locally after the service's own."""
+
+        return rate
+
     def synthesize(
         self,
         text: str,
@@ -1356,7 +1515,6 @@ class QwenTTS(_APITTSBase):
         rate: float = 1.0,
         volume: float = 1.0,
     ) -> bytes:
-        del rate, volume
         self._begin_synthesis_diagnostics()
         succeeded = False
         try:
@@ -1372,25 +1530,31 @@ class QwenTTS(_APITTSBase):
                 clean_text,
                 self.language_type_hint,
             )
-            payload = {
-                "model": self.model,
-                "input": {
-                    "text": clean_text,
-                    "voice": clean_voice,
-                    "language_type": language_type,
-                },
-            }
-            if self.instructions and qwen_tts_model_supports_instructions(self.model):
-                payload["input"]["instructions"] = self.instructions
-                payload["input"]["optimize_instructions"] = self.optimize_instructions
+            chunks = split_text_for_synthesis(clean_text, QWEN_TTS_MAX_TEXT_CHARS)
             self._set_diagnostic(
                 "preprocessing_s",
                 max(0.0, time.monotonic() - preprocessing_started_at),
             )
             self._set_diagnostic("language_type", language_type)
-            audio = self._request_json_audio(
-                f"{self.base_url}/services/aigc/multimodal-generation/generation",
-                payload,
+            self._set_diagnostic("text_chunks", len(chunks))
+            parts: list[bytes] = []
+            for chunk in chunks:
+                parts.append(
+                    self._request_json_audio(
+                        self._synthesis_url(),
+                        self._synthesis_payload(
+                            chunk,
+                            clean_voice,
+                            language_type=language_type,
+                            rate=rate,
+                        ),
+                    )
+                )
+            audio = parts[0] if len(parts) == 1 else concat_pcm16_wavs(parts)
+            audio = self._apply_local_rate_volume(
+                audio,
+                self._local_rate_factor(rate),
+                volume,
             )
             succeeded = True
             return audio
@@ -1417,36 +1581,123 @@ class QwenTTS(_APITTSBase):
             self._finish_synthesis_diagnostics(succeeded=succeeded)
 
 
-class QwenVoiceCloneTTS(QwenTTS):
-    """Qwen TTS driven by a voice the player cloned from their own recording.
+def _qwen_audio_native_rate(rate: object) -> float | None:
+    """The speaking rate to send to Qwen-Audio-TTS, or None for the default."""
 
-    Synthesis is byte-for-byte the same request as preset-voice Qwen TTS; only
-    the model and the voice id differ, so everything is inherited.  What this
-    subclass adds is resolving the voice list from the player's stored
+    try:
+        speed = float(rate)
+    except (TypeError, ValueError):
+        return None
+    if speed != speed or speed <= 0 or abs(speed - 1.0) < 0.01:
+        return None
+    return round(
+        max(QWEN_AUDIO_TTS_MIN_RATE, min(QWEN_AUDIO_TTS_MAX_RATE, speed)),
+        3,
+    )
+
+
+class QwenVoiceCloneTTS(QwenTTS):
+    """Qwen-Audio-TTS driven by a voice the player cloned from a recording.
+
+    Cloned voices are enrolled with ``voice-enrollment`` and spoken through
+    the SpeechSynthesizer service (not multimodal-generation). The response
+    shape, result download and error handling match preset-voice Qwen TTS, so
+    only the request differs. The voice list comes from the player's stored
     enrollments instead of the built-in catalog.
     """
 
     ENGINE_ID = "qwen_vc"
     ENGINE_LABEL = "Qwen Voice Cloning"
 
+    def _prewarm_url(self) -> str:
+        return f"{self.base_url}{QWEN_AUDIO_TTS_SYNTHESIS_PATH}"
+
+    def _synthesis_url(self) -> str:
+        return f"{self.base_url}{QWEN_AUDIO_TTS_SYNTHESIS_PATH}"
+
+    def _synthesis_payload(
+        self,
+        chunk: str,
+        voice: str,
+        *,
+        language_type: str,
+        rate: object,
+    ) -> dict[str, Any]:
+        input_payload: dict[str, Any] = {
+            "text": chunk,
+            "voice": voice,
+            # WAV keeps multi-chunk joins and the local volume step lossless.
+            "format": "wav",
+            "sample_rate": QWEN_AUDIO_TTS_SAMPLE_RATE,
+        }
+        native_rate = _qwen_audio_native_rate(rate)
+        if native_rate is not None:
+            input_payload["rate"] = native_rate
+        language_hint = _QWEN_AUDIO_LANGUAGE_HINTS.get(language_type)
+        if language_hint:
+            input_payload["language_hints"] = [language_hint]
+        return {"model": self.model, "input": input_payload}
+
+    def _local_rate_factor(self, rate: object) -> object:
+        native_rate = _qwen_audio_native_rate(rate)
+        if native_rate is None:
+            return rate
+        try:
+            # Only the part of the request beyond the service's 0.5-2.0
+            # range is left for the local time-stretch.
+            return float(rate) / native_rate
+        except (TypeError, ValueError, ZeroDivisionError):
+            return 1.0
+
     def __init__(self, config: Mapping[str, object] | None = None) -> None:
         super().__init__(config)
-        self._cloned_voices = get_cloned_voice_options(
-            config if isinstance(config, Mapping) else {}
-        )
+        engine_config = config if isinstance(config, Mapping) else {}
+        # Only voices enrolled for this synthesis model and service region
+        # are usable; DashScope rejects every other combination with an
+        # opaque HTTP 400.
+        self._cloned_voices = usable_cloned_voice_options(engine_config)
+        self._unusable_cloned_voices = {
+            voice["voice_id"]: voice
+            for voice in normalize_cloned_voices(engine_config.get("custom_voices"))
+            if voice["voice_id"] not in {entry[0] for entry in self._cloned_voices}
+        }
 
     def is_available(self) -> bool:
         # A cloned voice is required: without one there is nothing to speak
         # with, and reporting availability would only defer the failure to the
-        # first utterance in the middle of a conversation.
-        return bool(super().is_available() and self._resolved_default_voice())
+        # first utterance in the middle of a conversation.  Voices that exist
+        # but belong to another model/region keep the engine "available" so
+        # the mismatch is reported as a specific error instead of silence.
+        return bool(
+            super().is_available()
+            and (self._resolved_default_voice() or self._unusable_cloned_voices)
+        )
 
     def _resolved_default_voice(self) -> str:
-        if self.default_voice:
-            return self.default_voice
+        default = str(self.default_voice or "").strip()
+        usable_ids = {entry[0] for entry in self._cloned_voices}
+        if default and default in usable_ids:
+            return default
         if self._cloned_voices:
             return self._cloned_voices[0][0]
+        if default and default not in self._unusable_cloned_voices:
+            # A voice id the player entered by hand (not in the local list).
+            return default
         return ""
+
+    def _raise_for_unusable_voice(self, voice_id: str) -> None:
+        unusable = self._unusable_cloned_voices.get(voice_id)
+        if unusable is None:
+            return
+        registered_model = unusable.get("target_model") or "another model"
+        registered_region = unusable.get("region") or ""
+        where = f" in region '{registered_region}'" if registered_region else ""
+        raise RuntimeError(
+            f"The cloned voice '{unusable.get('display_name') or voice_id}' "
+            f"was registered for model '{registered_model}'{where}; it cannot be "
+            f"used with model '{self.model}' in region '{self.region}'. Record "
+            "the voice again for the current model, or switch the model back."
+        )
 
     def get_available_voices(self) -> list[TTSVoice]:
         return [
@@ -1469,10 +1720,17 @@ class QwenVoiceCloneTTS(QwenTTS):
     ) -> bytes:
         resolved_voice = str(voice or "").strip() or self._resolved_default_voice()
         if not resolved_voice:
+            # Explain a stored-but-unusable voice before falling back to the
+            # generic "record one first" message.
+            default = str(self.default_voice or "").strip()
+            self._raise_for_unusable_voice(
+                default or next(iter(self._unusable_cloned_voices), "")
+            )
             raise RuntimeError(
                 "Qwen Voice Cloning has no cloned voice yet. Record one in "
                 "Settings before enabling this engine."
             )
+        self._raise_for_unusable_voice(resolved_voice)
         return super().synthesize(text, resolved_voice, rate, volume)
 
 
@@ -1555,6 +1813,20 @@ def _response_error_detail(content: bytes, content_type: str = "") -> str:
             return str(error.get("message") or error.get("code") or error).strip()
         if error:
             return str(error).strip()
+        message = next(
+            (str(payload[key]).strip() for key in ("message", "msg") if payload.get(key)),
+            "",
+        )
+        code = payload.get("code")
+        code = code.strip() if isinstance(code, str) else ""
+        if message and _PROVIDER_ERROR_CODE_RE.fullmatch(code):
+            # DashScope's prose is often generic ("Access to model denied.
+            # Please make sure you are eligible for using the model."); its
+            # code (AccessDenied.Unpurchased, Arrearage, ...) says why, and
+            # dropping it made an inactive account read as a rejected key.
+            if code.casefold() in message.casefold():
+                return message
+            return f"{code}: {message}"
         for key in ("message", "msg", "code", "request_id"):
             value = payload.get(key)
             if value:
@@ -1789,17 +2061,43 @@ def _is_safe_api_request_url(
     )
 
 
+# DashScope qwen3-tts ``language_type`` values and the target-language
+# spellings the app uses for them.  Anything else is left to "Auto".
+_QWEN_LANGUAGE_TYPE_ALIASES: dict[str, frozenset[str]] = {
+    "Japanese": frozenset({"japanese", "ja", "jp", "ja-jp", "日本語", "日文", "日语"}),
+    "Chinese": frozenset(
+        {"chinese", "zh", "zh-cn", "zh-hans", "zh-tw", "zh-hant", "cn", "中文", "简体中文", "中国語"}
+    ),
+    "Korean": frozenset({"korean", "ko", "kr", "ko-kr", "한국어", "韩语", "韓国語"}),
+    "English": frozenset({"english", "en", "en-us", "en-gb", "英文", "英语", "英語"}),
+    "German": frozenset({"german", "de", "de-de", "deutsch", "德语", "ドイツ語"}),
+    "Italian": frozenset({"italian", "it", "it-it", "italiano", "意大利语", "イタリア語"}),
+    "Portuguese": frozenset(
+        {"portuguese", "pt", "pt-br", "pt-pt", "português", "葡萄牙语", "ポルトガル語"}
+    ),
+    "Spanish": frozenset({"spanish", "es", "es-es", "es-mx", "español", "西班牙语", "スペイン語"}),
+    "French": frozenset({"french", "fr", "fr-fr", "français", "法语", "フランス語"}),
+    "Russian": frozenset({"russian", "ru", "ru-ru", "русский", "俄语", "ロシア語"}),
+}
+
+
 def _normalize_qwen_language_type_hint(value: object) -> str:
     hint = str(value or "").strip().lower().replace("_", "-")
-    if hint in {"japanese", "ja", "jp", "日本語", "日文", "日语"}:
-        return "Japanese"
-    if hint in {"chinese", "zh", "zh-cn", "cn", "中文", "简体中文", "中国語"}:
-        return "Chinese"
-    if hint in {"korean", "ko", "kr", "한국어", "韩语", "韓国語"}:
-        return "Korean"
-    if hint in {"english", "en", "en-us", "en-gb", "英文", "英语"}:
-        return "English"
+    if not hint:
+        return ""
+    for language_type, aliases in _QWEN_LANGUAGE_TYPE_ALIASES.items():
+        if hint == language_type.lower() or hint in aliases:
+            return language_type
     return ""
+
+
+def qwen_tts_language_type_from_target(target_language: object) -> str:
+    """Map an app target-language code to a DashScope ``language_type``.
+
+    Returns an empty string for languages DashScope has no value for; the
+    engine then sends ``Auto`` so the service detects the language itself.
+    """
+    return _normalize_qwen_language_type_hint(target_language)
 
 
 def _qwen_language_type(text: str, language_hint: object = "") -> str:
@@ -1813,7 +2111,45 @@ def _qwen_language_type(text: str, language_hint: object = "") -> str:
         if hint in {"Chinese", "Japanese", "Korean"}:
             return hint
         return "Chinese"
-    stripped = value.strip()
-    if stripped and all(ord(char) < 128 for char in stripped):
-        return "English"
-    return "Auto"
+    # Latin-script text follows the translation target.  It used to be
+    # forced to English whenever the text was plain ASCII, which read
+    # Spanish/German/... sentences with English phonology.
+    return hint or "Auto"
+
+
+def split_text_for_synthesis(text: str, limit: int) -> list[str]:
+    """Split text into chunks of at most ``limit`` characters at natural breaks."""
+    clean = str(text or "").strip()
+    limit = max(1, int(limit))
+    if len(clean) <= limit:
+        return [clean] if clean else []
+
+    def _pack(units: list[str]) -> list[str]:
+        packed: list[str] = []
+        current = ""
+        for unit in units:
+            if not unit:
+                continue
+            if current and len(current) + len(unit) > limit:
+                packed.append(current.strip())
+                current = unit
+            else:
+                current += unit
+        if current.strip():
+            packed.append(current.strip())
+        return packed
+
+    chunks: list[str] = []
+    for sentence_chunk in _pack(_SENTENCE_SPLIT_RE.split(clean)):
+        if len(sentence_chunk) <= limit:
+            chunks.append(sentence_chunk)
+            continue
+        for soft_chunk in _pack(_SOFT_SPLIT_RE.split(sentence_chunk)):
+            if len(soft_chunk) <= limit:
+                chunks.append(soft_chunk)
+                continue
+            chunks.extend(
+                soft_chunk[index : index + limit].strip()
+                for index in range(0, len(soft_chunk), limit)
+            )
+    return [chunk for chunk in chunks if chunk]

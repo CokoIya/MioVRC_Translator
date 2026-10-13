@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import ssl
 import threading
@@ -10,7 +11,7 @@ import pytest
 import requests
 
 import src.tts.api_tts_engines as api_tts_engines
-from src.tts.api_tts_engines import MimoTTS, QwenTTS
+from src.tts.api_tts_engines import MimoTTS, QwenTTS, QwenVoiceCloneTTS
 from src.tts.error_utils import is_tts_authentication_error, tts_error_code
 
 
@@ -173,10 +174,12 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
     )
     assert headers["Authorization"] == "Bearer qwen-key"
     assert payload["model"] == "qwen3-tts-flash"
+    # Without a target-language hint, Latin-script text is left to the
+    # service's own detection instead of being forced to English.
     assert payload["input"] == {
         "text": "Hello there",
         "voice": "Cherry",
-        "language_type": "English",
+        "language_type": "Auto",
     }
     assert fake.gets == [
         (
@@ -184,6 +187,73 @@ def test_qwen_tts_posts_dashscope_request_and_downloads_audio(monkeypatch):
             "qwen.wav?Signature=test",
             30.0,
         )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("hint", "text", "expected"),
+    [
+        ("en", "Hello there", "English"),
+        ("es", "Hola, como estas", "Spanish"),
+        ("de", "Guten Tag", "German"),
+        ("fr", "Bonjour", "French"),
+        ("pt-BR", "Bom dia", "Portuguese"),
+        ("", "Hola, como estas", "Auto"),
+        ("tl", "Kamusta", "Auto"),
+        ("ja", "こんにちは", "Japanese"),
+        ("zh", "你好", "Chinese"),
+        ("ja", "日本語", "Japanese"),
+        ("", "你好", "Chinese"),
+        ("ko", "안녕하세요", "Korean"),
+    ],
+)
+def test_qwen_language_type_follows_the_translation_target(hint, text, expected):
+    assert api_tts_engines._qwen_language_type(text, hint) == expected
+    if expected not in {"Auto"} and hint:
+        assert api_tts_engines.qwen_tts_language_type_from_target(hint) == expected
+
+
+def test_qwen_tts_splits_long_text_at_sentence_boundaries_and_joins_audio(monkeypatch):
+    fake = _FakeSession()
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", lambda: fake)
+    joined: list[list[bytes]] = []
+    monkeypatch.setattr(
+        api_tts_engines,
+        "concat_pcm16_wavs",
+        lambda parts: joined.append(list(parts)) or b"RIFF\x04\x00\x00\x00WAVE",
+    )
+    engine = QwenTTS(
+        {
+            "api_key": "qwen-key",
+            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+            "model": "qwen3-tts-flash",
+        }
+    )
+    sentence = "This is one sentence of the long paragraph that keeps going. "
+    text = (sentence * 14).strip()  # ~870 chars > the 600-char DashScope limit
+    assert len(text) > api_tts_engines.QWEN_TTS_MAX_TEXT_CHARS
+
+    engine.synthesize(text, "Cherry")
+
+    chunks = [post[2]["input"]["text"] for post in fake.posts]
+    assert len(chunks) == 2
+    assert all(len(chunk) <= api_tts_engines.QWEN_TTS_MAX_TEXT_CHARS for chunk in chunks)
+    assert all(chunk.endswith(".") for chunk in chunks)
+    assert " ".join(chunks) == text
+    assert len(joined) == 1 and len(joined[0]) == 2
+
+
+def test_split_text_for_synthesis_keeps_short_text_and_hard_splits_runs():
+    assert api_tts_engines.split_text_for_synthesis("short", 600) == ["short"]
+    assert api_tts_engines.split_text_for_synthesis("", 600) == []
+    chunks = api_tts_engines.split_text_for_synthesis("a" * 1300, 600)
+    assert [len(chunk) for chunk in chunks] == [600, 600, 100]
+    mixed = api_tts_engines.split_text_for_synthesis("你好。" * 5 + "再见！", 7)
+    assert mixed == ["你好。你好。", "你好。你好。", "你好。再见！"]
+    # ASCII periods only count as sentence ends before whitespace.
+    assert api_tts_engines.split_text_for_synthesis("Pay 3.5 dollars. Then go.", 18) == [
+        "Pay 3.5 dollars.",
+        "Then go.",
     ]
 
 
@@ -777,32 +847,246 @@ def test_qwen_decorated_auth_error_remains_classifiable_without_provider_detail(
     assert is_tts_authentication_error(message) is True
 
 
-@pytest.mark.parametrize(
-    ("status_code", "detail", "expected_code"),
+_CLONED_VOICE_ID = "qwen-audio-3.0-tts-flash-mine-0a1b2c"
+_UNPURCHASED_MESSAGE = (
+    "Access to model denied. Please make sure you are eligible for using the model."
+)
+
+
+def _qwen_engine(engine_class):
+    """A preset-voice or cloned-voice Qwen engine and the voice it speaks with."""
+
+    config = {
+        "api_key": "qwen-key",
+        "region": "china_mainland",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "model": "qwen3-tts-flash",
+    }
+    voice = "Cherry"
+    if engine_class is QwenVoiceCloneTTS:
+        config.update(
+            model="qwen-audio-3.0-tts-flash",
+            voice=_CLONED_VOICE_ID,
+            custom_voices=[
+                {
+                    "voice_id": _CLONED_VOICE_ID,
+                    "target_model": "qwen-audio-3.0-tts-flash",
+                    "region": "china_mainland",
+                    "status": "OK",
+                }
+            ],
+        )
+        voice = _CLONED_VOICE_ID
+    return engine_class(config), voice
+
+
+def _answer_every_post_with(monkeypatch, response: _FakeResponse) -> None:
+    class Session(_FakeSession):
+        def post(self, *_args, **_kwargs):
+            return response
+
+    monkeypatch.setattr("src.tts.api_tts_engines.requests.Session", Session)
+
+
+_QWEN_ENGINE_CLASSES = pytest.mark.parametrize(
+    "engine_class",
     (
-        (403, "Forbidden", "authentication"),
-        (429, "Throttling.RateQuota", "rate_limit"),
-        (404, "Not Found", "invalid_endpoint"),
-        (400, "Model is not supported", "unsupported_model"),
-        (503, "Service unavailable", "provider"),
+        pytest.param(QwenTTS, id="preset-voice"),
+        pytest.param(QwenVoiceCloneTTS, id="cloned-voice"),
     ),
 )
-def test_qwen_tts_http_failures_map_to_stable_categories(
+
+
+@_QWEN_ENGINE_CLASSES
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected_code"),
+    (
+        pytest.param(403, b"Forbidden", "authentication", id="403-forbidden"),
+        # Model Studio is not activated: DashScope's most common 403, whose
+        # prose names no account problem; the code does.
+        pytest.param(
+            403,
+            {"code": "AccessDenied.Unpurchased", "message": _UNPURCHASED_MESSAGE},
+            "billing",
+            id="403-unpurchased",
+        ),
+        # A gateway that passes on only DashScope's message.
+        pytest.param(403, {"message": _UNPURCHASED_MESSAGE}, "billing", id="403-unpurchased-prose"),
+        # A valid key without model/workspace permission, or a free-tier-only
+        # account, is an account matter, not a rejected key.
+        pytest.param(
+            403,
+            {"code": "Model.AccessDenied", "message": "Model access denied."},
+            "billing",
+            id="403-model-access",
+        ),
+        pytest.param(
+            403,
+            {"code": "Workspace.AccessDenied", "message": "Workspace access denied."},
+            "billing",
+            id="403-workspace-access",
+        ),
+        pytest.param(
+            403,
+            {
+                "code": "AllocationQuota.FreeTierOnly",
+                "message": (
+                    "The free tier of the model has been exhausted. If you want to "
+                    "continue access the model on a paid basis, please disable the "
+                    '"use free tier only" mode in the management console.'
+                ),
+            },
+            "billing",
+            id="403-free-tier-only",
+        ),
+        # An overdue account is answered with HTTP 400 and generic prose.
+        pytest.param(
+            400,
+            {
+                "code": "Arrearage",
+                "message": "Access denied, please make sure your account is in good standing.",
+            },
+            "billing",
+            id="400-arrearage",
+        ),
+        pytest.param(
+            401,
+            {"code": "InvalidApiKey", "message": "Invalid API-key provided."},
+            "authentication",
+            id="401-invalid-key",
+        ),
+        pytest.param(
+            429,
+            {
+                "code": "Throttling.RateQuota",
+                "message": "Requests rate limit exceeded, please try again later.",
+            },
+            "rate_limit",
+            id="429-rate-quota",
+        ),
+        pytest.param(404, b"Not Found", "invalid_endpoint", id="404-not-found"),
+        pytest.param(
+            400,
+            {"code": "InvalidParameter", "message": "Model is not supported"},
+            "unsupported_model",
+            id="400-unsupported-model",
+        ),
+        pytest.param(
+            503,
+            {"code": "ServiceUnavailable", "message": "Service unavailable"},
+            "provider",
+            id="503-unavailable",
+        ),
+    ),
+)
+def test_qwen_http_failures_map_to_stable_categories(
+    monkeypatch,
+    engine_class,
     status_code,
-    detail,
+    body,
     expected_code,
 ):
-    engine = QwenTTS(
-        {
-            "region": "singapore",
-            "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
-            "model": "qwen3-tts-flash",
-        }
+    if isinstance(body, bytes):
+        response = _FakeResponse(
+            content=body,
+            headers={"content-type": "text/plain"},
+            status_code=status_code,
+        )
+    else:
+        response = _FakeResponse(
+            payload={"request_id": "req-error", **body},
+            status_code=status_code,
+        )
+    _answer_every_post_with(monkeypatch, response)
+    engine, voice = _qwen_engine(engine_class)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        engine.synthesize("Hello there", voice)
+
+    assert tts_error_code(str(exc_info.value)) == expected_code
+    assert response.closed is True
+
+
+@_QWEN_ENGINE_CLASSES
+def test_qwen_unpurchased_model_is_an_account_problem_not_a_rejected_key(
+    monkeypatch,
+    caplog,
+    engine_class,
+):
+    _answer_every_post_with(
+        monkeypatch,
+        _FakeResponse(
+            payload={
+                "request_id": "req-403",
+                "code": "AccessDenied.Unpurchased",
+                "message": _UNPURCHASED_MESSAGE,
+            },
+            status_code=403,
+        ),
     )
+    engine, voice = _qwen_engine(engine_class)
 
-    message = engine._api_request_failure_message(status_code, detail)
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(RuntimeError) as exc_info:
+            engine.synthesize("Hello there", voice)
 
-    assert tts_error_code(message) == expected_code
+    message = str(exc_info.value)
+    assert f"AccessDenied.Unpurchased: {_UNPURCHASED_MESSAGE}" in message
+    assert "account balance or model subscription" in message
+    assert "Authentication was rejected" not in message
+    assert is_tts_authentication_error(message) is False
+    assert ".." not in message
+    # Logs carry the status only, never the provider's prose.
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "eligible for using the model" not in rendered
+    assert "type=RuntimeError status=403" in rendered
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    (
+        pytest.param(
+            {
+                "request_id": "req-1",
+                "code": "AccessDenied.Unpurchased",
+                "message": _UNPURCHASED_MESSAGE,
+            },
+            f"AccessDenied.Unpurchased: {_UNPURCHASED_MESSAGE}",
+            id="dashscope-code-and-message",
+        ),
+        pytest.param(
+            {"code": "Arrearage", "msg": "Access denied."},
+            "Arrearage: Access denied.",
+            id="msg-key",
+        ),
+        # The code is not repeated when the prose already names it.
+        pytest.param(
+            {"code": "InvalidApiKey", "message": "InvalidApiKey: the key is wrong"},
+            "InvalidApiKey: the key is wrong",
+            id="code-already-in-message",
+        ),
+        # Only identifier-like codes are kept; numbers and prose are not.
+        pytest.param({"code": 401, "message": "Unauthorized"}, "Unauthorized", id="numeric-code"),
+        pytest.param(
+            {"code": "not an identifier", "message": "Bad request"},
+            "Bad request",
+            id="prose-code",
+        ),
+        pytest.param({"code": "InternalError"}, "InternalError", id="code-only"),
+        pytest.param({"request_id": "req-2"}, "req-2", id="request-id-only"),
+        # OpenAI-compatible bodies keep reporting the nested message.
+        pytest.param(
+            {"error": {"code": "invalid_api_key", "message": "Incorrect API key provided"}},
+            "Incorrect API key provided",
+            id="openai-style",
+        ),
+    ),
+)
+def test_error_detail_keeps_the_dashscope_code_with_the_message(body, expected):
+    content = json.dumps(body).encode("utf-8")
+
+    assert api_tts_engines._response_error_detail(content, "application/json") == expected
+    assert api_tts_engines._response_error_detail(b"Forbidden", "text/plain") == "Forbidden"
 
 
 def test_qwen_tts_logs_hide_raw_provider_error_body(monkeypatch, caplog):

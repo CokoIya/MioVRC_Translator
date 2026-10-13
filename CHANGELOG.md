@@ -2,6 +2,21 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.5.0] - 2026-10-13
+
+### Mio VR gestures
+
+- Added a SteamVR controller workflow for two-hand framing, screenshot translation, photos and QR links, using Mio's existing translation services.
+- Added persistent result panels, nearby grip movement, two-hand resizing, wrist bookmarks and bidirectional conversation history for the current session.
+- Added independent screenshot source/target languages, stable capture previews and fixed-direction voice subtitles with a manual recenter action.
+- Improved wrist activation, tutorial pointer focus, progress cleanup and direct VRChat chatbox delivery without a typing indicator.
+- Retained desktop translation, ASR and TTS integrations. VR requires SteamVR, a tracked headset and compatible controllers; game-input override is opt-in.
+
+### Release packaging
+
+- Updated application and Windows installer versions to 1.5.0 and made the website VR-first.
+- Kept prior distribution artifacts separate from the new release bundle. No application feature logic was changed during release preparation.
+
 ## [1.4.1] - 2026-08-29
 
 ### Release hardening

@@ -210,6 +210,42 @@ def test_qwen_tts_config_does_not_derive_instructions_from_legacy_persona():
     assert "instructions" not in engine_cfg
 
 
+def test_qwen_tts_config_derives_persona_instructions_only_when_opted_in():
+    window = MainWindow.__new__(MainWindow)
+    window._current_tgt_lang = "ja"
+    window._config = {
+        "translation": {
+            "output_format": "translated_only",
+            "social": {
+                "mode": "roleplay",
+                "politeness": "casual",
+                "tone": "playful",
+                "persona_name": "Energetic Friend",
+                "persona_prompt": "Sounds upbeat and reacts with friendly emotion.",
+            },
+        },
+        "tts": {
+            "engine": "qwen_tts",
+            "qwen_tts": {
+                "model": "qwen3-tts-instruct-flash",
+                "voice": "Cherry",
+                "rate": 1.0,
+                "volume": 0.8,
+                "use_persona_instructions": True,
+            },
+        },
+    }
+
+    engine_cfg = MainWindow._current_tts_engine_config(window)
+
+    assert "Energetic Friend" in engine_cfg["instructions"]
+    assert "playful" in engine_cfg["instructions"]
+
+    # A model without instruction support gets nothing even when opted in.
+    window._config["tts"]["qwen_tts"]["model"] = "qwen3-tts-flash"
+    assert "instructions" not in MainWindow._current_tts_engine_config(window)
+
+
 def test_qwen_tts_config_preserves_explicit_instructions():
     window = MainWindow.__new__(MainWindow)
     window._current_tgt_lang = "ja"
@@ -482,6 +518,56 @@ def test_qwen_tts_structured_failures_use_localized_runtime_copy(
             expected_key,
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("engine", "token", "expected_key"),
+    [
+        ("style_bert_vits2", "tts_error:model_missing", "tts_engine_model_missing_error"),
+        ("style_bert_vits2", "tts_error:language_mismatch", "tts_engine_language_mismatch_error"),
+        ("style_bert_vits2", "tts_error:timeout", "tts_engine_timeout_error"),
+        ("style_bert_vits2", "tts_error:provider", "tts_engine_provider_error"),
+        ("voicevox", "tts_error:unavailable", "tts_engine_unavailable_error"),
+        ("mimo_tts", "tts_error:network", "tts_engine_network_error"),
+        ("qwen_vc", "tts_error:configuration", "tts_engine_configuration_error"),
+        ("qwen_vc", "tts_error:billing", "tts_engine_billing_error"),
+    ],
+)
+def test_non_qwen_tts_failures_reach_the_runtime_ui(engine, token, expected_key):
+    """Every engine's failure is shown; the Qwen-only gate left sbv2 silent."""
+    from src.utils.i18n import get_tts_engine_label
+
+    window = MainWindow.__new__(MainWindow)
+    reports = []
+    window._ui_lang = "en"
+    window._config = {"tts": {"engine": engine}}
+    window._call_in_ui = lambda callback, **_kwargs: callback() or True
+    window._set_bottom = lambda text, color="default", key=None: reports.append(
+        (text, color, key)
+    )
+
+    window._handle_tts_failure(token)
+
+    label = get_tts_engine_label(engine, "en")
+    assert reports == [
+        (window._copy(expected_key, engine=label), "warning", expected_key)
+    ]
+    assert label in reports[0][0]
+    assert "{engine}" not in reports[0][0]
+
+
+def test_cancelled_and_stopped_tts_tokens_stay_silent_for_every_engine():
+    window = MainWindow.__new__(MainWindow)
+    reports = []
+    window._ui_lang = "en"
+    window._config = {"tts": {"engine": "style_bert_vits2"}}
+    window._call_in_ui = lambda callback, **_kwargs: callback() or True
+    window._set_bottom = lambda text, color="default", key=None: reports.append(text)
+
+    window._handle_tts_failure("tts_error:cancelled")
+    window._handle_tts_failure("tts_error:stopped")
+
+    assert reports == []
 
 
 def test_qwen_tts_auth_failure_is_reported_to_runtime_ui():

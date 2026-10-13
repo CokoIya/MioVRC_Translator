@@ -68,6 +68,105 @@ def scale_wav_volume_pcm16(data: bytes, volume: float) -> bytes:
     return encode_pcm16_wav(np.clip(audio * loudness, -1.0, 1.0), sample_rate)
 
 
+def time_stretch_pcm16_wav(data: bytes, rate: float) -> bytes:
+    """Change speaking speed without changing pitch and return 16-bit PCM WAV.
+
+    Online engines have no speed parameter, so the player's rate setting is
+    applied here with WSOLA (waveform-similarity overlap-add), which keeps the
+    pitch of speech intact.  ``rate`` > 1 speaks faster.
+    """
+    try:
+        speed = float(rate)
+    except (TypeError, ValueError):
+        return data
+    if not np.isfinite(speed) or abs(speed - 1.0) < 0.01:
+        return data
+    speed = max(0.5, min(2.0, speed))
+    audio, sample_rate, _info = decode_wav_bytes_with_info(data)
+    if audio.ndim == 1:
+        stretched = _wsola(audio, sample_rate, speed)
+    else:
+        channels = [
+            _wsola(np.ascontiguousarray(audio[:, index]), sample_rate, speed)
+            for index in range(audio.shape[1])
+        ]
+        length = min(len(channel) for channel in channels)
+        stretched = np.stack([channel[:length] for channel in channels], axis=1)
+    return encode_pcm16_wav(stretched, sample_rate)
+
+
+def _wsola(signal: np.ndarray, sample_rate: int, speed: float) -> np.ndarray:
+    samples = np.asarray(signal, dtype=np.float32)
+    frame = max(64, int(sample_rate * 0.030))
+    hop_out = frame // 2
+    hop_in = hop_out * speed
+    tolerance = max(8, int(sample_rate * 0.010))
+    if len(samples) < frame * 2 + tolerance:
+        return samples
+    window = np.hanning(frame).astype(np.float32)
+    capacity = int(len(samples) / speed) + frame * 2
+    output = np.zeros(capacity, np.float32)
+    weight = np.zeros(capacity, np.float32)
+    continuation: np.ndarray | None = None
+    pos_in = 0.0
+    pos_out = 0
+    last_start = 0
+    limit = len(samples) - frame - hop_out
+    while pos_out + frame <= capacity and int(pos_in) + tolerance <= limit:
+        center = int(pos_in)
+        if continuation is None:
+            start = center
+        else:
+            low = max(0, center - tolerance)
+            high = min(limit, center + tolerance)
+            search = samples[low : high + frame]
+            scores = np.correlate(search, continuation, mode="valid")
+            start = low + int(np.argmax(scores)) if scores.size else center
+        output[pos_out : pos_out + frame] += samples[start : start + frame] * window
+        weight[pos_out : pos_out + frame] += window
+        continuation = samples[start + hop_out : start + hop_out + frame]
+        last_start = start
+        pos_out += hop_out
+        pos_in += hop_in
+    produced = output[:pos_out] / np.maximum(weight[:pos_out], 1e-3)
+    # Keep the un-stretched tail so the last phoneme is not clipped.
+    tail = samples[last_start + frame :]
+    if len(tail) > frame * 2:
+        tail = tail[: frame * 2]
+    return np.concatenate([produced, tail]).astype(np.float32)
+
+
+def concat_pcm16_wavs(parts: list[bytes]) -> bytes:
+    """Join several WAV clips into one 16-bit PCM WAV at the first clip's rate."""
+    decoded: list[tuple[np.ndarray, int]] = []
+    for part in parts:
+        audio, sample_rate, _info = decode_wav_bytes_with_info(part)
+        decoded.append((audio, sample_rate))
+    if not decoded:
+        raise RuntimeError("No audio to concatenate")
+    target_rate = decoded[0][1]
+    target_channels = 1 if decoded[0][0].ndim == 1 else decoded[0][0].shape[1]
+    pieces: list[np.ndarray] = []
+    for audio, sample_rate in decoded:
+        if audio.ndim == 2 and target_channels == 1:
+            audio = audio.mean(axis=1)
+        elif audio.ndim == 1 and target_channels > 1:
+            audio = np.repeat(audio[:, None], target_channels, axis=1)
+        if sample_rate != target_rate and len(audio):
+            duration = len(audio) / float(sample_rate)
+            positions = np.linspace(0.0, duration, int(round(duration * target_rate)), endpoint=False)
+            source = np.linspace(0.0, duration, len(audio), endpoint=False)
+            if audio.ndim == 1:
+                audio = np.interp(positions, source, audio).astype(np.float32)
+            else:
+                audio = np.stack(
+                    [np.interp(positions, source, audio[:, index]) for index in range(audio.shape[1])],
+                    axis=1,
+                ).astype(np.float32)
+        pieces.append(np.asarray(audio, dtype=np.float32))
+    return encode_pcm16_wav(np.concatenate(pieces, axis=0), target_rate)
+
+
 def encode_pcm16_wav(audio: np.ndarray, sample_rate: int) -> bytes:
     """Encode float audio samples as signed 16-bit PCM WAV bytes."""
     samples = np.asarray(audio, dtype=np.float32)

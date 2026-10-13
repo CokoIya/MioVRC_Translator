@@ -3,10 +3,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from typing import Any
 
+from src.utils.model_retirement import (  # noqa: F401 - re-exported
+    is_retired_translation_model,
+    retired_catalog_model_ids,
+)
 from src.utils.ui_config import (
     ANTHROPIC_MODEL_ID_PREFIXES,
+    DEEPSEEK_PRO_MODEL_PATTERN,
+    RELAY_BACKEND,
     TRANSLATION_BACKENDS,
     TRANSLATION_MODEL_PRESETS,
     TRANSLATION_MODEL_PROFILES,
@@ -39,6 +46,15 @@ class TranslationCatalog:
 
 
 BUILTIN_CATALOG = TranslationCatalog()
+
+# Remote catalog section read by this release. The top-level
+# "translation_backends" / "translation_model_presets" /
+# "translation_model_profiles" sections are kept in catalog.json for already
+# installed older releases, whose backend set differs (separate GPT/Grok/
+# Claude-compatible relays) and whose values went stale; reading them here
+# would put retired defaults back. Without this section the builtin tables
+# apply unchanged.
+CATALOG_TRANSLATION_SECTION = "translation_v2"
 
 _OPENAI_MODEL_PREFIXES = ("gpt-", "o", "chatgpt-")
 _OPENAI_ALLOWED_LABELS = {"gpt", "openai", "chatgpt", "chatgpt / openai", "openai / gpt"}
@@ -73,25 +89,9 @@ _MAX_MODEL_ID_CHARS = 256
 _MAX_PRESETS_PER_BACKEND = 128
 _MAX_PROFILES_PER_BACKEND = 128
 _MAX_PROFILE_VALUE_CHARS = 64
-_RETIRED_MODELS_BY_BACKEND = {
-    "zhipu": {"glm-4.6"},
-    "qianwen": {"qwen3.7-max", "qwen-mt-turbo", "qwen-mt-lite"},
-    "hunyuan": {"hunyuan-lite"},
-    "xiaomi": {"mimo-v2-pro", "mimo-v2-omni"},
-    "gemini": {"gemini-2.5-pro"},
-    "kimi": {"kimi-k2-0905-preview", "kimi-k2-turbo-preview"},
-    "xai": {"grok-4.20-multi-agent-0309", "grok-4.20-0309-reasoning"},
-    "mistral": {
-        "mistral-large-latest",
-        "ministral-3b-latest",
-        "magistral-small-latest",
-        "magistral-medium-latest",
-    },
-    "nvidia": {
-        "nvidia/nemotron-3-super-120b-a12b",
-        "nvidia/llama-3.1-nemotron-nano-8b-v1",
-    },
-}
+# DeepSeek is offered as flash only; a remote catalog cannot recommend a
+# DeepSeek pro model on any backend (relays and aggregators included).
+_DEEPSEEK_PRO_MODEL_RE = re.compile(DEEPSEEK_PRO_MODEL_PATTERN, re.IGNORECASE)
 
 
 def _clean_single_line(value: object, *, max_chars: int) -> str:
@@ -172,13 +172,24 @@ def _is_openai_model_id(value: object) -> bool:
     return bool(text) and text.startswith(_OPENAI_MODEL_PREFIXES)
 
 
+def _is_retired_model(backend_id: str, value: object) -> bool:
+    """Whether a remote catalog must not offer ``value`` for ``backend_id``.
+
+    Ids that are retired (the shared tables in ``model_retirement``) or that
+    the app deliberately does not offer (DeepSeek pro models).
+    """
+
+    text = str(value or "").strip().lower()
+    if _DEEPSEEK_PRO_MODEL_RE.search(text):
+        return True
+    return is_retired_translation_model(backend_id, text)
+
+
 def _is_allowed_openai_model_id(value: object) -> bool:
     text = str(value or "").strip().lower()
     if not _is_openai_model_id(text):
         return False
-    if text.startswith("gpt-5.4"):
-        return False
-    return text not in {"gpt-5.6", "gpt-5.6-mini", "gpt-5.6-nano"}
+    return not _is_retired_model("openai", text)
 
 
 def _is_allowed_anthropic_model_id(value: object) -> bool:
@@ -201,7 +212,7 @@ def _dedupe_presets(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _sanitize_openai_backend(backends: dict[str, dict[str, Any]]) -> None:
-    for backend_id in ("openai", "openai_compatible"):
+    for backend_id in ("openai", RELAY_BACKEND):
         backend = backends.get(backend_id)
         builtin = TRANSLATION_BACKENDS[backend_id]
         if not isinstance(backend, dict):
@@ -211,14 +222,21 @@ def _sanitize_openai_backend(backends: dict[str, dict[str, Any]]) -> None:
             label = str(backend.get("label", "") or "").strip().lower()
             if label and label not in _OPENAI_ALLOWED_LABELS:
                 backend["label"] = builtin["label"]
-        if not _is_allowed_openai_model_id(backend.get("model")):
-            backend["model"] = builtin["model"]
+            if not _is_allowed_openai_model_id(backend.get("model")):
+                backend["model"] = builtin["model"]
+        else:
+            # The relay entry is defined by the app: its name, hints and the
+            # editable model field must not be replaced by an older catalog
+            # that still describes the separate GPT-compatible backend.
+            for field_name in ("label", "model", "model_input", "api_key_hint", "model_hint"):
+                if field_name in builtin:
+                    backend[field_name] = builtin[field_name]
         if str(backend.get("base_url", "") or "").strip().rstrip("/") == "https://api.anthropic.com":
             backend["base_url"] = builtin["base_url"]
 
 
 def _sanitize_anthropic_backends(backends: dict[str, dict[str, Any]]) -> None:
-    for backend_id in ("anthropic", "anthropic_compatible"):
+    for backend_id in ("anthropic",):
         backend = backends.get(backend_id)
         builtin = TRANSLATION_BACKENDS[backend_id]
         if not isinstance(backend, dict):
@@ -229,17 +247,17 @@ def _sanitize_anthropic_backends(backends: dict[str, dict[str, Any]]) -> None:
 
 
 def _sanitize_retired_backend_models(backends: dict[str, dict[str, Any]]) -> None:
-    for backend_id, retired_models in _RETIRED_MODELS_BY_BACKEND.items():
-        backend = backends.get(backend_id)
-        if not isinstance(backend, dict):
+    for backend_id, backend in backends.items():
+        if not isinstance(backend, dict) or backend_id == RELAY_BACKEND:
             continue
-        model = str(backend.get("model", "") or "").strip()
-        if model in retired_models:
+        if _is_retired_model(backend_id, backend.get("model", "")):
             backend["model"] = TRANSLATION_BACKENDS[backend_id]["model"]
 
 
 def _sanitize_openai_presets(presets: dict[str, tuple[str, ...]]) -> None:
-    for backend_id in ("openai", "openai_compatible"):
+    # The relay list is read from the relay itself, never from the catalog.
+    presets[RELAY_BACKEND] = tuple(TRANSLATION_MODEL_PRESETS[RELAY_BACKEND])
+    for backend_id in ("openai",):
         builtin = tuple(TRANSLATION_MODEL_PRESETS[backend_id])
         filtered = tuple(
             value
@@ -250,7 +268,7 @@ def _sanitize_openai_presets(presets: dict[str, tuple[str, ...]]) -> None:
 
 
 def _sanitize_anthropic_presets(presets: dict[str, tuple[str, ...]]) -> None:
-    for backend_id in ("anthropic", "anthropic_compatible"):
+    for backend_id in ("anthropic",):
         builtin = tuple(TRANSLATION_MODEL_PRESETS[backend_id])
         filtered = tuple(
             value
@@ -277,7 +295,7 @@ def _sanitize_openai_profiles(
     for model, profile in builtin.items():
         cleaned.setdefault(model, dict(profile))
     profiles["openai"] = cleaned
-    profiles["openai_compatible"] = {}
+    profiles[RELAY_BACKEND] = {}
 
 
 def _sanitize_anthropic_profiles(
@@ -300,7 +318,6 @@ def _sanitize_anthropic_profiles(
         if model in builtin and model not in cleaned:
             cleaned[model] = dict(builtin[model])
     profiles["anthropic"] = cleaned
-    profiles["anthropic_compatible"] = {}
 
 
 def load_catalog_from_data(data: dict | None) -> TranslationCatalog:
@@ -308,7 +325,12 @@ def load_catalog_from_data(data: dict | None) -> TranslationCatalog:
     if not isinstance(data, dict):
         return BUILTIN_CATALOG
 
-    remote_backends = data.get("translation_backends")
+    section = data.get(CATALOG_TRANSLATION_SECTION)
+    if not isinstance(section, dict) or not section:
+        # Only the older releases' top-level sections (or nothing usable):
+        # this release keeps its builtin tables.
+        return BUILTIN_CATALOG
+    remote_backends = section.get("backends")
     remote_backends = remote_backends if isinstance(remote_backends, dict) else {}
     backends: dict[str, dict[str, Any]] = {}
     for backend_id, builtin in TRANSLATION_BACKENDS.items():
@@ -326,7 +348,7 @@ def load_catalog_from_data(data: dict | None) -> TranslationCatalog:
     _sanitize_anthropic_backends(backends)
     _sanitize_retired_backend_models(backends)
 
-    presets_raw = data.get("translation_model_presets")
+    presets_raw = section.get("model_presets")
     presets: dict[str, tuple[str, ...]] = {}
     if isinstance(presets_raw, dict):
         for k, v in presets_raw.items():
@@ -342,14 +364,12 @@ def load_catalog_from_data(data: dict | None) -> TranslationCatalog:
             presets[k] = v
         else:
             presets[k] = _dedupe_presets(presets[k])
-        retired = _RETIRED_MODELS_BY_BACKEND.get(k, set())
-        if retired:
-            filtered = tuple(model for model in presets[k] if model not in retired)
-            presets[k] = filtered or tuple(v)
+        filtered = tuple(model for model in presets[k] if not _is_retired_model(k, model))
+        presets[k] = filtered or tuple(v)
     _sanitize_openai_presets(presets)
     _sanitize_anthropic_presets(presets)
 
-    profiles_raw = data.get("translation_model_profiles")
+    profiles_raw = section.get("model_profiles")
     profiles: dict[str, dict[str, dict[str, str]]] = {}
     if isinstance(profiles_raw, dict):
         for bk, bv in profiles_raw.items():
@@ -384,8 +404,11 @@ def load_catalog_from_data(data: dict | None) -> TranslationCatalog:
                 if mk not in profiles[bk]:
                     profiles[bk][mk] = dict(mv)
     for backend_id in TRANSLATION_BACKENDS:
-        if backend_id in {"openai_compatible", "anthropic_compatible"}:
+        if backend_id == RELAY_BACKEND:
             profiles[backend_id] = {}
+            continue
+        if backend_id not in profiles:
+            # No builtin or remote profiles (Local AI): add no empty entry.
             continue
         allowed_models = set(presets.get(backend_id, ()))
         profiles[backend_id] = {

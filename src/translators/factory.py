@@ -15,7 +15,10 @@ from .libretranslate_translator import LibreTranslateTranslator
 from .microsoft_edge_translator import MicrosoftEdgeTranslator
 from .mymemory_translator import MyMemoryTranslator
 from .openai_translator import OpenAITranslator
-from src.utils.config_manager import is_protected_secret_blob
+from src.utils.config_manager import (
+    is_protected_secret_blob,
+    translation_config_with_relay_merged,
+)
 from src.utils.latency_metrics import (
     merge_translation_metrics,
     translation_metrics_snapshot,
@@ -29,6 +32,9 @@ from src.utils.qwen_endpoints import (
 from src.utils.ui_config import (
     DEFAULT_BACKEND,
     DISABLED_TRANSLATION_BACKENDS,
+    RELAY_BACKEND,
+    RELAY_PROTOCOL_ANTHROPIC,
+    relay_protocol_from_config,
     get_backend_order,
     get_backend_config_value,
     get_backend_label,
@@ -54,7 +60,6 @@ OPENAI_COMPATIBLE_BACKENDS = {
     "doubao",
     "nvidia",
     "openai_compatible",
-    "grok_compatible",
 }
 
 
@@ -477,7 +482,7 @@ def _create_openai_compatible_translator(
     else:
         base_url = get_backend_config_value(trans_cfg, backend, "base_url")
     local_compatible_endpoint = bool(
-        backend in {"local_ai", "openai_compatible", "grok_compatible"}
+        backend in {"local_ai", RELAY_BACKEND}
         and should_bypass_environment_proxies(base_url)
     )
     api_key_required = bool(spec.get("api_key_required", True)) and not (
@@ -580,7 +585,11 @@ def _create_translator_for_backend(
     if backend in DISABLED_TRANSLATION_BACKENDS:
         raise ValueError(f"Translation backend is disabled: {backend}")
 
-    if backend in {"anthropic", "anthropic_compatible"}:
+    relay_uses_anthropic = (
+        backend == RELAY_BACKEND
+        and relay_protocol_from_config(trans_cfg) == RELAY_PROTOCOL_ANTHROPIC
+    )
+    if backend == "anthropic" or relay_uses_anthropic:
         spec = get_backend_spec(backend)
         backend_cfg = _backend_cfg(trans_cfg, backend)
         api_key = _require_text(
@@ -609,9 +618,17 @@ def _create_translator_for_backend(
                 minimum=0,
                 maximum=3,
             ),
-            max_output_tokens=int(spec.get("max_output_tokens", 192)),
+            max_output_tokens=_int_setting(
+                backend_cfg.get("max_output_tokens"),
+                spec.get("max_output_tokens", 192),
+                minimum=32,
+                maximum=4096,
+            ),
             context_store=context_store,
-            provider_id=backend,
+            # A relay speaking the Anthropic protocol keeps the relay identity:
+            # official-only behaviour (refusal fallbacks, model migrations)
+            # must not apply to it.
+            provider_id="anthropic_compatible" if relay_uses_anthropic else backend,
             custom_headers=backend_cfg.get("custom_headers", {}),
             streaming=_bool_setting(
                 backend_cfg.get("streaming"),
@@ -771,6 +788,7 @@ def create_translator(
     trans_cfg = config.get("translation", {})
     if not isinstance(trans_cfg, Mapping):
         trans_cfg = {}
+    trans_cfg = translation_config_with_relay_merged(dict(trans_cfg))
     backend = normalize_backend(trans_cfg.get("backend", DEFAULT_BACKEND))
     primary = _create_translator_for_backend(
         trans_cfg,

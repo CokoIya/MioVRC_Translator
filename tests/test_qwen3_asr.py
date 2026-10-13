@@ -236,7 +236,7 @@ def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(
     provider = Qwen3ASRProvider(
         _provider_config(
             region="singapore",
-            model="qwen3-asr-flash-2026-02-10",
+            model="qwen3-asr-flash",
             language="ja-JP",
         )
     )
@@ -262,7 +262,7 @@ def test_qwen3_asr_sends_audio_cleans_text_and_logs_request_context(
         )
         assert init_kwargs["max_retries"] == 0
         request = state.calls[0]
-        assert request["model"] == "qwen3-asr-flash-2026-02-10"
+        assert request["model"] == "qwen3-asr-flash"
         assert "timeout" not in request
         content = request["messages"][0]["content"][0]
         assert content["type"] == "input_audio"
@@ -338,6 +338,48 @@ def test_qwen3_asr_uses_selected_latest_flash_alias(monkeypatch):
 
     try:
         assert provider.transcribe(np.zeros(1600, dtype=np.float32)) == "latest"
+        assert state.calls[0]["model"] == "qwen3-asr-flash"
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{}, {"model": ""}, {"model": None}, {"model": "   "}],
+    ids=["model-missing", "model-empty", "model-null", "model-whitespace"],
+)
+def test_qwen3_asr_defaults_to_the_stable_flash_alias(monkeypatch, overrides):
+    state = _install_fake_runtime(monkeypatch, ["Transcription: default model"])
+    provider = Qwen3ASRProvider(_provider_config(**overrides))
+
+    try:
+        assert provider.transcribe(np.zeros(1600, dtype=np.float32)) == (
+            "default model"
+        )
+        assert state.calls[0]["model"] == "qwen3-asr-flash"
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize(
+    "retired_model",
+    ["qwen3-asr-flash-2026-02-10", "qwen3-asr-flash-2025-09-08"],
+)
+def test_qwen3_asr_sends_retired_dated_snapshot_as_the_stable_alias(
+    monkeypatch,
+    retired_model,
+):
+    """Alibaba retired the dated snapshots on 2026-10-10.
+
+    A provider built from an old saved config must still transcribe, on the
+    alias, instead of sending the retired id.
+    """
+
+    state = _install_fake_runtime(monkeypatch, ["Transcription: migrated"])
+    provider = Qwen3ASRProvider(_provider_config(model=retired_model))
+
+    try:
+        assert provider.transcribe(np.zeros(1600, dtype=np.float32)) == "migrated"
         assert state.calls[0]["model"] == "qwen3-asr-flash"
     finally:
         provider.close()

@@ -9,6 +9,7 @@ import ctypes
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import threading
@@ -32,7 +33,6 @@ from src.utils.ui_language_detection import bootstrap_ui_language
 from src.utils.locale_detect import select_default_asr_engine
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.global_hotkey import (
-    DEFAULT_SCREENSHOT_HOTKEY,
     DEFAULT_MIC_MUTE_HOTKEY,
     DEFAULT_TEXT_INPUT_HOTKEY,
     HotkeyError,
@@ -42,6 +42,15 @@ from src.utils.ui_config import (
     ANTHROPIC_MODEL_ID_PREFIXES,
     DEFAULT_ASR_ENGINE,
     DISABLED_TRANSLATION_BACKENDS,
+    HUNYUAN_TRANSLATION_KNOWN_BASE_URLS,
+    HUNYUAN_TRANSLATION_LEGACY_BASE_URLS,
+    LEGACY_RELAY_BACKENDS,
+    RELAY_BACKEND,
+    RELAY_PROTOCOL_ANTHROPIC,
+    RELAY_PROTOCOL_OPENAI,
+    DEEPSEEK_PRO_MODEL_PATTERN,
+    normalize_relay_protocol,
+    relay_protocol_default,
     SUPPORTED_MANUAL_SOURCE_LANGUAGE_CODES,
     SUPPORTED_TARGET_LANGUAGE_CODES,
     _catalog_backends,
@@ -59,10 +68,30 @@ from src.utils.ui_config import (
     ORIGINAL_ONLY_READ_TRANSLATION_WAIT_FOR_TTS_KEY,
     OUTPUT_FORMAT_2_DISABLED,
 )
+from src.utils.model_retirement import (  # noqa: F401 - re-exported
+    LEGACY_OPENAI_MODEL_PREFIXES as _LEGACY_OPENAI_MODEL_PREFIXES,
+    LEGACY_OPENAI_MODEL_IDS as _LEGACY_OPENAI_MODEL_IDS,
+    OPENAI_SUCCESSORS as _OPENAI_SUCCESSORS,
+    LEGACY_ANTHROPIC_MODEL_IDS as _LEGACY_ANTHROPIC_MODEL_IDS,
+    ANTHROPIC_SUCCESSORS as _ANTHROPIC_SUCCESSORS,
+    UNROUTABLE_QWEN_GENERAL_MODEL_IDS as _UNROUTABLE_QWEN_GENERAL_MODEL_IDS,
+    LEGACY_GEMINI_MODEL_IDS as _LEGACY_GEMINI_MODEL_IDS,
+    LEGACY_DOUBAO_MODEL_IDS as _LEGACY_DOUBAO_MODEL_IDS,
+    THINKING_MODEL_REPLACEMENTS as _THINKING_MODEL_REPLACEMENTS,
+    RETIRED_MODEL_REPLACEMENTS as _RETIRED_MODEL_REPLACEMENTS,
+    is_retired_translation_model,
+)
 from src.tts.api_tts_config import (
+    QWEN_TTS_DEFAULT_MODEL,
+    QWEN_VC_DEFAULT_MODEL,
+    QWEN_VC_DEFAULT_REGION,
+    QWEN_VC_LEGACY_BASE_URLS,
     TTS_API_ENGINE_IDS,
+    cloned_voice_survives_retirement,
     get_tts_api_default_config,
     normalize_cloned_voices,
+    qwen_tts_model_is_retired,
+    qwen_vc_model_is_supported,
     region_supports_voice_cloning,
     resolve_tts_api_config,
 )
@@ -111,166 +140,6 @@ _DEFAULT_LISTEN_TAIL_SILENCE_S = 0.80
 # not paused, so a low cap chops long sentences apart regardless of the
 # silence threshold.
 _DEFAULT_LISTEN_SEGMENT_DURATION_S = 5.0
-# The headset panel: a metre-ish wide, slightly below the eye line, and a
-# plate faint enough to see the world through while its text stays opaque.
-_DEFAULT_VR_WIDTH_METERS = 1.6
-_DEFAULT_VR_PLATE_OPACITY = 0.50
-_DEFAULT_VR_POSITION = [0.0, -0.32, -1.5]
-# Screenshot translation: a controller button captures the view, Windows
-# reads it, and the result lands on the other hand. Off by default because it
-# binds a physical button the player may already use for something else.
-_SCREENSHOT_DEFAULTS = {
-    "enabled": False,
-    "hand": "left",
-    "prefer_vrchat_window": True,
-    # Run the bundled OCR on the GPU through DirectML when the runtime has
-    # it; off means the CPU, which is slower but never surprises a driver.
-    "ocr_gpu": True,
-    # How long the translation card stays in the headset. The player wanted it
-    # brief, with any button putting it away sooner; desktop labels keep their
-    # own longer stay, since a keyboard has no such button.
-    "auto_hide_seconds": 1.5,
-    # Where the result goes: a panel hung where the text was, kept until it
-    # is closed ("panel", VRHandsFrame's way), the same picture briefly
-    # ("card", gone on any button) or the hand panel ("hand"). The former
-    # "in_place" value (labels pinned over the world) migrates to the panel:
-    # a flat sheet at one depth parts from the text as soon as the head
-    # moves, and the player gave it up.
-    "placement": "panel",
-    # The two-hand frame: hold both grips with the hands at opposite corners
-    # of a sign. Held still for ``still_seconds`` it reads what it covers
-    # into the frame (``auto_translate``); a trigger pull keeps it as a panel.
-    "frame_gesture": True,
-    "auto_translate": True,
-    "still_seconds": 0.6,
-    # Whose view a read is taken from: the dominant eye (most people are
-    # right-eyed). A frame between the hands covers a different part of a
-    # far sign for each eye.
-    "view_eye": "right",
-    # How readily a pose counts as a frame (0 strict .. 1 lenient), how long
-    # it must be held before the frame appears and how long it survives a
-    # flicker; quick mode opens one with trigger + grip on both hands.
-    "gesture_sensitivity": 0.5,
-    # Translations drawn in the sign's own colours instead of white on black.
-    "match_colors": True,
-    # Read the text only (no translation); translate a framed notice as one
-    # paragraph; copy each read to the clipboard; read QR codes too; scale
-    # the frame with the stick while framing.
-    "recognize_only": False,
-    "ignore_line_breaks": False,
-    "auto_copy": False,
-    "scan_codes": True,
-    "stick_scaling": True,
-    "frame_arm_seconds": 0.3,
-    "frame_release_seconds": 0.25,
-    "quick_frame": False,
-    # Press opens a frame to drag a region on; off means one press reads all.
-    "selection_mode": True,
-    # How far in front of the eyes the card floats; the mirror scale is a
-    # legacy trim for the in-place mode.
-    "depth_meters": 1.5,
-    "mirror_fov_scale": 1.0,
-}
-
-_VR_OVERLAY_DEFAULTS = {
-    "enabled": False,
-    "width_meters": _DEFAULT_VR_WIDTH_METERS,
-    "plate_opacity": _DEFAULT_VR_PLATE_OPACITY,
-    "position": list(_DEFAULT_VR_POSITION),
-    # A locked panel cannot be dragged, on purpose or by accident.
-    "locked": False,
-    # Text size on the board, and the small shapes that say whose line it
-    # is without relying on colour.
-    "font_scale": 1.0,
-    "speaker_marks": True,
-}
-
-# The Mio tab in the SteamVR dashboard. On by default: it costs nothing when
-# SteamVR is not running and is the safe way to reach Mio with a headset on.
-_VR_DASHBOARD_DEFAULTS = {
-    "enabled": True,
-}
-
-# The same controls on the back of a hand, shown by raising it. On by
-# default: it is invisible until the gesture and never takes the controllers.
-_VR_WRIST_DEFAULTS = {
-    "enabled": True,
-    "hand": "left",
-    # "twist" (roll the wrist twice), "look" (raise it and look, like a
-    # watch) or "always".
-    "show_mode": "twist",
-}
-
-# Buzz and a short sound for each step in the headset: the frame is ready,
-# it is reading, the result is in, a button was clicked.
-_VR_FEEDBACK_DEFAULTS = {
-    "haptics": True,
-    "sounds": True,
-    "volume": 0.5,
-}
-
-# Trigger and grip while Mio uses them: kept from the game (VRHandsFrame
-# does the same), counted as held past these pull values, optionally swapped.
-_VR_CONTROLS_DEFAULTS = {
-    "block_game_input": True,
-    "trigger_threshold": 0.5,
-    "grip_threshold": 0.4,
-    "swap_trigger_grip": False,
-    # Tapping the Touch thumb rest this many times in a row runs this.
-    "thumbrest_taps": 4,
-    "thumbrest_action": "frame_gesture",
-}
-_THUMBREST_ACTIONS = {"frame_gesture", "gather", "close_panels", "none"}
-
-# The kept panels: colour preset, background opacity, button tooltips, the
-# time in the title, the width of a panel that has no frame to match, and
-# what a trigger does while both hands hold a panel.
-_VR_PANELS_DEFAULTS = {
-    "color_preset": "default",
-    "opacity": 1.0,
-    "tooltips": True,
-    "show_time": True,
-    "default_width": 0.42,
-    "two_hand_left": "page_prev",
-    "two_hand_right": "next_or_close",
-    "same_hand_gather": True,
-}
-_PANEL_PRESETS = {"default", "dark", "light"}
-_TWO_HAND_ACTIONS = {"none", "page_prev", "page_next", "next_or_close", "close", "pin", "copy", "chatbox"}
-
-# The card was the default display until the panel took its place. A config
-# saved before then still says "card" because it was the default, not
-# because the player chose it; this marks configs already moved over.
-_SCREENSHOT_DISPLAY_VERSION = 2
-
-# The status line in the headset's corner and the controller-at-the-ear
-# gesture: both on by default, both harmless when SteamVR is not running.
-_VR_GESTURE_DEFAULTS = {
-    "enabled": True,
-}
-
-
-def _normalize_vr_position(value: object) -> list[float]:
-    """Keep a saved panel position inside arm's reach and out of the face."""
-
-    if not isinstance(value, (list, tuple)) or len(value) != 3:
-        return list(_DEFAULT_VR_POSITION)
-    try:
-        x, y, z = (float(component) for component in value)
-    except (TypeError, ValueError):
-        return list(_DEFAULT_VR_POSITION)
-    if any(component != component for component in (x, y, z)):
-        return list(_DEFAULT_VR_POSITION)
-    if abs(x) < 1e-6 and abs(z) < 1e-6:
-        return [0.0, max(-2.0, min(2.0, y)), -1.5]
-    # The panel lives on a cylinder around the head and may sit beside or
-    # behind the player; only the distance and the height are bounded.
-    from src.core.vr_geometry import snap_to_sphere
-
-    snapped = snap_to_sphere((x, y, z))
-    if all(abs(a - b) < 1e-6 for a, b in zip(snapped, (x, y, z))):
-        return [x, y, z]
-    return [float(component) for component in snapped]
 _LISTEN_LATENCY_PROFILE_VERSION = 2
 # Public aliases: the UI layer needs the same fallbacks this module
 # writes, otherwise a missing key silently restores the old timing.
@@ -298,7 +167,7 @@ _DEFAULT_LISTEN_VAD_MIN_RMS = 0.020
 _DEFAULT_LISTEN_DENOISE_STRENGTH = 0.35
 _DEFAULT_LISTEN_SILERO_SPEECH_THRESHOLD = 0.15
 _DEFAULT_OPENAI_MODEL = str(
-    _catalog_backends().get("openai", {}).get("model", "gpt-5.6-sol")
+    _catalog_backends().get("openai", {}).get("model", "gpt-6-luna")
 )
 _DEFAULT_ANTHROPIC_MODEL = str(
     _catalog_backends().get("anthropic", {}).get("model", "claude-opus-5")
@@ -325,118 +194,342 @@ _SIMUL_MODE_DEFAULTS = {
     "aggressive_chunking": False,
     "merge_window_ms": 800,
 }
-_LEGACY_OPENAI_MODEL_PREFIXES = (
-    "gpt-3.5",
-    "gpt-4-",
-    "gpt-4o",
-    "gpt-5.4",
-)
-_LEGACY_OPENAI_MODEL_IDS = {
-    "gpt-4",
-    "gpt-5.4-pro",
-    "gpt-5.5",
-    "gpt-5.6",
-    "gpt-5.6-mini",
-    "gpt-5.6-nano",
-}
-_LEGACY_ANTHROPIC_MODEL_IDS = {
-    "claude-sonnet-4-20250514",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
-}
 _CROSS_PROVIDER_OPENAI_MODEL_PREFIXES = ("claude",)
-_UNROUTABLE_QWEN_GENERAL_MODEL_IDS = {
-    "qwen3.6-max-preview",
-    "qwen3.6-plus",
-    "qwen3.6-flash",
-}
-_LEGACY_GEMINI_MODEL_IDS = {
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3-flash-preview",
-    "gemini-3.1-pro-preview",
-    # Shut down 2026-06-01; a request naming either one now fails outright.
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-}
 _LEGACY_DOUBAO_BASE_URLS = {
     "https://ark.cn-beijing.volces.com/api/compatible/v1",
-}
-_LEGACY_DOUBAO_MODEL_IDS = {
-    "doubao-seed-2.0-pro",
 }
 _LEGACY_DEEPSEEK_BASE_URLS = {
     "https://api.deepseek.com/v1",
 }
-_THINKING_MODEL_REPLACEMENTS = {
-    "deepseek": {
-        "deepseek-reasoner": "deepseek-v4-flash",
-    },
-    "kimi": {
-        "kimi-k2-thinking": "kimi-k2.6",
-        "kimi-k2-thinking-turbo": "kimi-k2.6",
-    },
-    "xai": {
-        "grok-4.20-0309-reasoning": "grok-4.20-0309-non-reasoning",
-    },
-    "mistral": {
-        "magistral-small-latest": "mistral-small-latest",
-        "magistral-medium-latest": "mistral-medium-3-5",
-    },
+# DeepSeek is offered as its flash model only. The same pattern hides the pro
+# models from fetched model lists; here it moves a pro model saved for the
+# official endpoint (a custom endpoint owns its catalog and is left alone).
+# One shared pattern with the model-list filters (ui_config).
+_DEEPSEEK_PRO_MODEL_RE = re.compile(DEEPSEEK_PRO_MODEL_PATTERN, re.IGNORECASE)
+# A relay section the single relay backend cannot hold is kept under this
+# prefix as a direct child of ``translation`` (see _store_relay_backup).
+_RELAY_BACKUP_PREFIX = "relay_backup_"
+# The backend whose defaults a legacy relay section used when it stored no
+# endpoint or model of its own.
+_LEGACY_RELAY_VENDOR_DEFAULTS = {
+    "grok_compatible": "xai",
+    "anthropic_compatible": "anthropic",
 }
-_RETIRED_MODEL_REPLACEMENTS = {
-    "qianwen": {
-        "qwen3.7-max": "qwen-mt-plus",
-        # qwen-mt-turbo is the one the vendor marks as no longer updated;
-        # qwen-mt-lite is a current low-latency model and must not be migrated.
-        "qwen-mt-turbo": "qwen-mt-flash",
-    },
-    "hunyuan": {"hunyuan-lite": "hunyuan-turbo-latest"},
-    "xiaomi": {
-        "mimo-v2-pro": "mimo-v2.5-pro",
-        "mimo-v2-omni": "mimo-v2.5",
-    },
-    "gemini": {
-        "gemini-2.5-pro": "gemini-3.7-flash",
-        # Shut down 2026-06-01.
-        "gemini-2.5-flash": "gemini-3.7-flash",
-        "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
-    },
-    "kimi": {
-        "kimi-k2-0905-preview": "kimi-k2.6",
-        "kimi-k2-turbo-preview": "kimi-k2.6",
-        # Closed to new users after K3 shipped, with shutdown announced.
-        "kimi-k2.5": "kimi-k2.6",
-    },
-    "xai": {
-        "grok-4.20-multi-agent-0309": "grok-4.20-0309-non-reasoning",
-        # No longer listed on its own; only the dated variants remain.
-        "grok-4.20": "grok-4.20-0309-non-reasoning",
-    },
-    "zhipu": {
-        # The entire GLM-4.7/5.0/5.1 catalog is gone from the vendor's docs.
-        "glm-5.1": "glm-5.3",
-        "glm-5": "glm-5.3",
-        "glm-5-turbo": "glm-5.3-flash",
-        "glm-4.7": "glm-5.3",
-        "glm-4.7-flash": "glm-5.3-flash",
-        "glm-4.7-flashx": "glm-5.3-flash",
-    },
-    # A date-suffixed Claude id is not a valid model string.
-    "anthropic": {"claude-haiku-4-5-20251001": "claude-haiku-4-5"},
-    "anthropic_compatible": {"claude-haiku-4-5-20251001": "claude-haiku-4-5"},
-    "mistral": {
-        "mistral-large-latest": "mistral-medium-3-5",
-        "ministral-3b-latest": "ministral-8b-latest",
-    },
-    "nvidia": {
-        "nvidia/nemotron-3-super-120b-a12b": "nvidia/nemotron-3-nano-30b-a3b",
-        "nvidia/llama-3.1-nemotron-nano-8b-v1": "nvidia/nemotron-3-nano-30b-a3b",
-    },
-}
+# Settings carried over when a legacy GPT/Grok/Claude-compatible relay section
+# is folded into the single relay backend.
+_RELAY_CONFIG_KEYS = (
+    "api_key",
+    "base_url",
+    "model",
+    "custom_headers",
+    "streaming",
+    "timeout_s",
+    "max_retries",
+    "max_output_tokens",
+    "connect_timeout_s",
+    "pool_timeout_s",
+    "read_timeout_s",
+    "write_timeout_s",
+    "wall_timeout_s",
+    "remote_models",
+    "remote_models_source",
+)
+
+
+def _split_fallback_backends(text: str) -> list[str]:
+    """Split a fallback chain saved as "a, b; c" into backend ids."""
+
+    return [item.strip() for item in text.replace(";", ",").split(",") if item.strip()]
+
+
+def _fallback_backend_ids(value: object) -> list[str]:
+    if isinstance(value, str):
+        return _split_fallback_backends(value)
+    if isinstance(value, (list, tuple)):
+        return [str(item or "").strip() for item in value]
+    return []
+
+
+def _legacy_relay_involved(trans_cfg: dict) -> bool:
+    """Whether a translation section still names a GPT/Grok/Claude-compatible relay."""
+
+    selected = str(trans_cfg.get("backend", "") or "").strip()
+    return (
+        selected in LEGACY_RELAY_BACKENDS
+        or any(legacy in trans_cfg for legacy in LEGACY_RELAY_BACKENDS)
+        or any(
+            item in LEGACY_RELAY_BACKENDS
+            for item in _fallback_backend_ids(trans_cfg.get("fallback_backends"))
+        )
+    )
+
+
+def translation_config_with_relay_merged(trans_cfg: object) -> object:
+    """Return ``trans_cfg`` with legacy relay sections folded in (copy if needed).
+
+    Saved configs are migrated on load; this keeps callers that receive a raw
+    or older snapshot (connection tests, imported configs) working the same way.
+    """
+
+    if not isinstance(trans_cfg, dict) or not _legacy_relay_involved(trans_cfg):
+        return trans_cfg
+    merged = copy.deepcopy(trans_cfg)
+    # The persistent migration in load_config already reports what it moved.
+    _merge_legacy_relay_backends(merged, log_changes=False)
+    return merged
+
+
+def _relay_section_has_key(section: object) -> bool:
+    return isinstance(section, dict) and bool(str(section.get("api_key", "") or "").strip())
+
+
+def _relay_section_has_secret(section: object) -> bool:
+    """Whether a relay section holds an API key or custom request headers."""
+
+    if not isinstance(section, dict):
+        return False
+    if _relay_section_has_key(section):
+        return True
+    headers = section.get("custom_headers")
+    if isinstance(headers, str):
+        return bool(headers.strip())
+    return isinstance(headers, dict) and bool(headers)
+
+
+def _relay_section_is_ready(section: object, *, protocol: object = None) -> bool:
+    """Whether a relay section can translate on its own settings.
+
+    It needs a key, unless it is a local server on the OpenAI protocol, which
+    may run without one (the same exemption credential_validation applies).
+    Such a relay is never replaced by another relay's settings: the player's
+    text would silently leave the machine. ``protocol`` overrides the
+    section's own (a legacy section implies it by its id).
+    """
+
+    if _relay_section_has_key(section):
+        return True
+    if not isinstance(section, dict):
+        return False
+    wire_protocol = section.get("protocol") if protocol is None else protocol
+    if normalize_relay_protocol(wire_protocol) != RELAY_PROTOCOL_OPENAI:
+        return False
+    from src.utils.provider_network import should_bypass_environment_proxies
+
+    return should_bypass_environment_proxies(section.get("base_url"))
+
+
+def _relay_section_worth_keeping(
+    section: object,
+    *,
+    protocol: object = None,
+    in_use: bool,
+) -> bool:
+    """Whether a relay section that is not kept as the relay needs a backup."""
+
+    return isinstance(section, dict) and (
+        in_use
+        or _relay_section_has_secret(section)
+        or _relay_section_is_ready(section, protocol=protocol)
+    )
+
+
+def _store_relay_backup(trans_cfg: dict, backend_id: str, section: dict) -> str:
+    """Keep a relay section the single relay backend cannot hold.
+
+    It becomes a direct child of ``translation`` because save_config seals the
+    key and headers of every direct child with DPAPI (a copy nested deeper
+    would be written in plaintext). The name is not a legacy backend id, so a
+    later load does not migrate it again. Returns the name used.
+    """
+
+    payload = copy.deepcopy(section)
+    headers = payload.get("custom_headers")
+    if isinstance(headers, str):
+        # Only a mapping is sealed on save. A saved section always holds one;
+        # this is the normalization a backend section gets on load.
+        try:
+            payload["custom_headers"] = normalize_openai_custom_headers(headers)
+        except ValueError:
+            payload["custom_headers"] = {}
+    name = f"{_RELAY_BACKUP_PREFIX}{backend_id}"
+    suffix = 2
+    # Never overwrite an earlier backup that holds something else.
+    while name in trans_cfg and trans_cfg[name] != payload:
+        name = f"{_RELAY_BACKUP_PREFIX}{backend_id}_{suffix}"
+        suffix += 1
+    trans_cfg[name] = payload
+    return name
+
+
+def _merge_legacy_relay_backends(trans_cfg: dict, *, log_changes: bool = True) -> bool:
+    """Fold the old GPT/Grok/Claude-compatible relay sections into one backend.
+
+    One legacy section becomes the relay, in this order: the selected one;
+    else the first one in the fallback chain, when the relay is not in use or
+    cannot translate on its own (no key, and not a keyless local server); else
+    the first one with a key, when the relay cannot translate on its own. Its
+    wire format is kept through ``protocol`` (Grok/GPT: OpenAI, Claude:
+    Anthropic) and fallback chains naming a legacy id point at the relay.
+
+    Nothing keyed is destroyed: every relay section (the relay's own included)
+    that does not end up as the relay but has a key or custom headers, is a
+    keyless local server, or was selected or in the fallback chain, is kept as
+    ``relay_backup_<id>``. Fallback entries that now name the primary (or an
+    earlier entry) are dropped.
+    """
+
+    changed = False
+    fallback_backends = trans_cfg.get("fallback_backends")
+    if isinstance(fallback_backends, str):
+        # Split before remapping so a chain saved as text settles in one load.
+        fallback_backends = _split_fallback_backends(fallback_backends)
+        trans_cfg["fallback_backends"] = fallback_backends
+        changed = True
+    relay_cfg = trans_cfg.get(RELAY_BACKEND)
+    if not isinstance(relay_cfg, dict):
+        relay_cfg = None
+
+    if _legacy_relay_involved(trans_cfg):
+        selected = str(trans_cfg.get("backend", "") or "").strip()
+        fallback_ids = _fallback_backend_ids(fallback_backends)
+        relay_ids = {*LEGACY_RELAY_BACKENDS, RELAY_BACKEND}
+        in_use = {selected, *fallback_ids} & relay_ids
+        relay_ready = _relay_section_is_ready(relay_cfg)
+
+        source = ""
+        if selected in LEGACY_RELAY_BACKENDS:
+            source = selected
+        else:
+            if RELAY_BACKEND not in in_use or not relay_ready:
+                source = next(
+                    (
+                        item
+                        for item in fallback_ids
+                        if item in LEGACY_RELAY_BACKENDS
+                        and isinstance(trans_cfg.get(item), dict)
+                    ),
+                    "",
+                )
+            if not source and not relay_ready:
+                source = next(
+                    (
+                        legacy
+                        for legacy in LEGACY_RELAY_BACKENDS
+                        if _relay_section_has_key(trans_cfg.get(legacy))
+                    ),
+                    "",
+                )
+
+        backups: dict[str, str] = {}
+        if source:
+            section = trans_cfg.get(source)
+            if not isinstance(section, dict):
+                # Selected but never saved: the old release used its defaults.
+                section = {}
+            if _relay_section_worth_keeping(
+                relay_cfg, in_use=RELAY_BACKEND in in_use
+            ):
+                backups[RELAY_BACKEND] = _store_relay_backup(
+                    trans_cfg, RELAY_BACKEND, relay_cfg
+                )
+            merged = {
+                key: copy.deepcopy(value)
+                for key, value in section.items()
+                if key in _RELAY_CONFIG_KEYS
+            }
+            # A legacy section without an endpoint or model used that
+            # backend's own defaults (x.ai / Anthropic), not the relay's.
+            vendor = _LEGACY_RELAY_VENDOR_DEFAULTS[source]
+            for key in ("base_url", "model"):
+                if not str(merged.get(key, "") or "").strip():
+                    merged[key] = get_backend_value(vendor, key)
+            merged["protocol"] = LEGACY_RELAY_BACKENDS[source]
+            trans_cfg[RELAY_BACKEND] = merged
+            relay_cfg = merged
+            changed = True
+
+        for legacy in LEGACY_RELAY_BACKENDS:
+            if legacy not in trans_cfg:
+                continue
+            section = trans_cfg.pop(legacy)
+            changed = True
+            if legacy != source and _relay_section_worth_keeping(
+                section,
+                protocol=LEGACY_RELAY_BACKENDS[legacy],
+                in_use=legacy in in_use,
+            ):
+                backups[legacy] = _store_relay_backup(trans_cfg, legacy, section)
+
+        if selected in LEGACY_RELAY_BACKENDS:
+            trans_cfg["backend"] = RELAY_BACKEND
+            changed = True
+        primary = str(trans_cfg.get("backend", "") or "").strip()
+
+        if isinstance(fallback_backends, (list, tuple)):
+            remapped: list[object] = []
+            for item, item_id in zip(fallback_backends, fallback_ids):
+                if item_id not in relay_ids:
+                    remapped.append(item)
+                elif primary != RELAY_BACKEND and RELAY_BACKEND not in remapped:
+                    remapped.append(RELAY_BACKEND)
+                # Otherwise it collapses onto the primary or an earlier entry.
+            if remapped != list(fallback_backends):
+                trans_cfg["fallback_backends"] = remapped
+                changed = True
+
+        if log_changes:
+            kept = source or RELAY_BACKEND
+            for backend_id, backup_name in backups.items():
+                if backend_id in in_use:
+                    logger.warning(
+                        "Translation relay %s could not be kept: only one relay "
+                        "backend remains and it now uses the settings of %s. The "
+                        "old settings were saved as translation.%s.",
+                        backend_id,
+                        kept,
+                        backup_name,
+                    )
+                else:
+                    logger.info(
+                        "Unused translation relay settings %s were saved as "
+                        "translation.%s.",
+                        backend_id,
+                        backup_name,
+                    )
+
+    if relay_cfg is not None:
+        protocol = normalize_relay_protocol(relay_cfg.get("protocol"))
+        if relay_cfg.get("protocol") != protocol:
+            relay_cfg["protocol"] = protocol
+            changed = True
+    return changed
+
+
+def _replace_relay_openai_placeholders(relay_cfg: dict) -> bool:
+    """Give an Anthropic-protocol relay Claude's endpoint and model for placeholders.
+
+    load_config fills a relay section saved without ``base_url`` or ``model``
+    from config.example.json, whose relay speaks the OpenAI protocol. On the
+    Anthropic protocol a value equal to the OpenAI-protocol default is such a
+    placeholder (an OpenAI URL never answers the messages API, and the relay
+    key must not be sent there), so it follows the protocol, as in the
+    settings protocol switch. Anything else the player saved is kept.
+    """
+
+    if normalize_relay_protocol(relay_cfg.get("protocol")) != RELAY_PROTOCOL_ANTHROPIC:
+        return False
+    changed = False
+    for key in ("base_url", "model"):
+        value = str(relay_cfg.get(key, "") or "").strip()
+        placeholder = relay_protocol_default(RELAY_PROTOCOL_OPENAI, key).strip()
+        if key == "base_url":
+            value, placeholder = value.rstrip("/"), placeholder.rstrip("/")
+        if value and value == placeholder:
+            relay_cfg[key] = relay_protocol_default(RELAY_PROTOCOL_ANTHROPIC, key)
+            changed = True
+    return changed
+
+
 _ASR_CONFIG_KEYS = frozenset(
     {
         "auto_fallback",
@@ -1017,237 +1110,6 @@ def _ensure_vrc_listen_config(config: dict, loaded: dict | None = None) -> bool:
         "fallback_to_device_loopback": True,
     }
 
-    # Subtitles inside the headset. Off by default: it needs SteamVR running,
-    # and a player without a headset should never pay for the attempt.
-    vr_cfg = vrc_cfg.get("vr_overlay")
-    if not isinstance(vr_cfg, dict):
-        vr_cfg = {}
-        vrc_cfg["vr_overlay"] = vr_cfg
-        changed = True
-    for key, value in _VR_OVERLAY_DEFAULTS.items():
-        if key not in vr_cfg:
-            vr_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(vr_cfg, "enabled", False):
-        changed = True
-    if _coerce_bool_config(vr_cfg, "locked", False):
-        changed = True
-    if _coerce_float_range_config(
-        vr_cfg, "width_meters", _DEFAULT_VR_WIDTH_METERS, 0.3, 4.0
-    ):
-        changed = True
-    if _coerce_float_range_config(
-        vr_cfg, "plate_opacity", _DEFAULT_VR_PLATE_OPACITY, 0.0, 0.95
-    ):
-        changed = True
-    if _coerce_float_range_config(vr_cfg, "font_scale", 1.0, 0.7, 1.8):
-        changed = True
-    if _coerce_bool_config(vr_cfg, "speaker_marks", True):
-        changed = True
-    position = vr_cfg.get("position")
-    normalized_position = _normalize_vr_position(position)
-    if position != normalized_position:
-        vr_cfg["position"] = normalized_position
-        changed = True
-
-    dash_cfg = vrc_cfg.get("vr_dashboard")
-    if not isinstance(dash_cfg, dict):
-        dash_cfg = {}
-        vrc_cfg["vr_dashboard"] = dash_cfg
-        changed = True
-    for key, value in _VR_DASHBOARD_DEFAULTS.items():
-        if key not in dash_cfg:
-            dash_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(dash_cfg, "enabled", True):
-        changed = True
-
-    wrist_cfg = vrc_cfg.get("vr_wrist")
-    if not isinstance(wrist_cfg, dict):
-        wrist_cfg = {}
-        vrc_cfg["vr_wrist"] = wrist_cfg
-        changed = True
-    for key, value in _VR_WRIST_DEFAULTS.items():
-        if key not in wrist_cfg:
-            wrist_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(wrist_cfg, "enabled", True):
-        changed = True
-    wrist_hand = str(wrist_cfg.get("hand", "left") or "left").strip().lower()
-    if wrist_hand not in {"left", "right"}:
-        wrist_hand = "left"
-    if wrist_cfg.get("hand") != wrist_hand:
-        wrist_cfg["hand"] = wrist_hand
-        changed = True
-    show_mode = str(wrist_cfg.get("show_mode", "twist") or "twist").strip().lower()
-    if show_mode not in {"twist", "look", "always"}:
-        show_mode = "twist"
-    if wrist_cfg.get("show_mode") != show_mode:
-        wrist_cfg["show_mode"] = show_mode
-        changed = True
-
-    feedback_cfg = vrc_cfg.get("vr_feedback")
-    if not isinstance(feedback_cfg, dict):
-        feedback_cfg = {}
-        vrc_cfg["vr_feedback"] = feedback_cfg
-        changed = True
-    for key, value in _VR_FEEDBACK_DEFAULTS.items():
-        if key not in feedback_cfg:
-            feedback_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(feedback_cfg, "haptics", True):
-        changed = True
-    if _coerce_bool_config(feedback_cfg, "sounds", True):
-        changed = True
-    if _coerce_float_range_config(feedback_cfg, "volume", 0.5, 0.0, 1.0):
-        changed = True
-
-    controls_cfg = vrc_cfg.get("vr_controls")
-    if not isinstance(controls_cfg, dict):
-        controls_cfg = {}
-        vrc_cfg["vr_controls"] = controls_cfg
-        changed = True
-    for key, value in _VR_CONTROLS_DEFAULTS.items():
-        if key not in controls_cfg:
-            controls_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(controls_cfg, "block_game_input", True):
-        changed = True
-    if _coerce_bool_config(controls_cfg, "swap_trigger_grip", False):
-        changed = True
-    if _coerce_float_range_config(controls_cfg, "trigger_threshold", 0.5, 0.05, 1.0):
-        changed = True
-    if _coerce_float_range_config(controls_cfg, "grip_threshold", 0.4, 0.05, 1.0):
-        changed = True
-    if _coerce_int_range_config(controls_cfg, "thumbrest_taps", 4, 2, 6):
-        changed = True
-    if str(controls_cfg.get("thumbrest_action", "")) not in _THUMBREST_ACTIONS:
-        controls_cfg["thumbrest_action"] = "frame_gesture"
-        changed = True
-
-    panels_cfg = vrc_cfg.get("vr_panels")
-    if not isinstance(panels_cfg, dict):
-        panels_cfg = {}
-        vrc_cfg["vr_panels"] = panels_cfg
-        changed = True
-    for key, value in _VR_PANELS_DEFAULTS.items():
-        if key not in panels_cfg:
-            panels_cfg[key] = value
-            changed = True
-    if str(panels_cfg.get("color_preset", "")) not in _PANEL_PRESETS:
-        panels_cfg["color_preset"] = "default"
-        changed = True
-    for key in ("tooltips", "show_time", "same_hand_gather"):
-        if _coerce_bool_config(panels_cfg, key, True):
-            changed = True
-    if _coerce_float_range_config(panels_cfg, "opacity", 1.0, 0.3, 1.0):
-        changed = True
-    if _coerce_float_range_config(panels_cfg, "default_width", 0.42, 0.28, 0.7):
-        changed = True
-    for key in ("two_hand_left", "two_hand_right"):
-        if str(panels_cfg.get(key, "")) not in _TWO_HAND_ACTIONS:
-            panels_cfg[key] = _VR_PANELS_DEFAULTS[key]
-            changed = True
-
-    # The headset status line was removed; a saved config that still
-    # carries its section loses it rather than keeping a dead switch.
-    if vrc_cfg.pop("vr_status", None) is not None:
-        changed = True
-    for section, section_defaults in (("vr_gesture", _VR_GESTURE_DEFAULTS),):
-        section_cfg = vrc_cfg.get(section)
-        if not isinstance(section_cfg, dict):
-            section_cfg = {}
-            vrc_cfg[section] = section_cfg
-            changed = True
-        for key, value in section_defaults.items():
-            if key not in section_cfg:
-                section_cfg[key] = value
-                changed = True
-        if _coerce_bool_config(section_cfg, "enabled", True):
-            changed = True
-    # SteamVR launching Mio is opt-in: off unless the player asked.
-    if "steamvr_autolaunch" not in vrc_cfg:
-        vrc_cfg["steamvr_autolaunch"] = False
-        changed = True
-    if _coerce_bool_config(vrc_cfg, "steamvr_autolaunch", False):
-        changed = True
-
-    shot_cfg = vrc_cfg.get("screenshot_translation")
-    if not isinstance(shot_cfg, dict):
-        shot_cfg = {}
-        vrc_cfg["screenshot_translation"] = shot_cfg
-        changed = True
-    if "display_version" not in shot_cfg:
-        # Saved before the panel existed: "card" was the default then.
-        if str(shot_cfg.get("placement", "") or "").strip().lower() in {"", "card", "in_place"}:
-            shot_cfg["placement"] = "panel"
-        shot_cfg["display_version"] = _SCREENSHOT_DISPLAY_VERSION
-        changed = True
-    for key, value in _SCREENSHOT_DEFAULTS.items():
-        if key not in shot_cfg:
-            shot_cfg[key] = value
-            changed = True
-    if _coerce_bool_config(shot_cfg, "enabled", False):
-        changed = True
-    if _coerce_bool_config(shot_cfg, "prefer_vrchat_window", True):
-        changed = True
-    if _coerce_bool_config(shot_cfg, "ocr_gpu", True):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "auto_hide_seconds", 1.5, 0.5, 120.0):
-        changed = True
-    hand = str(shot_cfg.get("hand", "left") or "left").strip().lower()
-    if hand not in {"left", "right"}:
-        hand = "left"
-    if shot_cfg.get("hand") != hand:
-        shot_cfg["hand"] = hand
-        changed = True
-    placement = str(shot_cfg.get("placement", "panel") or "panel").strip().lower()
-    if placement not in {"panel", "card", "hand"}:
-        placement = "panel"
-    if shot_cfg.get("placement") != placement:
-        shot_cfg["placement"] = placement
-        changed = True
-    if shot_cfg.get("display_version") != _SCREENSHOT_DISPLAY_VERSION:
-        shot_cfg["display_version"] = _SCREENSHOT_DISPLAY_VERSION
-        changed = True
-    if _coerce_bool_config(shot_cfg, "frame_gesture", True):
-        changed = True
-    if _coerce_bool_config(shot_cfg, "auto_translate", True):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "still_seconds", 0.6, 0.2, 3.0):
-        changed = True
-    view_eye = str(shot_cfg.get("view_eye", "right") or "right").strip().lower()
-    if view_eye not in {"left", "right"}:
-        view_eye = "right"
-    if shot_cfg.get("view_eye") != view_eye:
-        shot_cfg["view_eye"] = view_eye
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "gesture_sensitivity", 0.5, 0.0, 1.0):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "frame_arm_seconds", 0.3, 0.1, 1.0):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "frame_release_seconds", 0.25, 0.1, 1.0):
-        changed = True
-    if _coerce_bool_config(shot_cfg, "quick_frame", False):
-        changed = True
-    if _coerce_bool_config(shot_cfg, "match_colors", True):
-        changed = True
-    for key, default in (
-        ("recognize_only", False),
-        ("ignore_line_breaks", False),
-        ("auto_copy", False),
-        ("scan_codes", True),
-        ("stick_scaling", True),
-    ):
-        if _coerce_bool_config(shot_cfg, key, default):
-            changed = True
-    if _coerce_bool_config(shot_cfg, "selection_mode", True):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "depth_meters", 1.5, 0.8, 5.0):
-        changed = True
-    if _coerce_float_range_config(shot_cfg, "mirror_fov_scale", 1.0, 0.5, 1.6):
-        changed = True
-
     for key, value in defaults.items():
         if key not in vrc_cfg:
             vrc_cfg[key] = value
@@ -1598,12 +1460,6 @@ def _ensure_audio_device_config(config: dict, loaded: dict | None = None) -> boo
         audio_cfg, "frame_duration_ms", _DEFAULT_FRAME_DURATION_MS, 10, 30
     ):
         changed = True
-    # Hold a controller button (bound in SteamVR) to talk; off by default.
-    if "push_to_talk" not in audio_cfg:
-        audio_cfg["push_to_talk"] = False
-        changed = True
-    if _coerce_bool_config(audio_cfg, "push_to_talk", False):
-        changed = True
     if int(audio_cfg.get("frame_duration_ms", _DEFAULT_FRAME_DURATION_MS)) not in {
         10,
         20,
@@ -1690,10 +1546,7 @@ def _ensure_osc_config(config: dict) -> bool:
         "listen": f"{prefix}ToggleListen",
         "tts": f"{prefix}ToggleTts",
         "overlay": f"{prefix}ToggleOverlay",
-        "vr_overlay": f"{prefix}ToggleVrOverlay",
-        "frame_gesture": f"{prefix}FrameGesture",
         "target_language": f"{prefix}TargetLanguage",
-        "screenshot": f"{prefix}Screenshot",
     }
     for key, value in control_defaults.items():
         if not str(control_params.get(key, "") or "").strip():
@@ -1793,29 +1646,31 @@ def _ensure_qwen_translation_backend_config(
     )
 
 
-def _ensure_screenshot_hotkey_config(config: dict) -> bool:
-    """The desktop hotkey for screenshot translation; empty means off."""
+def _is_legacy_hunyuan_base_url(base_url: str) -> bool:
+    """The Hunyuan API Tencent closed on 2026-09-30 (replaced by TokenHub)."""
 
-    hotkey_cfg = config.get("hotkeys")
-    if not isinstance(hotkey_cfg, dict):
+    return base_url in HUNYUAN_TRANSLATION_LEGACY_BASE_URLS or base_url.startswith(
+        "https://api.hunyuan.cloud.tencent.com"
+    )
+
+
+def _hunyuan_proxy_saved_before_regions(section: object) -> bool:
+    """A saved Hunyuan section with its own endpoint but no service region.
+
+    Releases before TokenHub stored no region for Hunyuan, so such a URL that
+    is neither the closed API nor a TokenHub site is the player's own proxy.
+    """
+
+    if not isinstance(section, dict) or str(section.get("region", "") or "").strip():
         return False
-    if "screenshot_translate" not in hotkey_cfg:
-        hotkey_cfg["screenshot_translate"] = DEFAULT_SCREENSHOT_HOTKEY
-        return True
-    raw = str(hotkey_cfg.get("screenshot_translate", "") or "").strip()
-    if not raw:
-        if hotkey_cfg.get("screenshot_translate") != "":
-            hotkey_cfg["screenshot_translate"] = ""
-            return True
-        return False
-    try:
-        normalized = normalize_hotkey(raw)
-    except Exception:
-        normalized = DEFAULT_SCREENSHOT_HOTKEY
-    if hotkey_cfg.get("screenshot_translate") != normalized:
-        hotkey_cfg["screenshot_translate"] = normalized
-        return True
-    return False
+    base_url = str(section.get("base_url", "") or "").strip().rstrip("/")
+    return (
+        bool(base_url)
+        and not _is_legacy_hunyuan_base_url(base_url)
+        and base_url not in HUNYUAN_TRANSLATION_KNOWN_BASE_URLS
+    )
+
+
 
 
 def _ensure_hotkey_config(config: dict) -> bool:
@@ -1867,6 +1722,8 @@ def _ensure_translation_config(
     loaded_trans_cfg = loaded.get("translation", {})
     if not isinstance(loaded_trans_cfg, dict):
         loaded_trans_cfg = {}
+    if _merge_legacy_relay_backends(trans_cfg):
+        changed = True
 
     ui_cfg = config.get("ui", {})
     ui_language = ui_cfg.get("language") if isinstance(ui_cfg, dict) else None
@@ -2064,11 +1921,7 @@ def _ensure_translation_config(
         trans_cfg["fallback_backends"] = []
         changed = True
     elif isinstance(fallback_backends, str):
-        trans_cfg["fallback_backends"] = [
-            item.strip()
-            for item in fallback_backends.replace(";", ",").split(",")
-            if item.strip()
-        ]
+        trans_cfg["fallback_backends"] = _split_fallback_backends(fallback_backends)
         changed = True
     elif isinstance(fallback_backends, tuple):
         trans_cfg["fallback_backends"] = list(fallback_backends)
@@ -2106,6 +1959,27 @@ def _ensure_translation_config(
             if not raw_region and base_url in _LEGACY_DEEPSEEK_BASE_URLS:
                 backend_cfg["base_url"] = get_backend_value("deepseek", "base_url")
                 changed = True
+        if backend_code == "hunyuan":
+            # load_config fills keys missing from the saved section out of
+            # config.example.json, so judge the section as the player saved it.
+            raw_hunyuan_cfg = (
+                loaded_trans_cfg.get("hunyuan") if loaded_was_provided else backend_cfg
+            )
+            base_url = str(backend_cfg.get("base_url", "") or "").strip().rstrip("/")
+            if _hunyuan_proxy_saved_before_regions(raw_hunyuan_cfg):
+                # A proxy saved before Hunyuan had service regions stays a
+                # custom endpoint: its key must not be sent to TokenHub and its
+                # model ids belong to the proxy.
+                if backend_cfg.get("region") != "custom":
+                    backend_cfg["region"] = "custom"
+                    changed = True
+            elif _is_legacy_hunyuan_base_url(base_url):
+                # The old Hunyuan API closed on 2026-09-30; move the player to
+                # TokenHub (a new key is needed there).
+                backend_cfg.pop("base_url", None)
+                backend_cfg.pop("region", None)
+                backend_cfg.pop("extra_body", None)
+                changed = True
         if backend_has_service_regions(backend_code):
             default_region = backend_region_for_ui_language(
                 backend_code,
@@ -2118,8 +1992,16 @@ def _ensure_translation_config(
                 prefer_auto_backend=prefer_auto_backend,
             ):
                 changed = True
+        if backend_code == RELAY_BACKEND and _replace_relay_openai_placeholders(
+            backend_cfg
+        ):
+            changed = True
         for key in ("base_url", "model"):
-            default_value = get_backend_value(backend_code, key)
+            default_value = (
+                relay_protocol_default(backend_cfg.get("protocol"), key)
+                if backend_code == RELAY_BACKEND
+                else get_backend_value(backend_code, key)
+            )
             if (
                 backend_has_service_regions(backend_code)
                 and key == "base_url"
@@ -2195,7 +2077,7 @@ def _ensure_translation_config(
                 and model.startswith(_CROSS_PROVIDER_OPENAI_MODEL_PREFIXES)
             )
         ):
-            openai_cfg["model"] = _DEFAULT_OPENAI_MODEL
+            openai_cfg["model"] = _OPENAI_SUCCESSORS.get(model, _DEFAULT_OPENAI_MODEL)
             changed = True
 
     # Relay-owned model identifiers must remain byte-for-byte stable. Apply
@@ -2208,14 +2090,17 @@ def _ensure_translation_config(
         if model in _LEGACY_ANTHROPIC_MODEL_IDS or not model.startswith(
             ANTHROPIC_MODEL_ID_PREFIXES
         ):
-            anthropic_cfg["model"] = _DEFAULT_ANTHROPIC_MODEL
+            anthropic_cfg["model"] = _ANTHROPIC_SUCCESSORS.get(
+                model,
+                _DEFAULT_ANTHROPIC_MODEL,
+            )
             changed = True
 
     qwen_cfg = trans_cfg.get("qianwen", {})
     if isinstance(qwen_cfg, dict):
         model = str(qwen_cfg.get("model", "") or "").strip().lower()
         if model in _UNROUTABLE_QWEN_GENERAL_MODEL_IDS:
-            qwen_cfg["model"] = "qwen-mt-plus"
+            qwen_cfg["model"] = get_backend_value("qianwen", "model")
             changed = True
 
     # Renamed in the UI, so a stored config still holds the old identifier.
@@ -2288,6 +2173,10 @@ def _ensure_translation_config(
             and base_url in _LEGACY_DEEPSEEK_BASE_URLS
         ):
             deepseek_cfg["base_url"] = get_backend_value("deepseek", "base_url")
+            changed = True
+        model = str(deepseek_cfg.get("model", "") or "").strip()
+        if deepseek_cfg.get("region") != "custom" and _DEEPSEEK_PRO_MODEL_RE.search(model):
+            deepseek_cfg["model"] = get_backend_value("deepseek", "model")
             changed = True
 
     return changed
@@ -2653,6 +2542,17 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
         for engine in TTS_API_ENGINE_IDS
         if isinstance((engine_cfg := raw_tts_cfg.get(engine)), dict)
     }
+    raw_vc_cfg = raw_api_configs.get("qwen_vc")
+    if isinstance(raw_vc_cfg, dict) and (
+        str(raw_vc_cfg.get("region", "") or "").strip().lower() == "custom"
+        and str(raw_vc_cfg.get("base_url", "") or "").strip().rstrip("/")
+        in QWEN_VC_LEGACY_BASE_URLS
+    ):
+        # The international endpoint older releases saved for cloning would
+        # survive as a "custom" address, but the temporary storage enrollment
+        # needs exists only in China (Beijing).
+        raw_vc_cfg["region"] = QWEN_VC_DEFAULT_REGION
+        raw_vc_cfg.pop("base_url", None)
 
     legacy_output_device = tts_cfg.get("output_device")
     if "output_to_vrchat" not in tts_cfg:
@@ -2735,14 +2635,30 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
                 api_cfg[key] = resolved[key]
                 changed = True
 
+    preset_qwen_cfg = tts_cfg.get("qwen_tts")
+    if isinstance(preset_qwen_cfg, dict) and qwen_tts_model_is_retired(
+        preset_qwen_cfg.get("model")
+    ):
+        # qwen3-tts-instruct-flash and the dated snapshots were retired on
+        # 2026-10-10; requests for them fail, so move to the stable alias.
+        preset_qwen_cfg["model"] = QWEN_TTS_DEFAULT_MODEL
+        changed = True
+
     vc_cfg = tts_cfg.get("qwen_vc")
     if isinstance(vc_cfg, dict):
+        # Cloned voices now target Qwen-Audio-TTS; the qwen3-tts-vc models
+        # they used to target were retired on 2026-10-10.
+        if not qwen_vc_model_is_supported(vc_cfg.get("model")):
+            vc_cfg["model"] = QWEN_VC_DEFAULT_MODEL
+            changed = True
         # Cloning and preset-voice Qwen TTS authenticate against the same
         # DashScope account, so reuse a key the player already entered rather
         # than asking for the identical value twice.  A key issued for a region
         # without an enrollment endpoint is deliberately NOT copied: it would
         # authenticate against its own region only and surface as a confusing
-        # "invalid key" against the cloning fallback region.
+        # "invalid key" against the cloning region.  Only the key is copied;
+        # the cloning endpoint stays the player's (e.g. a custom Beijing
+        # workspace URL).
         if not str(vc_cfg.get("api_key", "") or "").strip():
             preset_cfg = tts_cfg.get("qwen_tts")
             shared_key = ""
@@ -2754,7 +2670,13 @@ def _ensure_tts_config(config: dict, loaded: dict | None = None) -> bool:
                 vc_cfg["api_key"] = shared_key
                 changed = True
 
-        voices = [dict(voice) for voice in normalize_cloned_voices(vc_cfg.get("custom_voices"))]
+        # Voices enrolled for the retired models were deleted by Alibaba along
+        # with the models; keeping them would only produce failed requests.
+        voices = [
+            dict(voice)
+            for voice in normalize_cloned_voices(vc_cfg.get("custom_voices"))
+            if cloned_voice_survives_retirement(voice)
+        ]
         if vc_cfg.get("custom_voices") != voices:
             vc_cfg["custom_voices"] = voices
             changed = True
@@ -2955,8 +2877,6 @@ def load_config() -> dict:
     if _ensure_osc_config(merged):
         config_changed = True
     if _ensure_text_input_window_config(merged):
-        config_changed = True
-    if _ensure_screenshot_hotkey_config(merged):
         config_changed = True
     if _ensure_hotkey_config(merged):
         config_changed = True

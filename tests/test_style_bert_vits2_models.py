@@ -212,7 +212,9 @@ def test_hololive_catalog_labels_matching_imported_voice(tmp_path, monkeypatch):
 
     assert voices[0].id == "SBV2_HoloLow :: MoriCalliope :: Neutral"
     assert voices[0].name == "Mori Calliope / Neutral"
-    assert voices[0].language == "ja"
+    # Catalog voices carry their own language regardless of the BERT setting.
+    assert voices[0].language == "en"
+    assert voices[0].locale == "en-US"
 
 
 def test_light_style_bert_voice_listing_does_not_load_runtime(tmp_path, monkeypatch):
@@ -271,9 +273,69 @@ def test_style_bert_synthesis_uses_configured_bert_language(tmp_path, monkeypatc
     )
 
     assert audio.startswith(b"RIFF")
-    assert ensured_languages == ["jp"]
-    assert infer_calls[0]["language"] == "JP"
+    # Mori Calliope is an English catalog voice: the global "jp" setting must
+    # not push English text through the Japanese g2p.
+    assert ensured_languages == ["en"]
+    assert infer_calls[0]["language"] == "EN"
     assert infer_calls[0]["sdp_ratio"] == 0.0
+
+
+def test_style_bert_unknown_model_follows_configured_bert_language(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "sample_voice")
+
+    ensured_languages: list[str | None] = []
+    infer_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        StyleBertVits2TTS,
+        "_ensure_bert_runtime",
+        lambda self, language=None: ensured_languages.append(language),
+    )
+
+    class FakeModel:
+        def __init__(self, **_kwargs):
+            self.spk2id = {"Speaker": 0}
+            self.style2id = {"Neutral": 0}
+
+        def infer(self, **kwargs):
+            infer_calls.append(kwargs)
+            return 24000, np.array([0, 600, -600], dtype=np.int16)
+
+    engine = StyleBertVits2TTS(bert_language="zh")
+    engine._tts_model_cls = FakeModel
+
+    engine.synthesize(
+        "你好",
+        model_store.style_bert_voice_id("sample_voice", "Speaker", "Neutral"),
+    )
+
+    assert ensured_languages == ["zh"]
+    assert infer_calls[0]["language"] == "ZH"
+
+
+def test_style_bert_jp_extra_model_always_speaks_japanese(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "jp_extra_voice")
+    imported = managed_root / "jp_extra_voice"
+    config = json.loads((imported / "config.json").read_text(encoding="utf-8"))
+    config["version"] = "2.5.0-JP-Extra"
+    (imported / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    info = model_store.inspect_style_bert_model_dir(imported)
+    assert info.jp_extra is True
+    # Upstream raises "trained with JP-Extra, but the language is not JP" for
+    # anything else, so the engine must ignore an English BERT setting here.
+    assert model_store.resolve_style_bert_voice_language(info, "Speaker", "en") == "jp"
+    assert (
+        model_store.style_bert_voice_language(
+            model_store.style_bert_voice_id("jp_extra_voice", "Speaker", "Neutral"),
+            "en",
+        )
+        == "jp"
+    )
+    assert StyleBertVits2TTS(bert_language="en").get_available_voices()[0].language == "ja"
 
 
 def test_style_bert_cuda_prepares_acoustic_model_as_fp32(monkeypatch):
@@ -362,7 +424,7 @@ def test_style_bert_english_text_processing_preflight(monkeypatch):
     engine_store._preflight_style_bert_text_processing("en")
     engine_store._preflight_style_bert_text_processing("en")
 
-    assert calls == [("Hello, Mio 2026.", "EN")]
+    assert calls == [("Hello, nice to meet you in 2026.", "EN")]
     assert "en" in engine_store._SBV2_LANGUAGE_PREFLIGHTED
 
 
@@ -419,7 +481,12 @@ def test_style_bert_japanese_dependency_probe_accepts_packaged_openjtalk_dict(
     engine_store._ensure_style_bert_language_runtime_dependencies("jp")
 
 
-def test_style_bert_engine_requires_shared_runtime_assets(tmp_path, monkeypatch):
+def test_style_bert_engine_reports_missing_bert_runtime_at_synthesis(tmp_path, monkeypatch):
+    """A missing BERT download must surface as a specific error, not as "unavailable".
+
+    An unavailable engine is silently dropped by the manager; the explicit
+    error reaches the player with a hint to download the model.
+    """
     monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
     _write_style_model(model_store.style_bert_models_dir(), "sample_voice")
 
@@ -427,10 +494,19 @@ def test_style_bert_engine_requires_shared_runtime_assets(tmp_path, monkeypatch)
     engine._tts_model_cls = object()
 
     monkeypatch.setattr(engine_store, "style_bert_bert_assets_ready", lambda _lang: False)
-    assert engine.is_available() is False
+    assert engine.is_available() is True
+    with pytest.raises(RuntimeError) as excinfo:
+        engine.synthesize(
+            "hello",
+            model_store.style_bert_voice_id("sample_voice", "Speaker", "Neutral"),
+        )
+    assert "BERT runtime model" in str(excinfo.value)
+    assert "is not downloaded" in str(excinfo.value)
 
     monkeypatch.setattr(engine_store, "style_bert_bert_assets_ready", lambda _lang: True)
     assert engine.is_available() is True
+    engine.close()
+    assert engine.is_available() is False
 
 
 def test_transformers_export_probe_reports_missing_style_bert_symbols():
@@ -594,33 +670,48 @@ def test_style_bert_installs_offline_g2p_fallback_when_nltk_is_missing(monkeypat
     assert g2p_en.G2p()("hello") == ["HH", "AH0", "L", "OW1"]
 
 
-def test_style_bert_enforces_nltk_path_security_before_resource_access(monkeypatch):
-    pathsec = SimpleNamespace(ENFORCE=False)
-    observed = []
+def test_style_bert_english_g2p_never_imports_nltk(monkeypatch):
+    """The shim must stay NLTK-free: the frozen build ships a tagger NLTK 3.9+ cannot use."""
+    monkeypatch.delitem(sys.modules, "g2p_en", raising=False)
+    original_import = builtins.__import__
 
-    def find(resource_name):
-        observed.append((resource_name, pathsec.ENFORCE))
-        return object()
+    def blocked_import(name, *args, **kwargs):
+        if name == "nltk" or name.startswith("nltk.") or name == "g2p_en.g2p":
+            raise AssertionError(f"unexpected import of {name}")
+        return original_import(name, *args, **kwargs)
 
-    fake_nltk = SimpleNamespace(
-        pathsec=pathsec,
-        data=SimpleNamespace(find=find),
-    )
-    monkeypatch.setitem(sys.modules, "nltk", fake_nltk)
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
 
-    assert engine_store._nltk_zip_resource_ready("corpora/cmudict.zip") is True
-    assert observed == [("corpora/cmudict.zip", True)]
+    engine_store._install_g2p_en_offline_fallback()
+    import g2p_en
+
+    g2p = g2p_en.G2p()
+    # Out-of-vocabulary words go through g2p_en's GRU (when its weights are
+    # installed) or the letter rules; both yield ARPAbet phones SBV2 accepts.
+    phones = [phone for phone in g2p("skibidi") if phone != " "]
+    assert phones
+    assert all(phone.rstrip("012") in engine_store._G2P_EN_PHONEMES or phone in engine_store._G2P_EN_PHONEMES for phone in phones)
+    if engine_store._load_neural_english_g2p() is not None:
+        assert engine_store._load_neural_english_g2p().predict("skibidi") == phones
 
 
-def test_style_bert_repairs_packaged_g2p_module_spec(monkeypatch):
+def test_style_bert_replaces_an_imported_real_g2p_en(monkeypatch):
+    """A real g2p_en that was imported first is swapped out, including SBV2's bound instance."""
     fake_module = ModuleType("g2p_en")
     fake_module.__spec__ = None
+    fake_module.G2p = object
     monkeypatch.setitem(sys.modules, "g2p_en", fake_module)
+    fake_sbv2_g2p = ModuleType("style_bert_vits2.nlp.english.g2p")
+    fake_sbv2_g2p._g2p = object()
+    monkeypatch.setitem(sys.modules, "style_bert_vits2.nlp.english.g2p", fake_sbv2_g2p)
 
     engine_store._install_g2p_en_offline_fallback()
 
-    assert fake_module.__spec__ is not None
-    assert fake_module.__spec__ is importlib.util.find_spec("g2p_en")
+    installed = sys.modules["g2p_en"]
+    assert installed is not fake_module
+    assert getattr(installed, "_MIO_FALLBACK", False) is True
+    assert installed.__spec__ is not None
+    assert isinstance(fake_sbv2_g2p._g2p, engine_store._OfflineG2p)
 
 
 

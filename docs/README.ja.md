@@ -1,5 +1,10 @@
 # Mio RealTime Translator
 
+## v1.5.0 公開ソースの範囲
+
+本ソースツリーは、ASR・翻訳・TTS・Chatbox・逆翻訳・デスクトップ字幕を備えた、単独で動作する非 VR デスクトップ版です。SteamVR UI、コントローラー操作、画面キャプチャ/OCR 翻訳、QR 読み取りの実装は別途管理しており、このツリーには含まれません。公式 v1.5.0 インストーラーには VR 機能が含まれ、公開ソースからビルドしたデスクトップ版とは異なります。従来の公開履歴とソースライセンスは維持します。
+
+
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)

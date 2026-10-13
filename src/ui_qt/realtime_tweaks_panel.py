@@ -127,15 +127,21 @@ def _voice_entries_for_engine(
 
             return [(label, voice_id) for voice_id, label, *_rest in get_tts_api_voice_options(engine)]
         if engine == "qwen_vc":
-            from src.tts.api_tts_config import get_cloned_voice_options
+            from src.tts.api_tts_config import (
+                resolve_tts_api_config,
+                usable_cloned_voice_options,
+            )
 
             tts_cfg = config.get("tts", {}) if isinstance(config, Mapping) else {}
             engine_cfg = tts_cfg.get("qwen_vc", {}) if isinstance(tts_cfg, Mapping) else {}
+            # The stored list also keeps voices of other Qwen-Audio models and
+            # regions; offer only the ones the engine can speak with now.
+            resolved = resolve_tts_api_config(
+                "qwen_vc", engine_cfg if isinstance(engine_cfg, Mapping) else {}
+            )
             return [
                 (label, voice_id)
-                for voice_id, label, *_rest in get_cloned_voice_options(
-                    engine_cfg if isinstance(engine_cfg, Mapping) else {}
-                )
+                for voice_id, label, *_rest in usable_cloned_voice_options(resolved)
             ]
     except Exception:
         logger.debug("Failed to load quick-switch TTS voices for %s", engine, exc_info=True)
@@ -387,7 +393,14 @@ class RealtimeTweaksPanel(QDialog):
         self._set_combo_options("translation_provider", backend_options, backend)
 
         current_model = get_backend_config_value(trans_cfg, backend, "model")
-        model_options = [(model, model) for model in get_backend_model_options(backend, current_model)]
+        # Offer the list read from the provider; the relay has no built-in
+        # presets at all.
+        model_options = [
+            (model, model)
+            for model in get_backend_model_options(
+                backend, current_model, trans_cfg.get(backend)
+            )
+        ]
         self._set_combo_options("translation_model", model_options, str(current_model or ""))
 
         output_format = normalize_output_format(str(trans_cfg.get("output_format", "")))

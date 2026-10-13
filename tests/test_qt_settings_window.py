@@ -41,6 +41,23 @@ def _isolate_config_writes(monkeypatch):
     monkeypatch.setattr("src.utils.config_manager.save_config", lambda _config: None)
 
 
+@pytest.fixture(autouse=True)
+def _offline_model_lists(monkeypatch):
+    """Keep the translation model-list refresh off the network."""
+
+    from src.translators.model_listing import ModelListResult
+
+    monkeypatch.setattr(
+        "src.translators.model_list_service.fetch_backend_models",
+        lambda config, **_kwargs: ModelListResult(
+            backend=str(config["translation"]["backend"]),
+            models=(),
+            source="builtin",
+            error=RuntimeError("offline in tests"),
+        ),
+    )
+
+
 @pytest.fixture
 def config():
     return {
@@ -120,6 +137,10 @@ def _select_settings_page(qtbot, dialog: SettingsWindow, page_id: str) -> None:
 def _flush_deferred_qt_deletes() -> None:
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     QApplication.processEvents()
+
+
+
+
 
 
 def _capture_credential_prompts(monkeypatch, *, open_settings: bool = False):
@@ -950,15 +971,22 @@ def test_grok_compatible_settings_preserve_custom_relay_fields(
     config,
     monkeypatch,
 ):
+    """A Grok relay is now an entry of the single relay backend.
+
+    Its custom model id, Base URL, headers, streaming switch, timeouts and the
+    wire protocol must survive a load/edit/save round trip unchanged.
+    """
+
     _patch_dialog_deps(monkeypatch)
     monkeypatch.setattr(
         "src.ui_qt.settings_window.config_manager.save_config",
         lambda _cfg: None,
     )
-    config["translation"]["grok_compatible"] = {
+    config["translation"]["openai_compatible"] = {
         "api_key": "relay-key",
         "base_url": "https://relay.example.com/openai/v1",
         "model": "Custom-GROK/router:model-001",
+        "protocol": "openai",
         "timeout_s": 19,
         "max_retries": 0,
         "streaming": True,
@@ -968,35 +996,50 @@ def test_grok_compatible_settings_preserve_custom_relay_fields(
     qtbot.addWidget(dialog)
     _select_settings_page(qtbot, dialog, "api_config")
 
-    grok_label = settings_module.get_backend_label("grok_compatible", dialog._ui_lang)
-    dialog._backend_var.set(grok_label)
+    relay_label = settings_module.get_backend_label("openai_compatible", dialog._ui_lang)
+    dialog._backend_var.set(relay_label)
     dialog._render_backend_fields()
 
-    assert dialog._backend_code() == "grok_compatible"
+    assert dialog._backend_code() == "openai_compatible"
     assert dialog._backend_base_url_var.value() == "https://relay.example.com/openai/v1"
     assert dialog._backend_model_var.value() == "Custom-GROK/router:model-001"
     assert dialog._backend_custom_headers_var.value() == '{"X-Relay-Token":"secret"}'
     assert dialog._backend_streaming_var.value() is True
+    assert dialog._selected_relay_protocol() == "openai"
 
     dialog._backend_model_var.set("relay/Grok-Exact-Name:Preview")
     dialog._backend_timeout_var.set("23")
+    dialog._backend_wall_timeout_var.set("44")
     dialog._backend_custom_headers_var.set('{"X-Tenant":"player-one"}')
     dialog._backend_streaming_var.set(False)
+    anthropic_label = next(
+        label
+        for label, code in dialog._backend_protocol_codes.items()
+        if code == "anthropic"
+    )
+    dialog._backend_protocol_var.set(anthropic_label)
     dialog._save()
 
-    saved = config["translation"]["grok_compatible"]
+    saved = config["translation"]["openai_compatible"]
     assert saved["base_url"] == "https://relay.example.com/openai/v1"
     assert saved["model"] == "relay/Grok-Exact-Name:Preview"
     assert saved["timeout_s"] == 23.0
+    assert saved["wall_timeout_s"] == 44.0
     assert saved["custom_headers"] == {"X-Tenant": "player-one"}
     assert saved["streaming"] is False
+    assert saved["protocol"] == "anthropic"
+    assert "grok_compatible" not in config["translation"]
     for language in ("zh-CN", "en", "ja", "ru", "ko"):
-        assert settings_module.QT_SETTINGS_COPY[
-            "backend_api_hint_grok_compatible"
-        ][language]
-        assert settings_module.QT_SETTINGS_COPY[
-            "backend_model_hint_grok_compatible"
-        ][language]
+        for key in (
+            "backend_api_hint_openai_compatible",
+            "backend_model_hint_openai_compatible",
+            "relay_protocol",
+            "relay_protocol_openai",
+            "relay_protocol_anthropic",
+            "relay_protocol_hint",
+        ):
+            assert settings_module.QT_SETTINGS_COPY[key][language], (key, language)
+    assert "backend_api_hint_grok_compatible" not in settings_module.QT_SETTINGS_COPY
 
 
 def test_grok_connection_test_uses_unsaved_settings_without_blocking_ui(
@@ -1005,10 +1048,11 @@ def test_grok_connection_test_uses_unsaved_settings_without_blocking_ui(
     monkeypatch,
 ):
     _patch_dialog_deps(monkeypatch)
-    config["translation"]["grok_compatible"] = {
+    config["translation"]["openai_compatible"] = {
         "api_key": "relay-key",
         "base_url": "https://relay.example.com/v1",
-        "model": "grok-4.5",
+        "model": "grok-4.3",
+        "protocol": "openai",
         "timeout_s": 15,
         "max_retries": 0,
         "streaming": True,
@@ -1034,25 +1078,38 @@ def test_grok_connection_test_uses_unsaved_settings_without_blocking_ui(
     qtbot.addWidget(dialog)
     _select_settings_page(qtbot, dialog, "api_config")
     dialog._backend_var.set(
-        settings_module.get_backend_label("grok_compatible", dialog._ui_lang)
+        settings_module.get_backend_label("openai_compatible", dialog._ui_lang)
     )
     dialog._render_backend_fields()
     dialog._backend_base_url_var.set("https://custom-relay.example/api/v1")
     dialog._backend_model_var.set("relay-grok-custom")
     dialog._backend_timeout_var.set("11")
     dialog._backend_custom_headers_var.set('{"X-Tenant":"test"}')
+    dialog._backend_protocol_var.set(
+        next(
+            label
+            for label, code in dialog._backend_protocol_codes.items()
+            if code == "anthropic"
+        )
+    )
 
     dialog._test_translation_connection()
+    # The test runs on a worker thread; the dialog stays responsive.
+    assert dialog._translation_connection_testing is True
 
     qtbot.waitUntil(
         lambda: not dialog._translation_connection_testing,
         timeout=2000,
     )
-    tested = captured[0]["translation"]["grok_compatible"]
+    assert captured[0]["translation"]["backend"] == "openai_compatible"
+    tested = captured[0]["translation"]["openai_compatible"]
     assert tested["base_url"] == "https://custom-relay.example/api/v1"
     assert tested["model"] == "relay-grok-custom"
     assert tested["timeout_s"] == 11.0
     assert tested["custom_headers"] == {"X-Tenant": "test"}
+    assert tested["protocol"] == "anthropic"
+    # Testing never saves: the stored relay is untouched.
+    assert config["translation"]["openai_compatible"]["base_url"] == "https://relay.example.com/v1"
 
 
 def test_dictionary_status_localizes_layer_order_and_large_counts(
@@ -2369,8 +2426,9 @@ def test_qwen_tts_settings_save_region_and_pass_test_config(qtbot, config, monke
         dialog._tts_api_model_entry.itemText(i)
         for i in range(dialog._tts_api_model_entry.count())
     ]
-    assert "qwen3-tts-flash" in model_items
-    assert "qwen3-tts-instruct-flash" in model_items
+    # qwen3-tts-instruct-flash and the dated snapshots were retired on
+    # 2026-10-10; the stable alias is the only model offered.
+    assert model_items == ["qwen3-tts-flash"]
     assert spoken[0] == (TTS_TEST_TEXT_BY_LANGUAGE["jp"], "Cherry")
 
     dialog._save()
@@ -2853,23 +2911,29 @@ def test_background_import_rejects_redirected_destination_without_changing_state
         _remove_settings_directory_link(redirected)
 
 
+_CLONED_VOICE_ID = "qwen-audio-3.0-tts-flash-myvoice-0a1b2c3d4e5f"
+
+
 def _voice_clone_config(config, **overrides):
+    # Cloning is Beijing-only since the 2026-10-10 voice-enrollment migration.
     engine_cfg = {
         "api_key": "sk-test",
-        "region": "singapore",
-        "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
-        "model": "qwen3-tts-vc-2026-01-22",
-        "voice": "mio-voice-1",
+        "region": "china_mainland",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "model": "qwen-audio-3.0-tts-flash",
+        "voice": _CLONED_VOICE_ID,
         "rate": 1.0,
         "volume": 0.8,
         "upload_consent": True,
         "custom_voices": [
             {
-                "voice_id": "mio-voice-1",
+                "voice_id": _CLONED_VOICE_ID,
                 "display_name": "My Voice",
-                "target_model": "qwen3-tts-vc-2026-01-22",
-                "created_at": "2026-08-01 10:00:00",
+                "target_model": "qwen-audio-3.0-tts-flash",
+                "created_at": "2026-10-12 10:00:00",
                 "language": "",
+                "region": "china_mainland",
+                "status": "OK",
             }
         ],
     }
@@ -3029,8 +3093,30 @@ def test_voice_clone_settings_reach_the_test_manager(qtbot, config, monkeypatch)
     qtbot.addWidget(dialog)
 
     engine_cfg = dialog._current_tts_engine_config("qwen_vc")
-    assert engine_cfg["model"] == "qwen3-tts-vc-2026-01-22"
-    assert engine_cfg["base_url"] == "https://dashscope-intl.aliyuncs.com/api/v1"
+    assert engine_cfg["model"] == "qwen-audio-3.0-tts-flash"
+    assert engine_cfg["region"] == "china_mainland"
+    assert engine_cfg["base_url"] == "https://dashscope.aliyuncs.com/api/v1"
+    assert engine_cfg["voice"] == _CLONED_VOICE_ID
+    # The test text follows the translation target (ja) and so does the hint.
+    assert engine_cfg["language_type"] == "Japanese"
+
+
+def test_voice_clone_singapore_settings_resolve_to_beijing(qtbot, config, monkeypatch):
+    """Singapore cannot clone any more: a stored intl endpoint becomes Beijing."""
+
+    _patch_dialog_deps(monkeypatch)
+    _voice_clone_config(
+        config,
+        region="singapore",
+        base_url="https://dashscope-intl.aliyuncs.com/api/v1",
+    )
+    dialog = SettingsWindow(None, config)
+    qtbot.addWidget(dialog)
+
+    assert set(dialog._tts_api_region_codes.values()) == {"china_mainland", "custom"}
+    engine_cfg = dialog._current_tts_engine_config("qwen_vc")
+    assert engine_cfg["region"] == "china_mainland"
+    assert engine_cfg["base_url"] == "https://dashscope.aliyuncs.com/api/v1"
 
 
 def test_voice_clone_warns_when_the_preset_region_cannot_clone(qtbot, config, monkeypatch):

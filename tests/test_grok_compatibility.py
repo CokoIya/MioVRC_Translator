@@ -12,11 +12,14 @@ from src.utils.credential_validation import first_missing_required_credential
 from src.utils.openai_compat import normalize_openai_custom_headers
 from src.utils.translation_error_formatter import format_translation_error
 from src.utils.ui_config import (
+    RELAY_BACKEND,
     backend_base_url_is_editable,
     backend_model_is_editable,
     get_backend_label,
     get_backend_model_options,
     get_backend_value,
+    normalize_backend,
+    relay_protocol_default,
 )
 
 
@@ -105,17 +108,25 @@ def _grok_config(**overrides) -> dict:
     }
 
 
-def test_grok_profile_is_distinct_editable_and_localized():
-    assert "grok_compatible" in OPENAI_COMPATIBLE_BACKENDS
-    assert get_backend_value("grok_compatible", "model") == "grok-4.6"
-    assert get_backend_model_options("grok_compatible") == (
-        "grok-4.6",
-        "grok-4.5",
-    )
+def test_grok_profile_is_now_the_editable_localized_relay():
+    # The Grok-compatible backend was merged into the single relay backend.
+    assert "grok_compatible" not in OPENAI_COMPATIBLE_BACKENDS
+    assert RELAY_BACKEND in OPENAI_COMPATIBLE_BACKENDS
+    assert normalize_backend("grok_compatible") == RELAY_BACKEND
+    default_model = relay_protocol_default("openai", "model")
+    assert get_backend_value("grok_compatible", "model") == default_model
+    # No built-in list: the relay's own list is read from the relay; until
+    # then only the default model is offered.
+    assert get_backend_model_options("grok_compatible") == (default_model,)
     assert backend_base_url_is_editable("grok_compatible") is True
     assert backend_model_is_editable("grok_compatible") is True
+    english = get_backend_label(RELAY_BACKEND, "en")
     for language in ("zh-CN", "en", "ja", "ru", "ko"):
-        assert get_backend_label("grok_compatible", language)
+        label = get_backend_label("grok_compatible", language)
+        assert label
+        assert label == get_backend_label(RELAY_BACKEND, language)
+        if language != "en":
+            assert label != english
 
 
 def test_grok_factory_preserves_relay_model_headers_and_timeout(monkeypatch):
@@ -193,12 +204,53 @@ def test_grok_custom_model_and_endpoint_survive_config_normalization():
 
     config_manager._ensure_translation_config(config, loaded=loaded)
 
-    grok = config["translation"]["grok_compatible"]
-    assert grok["base_url"] == "https://custom.grok-relay.example/api/openai/v1"
-    assert grok["model"] == "Custom-GROK/router:model-001"
-    assert grok["timeout_s"] == 17
-    assert grok["streaming"] is False
-    assert grok["custom_headers"] == {"X-Tenant": "player-one"}
+    translation = config["translation"]
+    assert translation["backend"] == RELAY_BACKEND
+    assert "grok_compatible" not in translation
+    relay = translation[RELAY_BACKEND]
+    assert relay["protocol"] == "openai"
+    assert relay["api_key"] == "relay-key"
+    assert relay["base_url"] == "https://custom.grok-relay.example/api/openai/v1"
+    assert relay["model"] == "Custom-GROK/router:model-001"
+    assert relay["timeout_s"] == 17
+    assert relay["streaming"] is False
+    assert relay["custom_headers"] == {"X-Tenant": "player-one"}
+
+    # The migration settles in one load.
+    again = copy.deepcopy(config)
+    config_manager._ensure_translation_config(again, loaded=copy.deepcopy(again))
+    assert again["translation"]["backend"] == RELAY_BACKEND
+    assert again["translation"][RELAY_BACKEND] == relay
+
+
+@pytest.mark.parametrize("protocol", ("openai", "anthropic"))
+def test_relay_custom_model_and_endpoint_survive_config_normalization(protocol):
+    settings = {
+        "api_key": "relay-key",
+        "protocol": protocol,
+        "base_url": "https://relay.example.com/custom/v1",
+        "model": "Vendor/Custom-Model:beta-7",
+        "timeout_s": 21,
+        "streaming": True,
+        "custom_headers": {"X-Tenant": "player-two"},
+    }
+    config = {
+        "ui": {"language": "en"},
+        "translation": {
+            "backend": RELAY_BACKEND,
+            "backend_source": "manual",
+            "source_language": "en",
+            "target_language": "ja",
+            "language_pair_source": "manual",
+            RELAY_BACKEND: dict(settings),
+        },
+    }
+
+    config_manager._ensure_translation_config(config, loaded=copy.deepcopy(config))
+
+    relay = config["translation"][RELAY_BACKEND]
+    for key, value in settings.items():
+        assert relay[key] == value
 
 
 def test_grok_custom_header_values_are_protected_at_rest(monkeypatch):
@@ -230,42 +282,51 @@ def test_grok_custom_header_values_are_protected_at_rest(monkeypatch):
     }
 
 
-def test_grok_missing_key_and_errors_are_actionable():
+@pytest.mark.parametrize("backend", ("grok_compatible", RELAY_BACKEND))
+def test_grok_missing_key_and_errors_are_actionable(backend):
     missing = first_missing_required_credential(
         {
             "translation": {
-                "backend": "grok_compatible",
-                "grok_compatible": {"api_key": ""},
+                "backend": backend,
+                backend: {"api_key": ""},
             }
         },
         scopes=("translation",),
         ui_language="en",
         active_only=False,
     )
+    # A raw legacy Grok section is checked as the relay it migrates into.
     assert missing is not None
-    assert missing.provider_id == "grok_compatible"
-    assert missing.credential_id == "translation.grok_compatible.api_key"
+    assert missing.provider_id == RELAY_BACKEND
+    assert missing.credential_id == f"translation.{RELAY_BACKEND}.api_key"
     assert missing.focus_target == "backend_api_key"
 
     endpoint = format_translation_error(
         ValueError("Translation API base URL is malformed"),
-        backend="grok_compatible",
+        backend=backend,
         ui_language="en",
     )
     auth = format_translation_error(
         RuntimeError("401 Unauthorized: invalid api key"),
-        backend="grok_compatible",
+        backend=backend,
         ui_language="en",
+    )
+    localized_auth = format_translation_error(
+        RuntimeError("401 Unauthorized: invalid api key"),
+        backend=backend,
+        ui_language="zh-CN",
     )
     rate_limit = format_translation_error(
         RuntimeError("429 rate limit exceeded"),
-        backend="grok_compatible",
+        backend=backend,
         ui_language="en",
     )
     assert endpoint.category == "endpoint"
     assert "Base URL" in endpoint.short_message
     assert auth.category == "auth"
-    assert "Grok Compatible" in auth.short_message
+    assert get_backend_label(RELAY_BACKEND, "en") in auth.short_message
+    assert localized_auth.category == "auth"
+    assert get_backend_label(RELAY_BACKEND, "zh-CN") in localized_auth.short_message
     assert rate_limit.category == "quota"
 
 

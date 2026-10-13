@@ -16,6 +16,34 @@ if (-not (Test-Path -LiteralPath $releasePython -PathType Leaf)) {
 }
 Write-Host "Using release Python: $releasePython"
 
+$releaseVersion = & $releasePython -c "from src.version import APP_VERSION; print(APP_VERSION)"
+if ($LASTEXITCODE -ne 0 -or $releaseVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Unable to determine a stable release version."
+}
+$bundleDistPath = Join-Path $repoRoot "dist\release-v$releaseVersion"
+$bundlePath = Join-Path $bundleDistPath "MioTranslator"
+$releaseWorkPath = Join-Path $repoRoot "build\release-v$releaseVersion"
+$expectedInstallerPath = Join-Path $repoRoot "dist\MioTranslator-Setup-v$releaseVersion.exe"
+foreach ($outputPath in @($bundleDistPath, $releaseWorkPath, $expectedInstallerPath)) {
+    $absoluteOutput = [IO.Path]::GetFullPath($outputPath)
+    if (-not $absoluteOutput.StartsWith($repoRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Release output is outside the repository: $outputPath"
+    }
+    if (Test-Path -LiteralPath $absoluteOutput) {
+        throw "Refusing to overwrite an existing release output: $absoluteOutput"
+    }
+    $ancestor = Split-Path -Parent $absoluteOutput
+    while ($ancestor) {
+        if (Test-Path -LiteralPath $ancestor) {
+            $ancestorItem = Get-Item -LiteralPath $ancestor -Force
+            if (-not $ancestorItem.PSIsContainer -or ($ancestorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Unsafe release output parent: $ancestor"
+            }
+        }
+        $ancestor = Split-Path -Parent $ancestor
+    }
+}
+
 $releaseSeed = $env:MIO_RELEASE_SIGNING_SEED
 if (-not $releaseSeed) {
     $releaseSeed = $env:MIO_MANIFEST_SEED
@@ -106,12 +134,12 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& $releasePython -m PyInstaller --clean --noconfirm MioTranslator.spec
+& $releasePython -m PyInstaller --clean --noconfirm --distpath $bundleDistPath --workpath $releaseWorkPath MioTranslator.spec
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$frozenExe = Join-Path $repoRoot "dist\MioTranslator\MioTranslator.exe"
+$frozenExe = Join-Path $bundlePath "MioTranslator.exe"
 if (-not (Test-Path -LiteralPath $frozenExe -PathType Leaf)) {
     throw "Frozen application was not produced: $frozenExe"
 }
@@ -153,7 +181,7 @@ try {
 # carries everything it needs, and nothing it dropped: a data file that stopped
 # being collected, or a package deleted from the source tree that a stale pin
 # kept shipping.
-& $releasePython tools\verify_release_bundle.py
+& $releasePython tools\verify_release_bundle.py --bundle $bundlePath
 if ($LASTEXITCODE -ne 0) {
     throw "The frozen bundle failed payload verification."
 }
@@ -255,7 +283,7 @@ if ($isccVersion -lt [Version]'6.5.0') {
 }
 Write-Host "Using Inno Setup compiler: $iscc ($isccVersion)"
 
-$isccArgs = @()
+$isccArgs = @("/DSourceDir=$bundlePath")
 if ($useAuthenticode) {
     $isccArgs += "/DSignPfx=$signPfx"
     $isccArgs += "/DSignPass=$signPass"

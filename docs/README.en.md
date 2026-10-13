@@ -1,5 +1,10 @@
 # Mio RealTime Translator
 
+## v1.5.0 public source scope
+
+This source tree builds a standalone non-VR desktop app, retaining ASR, translation, TTS, Chatbox, reverse translation and desktop captions. SteamVR interfaces, controller gestures, capture/OCR translation and QR scanning are maintained separately and are not included in this tree. The official v1.5.0 installer still includes VR features; it is not the same build as the public desktop source. Existing public history and source licensing are preserved.
+
+
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)

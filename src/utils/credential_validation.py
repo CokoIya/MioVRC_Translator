@@ -9,13 +9,17 @@ from src.asr.model_registry import (
 )
 from src.tts.api_tts_config import TTS_API_ENGINE_IDS
 from src.translators.asr_rewriter import asr_rewrite_enabled
+from src.utils.config_manager import translation_config_with_relay_merged
 from src.utils.i18n import tr
 from src.utils.ui_config import (
     DEFAULT_ASR_ENGINE,
+    RELAY_BACKEND,
+    RELAY_PROTOCOL_OPENAI,
     backend_api_key_is_required,
     get_backend_label,
     normalize_backend,
     normalize_output_format,
+    relay_protocol_from_config,
 )
 
 
@@ -96,10 +100,20 @@ def _translation_requirement(
         ):
             return None
 
+    # An older snapshot may still keep the key in a GPT/Claude/Grok-compatible
+    # section that now belongs to the single relay backend.
+    trans_cfg = _mapping(translation_config_with_relay_merged(dict(trans_cfg)))
     backend = normalize_backend(trans_cfg.get("backend"))
     backend_cfg = _mapping(trans_cfg.get(backend))
+    # A local OpenAI-compatible server may run without a key; the translator
+    # for the Anthropic messages protocol always requires one, so a relay on
+    # that protocol needs it even on a local address.
+    keyless_local_endpoint = backend == "local_ai" or (
+        backend == RELAY_BACKEND
+        and relay_protocol_from_config(trans_cfg) == RELAY_PROTOCOL_OPENAI
+    )
     if not backend_api_key_is_required(backend) or (
-        backend in {"local_ai", "openai_compatible", "grok_compatible"}
+        keyless_local_endpoint
         and should_bypass_environment_proxies(backend_cfg.get("base_url"))
     ):
         return None

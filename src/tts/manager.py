@@ -1719,8 +1719,13 @@ class TTSManager:
                 request
                 for request, _started_at, _worker in active.values()
             )
-            for _request, _started_at, worker in active.values():
-                retired_worker = self._retire_synthesis_worker(worker) or retired_worker
+            # The in-flight worker is left alone: it finishes its (now
+            # cancelled) synthesis, drops the result on the generation check
+            # and picks up the next request.  Retiring it here used to spawn a
+            # replacement for every cancelled sentence, so the "latest"
+            # strategy ran several Style-Bert-VITS2 model loads at once on the
+            # CPU.  Genuinely stalled workers are still quarantined by the
+            # wall-clock timeout in _expire_stalled_head_locked.
             active.clear()
             self._active_synthesis = active
 

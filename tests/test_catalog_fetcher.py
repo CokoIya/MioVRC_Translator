@@ -1,6 +1,33 @@
+import json
 import threading
+from pathlib import Path
+
+import pytest
 
 from src.utils import catalog_fetcher
+from src.utils.catalog_loader import BUILTIN_CATALOG, CATALOG_TRANSLATION_SECTION, load_catalog_from_data
+
+DOCS_CATALOG = Path(__file__).resolve().parents[1] / "docs" / "catalog.json"
+
+
+def test_shipped_catalog_passes_fetch_validation_and_loads():
+    data = json.loads(DOCS_CATALOG.read_text(encoding="utf-8"))
+
+    validated = catalog_fetcher._validate_catalog_payload(data)
+
+    assert validated is data
+    assert CATALOG_TRANSLATION_SECTION in validated
+    assert load_catalog_from_data(validated) == BUILTIN_CATALOG
+
+
+def test_fetch_validation_accepts_a_v2_only_catalog_and_rejects_bad_v1_tables():
+    v2_only = {"version": 2, CATALOG_TRANSLATION_SECTION: {"backends": {}}}
+
+    assert catalog_fetcher._validate_catalog_payload(v2_only) is v2_only
+    with pytest.raises(ValueError):
+        catalog_fetcher._validate_catalog_payload({"translation_backends": []})
+    with pytest.raises(ValueError):
+        catalog_fetcher._validate_catalog_payload(["not", "an", "object"])
 
 
 def test_catalog_request_url_adds_cache_buster_and_preserves_query():

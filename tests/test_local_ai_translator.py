@@ -10,18 +10,49 @@ from src.translators.factory import (
     OPENAI_COMPATIBLE_BACKENDS,
     create_translator,
 )
-from src.translators.anthropic_translator import ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S
-from src.translators.openai_translator import OPENAI_HTTP_KEEPALIVE_EXPIRY_S
+from src.translators.anthropic_translator import (
+    ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S,
+    AnthropicTranslator,
+)
+from src.translators.openai_translator import (
+    OPENAI_HTTP_KEEPALIVE_EXPIRY_S,
+    OpenAITranslator,
+)
 from src.utils import provider_network
 from src.utils.ui_config import (
     NVIDIA_TRANSLATION_BASE_URL,
+    RELAY_BACKEND,
     XIAOMI_TRANSLATION_BASE_URL_PAYG,
     backend_api_key_is_required,
     backend_base_url_is_editable,
     backend_model_is_selectable,
     get_backend_model_options,
     get_backend_value,
+    relay_protocol_default,
 )
+
+# Relay settings that must reach the translator unchanged on both protocols.
+_RELAY_NETWORK_SETTINGS = {
+    "custom_headers": {"X-Relay-Token": "header-secret"},
+    "streaming": True,
+    "connect_timeout_s": "2",
+    "pool_timeout_s": "4",
+    "read_timeout_s": "20",
+    "write_timeout_s": "3",
+    "wall_timeout_s": "25",
+}
+
+
+def _assert_relay_network_settings(translator) -> None:
+    assert translator._client.kwargs["default_headers"] == {
+        "X-Relay-Token": "header-secret"
+    }
+    assert translator._streaming_enabled is True
+    assert translator._connect_timeout_s == 2.0
+    assert translator._pool_timeout_s == 4.0
+    assert translator._read_timeout_s == 20.0
+    assert translator._write_timeout_s == 3.0
+    assert translator._wall_timeout_s == 25.0
 
 
 class _FakeOpenAI:
@@ -121,6 +152,7 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
                 "model": "gpt-proxy-router",
                 "timeout_s": "9",
                 "max_retries": "1",
+                **_RELAY_NETWORK_SETTINGS,
             },
         }
     }
@@ -131,7 +163,13 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert backend_base_url_is_editable("openai_compatible") is True
     assert backend_api_key_is_required("openai_compatible") is True
     assert backend_model_is_selectable("openai_compatible") is True
-    assert get_backend_model_options("openai_compatible")[0] == "gpt-5.6-sol"
+    # The relay has no built-in list: until the relay's own list is read, only
+    # the protocol default is offered.
+    assert get_backend_model_options("openai_compatible") == (
+        relay_protocol_default("openai", "model"),
+    )
+    assert isinstance(translator, OpenAITranslator)
+    assert translator._provider_id == RELAY_BACKEND
     assert translator._client.kwargs["api_key"] == "relay-key"
     assert translator._client.kwargs["base_url"] == "https://relay.example.com/v1"
     assert translator._client.kwargs["timeout"] == 9.0
@@ -140,6 +178,37 @@ def test_openai_compatible_backend_uses_custom_proxy_settings(monkeypatch):
     assert translator._trust_env is True
     assert OPENAI_HTTP_KEEPALIVE_EXPIRY_S == 60.0
     assert translator.model == "gpt-proxy-router"
+    _assert_relay_network_settings(translator)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "translator_class"),
+    (("openai", OpenAITranslator), ("anthropic", AnthropicTranslator)),
+)
+def test_relay_without_model_or_base_url_uses_the_protocol_defaults(
+    monkeypatch, protocol, translator_class
+):
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
+    monkeypatch.setitem(
+        sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_FakeAnthropic)
+    )
+
+    translator = create_translator(
+        {
+            "translation": {
+                "backend": RELAY_BACKEND,
+                RELAY_BACKEND: {"api_key": "relay-key", "protocol": protocol},
+            }
+        }
+    )
+
+    assert isinstance(translator, translator_class)
+    assert translator.model == relay_protocol_default(protocol, "model")
+    assert translator._client.kwargs["base_url"] == relay_protocol_default(
+        protocol, "base_url"
+    )
 
 
 def test_keyless_openai_compatible_local_endpoint_uses_direct_http(monkeypatch):
@@ -293,6 +362,80 @@ def test_credentialed_local_ai_allows_literal_private_lan_http(monkeypatch):
 
 
 def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
+    """The relay on the Anthropic protocol (the former Claude-compatible backend)."""
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=_FakeAnthropic),
+    )
+    config = {
+        "translation": {
+            "backend": RELAY_BACKEND,
+            RELAY_BACKEND: {
+                "protocol": "anthropic",
+                "api_key": "relay-key",
+                "base_url": "https://claude-relay.example.com",
+                "model": "claude-router",
+                "timeout_s": "11",
+                "max_retries": "2",
+                **_RELAY_NETWORK_SETTINGS,
+            },
+        }
+    }
+
+    translator = create_translator(config)
+
+    assert backend_base_url_is_editable("anthropic_compatible") is True
+    assert backend_api_key_is_required("anthropic_compatible") is True
+    assert backend_model_is_selectable("anthropic_compatible") is True
+    assert isinstance(translator, AnthropicTranslator)
+    # Relay identity: official-only behaviour keys on the provider id.
+    assert translator._provider_id == "anthropic_compatible"
+    assert translator._client.kwargs["api_key"] == "relay-key"
+    assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
+    assert translator._client.kwargs["timeout"] == 11.0
+    assert translator._client.kwargs["max_retries"] == 2
+    assert translator._client.kwargs["http_client"] is translator._http_client
+    assert ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S == 60.0
+    assert translator.model == "claude-router"
+    _assert_relay_network_settings(translator)
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, 192), ("512", 512), (8, 32), (99999, 4096)],
+)
+def test_anthropic_protocol_relay_honours_a_configured_output_cap(
+    monkeypatch, configured, expected
+):
+    """max_output_tokens carried over from a relay section applies on both protocols."""
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        types.SimpleNamespace(Anthropic=_FakeAnthropic),
+    )
+    section = {
+        "protocol": "anthropic",
+        "api_key": "relay-key",
+        "base_url": "https://claude-relay.example.com",
+        "model": "claude-router",
+    }
+    if configured is not None:
+        section["max_output_tokens"] = configured
+
+    translator = create_translator(
+        {"translation": {"backend": RELAY_BACKEND, RELAY_BACKEND: section}}
+    )
+    try:
+        assert isinstance(translator, AnthropicTranslator)
+        assert translator._max_output_tokens == expected
+    finally:
+        translator.close()
+
+
+def test_legacy_claude_compatible_config_builds_the_anthropic_protocol_relay(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "anthropic",
@@ -307,23 +450,22 @@ def test_anthropic_compatible_backend_uses_custom_proxy_settings(monkeypatch):
                 "model": "claude-router",
                 "timeout_s": "11",
                 "max_retries": "2",
+                **_RELAY_NETWORK_SETTINGS,
             },
         }
     }
 
     translator = create_translator(config)
 
-    assert backend_base_url_is_editable("anthropic_compatible") is True
-    assert backend_api_key_is_required("anthropic_compatible") is True
-    assert backend_model_is_selectable("anthropic_compatible") is True
-    assert get_backend_model_options("anthropic_compatible")[0] == "claude-opus-5"
-    assert translator._client.kwargs["api_key"] == "relay-key"
+    assert isinstance(translator, AnthropicTranslator)
+    assert translator._provider_id == "anthropic_compatible"
     assert translator._client.kwargs["base_url"] == "https://claude-relay.example.com"
     assert translator._client.kwargs["timeout"] == 11.0
     assert translator._client.kwargs["max_retries"] == 2
-    assert translator._client.kwargs["http_client"] is translator._http_client
-    assert ANTHROPIC_HTTP_KEEPALIVE_EXPIRY_S == 60.0
     assert translator.model == "claude-router"
+    _assert_relay_network_settings(translator)
+    # The caller's raw snapshot is not migrated in place.
+    assert "anthropic_compatible" in config["translation"]
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,10 @@
 # Mio RealTime Translator
 
+## v1.5.0 公开源码范围
+
+当前公开源码可独立运行非 VR 桌面版，保留 ASR、翻译、TTS、Chatbox、反向翻译与桌面字幕。SteamVR 界面、手势、取景/OCR 翻译和扫码实现另行维护，不包含在此源码树中。官方 v1.5.0 安装包仍包含 VR 功能；从公开源码构建的桌面版与官方完整安装包不同。既有公开历史及源码许可保留。
+
+
 [![zh-CN](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87-2ea44f?style=for-the-badge)](./README.zh-CN.md)
 [![ja](https://img.shields.io/badge/README-%E6%97%A5%E6%9C%AC%E8%AA%9E-f39c12?style=for-the-badge)](./README.ja.md)
 [![en](https://img.shields.io/badge/README-English-0366d6?style=for-the-badge)](./README.en.md)

@@ -54,6 +54,20 @@ Before building, update and validate:
 Do not hand-edit installer size, SHA-256, publication time, signature fields,
 or final website size/hash values. Those are derived from the final installer.
 
+## Preserving existing distributions
+
+Production bundles now use `dist/release-v<version>/MioTranslator`, with build
+intermediates in `build/release-v<version>`. The installer stays at the top of
+`dist`. The build refuses to overwrite any of these version-specific outputs.
+Existing `dist/MioTranslator`, older installers, checksums and beta manuals are
+left untouched. Do not delete `dist` to prepare a release.
+
+When continuing an interrupted build, reuse only the inspected version-specific
+bundle and pass `/DSourceDir=dist\\release-v1.5.0\\MioTranslator` to Inno Setup.
+Run the frozen self-test and `tools/verify_release_bundle.py --bundle` on that
+same directory before compiling. Finalize manifests and checksums only with the
+original trusted signing key; never replace trust keys just to finish packaging.
+
 ## Clean environment and pre-build gates
 
 Remove only verified repo-local build outputs and caches. Refuse links, reparse
@@ -98,21 +112,21 @@ The build performs source and frozen runtime self-tests, creates the Inno
 installer, signs and verifies both updater manifests, and creates a
 domain-separated detached signature over deterministic checksums.
 
-Expected `v1.4.0` assets:
+Expected `v1.5.0` assets:
 
-- `dist\MioTranslator-Setup-v1.4.0.exe`
+- `dist\MioTranslator-Setup-v1.5.0.exe`
 - `mio_update.json`
 - `docs\installer_manifest.json`
 - `docs\release_signing_keys.json`
-- `dist\MioTranslator-v1.4.0-SHA256SUMS.txt`
-- `dist\MioTranslator-v1.4.0-SHA256SUMS.txt.sig.json`
+- `dist\MioTranslator-v1.5.0-SHA256SUMS.txt`
+- `dist\MioTranslator-v1.5.0-SHA256SUMS.txt.sig.json`
 
 Run seedless verification:
 
 ```powershell
 .\.venv-release311\Scripts\python.exe `
   tools\release\generate_release_checksums.py `
-  .\dist\MioTranslator-Setup-v1.4.0.exe `
+  .\dist\MioTranslator-Setup-v1.5.0.exe `
   .\mio_update.json `
   .\docs\installer_manifest.json `
   .\docs\release_signing_keys.json `
@@ -175,15 +189,15 @@ CLI and do not embed credentials in the remote URL.
 gh auth setup-git
 git remote set-url --push origin https://github.com/CokoIya/MioVRC_Translator.git
 git push origin main
-git push origin v1.4.0
+git push origin v1.5.0
 ```
 
-The GitHub Release must be tagged `v1.4.0` and must upload the installer,
+The GitHub Release must be tagged `v1.5.0` and must upload the installer,
 both updater JSON manifests, the public-key catalog, the checksum file, and
 detached signature metadata.
 `docs/installer_manifest.json` must be uploaded with the exact asset name
 `installer_manifest.json`, because the in-app updater fallback URL depends on
-that name. Use `docs/RELEASE_NOTES_v1.4.0.md` as the release body.
+that name. Use `docs/RELEASE_NOTES_v1.5.0.md` as the release body.
 
 After upload, download the public assets again, rerun seedless verification on
 the downloaded copies, and confirm the website and updater URLs resolve to the

@@ -1,3 +1,5 @@
+import pytest
+
 from src.utils.credential_validation import (
     first_missing_required_credential,
     missing_required_credentials,
@@ -111,6 +113,104 @@ def test_keyless_openai_compatible_local_endpoint_does_not_require_api_key():
     }
 
     assert missing_required_credentials(config, scopes=("translation",)) == ()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://127.0.0.1:8082", "http://192.168.1.20:8082/v1"],
+)
+def test_keyless_local_relay_on_the_anthropic_protocol_requires_an_api_key(base_url):
+    """The Anthropic messages path always sends a key, even to a local relay."""
+
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "output_format": "translated_only",
+            "openai_compatible": {
+                "api_key": "",
+                "base_url": base_url,
+                "protocol": "anthropic",
+            },
+        }
+    }
+
+    missing = first_missing_required_credential(config, scopes=("translation",))
+
+    assert missing is not None
+    assert missing.provider_id == "openai_compatible"
+    assert missing.credential_id == "translation.openai_compatible.api_key"
+    assert missing.focus_target == "backend_api_key"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://127.0.0.1:8082", "http://192.168.1.20:8082/v1"],
+)
+def test_keyless_local_relay_on_the_openai_protocol_needs_no_api_key(base_url):
+    config = {
+        "translation": {
+            "backend": "openai_compatible",
+            "output_format": "translated_only",
+            "openai_compatible": {
+                "api_key": "",
+                "base_url": base_url,
+                "protocol": "openai",
+            },
+        }
+    }
+
+    assert missing_required_credentials(config, scopes=("translation",)) == ()
+
+
+def test_keyless_hosted_relay_requires_an_api_key_on_either_protocol():
+    for protocol in ("openai", "anthropic"):
+        config = {
+            "translation": {
+                "backend": "openai_compatible",
+                "output_format": "translated_only",
+                "openai_compatible": {
+                    "api_key": "",
+                    "base_url": "https://relay.example.com/v1",
+                    "protocol": protocol,
+                },
+            }
+        }
+
+        missing = first_missing_required_credential(config, scopes=("translation",))
+
+        assert missing is not None, protocol
+        assert missing.provider_id == "openai_compatible"
+
+
+@pytest.mark.parametrize("legacy", ["anthropic_compatible", "grok_compatible"])
+def test_raw_legacy_relay_section_with_a_key_counts_as_configured(legacy):
+    """A snapshot from an older release keeps the key in the legacy section."""
+
+    config = {
+        "translation": {
+            "backend": legacy,
+            "output_format": "translated_only",
+            legacy: {"api_key": "relay-key"},
+        }
+    }
+
+    assert missing_required_credentials(config, scopes=("translation",)) == ()
+
+
+def test_raw_legacy_relay_section_without_a_key_is_reported_as_the_relay():
+    config = {
+        "translation": {
+            "backend": "anthropic_compatible",
+            "output_format": "translated_only",
+            "anthropic_compatible": {"api_key": "", "base_url": "http://127.0.0.1:8082"},
+        }
+    }
+
+    missing = first_missing_required_credential(config, scopes=("translation",))
+
+    assert missing is not None
+    assert missing.provider_id == "openai_compatible"
+    assert missing.credential_id == "translation.openai_compatible.api_key"
 
 
 def test_main_and_enabled_listen_asr_requirements_are_checked_and_deduplicated():

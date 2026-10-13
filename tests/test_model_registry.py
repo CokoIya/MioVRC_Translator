@@ -1,5 +1,9 @@
+import pytest
+
 from src.asr.model_registry import (
     LISTEN_SELECTABLE_ASR_ENGINES,
+    QWEN3_ASR_DEFAULT_MODEL,
+    QWEN3_ASR_MODEL_CHOICES,
     USER_SELECTABLE_ASR_ENGINES,
     get_asr_runtime_spec,
     get_qwen3_asr_base_url,
@@ -11,14 +15,14 @@ def test_online_asr_specs_do_not_require_local_models():
     config = {
         "asr": {
             "engine": "qwen3-asr",
-            "qwen3_asr": {"model": "qwen3-asr-flash-2026-02-10"},
+            "qwen3_asr": {"model": "qwen3-asr-flash"},
         }
     }
 
     spec = get_asr_runtime_spec(config)
 
     assert spec.engine == "qwen3-asr"
-    assert spec.model_id == "qwen3-asr-flash-2026-02-10"
+    assert spec.model_id == "qwen3-asr-flash"
     assert spec.requires_local_model is False
 
 
@@ -33,6 +37,67 @@ def test_qwen3_latest_flash_alias_remains_selectable():
     spec = get_asr_runtime_spec(config)
 
     assert spec.model_id == "qwen3-asr-flash"
+
+
+def test_qwen3_asr_only_offers_the_stable_flash_alias():
+    """Alibaba retired every dated qwen3-asr-flash snapshot on 2026-10-10."""
+
+    assert QWEN3_ASR_MODEL_CHOICES == ("qwen3-asr-flash",)
+    assert QWEN3_ASR_DEFAULT_MODEL == "qwen3-asr-flash"
+
+
+@pytest.mark.parametrize(
+    "qwen_cfg",
+    [{}, {"model": ""}, {"model": None}, {"model": "   "}],
+    ids=["model-missing", "model-empty", "model-null", "model-whitespace"],
+)
+def test_qwen3_asr_defaults_to_the_stable_flash_alias(qwen_cfg):
+    config = {"asr": {"engine": "qwen3-asr", "qwen3_asr": qwen_cfg}}
+
+    spec = get_asr_runtime_spec(config)
+
+    assert spec.model_id == "qwen3-asr-flash"
+
+
+@pytest.mark.parametrize(
+    "retired_model",
+    ["qwen3-asr-flash-2026-02-10", "qwen3-asr-flash-2025-09-08"],
+)
+def test_qwen3_retired_dated_snapshot_resolves_to_the_stable_alias(retired_model):
+    """A config saved by an older release must not keep a retired snapshot.
+
+    The dated ids were retired on 2026-10-10, so the runtime spec reports the
+    alias even for a config that has not been through the migration yet.
+    """
+
+    saved = {
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {"model": retired_model},
+        }
+    }
+    alias = {
+        "asr": {
+            "engine": "qwen3-asr",
+            "qwen3_asr": {"model": "qwen3-asr-flash"},
+        }
+    }
+
+    spec = get_asr_runtime_spec(saved)
+
+    assert spec.engine == "qwen3-asr"
+    assert spec.model_id == "qwen3-asr-flash"
+    assert spec == get_asr_runtime_spec(alias)
+    # Reverse listen passes its own engine while the main engine differs.
+    listen_only = {
+        "asr": {
+            "engine": "edge-stt",
+            "qwen3_asr": {"model": retired_model},
+        }
+    }
+    assert get_asr_runtime_spec(listen_only, "qwen3-asr").model_id == (
+        "qwen3-asr-flash"
+    )
 
 
 def test_qwen3_region_base_url_helpers():
@@ -62,6 +127,23 @@ def test_unknown_legacy_engine_normalizes_to_the_default_engine():
 
     assert spec.engine == "edge-stt"
     assert spec.requires_local_model is False
+
+
+def test_null_local_model_settings_fall_back_to_the_pinned_model():
+    """A saved null must not become the model id or revision "None"."""
+
+    spec = get_asr_runtime_spec(
+        {
+            "asr": {
+                "engine": "sensevoice-small",
+                "sensevoice": {"model_id": None, "model_revision": None},
+            }
+        }
+    )
+
+    assert spec.model_id == "iic/SenseVoiceSmall"
+    assert spec.model_revision == "70514a3da51f1160f51d18449dab6128bbd4928b"
+    assert spec.required_file_sha256
 
 
 def test_sensevoice_spec_is_pinned_and_all_required_files_are_hashed():
