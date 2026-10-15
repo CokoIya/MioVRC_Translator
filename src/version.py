@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 # ── 每次发版前改这两行 ──────────────────────────────────────────────────────
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 UPDATE_CHECK_URL = "https://miovrc.com/installer_manifest.json"
 UPDATE_CHECK_URLS: tuple[str, ...] = (
     UPDATE_CHECK_URL,

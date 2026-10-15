@@ -23,10 +23,13 @@ def _write_style_model(root: Path, name: str = "sample_voice") -> Path:
     (model_dir / "config.json").write_text(
         json.dumps(
             {
+                # A regular (multilingual) SBV2 2.x model; JP-Extra models end
+                # in "-JP-Extra" and a missing version means JP-Extra upstream.
+                "version": "2.5.0",
                 "data": {
                     "spk2id": {"Alice": 0},
                     "style2id": {"Neutral": 0, "Happy": 1},
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -212,9 +215,13 @@ def test_hololive_catalog_labels_matching_imported_voice(tmp_path, monkeypatch):
 
     assert voices[0].id == "SBV2_HoloLow :: MoriCalliope :: Neutral"
     assert voices[0].name == "Mori Calliope / Neutral"
-    # Catalog voices carry their own language regardless of the BERT setting.
-    assert voices[0].language == "en"
-    assert voices[0].locale == "en-US"
+    # A catalog voice is multilingual: it is listed in the language the
+    # player chose, not locked to the talent's own language (1.5.0 locked it
+    # and catalog voices could no longer speak Chinese).
+    assert voices[0].language == "ja"
+    chinese = StyleBertVits2TTS(bert_language="zh").get_available_voices()
+    assert chinese[0].language == "zh"
+    assert chinese[0].locale == "zh-CN"
 
 
 def test_light_style_bert_voice_listing_does_not_load_runtime(tmp_path, monkeypatch):
@@ -336,6 +343,61 @@ def test_style_bert_jp_extra_model_always_speaks_japanese(tmp_path, monkeypatch)
         == "jp"
     )
     assert StyleBertVits2TTS(bert_language="en").get_available_voices()[0].language == "ja"
+
+
+def test_imported_chinese_pack_with_training_flag_still_speaks_chinese(
+    tmp_path, monkeypatch
+):
+    # Player voice packs often keep data.use_jp_extra = true (the training
+    # default) while the version says a regular multilingual model. Upstream
+    # only looks at the version suffix, so the pack must keep Chinese.
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "chinese_pack")
+    imported = managed_root / "chinese_pack"
+    config = json.loads((imported / "config.json").read_text(encoding="utf-8"))
+    config["version"] = "2.4.1"
+    config["data"]["use_jp_extra"] = True
+    config["data"]["spk2id"] = {"Xiaoyu": 0}
+    config["data"]["style2id"] = {"Neutral": 0}
+    (imported / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    voice_id = model_store.style_bert_voice_id("chinese_pack", "Xiaoyu", "Neutral")
+
+    assert model_store.inspect_style_bert_model_dir(imported).jp_extra is False
+    assert StyleBertVits2TTS(bert_language="zh").get_available_voices()[0].language == "zh"
+    ensured, calls = _synthesize_languages(
+        monkeypatch,
+        StyleBertVits2TTS(bert_language="zh"),
+        voice_id,
+        "大家好，我是小雨。",
+        ready={"zh"},
+    )
+    assert ensured == ["zh"]
+    assert calls[0]["language"] == "ZH"
+
+
+@pytest.mark.parametrize(
+    ("version", "jp_extra"),
+    [
+        ("2.5.0-JP-Extra", True),
+        ("2.0-JP-Extra", True),
+        ("2.5.0", False),
+        ("2.1", False),
+        ("1.3", False),
+        (None, True),  # missing: upstream HyperParameters defaults to 2.0-JP-Extra
+    ],
+)
+def test_jp_extra_detection_matches_upstream(tmp_path, version, jp_extra):
+    model_dir = _write_style_model(tmp_path, "voice")
+    config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+    config["data"]["use_jp_extra"] = not jp_extra  # never decides it
+    if version is None:
+        config.pop("version")
+    else:
+        config["version"] = version
+    (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    assert model_store.inspect_style_bert_model_dir(model_dir).jp_extra is jp_extra
 
 
 def test_style_bert_cuda_prepares_acoustic_model_as_fp32(monkeypatch):
@@ -944,3 +1006,141 @@ def test_remove_validated_tree_wraps_root_identity_failure(tmp_path, monkeypatch
 
     assert tree.exists()
     assert quarantine.exists()
+
+
+def _catalog_voice(
+    tmp_path, monkeypatch, model: str = "SBV2_HoloLow", speaker: str = "MoriCalliope"
+) -> str:
+    """A Hololive catalog voice (EN Mori Calliope or JP Tokino Sora)."""
+    assert model_store.style_bert_preset_language(model, speaker) in {"EN", "JP"}
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, model)
+    imported = managed_root / model
+    config = json.loads((imported / "config.json").read_text(encoding="utf-8"))
+    config["data"]["spk2id"] = {speaker: 0}
+    config["data"]["style2id"] = {"Neutral": 0}
+    (imported / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    return model_store.style_bert_voice_id(model, speaker, "Neutral")
+
+
+def _synthesize_languages(monkeypatch, engine, voice_id, text, ready=()):
+    ensured: list[str | None] = []
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        StyleBertVits2TTS,
+        "_ensure_bert_runtime",
+        lambda self, language=None: ensured.append(language),
+    )
+    monkeypatch.setattr(
+        engine_store, "style_bert_bert_assets_ready", lambda language: language in ready
+    )
+    speaker = model_store.parse_style_bert_voice_id(voice_id)[1]
+
+    class FakeModel:
+        def __init__(self, **_kwargs):
+            self.spk2id = {speaker: 0}
+            self.style2id = {"Neutral": 0}
+
+        def infer(self, **kwargs):
+            calls.append(kwargs)
+            return 24000, np.array([0, 600, -600], dtype=np.int16)
+
+    engine._tts_model_cls = FakeModel
+    engine.synthesize(text, voice_id)
+    return ensured, calls
+
+
+@pytest.mark.parametrize(
+    ("model", "speaker"),
+    [("SBV2_HoloLow", "MoriCalliope"), ("SBV2_HoloJPTest2", "TokinoSora")],
+)
+def test_catalog_voice_speaks_chinese_when_the_player_chose_chinese(
+    tmp_path, monkeypatch, model, speaker
+):
+    voice_id = _catalog_voice(tmp_path, monkeypatch, model, speaker)
+
+    ensured, calls = _synthesize_languages(
+        monkeypatch,
+        StyleBertVits2TTS(bert_language="zh"),
+        voice_id,
+        "你好，今天也请多关照。",
+        ready={"zh"},
+    )
+
+    assert ensured == ["zh"]
+    assert calls[0]["language"] == "ZH"
+    assert model_store.style_bert_voice_language(voice_id, "zh") == "zh"
+
+
+def test_kana_text_is_read_as_japanese_whatever_the_setting(tmp_path, monkeypatch):
+    voice_id = _catalog_voice(tmp_path, monkeypatch, "SBV2_HoloJPTest2", "TokinoSora")
+
+    ensured, calls = _synthesize_languages(
+        monkeypatch,
+        StyleBertVits2TTS(bert_language="zh"),
+        voice_id,
+        "こんにちは、よろしくね。",
+        ready={"zh", "jp"},
+    )
+
+    assert ensured == ["jp"]
+    assert calls[0]["language"] == "JP"
+
+
+def test_missing_bert_for_the_detected_language_falls_back_to_the_setting(
+    tmp_path, monkeypatch
+):
+    voice_id = _catalog_voice(tmp_path, monkeypatch)
+
+    ensured, calls = _synthesize_languages(
+        monkeypatch,
+        StyleBertVits2TTS(bert_language="zh"),
+        voice_id,
+        "see you tomorrow",
+        ready={"zh"},
+    )
+
+    assert ensured == ["zh"]
+    assert calls[0]["language"] == "ZH"
+
+
+def test_jp_extra_model_still_speaks_japanese_for_chinese_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(model_store, "writable_app_dir", lambda: tmp_path / "app")
+    managed_root = model_store.style_bert_models_dir()
+    _write_style_model(managed_root, "jp_extra_voice")
+    imported = managed_root / "jp_extra_voice"
+    config = json.loads((imported / "config.json").read_text(encoding="utf-8"))
+    config["version"] = "2.5.0-JP-Extra"
+    config["data"]["spk2id"] = {"Speaker": 0}
+    config["data"]["style2id"] = {"Neutral": 0}
+    (imported / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    ensured, calls = _synthesize_languages(
+        monkeypatch,
+        StyleBertVits2TTS(bert_language="zh"),
+        model_store.style_bert_voice_id("jp_extra_voice", "Speaker", "Neutral"),
+        "你好",
+        ready={"zh", "jp"},
+    )
+
+    assert ensured == ["jp"]
+    assert calls[0]["language"] == "JP"
+
+
+@pytest.mark.parametrize(
+    ("text", "setting", "expected"),
+    [
+        ("你好", "zh", "zh"),
+        ("你好", "jp", "jp"),
+        ("你好", "en", "zh"),
+        ("了解しました", "zh", "jp"),
+        ("カタカナ", "en", "jp"),
+        ("hello there", "zh", "en"),
+        ("Hello 你好", "zh", "zh"),
+        ("2026!", "zh", "zh"),
+        ("", "jp", "jp"),
+    ],
+)
+def test_style_bert_text_language(text, setting, expected):
+    assert model_store.style_bert_text_language(text, setting) == expected

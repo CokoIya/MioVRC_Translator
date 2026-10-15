@@ -2,6 +2,19 @@
 
 All notable production changes to Mio RealTime Translator are documented here.
 
+## [1.5.1] - 2026-10-15
+
+### Included existing fixes
+
+- Includes the existing SteamVR shutdown cleanup and unavailable-runtime reporting fixes.
+- Includes the existing Style-Bert-VITS2 model-type and multilingual text-language fixes.
+- Retains the full Mio VR Gestures experience and existing translation, ASR and TTS services.
+
+### Release packaging
+
+- Updates application, Windows installer and website versions to 1.5.1 without changing feature logic during release preparation.
+- Builds into a separate versioned directory and preserves older distributions.
+
 ## [1.5.0] - 2026-10-13
 
 ### Mio VR gestures

@@ -1,24 +1,24 @@
 {
-  "version": "v1.5.0",
-  "installer_name": "MioTranslator-Setup-v1.5.0.exe",
-  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.0/MioTranslator-Setup-v1.5.0.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.0/MioTranslator-Setup-v1.5.0.exe",
-  "size_bytes": 431226824,
-  "sha256": "f357c048ac34947e330e8acd90b84029596418920c63157a04127dea4ce53d90",
+  "version": "v1.5.1",
+  "installer_name": "MioTranslator-Setup-v1.5.1.exe",
+  "url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.1/MioTranslator-Setup-v1.5.1.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.1/MioTranslator-Setup-v1.5.1.exe",
+  "size_bytes": 431198244,
+  "sha256": "7523d206af76fd89ccaba964b9c820976824f546e123eb88a7aa13ee3b945988",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "1f7531c40c812ea322f7bc0c2b35592c2cbb7eec59228990b05ea0b754c60f9b9616275f7d52066f3fb80f3ce15335b5688009a97a52386c14012cdf82328e04",
-  "notes": "v1.5.0 adds Mio VR Gestures: two-hand screenshot translation, independent screenshot languages, QR links, wrist bookmarks, bidirectional session history and fixed-heading captions with manual recentering. Existing Mio translation, ASR and TTS services remain. VR requires SteamVR and tracked headset/controllers.",
+  "installer_signature": "405b8577f02c666f701e63e347c2c3a8765e9f6ec5631ea3ece150da7091b571814558bfc54ac6fe8ae960d13eb1905ea03eebb2061d2f860761a37afe051a08",
+  "notes": "v1.5.1 packages existing SteamVR shutdown cleanup and Style-Bert-VITS2 multilingual fixes. Full Mio VR Gestures and existing translation, ASR and TTS services remain. Release preparation changes only version and packaging files.",
   "notes_i18n": {
-    "zh-CN": "v1.5.0 新增 Mio VR手势：双手取景翻译、独立截图语言、二维码链接、手腕书签与双向转译记录，以及固定朝向字幕和“移到眼前”。保留 Mio 原有翻译、ASR、TTS 服务。VR 需要 SteamVR 与正常追踪的头显和手柄。",
-    "en": "v1.5.0 adds Mio VR Gestures: two-hand screenshot translation, independent screenshot languages, QR links, wrist bookmarks, bidirectional session history and fixed-heading captions with manual recentering. Existing Mio translation, ASR and TTS services remain. VR requires SteamVR and tracked headset/controllers.",
-    "ja": "v1.5.0 は Mio VRジェスチャーを追加：両手の画像翻訳、画像専用言語、QR リンク、手首ブックマーク、双方向のセッション履歴、向き固定字幕と再配置。Mio の翻訳・ASR・TTS は維持します。VR には SteamVR と追跡中の頭と両手が必要です。",
-    "ru": "v1.5.0 добавляет жесты Mio VR: перевод снимков двумя руками, отдельные языки снимков, QR-ссылки, закладки на запястье, историю обеих сторон диалога в сеансе и субтитры фиксированного направления с возвратом перед глазами. Сервисы перевода, ASR и TTS сохранены. Требуются SteamVR и отслеживаемые шлем и контроллеры.",
-    "ko": "v1.5.0은 Mio VR 제스처를 추가합니다: 양손 스크린샷 번역, 독립 언어 설정, QR 링크, 손목 북마크, 양방향 세션 기록, 방향 고정 자막과 재배치. 기존 Mio 번역·ASR·TTS는 유지됩니다. VR에는 SteamVR과 정상 추적 중인 헤드셋·컨트롤러가 필요합니다."
+    "zh-CN": "v1.5.1 打包现有 SteamVR 退出清理及 Style-Bert-VITS2 多语言修复；保留完整 Mio VR手势与原有翻译、ASR、TTS 服务。本次发布准备仅更新版本与打包文件。",
+    "en": "v1.5.1 packages existing SteamVR shutdown cleanup and Style-Bert-VITS2 multilingual fixes. Full Mio VR Gestures and existing translation, ASR and TTS services remain. Release preparation changes only version and packaging files.",
+    "ja": "v1.5.1 は既存の SteamVR 終了処理と Style-Bert-VITS2 多言語修正を収録します。Mio VRジェスチャーと翻訳・ASR・TTS を維持し、リリース準備ではバージョンと配布用ファイルのみ更新します。",
+    "ru": "v1.5.1 включает уже подготовленные исправления завершения SteamVR и многоязычного Style-Bert-VITS2. Жесты Mio VR, перевод, ASR и TTS сохранены. Подготовка выпуска меняет только версию и файлы сборки.",
+    "ko": "v1.5.1은 기존 SteamVR 종료 정리 및 Style-Bert-VITS2 다국어 수정 사항을 포함합니다. Mio VR 제스처와 번역·ASR·TTS는 유지되며 출시 준비에서는 버전과 패키징 파일만 변경합니다."
   },
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-10-13T18:14:47+09:00",
+  "published_at": "2026-10-15T15:30:31+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "42815d94225b83d89f4861ef9551d916ee7d6664698d0f80f49cf51aaec75a99f55165b394c7141ba899d21b3dc8f9f2dd51fe1c9a6ddaa82db8bfa4dd6c4e0c"
+  "signature": "a217aec89eea290a7c902a7643e2fd412172c4ac079c8b2f33903bea8e592f796fa25139c101f528622260baa90405e2258366562ca616c0cdc7987fe8114005"
 }

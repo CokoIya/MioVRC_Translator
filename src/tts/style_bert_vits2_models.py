@@ -33,6 +33,7 @@ _UNSUPPORTED_MODEL_FILE_SUFFIXES = {".onnx"}
 VOICE_ID_SEPARATOR = " :: "
 
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
+_UPSTREAM_DEFAULT_VERSION = "2.0-JP-Extra"  # style_bert_vits2 HyperParameters.version
 _MAX_MODEL_FILE_BYTES = 8 * 1024 * 1024 * 1024
 _MAX_MODEL_TOTAL_BYTES = 16 * 1024 * 1024 * 1024
 _MAX_MODEL_ENTRIES = 512
@@ -383,10 +384,13 @@ def _inspect_from_snapshot(
         raise StyleBertVits2ModelError("No speakers were found in config.json.")
     if not styles:
         raise StyleBertVits2ModelError("No styles were found in config.json.")
-    version = str(raw_config.get("version", "") or "")
-    jp_extra = bool(data.get("use_jp_extra")) or version.strip().lower().endswith(
-        "jp-extra"
-    )
+    # Same rule as upstream inference (TTSModel / infer.get_net_g): only the
+    # version suffix selects the JP-Extra network, and a missing version
+    # takes the HyperParameters default "2.0-JP-Extra". ``data.use_jp_extra``
+    # is a training flag that defaults to True, so trusting it would lock
+    # multilingual (e.g. Chinese) voice packs to Japanese.
+    version = str(raw_config.get("version", _UPSTREAM_DEFAULT_VERSION) or "")
+    jp_extra = version.endswith("JP-Extra")
 
     return StyleBertVits2ModelInfo(
         name=directory.name,
@@ -916,20 +920,64 @@ def resolve_style_bert_voice_language(
     speaker: str,
     fallback: object = "jp",
 ) -> str:
-    """Return the SBV2 text language one imported voice must be driven with.
+    """Return the SBV2 language one imported voice is driven with by default.
 
-    A JP-Extra model only accepts Japanese (upstream raises otherwise), a
-    catalog voice carries its own language, and anything else follows the
-    player's BERT language setting.
+    A JP-Extra model only accepts Japanese (upstream raises otherwise).
+    Every other model is multilingual and follows the player's BERT language
+    setting - including catalog (Hololive) voices: their catalog language is
+    the talent's own language, not a limit, and players deliberately make
+    them speak Chinese. ``style_bert_text_language`` refines this per
+    sentence from the text's script.
     """
     from src.utils.config_manager import normalize_style_bert_bert_language
 
+    del speaker  # kept for callers; the speaker does not limit the language
     if getattr(model_info, "jp_extra", False):
         return "jp"
-    preset_language = style_bert_preset_language(model_info.name, speaker)
-    if preset_language:
-        return normalize_style_bert_bert_language(preset_language)
     return normalize_style_bert_bert_language(fallback)
+
+
+def _is_kana(char: str) -> bool:
+    code = ord(char)
+    return 0x3040 <= code <= 0x30FF or 0x31F0 <= code <= 0x31FF or 0xFF66 <= code <= 0xFF9F
+
+
+def _is_cjk_ideograph(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x4E00 <= code <= 0x9FFF
+        or 0x3400 <= code <= 0x4DBF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x20000 <= code <= 0x2FA1F
+    )
+
+
+def style_bert_text_language(text: object, fallback: object = "jp") -> str:
+    """Pick the SBV2 language a multilingual voice should read ``text`` in.
+
+    Kana means Japanese and Latin letters without any CJK mean English. Text
+    written only in CJK ideographs (Chinese, or kanji-only Japanese) cannot be
+    told apart, so it follows the player's BERT setting when that is Japanese
+    or Chinese, and Chinese otherwise. Anything else keeps the setting.
+    """
+    from src.utils.config_manager import normalize_style_bert_bert_language
+
+    setting = normalize_style_bert_bert_language(fallback)
+    value = str(text or "")
+    has_ideograph = False
+    has_latin = False
+    for char in value:
+        if _is_kana(char):
+            return "jp"
+        if _is_cjk_ideograph(char):
+            has_ideograph = True
+        elif ("a" <= char <= "z") or ("A" <= char <= "Z"):
+            has_latin = True
+    if has_ideograph:
+        return setting if setting in {"jp", "zh"} else "zh"
+    if has_latin:
+        return "en"
+    return setting
 
 
 def style_bert_voice_language(voice: object, fallback: object = "jp") -> str:

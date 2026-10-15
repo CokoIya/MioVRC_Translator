@@ -37,6 +37,7 @@ from .style_bert_vits2_models import (
     parse_style_bert_voice_id,
     resolve_style_bert_voice_language,
     style_bert_preset_title,
+    style_bert_text_language,
     style_bert_voice_id,
     style_bert_voice_language,
 )
@@ -1335,7 +1336,9 @@ class StyleBertVits2TTS(BaseTTS):
         volume: float,
     ) -> bytes:
         model_name = model_info.name
-        voice_bert_language = self._voice_bert_language(model_info, speaker_name)
+        voice_bert_language = self._voice_bert_language(
+            model_info, speaker_name, clean_text
+        )
         self._ensure_bert_runtime(voice_bert_language)
         model = self._get_or_create_model(model_info)
         speaker_id = getattr(model, "spk2id", {}).get(speaker_name)
@@ -1454,10 +1457,35 @@ class StyleBertVits2TTS(BaseTTS):
         self,
         model_info: StyleBertVits2ModelInfo,
         speaker_name: str,
+        text: str = "",
     ) -> str:
-        return resolve_style_bert_voice_language(
+        """Language one sentence is synthesized in.
+
+        JP-Extra models always speak Japanese. Multilingual models follow the
+        text's script (kana -> Japanese, Latin -> English) and the player's
+        BERT setting for ideograph-only text. When the script points to a
+        language whose BERT model is not downloaded but the setting's is, the
+        setting wins, so a working setup never starts failing on one word.
+        """
+        default = resolve_style_bert_voice_language(
             model_info, speaker_name, self._bert_language
         )
+        if getattr(model_info, "jp_extra", False) or not str(text or "").strip():
+            return default
+        detected = style_bert_text_language(text, self._bert_language)
+        if (
+            detected != default
+            and not style_bert_bert_assets_ready(detected)
+            and style_bert_bert_assets_ready(default)
+        ):
+            logger.info(
+                "Style-Bert-VITS2 text looks %s but that BERT model is not downloaded; "
+                "using %s",
+                STYLE_BERT_LANGUAGE_NAMES[detected],
+                STYLE_BERT_LANGUAGE_NAMES[default],
+            )
+            return default
+        return detected
 
     def _ensure_bert_runtime(self, language: str | None = None) -> None:
         bert_language = normalize_style_bert_bert_language(
