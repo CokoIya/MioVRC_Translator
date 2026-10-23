@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MioVRCA - VRChat 改模素材管理工具｜Booth、网盘素材一键导入 Unity</title>
-<meta name="description" content="MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，还能一键创建 VRChat 基础工程。">
+<meta name="description" content="MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，AI 自动验收和修穿模、调外观、做 Quest 版，还能一键创建 VRChat 基础工程。">
 <meta name="keywords" content="MioVRCA, miovrca, MioVRC, VRChat 素材管理, VRChat 改模, Booth 素材, VRChat 模型, Unity 一键导入, Modular Avatar, MioVRC_AssetManager">
 <link rel="canonical" href="https://miovrc.com/vrca/">
 <meta property="og:site_name" content="MioVRC">
@@ -13,7 +13,7 @@
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="MioVRCA - VRChat 改模素材管理工具">
 <meta name="twitter:description" content="找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Windows 免费开源。">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "MioVRCA", "alternateName": ["MioVRC 素材托管工具", "MioVRC_AssetManager", "MioVRC AssetManager", "VRC素材库"], "description": "MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，还能一键创建 VRChat 基础工程。", "url": "https://miovrc.com/vrca/", "image": "https://miovrc.com/assets/icons/app_icon_mio.png", "applicationCategory": "UtilitiesApplication", "operatingSystem": "Windows 10, Windows 11", "softwareVersion": "1.7.16", "inLanguage": "zh-CN", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "CNY"}, "downloadUrl": "https://github.com/CokoIya/MioVRC_AssetManager/releases/latest", "codeRepository": "https://github.com/CokoIya/MioVRC_AssetManager", "author": {"@type": "Person", "name": "天川澪", "alternateName": "Coko_Iya", "url": "https://github.com/CokoIya"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "MioVRCA", "alternateName": ["MioVRC 素材托管工具", "MioVRC_AssetManager", "MioVRC AssetManager", "VRC素材库"], "description": "MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，AI 自动验收和修穿模、调外观、做 Quest 版，还能一键创建 VRChat 基础工程。", "url": "https://miovrc.com/vrca/", "image": "https://miovrc.com/assets/icons/app_icon_mio.png", "applicationCategory": "UtilitiesApplication", "operatingSystem": "Windows 10, Windows 11", "softwareVersion": "2.0.0", "inLanguage": "zh-CN", "isAccessibleForFree": true, "offers": {"@type": "Offer", "price": "0", "priceCurrency": "CNY"}, "downloadUrl": "https://github.com/CokoIya/MioVRC_AssetManager/releases/latest", "codeRepository": "https://github.com/CokoIya/MioVRC_AssetManager", "author": {"@type": "Person", "name": "天川澪", "alternateName": "Coko_Iya", "url": "https://github.com/CokoIya"}}</script>
 <meta property="og:title" content="MioVRCA - VRChat 改模素材管理工具">
 <meta property="og:description" content="MioVRCA：找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Booth 和闲鱼内置，网盘分享直接下载，一键导入 Unity。">
 <meta property="og:type" content="website">
@@ -278,6 +278,8 @@ footer .note { flex-basis: 100%; font-size: 13px; }
     <nav>
       <a href="#flow">流程</a>
       <a href="#features">功能</a>
+      <a href="#oneclick">一键改模</a>
+      <a href="#ai">AI 改模</a>
       <a href="#download">下载</a>
       <a href="#faq">常见问题</a>
       <a class="keep" href="#community">交流群</a>
@@ -395,6 +397,184 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   </div>
 </section>
 
+<section id="oneclick" aria-labelledby="oc-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="oc-title">2.0.0：一键改模</h2><p>选好素体和素材，点一次「一键创建」，得到穿戴完成、带菜单、可以上传的模型。不会 Unity 也能用。</p></div>
+    <div class="qm">
+      <div class="tile" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 9h16l-1.5 10h-13z"/><path d="M8 9l4-5 4 5"/></svg></div>
+        <h3>改模篮</h3><p>在素材库把素体、衣服、头发、配饰、表情和功能插件放进「改模篮」。创建前先告诉你能不能穿、同步参数和磁盘空间够不够，有问题先说明原因。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></div>
+        <h3>一键创建</h3><p>新建工程、导入素材、穿戴、生成菜单、汉化菜单、检查结果，全部自动完成；也可以装进自己已有的工程。电脑上还没有 Unity 时，会先把环境准备好。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></div>
+        <h3>换素体</h3><p>Plum、Chocolat、Chiffon、Lime 这类同系列的素体之间，只有别的素体版本的衣服和头发也能穿，按官方比例适配体型。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="6" y="8" width="12" height="6" rx="2"/><path d="M12 14v7"/></svg></div>
+        <h3>功能插件</h3><p>面捕、SPS 等插件放进改模篮就能装好并生效，缺少的依赖从素材库补齐。同步参数超过 256 位时自动处理，不用自己删开关。</p>
+      </div>
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></div>
+        <h3>检查与穿模</h3><p>创建完成后给出模型照片、性能评级和每个插件是否生效。穿进身体或脸里的部件可以「修复」「移开」或「移除」，随时能恢复。</p>
+      </div>
+      <div class="tile" style="--c: var(--yellow)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/></svg></div>
+        <h3>上传到 VRChat</h3><p>在结果页直接上传，默认仅自己可见；VRChat 账号暂时不能上传时会说明原因。PC 版上传后，还可以一键上传 Quest 版。</p>
+      </div>
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></div>
+        <h3>从 Booth 商品开始</h3><p>粘贴一个 Booth 商品链接，自动配上合适的素体放进改模篮；没买的标「未购买」，可以打开商品页或加入愿望单，还能看到社区里用到它的作品。</p>
+      </div>
+      <div class="tile" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg></div>
+        <h3>新手引导与撤销</h3><p>还没有素体时推荐常用素体，「适配我的素体」只显示能穿的素材。「撤销这次改动」可以退回创建之前，撤销前先列出会移走哪些文件。</p>
+      </div>
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></div>
+        <h3>版本提醒</h3><p>改模篮里的素材在 Booth 出了新版本时会提示，可以直接下载新版本；面捕暂时不支持当前素体版本时，更新后可以重新应用。</p>
+      </div>
+    </div>
+    <p>出错时直接给出处理按钮，例如「更新插件」「重新连接」「打开 SDK 面板」；结果页的「问 AI」会结合这次创建的结果回答问题。</p>
+  </div>
+</section>
+
+<section id="social" aria-labelledby="social-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="social-title">2.0.0：社区</h2><p>类似 X 的社区：用邮箱账号发帖、分享作品、关注创作者和私信，由 MioVRCA 自有服务提供。</p></div>
+    <div class="qm">
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M16 14.3c2.5-.2 4.2 1.4 4.6 4.2"/></svg></div>
+        <h3>邮箱账号与社区服务</h3><p>MioVRCA 自有服务（https://api.miovrc.com）面向国内玩家提供社区。浏览无需登录，发布资料、帖子、作品和方案只需邮箱账号。点击「登录社区」，输入 6 位验证码（10 分钟内有效），首次填写昵称；没收到请查看垃圾邮件。可设置 @用户名，GitHub 关联仅用于认领旧内容。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
+        <h3>首页与发帖</h3><p>首页分「为你推荐」「正在关注」，有新帖子时提示。普通帖子最多 1000 字、4 张图片，支持 @提及、#话题、回复串、转帖和引用，也可点赞、加入书签、查看浏览次数。分享链接可在 QQ、微信中预览，网页上可以「在 MioVRCA 中打开」。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12l-8 8-8-8V4h8z"/><circle cx="8" cy="8" r="1.5"/></svg></div>
+        <h3>探索</h3><p>查看话题趋势，按「热门」「最新」「用户」「媒体」搜索。保留「作品」「图片」「创作者」「装配方案」入口；作品可按素体浏览、筛选有方案或视频，「图片」以瀑布流展示。新人作品、关注的创作者生日和 Booth 店铺上新在这里显示。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6h7v8m-3-3 3 3 3-3"/></svg></div>
+        <h3>个人主页与展示柜</h3><p>主页分「帖子」「回复」「媒体」「作品」，本人另有「喜欢」，有公开素材时显示「展示柜」。可编辑头像、昵称、生日、简介和链接。展示柜选择最多 60 件素材并保存后公开商品编号、名称和店铺，查看时与本机素材库比较，缺少的可加入愿望单。</p>
+      </div>
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg></div>
+        <h3>通知与书签</h3><p>通知分「全部」「提及」，显示点赞、转帖、引用、回复、提及和关注，同一帖子的点赞与转帖分别合并显示。书签列表和个人主页的「喜欢」列表仅本人可见，互动数量仍公开，点赞会通知帖子作者。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M18 4v6m-3-3h6"/></svg></div>
+        <h3>私信、拉黑与举报</h3><p>私信可发文字和图片；你关注的人直接进入收件箱，其他人进入「消息请求」，接受前最多发 3 条。「更多」中可关闭新请求或管理拉黑。自己的消息 5 分钟内可撤回，删除会话只隐藏自己一侧历史。帖子、作品、方案、资料和收到的私信均可在软件内举报。</p>
+      </div>
+      <div class="tile" style="--c: var(--yellow)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></div>
+        <h3>作品与照着装</h3><p>作品是带作品卡片的帖子，可上传 1–9 张图片，填写视频链接、素体、同款素材并附带方案。卡片显示已有素材数量，提供「一键克隆」「照着装」「复制使用素材」；一键克隆前先列出已有和缺少的素材。详情可把缺少的素材加入愿望单；素材仍需自行购买和导入，素材库详情也可查看同款社区作品。</p>
+      </div>
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></div>
+        <h3>参考作品与分享方案</h3><p>「我也做了」记录参考关系，原作列出做同款的作品，新作品链接回原作。「保存分享图」生成含作者和素材名单的 PNG 图片。方案在「分享」中点「分享到社区…」即可通过服务发布，在「探索」的「装配方案」中查看和导入，不含素材文件。</p>
+      </div>
+      <div class="tile" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
+        <h3>公开内容与私信隐私</h3><p>公开资料、帖子、回复、作品和方案对外可见，生日和关注列表按设置公开。邮箱不向其他玩家展示，本人账号页仅显示遮盖形式，管理接口也可查看遮盖邮箱。私信未采用端到端加密，服务端保存正文；管理接口只提供被举报消息及前后各两条上下文，不提供任意会话读取入口。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></div>
+        <h3>求同款</h3><p>发图问「这套是什么、怎么搭」，其他玩家用作品或 Booth 商品回答，提问人可以把其中一条设为答案。「探索」里可以看待解决和已解决的。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M3 20c.5-3 2.5-5 5-5s4.5 2 5 5M11 20c.5-3 2.5-5 5-5s4.5 2 5 5"/></svg></div>
+        <h3>素体小组、主题与投票</h3><p>每个素体有自己的小组，汇集用这个素体的作品。每周主题显示在「为你推荐」顶部，点「参加」即可发帖。发帖时可以加 2–4 个选项的投票。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>安全与账号</h3><p>可能敏感的图片会自动标记并遮挡。创作者可以认证自己的 Booth 店铺，名片上显示认证标识。可以导出自己的数据；删除账号有 7 天的反悔期。</p>
+      </div>
+    </div>
+<p>2.0.0 包含 1.8.1 之后的全部更新。流水线的 Unity 插件更新为 1.6.6：打开工程后在流水线页点击「更新」，一键创建会自动更新。旧仓库内容仍保留服务副本、GitHub 和 CDN 读取来源；新社区的发布和互动需要社区服务可用。</p>
+  </div>
+</section>
+
+<section id="new" aria-labelledby="n-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="n-title">1.8.1：作品与创作者</h2><p>发布作品、关注创作者；给模型拍一支宣传短视频。</p></div>
+    <div class="qm">
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9v6l5-3z"/></svg></div>
+        <h3>宣传视频</h3><p>流水线页或工程卡片上点「宣传视频」：AI 当导演，让 Unity 拍镜头、按音乐的节拍排分镜，卡点、字幕和渲染由软件完成，不用生成视频的 AI。导出 1080p MP4、封面和 VRChat 缩略图，并写好各平台的标题和简介。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M16 14.3c2.5-.2 4.2 1.4 4.6 4.2"/></svg></div>
+        <h3>社区（实验性）</h3><p>新的「社区」标签：用 GitHub 账号发布名片和作品（封面、视频链接、同款素材、附带的装配方案），关注喜欢的创作者，在「动态」里看他们的新作品和新方案。关注只保存在本机。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12l-8 8-8-8V4h8z"/><circle cx="8" cy="8" r="1.5"/></svg></div>
+        <h3>同款素材</h3><p>作品里的同款素材标出你已有的，没有的一键加入愿望单；Booth 链接在软件里打开，网盘分享直接收进素材库。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ai" aria-labelledby="a-title" style="padding-top:0">
+  <div class="wrap">
+    <div class="sh"><h2 id="a-title">1.8.0：AI 帮你改模</h2><p>装完自己检查、自己修，说一句话就能改。用你自己的 AI 账号，DeepSeek 专门优化过。</p></div>
+    <div class="qm">
+      <div class="tile wide" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></div>
+        <h3>全面验收，自动修穿模</h3><p>流水线跑完，菜单里的开关逐个拍照对比，量出身体从衣服里穿出来的地方，再让模型坐下量一次，检查裙子有没有连上大腿的碰撞体。能修的问你一声就修：穿着这件衣服时隐藏被盖住的身体，修完重新量，没改善就自动撤回。原文件不改，Ctrl+Z 能撤销。</p>
+      </div>
+      <div class="tile" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
+        <h3>一句话调外观</h3><p>「腰再细一点」「做一个坏笑的表情」「这条裙子出五个配色」：AI 调形态键（衣服跟着身体变）、做表情开关、复制材质出新配色，先给你看，再做成菜单。</p>
+      </div>
+      <div class="tile" style="--c: var(--yellow)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
+        <h3>说明书变步骤</h3><p>素材自带的日文说明书、PDF、说明图，AI 整理成中文步骤，标出哪步流水线已做、哪步 AI 能做、哪步要你手动；AI 能做的可以直接交给它。</p>
+      </div>
+      <div class="tile" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></div>
+        <h3>3D 试衣间</h3><p>在软件里 360° 看模型，没穿的衣服、头发、配饰和各个配色点一下就试穿，不改场景。</p>
+      </div>
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></div>
+        <h3>照图配装</h3><p>丢一张别人的模型截图或商品图，AI 从你的素材库里找出最接近的衣服、头发和配饰，优先给你的素体做的。</p>
+      </div>
+      <div class="tile" style="--c: var(--portal)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg></div>
+        <h3>工程时光机</h3><p>每次改模前自动把模型存一份（带照片），和现在对比，一键回到那一刻；之后导入的素材文件夹可以移到回收站。</p>
+      </div>
+      <div class="tile" style="--c: var(--green)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></div>
+        <h3>一键 Quest 版</h3><p>自动装 VRCQuestTools，按 Android 的硬性上限挑出要保留的骨骼物理，勾选调整、实时看总数，再预估 Android 版的评级。</p>
+      </div>
+      <div class="tile" style="--c: var(--coral)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></svg></div>
+        <h3>方案分享和社区</h3><p>装配方案生成一段分享码，贴进 QQ、微信就能发给朋友；「社区方案」里找别人分享的搭配，显示你已有其中几件素材。每次验收记下的「这件衣服在这个素体上怎么修好」也能分享，大家装同一件衣服时自动套用。</p>
+      </div>
+      <div class="tile" style="--c: var(--yellow)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M9 14l2 2 4-4"/></svg></div>
+        <h3>给素材作者：miovrca.json</h3><p>在素材包里放一份 miovrca.json，玩家装配时按它选对应素体的版本、设置穿着时的形态键、生成部件开关。软件里的「作者工具」可以一键生成。</p>
+      </div>
+      <div class="tile" style="--c: var(--orange)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5h5"/><path d="M17 3h4v4"/></svg></div>
+        <h3>DeepSeek 深度优化</h3><p>按任务设定思考强度，菜单方案用 JSON 模式一次成形；花费按缓存价格折算，节假日不算高峰；素材名和商品说明用它翻译，拿不准的分类和素体由它补判；AI 还能联网查资料。</p>
+      </div>
+      <div class="tile wide" style="--c: var(--purple)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="m7 9 2 2-2 2M12 13h4M8 20h8"/></svg></div>
+        <h3>外部 AI 接入（MCP）</h3><p>Claude Code、Codex、DeepSeek Harness、Cursor 等 AI 工具可以直接调用 MioVRCA：查素材库、导入、装衣服、做菜单、验收、做 Quest 版、用时光机回退。需要确认的操作仍由你在软件里点确认。</p>
+      </div>
+      <div class="tile wide" style="--c: var(--blue)">
+        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 9a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3h-3l-1.5-2h-3L9 16H6a3 3 0 0 1-3-3z"/></svg></div>
+        <h3>不摘头显改模</h3><p>配合 MioVRCT：在 VRChat 里说一句「把头发换成双马尾」，AI 在 Unity 里改好，用 Build &amp; Test 发到游戏里，再用游戏相机拍照确认，回复显示在聊天框；要确认的操作说「确认」就行。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section aria-labelledby="s-title" style="padding-top:0">
   <div class="wrap">
     <div class="sh"><h2 id="s-title">开始使用</h2></div>
@@ -438,9 +618,9 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   <div class="wrap">
     <div class="sh"><h2 id="c-title">加入交流</h2><p>使用问题、改模交流、新版本通知。</p></div>
     <div class="links">
-      <a class="lk" style="--c: var(--blue)" href="https://qm.qq.com/q/5d1fxbkYhy" target="_blank" rel="noopener">
+      <a class="lk" style="--c: var(--blue)" href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">
         <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12h5"/></svg></span>
-        <span><b>QQ 交流群</b><span class="d">提问、反馈、看别人怎么改模，新版本也在群里通知。</span></span>
+        <span><b>QQ 交流群 1077205718</b><span class="d">提问、反馈、看别人怎么改模，新版本也在群里通知。</span></span>
         <svg class="i arrow" viewBox="0 0 24 24"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
       </a>
       <a class="lk" style="--c: var(--purple)" href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">
@@ -482,7 +662,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       <details><summary>Booth、闲鱼、百度网盘的登录安全吗？</summary>
         <div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不读取你平时用的浏览器，也不经过任何服务器。登录会长期保留，重启、更新软件后不用重新登录。下载用的登录另外加密保存，只有你的 Windows 账户能读取；在设置里可以随时退出、更换账号。</div></details>
       <details><summary>遇到问题怎么反馈？</summary>
-        <div class="a">软件右下角有「反馈与建议」，写完直接发给作者。也可以到 <a href="https://qm.qq.com/q/5d1fxbkYhy" target="_blank" rel="noopener" style="color:var(--portal)">QQ 交流群</a>或 <a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener" style="color:var(--portal)">Discord</a> 里说，或者在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
+        <div class="a">软件右下角有「反馈与建议」，写完直接发给作者。也可以到 <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener" style="color:var(--portal)">QQ 交流群</a>或 <a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener" style="color:var(--portal)">Discord</a> 里说，或者在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
     </div>
   </div>
 </section>
@@ -496,7 +676,7 @@ footer .note { flex-basis: 100%; font-size: 13px; }
       <div>
         <span class="plate" style="--rank: var(--yellow)">MioVRCT<small>实时语音翻译</small></span>
         <h3>Mio RealTime Translator<small>让任何游戏都能同声传译</small></h3>
-        <p>对着麦克风说话，识别、翻译后直接发到 VRChat 聊天框；别人说的话也能反向翻译给你看。打字或译文可以读成 AI 语音送进游戏麦克风，不方便开口的玩家也能「说话」。</p>
+        <p>对着麦克风说话，识别、翻译后直接发到 VRChat 聊天框；别人说的话也能反向翻译给你看。打字或译文可以读成 AI 语音送进游戏麦克风，不方便开口的玩家也能「说话」。和 MioVRCA 一起用，还能在游戏里说话改模型（不摘头显改模）。</p>
         <div class="meta"><span>本地语音识别</span><span>多翻译后端</span><span>VRChat 直发</span><span>反向翻译 + 同声传译</span><span>文字输入 + AI 语音阅读</span></div>
       </div>
       <div class="actions">
@@ -512,11 +692,12 @@ footer .note { flex-basis: 100%; font-size: 13px; }
   <div class="wrap">
     <span>MioVRCA · 作者：<a href="https://vrchat.com/home/user/usr_efddbb43-57ae-44b4-bb4f-51926af40736" target="_blank" rel="noopener">天川澪（VRC 同名）</a></span>
     <a href="https://miovrc.com/">miovrc.com（Mio 实时翻译）</a>
-    <a href="https://qm.qq.com/q/5d1fxbkYhy" target="_blank" rel="noopener">QQ 交流群</a>
+    <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">QQ 交流群</a>
     <a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">Discord</a>
     <a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a>
     <a href="https://www.bilibili.com/video/BV1WGpc6YE31/" target="_blank" rel="noopener">宣传视频（哔哩哔哩）</a>
     <span class="note">本工具与 VRChat、BOOTH、pixiv、闲鱼、百度网盘没有关联。</span>
+    <span class="note">源码以 GPL-3.0 或 PolyForm Noncommercial 1.0.0 授权，任选其一（<a href="https://github.com/CokoIya/MioVRC_AssetManager/blob/HEAD/LICENSE.md" target="_blank" rel="noopener">LICENSE.md</a>）。修改后再发布须保留作者署名、标明是修改版，并换用自己的名称和图标。</span>
   </div>
 </footer>
 
