@@ -3,729 +3,359 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MioVRCA - VRChat 改模素材管理工具｜Booth、网盘素材一键导入 Unity</title>
-<meta name="description" content="MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，AI 自动验收和修穿模、调外观、做 Quest 版，还能一键创建 VRChat 基础工程。">
-<meta name="keywords" content="MioVRCA, miovrca, MioVRC, VRChat 素材管理, VRChat 改模, Booth 素材, VRChat 模型, Unity 一键导入, Modular Avatar, MioVRC_AssetManager">
+<title>MioVRCA - VRChat 改模素材管理工具</title>
+<meta name="description" content="MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，下载素材自动解压入库，一键导入 Unity，一键改模穿好衣服、做好菜单。">
+<meta name="keywords" content="MioVRCA, miovrca, MioVRC, VRChat 素材管理, VRChat 改模, Booth 素材, 一键改模, Unity 一键导入, Modular Avatar">
 <link rel="canonical" href="https://miovrc.com/vrca/">
 <meta property="og:site_name" content="MioVRC">
-<meta property="og:locale" content="zh_CN">
-<meta property="og:image" content="https://miovrc.com/assets/icons/app_icon_mio.png">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="MioVRCA - VRChat 改模素材管理工具">
-<meta name="twitter:description" content="找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Windows 免费开源。">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"MioVRCA","alternateName":["MioVRC 素材托管工具","MioVRC_AssetManager","MioVRC AssetManager","VRC素材库"],"description":"MioVRCA 是免费开源的 VRChat 改模素材管理工具（Windows）：在软件里逛 Booth 和闲鱼，素材和百度网盘分享直接下载、自动解压入库，一键导入 Unity 工程，流水线装衣服、头发、道具并生成菜单，AI 自动验收和修穿模、调外观、做 Quest 版，还能一键创建 VRChat 基础工程。","url":"https://miovrc.com/vrca/","image":"https://miovrc.com/assets/icons/app_icon_mio.png","applicationCategory":"UtilitiesApplication","operatingSystem":"Windows 10, Windows 11","softwareVersion":"2.0.4","inLanguage":"zh-CN","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"CNY"},"downloadUrl":"https://github.com/CokoIya/MioVRC_AssetManager/releases/latest","codeRepository":"https://github.com/CokoIya/MioVRC_AssetManager","author":{"@type":"Person","name":"天川澪","alternateName":"Coko_Iya","url":"https://github.com/CokoIya"}}</script>
 <meta property="og:title" content="MioVRCA - VRChat 改模素材管理工具">
-<meta property="og:description" content="MioVRCA：找素材、买素材、下载、导入工程、装到模型上，都在一个软件里。Booth 和闲鱼内置，网盘分享直接下载，一键导入 Unity。">
+<meta property="og:description" content="找素材、下载、导入工程、穿到模型上，都在一个软件里。Windows 免费开源。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://miovrc.com/vrca/">
-<meta name="theme-color" content="#0d1029">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='9' width='26' height='19' rx='4' fill='%233fe6d8'/%3E%3Cpath d='M10 9V7a6 6 0 0 1 12 0v2' stroke='%233fe6d8' stroke-width='3' fill='none'/%3E%3C/svg%3E">
+<meta property="og:image" content="https://miovrc.com/assets/images/vrca-og.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#fff7fa">
+<link rel="icon" href="../assets/icons/app_icon_mio.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"MioVRCA","alternateName":["MioVRC_AssetManager","VRC素材库"],"description":"免费开源的 VRChat 改模素材管理工具：逛 Booth 和闲鱼、下载素材自动解压入库、一键导入 Unity、一键改模。","url":"https://miovrc.com/vrca/","applicationCategory":"UtilitiesApplication","operatingSystem":"Windows 10, Windows 11","softwareVersion":"2.0.5","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"CNY"},"downloadUrl":"https://github.com/CokoIya/MioVRC_AssetManager/releases/latest/download/MioVRC_AssetManager-setup.exe","codeRepository":"https://github.com/CokoIya/MioVRC_AssetManager","author":{"@type":"Person","name":"天川澪","alternateName":"Coko_Iya"}}</script>
 <style>
 :root {
-  --sky-top: #0b0e26;
-  --sky-low: #221947;
-  --panel: rgba(17, 21, 46, .72);
-  --panel-solid: #141836;
-  --line: rgba(150, 190, 255, .16);
-  --line-strong: rgba(150, 190, 255, .3);
-  --text: #eef1ff;
-  --muted: #a7aed0;
-  --faint: #7178a0;
-  --portal: #3fe6d8;
-  --portal-deep: #13a89c;
-  --blue: #2f8cff;
-  --green: #43d17a;
-  --orange: #ff8a4c;
-  --purple: #9a6bff;
-  --coral: #ff5a6a;
-  --yellow: #ffcf3f;
-  --latin: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "DIN Alternate", system-ui, sans-serif;
-  --cjk: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+  --bg: #fff7fa; --band: #fdeff5; --card: #ffffff; --ink: #3b2f4a; --muted: #7c6c8c; --line: #f4d8e6;
+  --pink: #ff6fa5; --pink-d: #e5508c; --lilac: #9f86ff; --sky: #58b4ff; --mint: #37c4ad; --butter: #f5b83d; --peach: #ff8a65;
+  --shadow: 0 14px 34px -16px rgba(229, 80, 140, .35);
+  --round: "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
 body {
-  margin: 0; color: var(--text); font: 16px/1.7 var(--latin); font-family: var(--latin), var(--cjk);
-  background: var(--sky-top) linear-gradient(180deg, var(--sky-top) 0, #12123a 520px, var(--sky-low) 1100px, #120f2c 100%);
-  -webkit-font-smoothing: antialiased;
+  margin: 0; color: var(--ink); background: var(--bg); font: 16px/1.8 var(--round); -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(rgba(255, 111, 165, .13) 1.2px, transparent 1.2px); background-size: 22px 22px;
 }
-a { color: inherit; }
-:focus-visible { outline: 2px solid var(--portal); outline-offset: 3px; border-radius: 6px; }
+a { color: var(--pink-d); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; display: block; }
 .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
-svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 
-/* stars: a fixed backdrop, nothing moves */
-.sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .9;
-  background-image:
-    radial-gradient(1px 1px at 20px 30px, #fff9 50%, transparent 51%), radial-gradient(1px 1px at 140px 90px, #fff7 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 260px 40px, #fffc 50%, transparent 51%), radial-gradient(1px 1px at 330px 170px, #fff6 50%, transparent 51%),
-    radial-gradient(1px 1px at 80px 210px, #fff8 50%, transparent 51%), radial-gradient(1.5px 1.5px at 200px 260px, #9ff 50%, transparent 51%),
-    radial-gradient(1px 1px at 380px 280px, #fff6 50%, transparent 51%), radial-gradient(1px 1px at 300px 110px, #fff5 50%, transparent 51%);
-  background-size: 420px 320px, 530px 410px, 610px 370px, 370px 290px, 470px 530px, 690px 450px, 390px 610px, 560px 340px; }
 /* top bar */
-.top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(12px); background: rgba(11, 14, 38, .72); border-bottom: 1px solid var(--line); }
-.top .wrap { display: flex; align-items: center; gap: 18px; height: 60px; }
-.family { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; white-space: nowrap; }
-.family img { width: 30px; height: 30px; border-radius: 8px; background: #efe6d9; }
-.family .sep { color: var(--faint); font-weight: 400; }
-.top nav { margin-left: auto; display: flex; gap: 4px; align-items: center; }
-.top nav a { text-decoration: none; color: var(--muted); padding: 6px 12px; border-radius: 8px; font-size: 15px; }
-.top nav a:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
-.top nav a.gh { display: inline-flex; align-items: center; gap: 6px; color: var(--text); border: 1px solid var(--line-strong); }
-
-/* nameplate: the floating name tag above players in VRChat */
-.plate { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px; border-radius: 8px; background: rgba(8, 10, 26, .82);
-  border: 1px solid var(--line); font-size: 13px; color: var(--text); white-space: nowrap; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
-.plate::before { content: ""; width: 4px; height: 16px; border-radius: 2px; background: var(--rank, var(--blue)); }
-.plate small { color: var(--muted); font-size: 12px; }
+.top { position: sticky; top: 0; z-index: 20; background: rgba(255, 247, 250, .82); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 20px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 800; letter-spacing: .02em; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 34px; height: 34px; border-radius: 9px; box-shadow: 0 4px 10px -4px rgba(59, 47, 74, .4); }
+.brand small { color: var(--muted); font-weight: 600; }
+nav { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+nav a { color: var(--ink); font-size: 14.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; }
+nav a:hover { background: #fff; text-decoration: none; color: var(--pink-d); }
+nav .gh { display: flex; gap: 6px; align-items: center; border: 1.5px solid var(--line); background: #fff; }
+nav .gh svg { width: 17px; height: 17px; }
 
 /* hero */
-section.hero { position: relative; overflow: hidden; padding: 0; }
-.hero .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr); gap: 32px; align-items: center; padding-top: 48px; padding-bottom: 24px; }
-.hero h1 { margin: 18px 0 14px; font-size: clamp(40px, 5.4vw, 64px); line-height: 1.08; letter-spacing: .5px; font-weight: 700; }
-.hero h1 .mio { display: block; font-size: .62em; letter-spacing: 3px; color: var(--portal); font-weight: 600; }
-.hero p.lede { margin: 0 0 28px; font-size: 18px; color: var(--muted); max-width: 30em; }
-.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.btn { display: inline-flex; align-items: center; gap: 10px; height: 50px; padding: 0 22px; border-radius: 25px; text-decoration: none; font-weight: 600; font-size: 16px; border: 1px solid var(--line-strong); color: var(--text); background: rgba(255, 255, 255, .04); transition: background .15s, border-color .15s; }
-.btn:hover { background: rgba(255, 255, 255, .09); border-color: rgba(150, 190, 255, .5); }
-.btn.go { background: var(--portal); color: #062521; border-color: transparent; box-shadow: 0 0 0 4px rgba(63, 230, 216, .14), 0 10px 30px rgba(63, 230, 216, .25); }
-.btn.go:hover { background: #6af0e4; }
-.btn .v { font-family: var(--latin); font-weight: 500; opacity: .75; font-size: 14px; }
-.meta { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
-.meta span { font-size: 13px; color: var(--muted); padding: 2px 10px; border-radius: 6px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); }
+.hero { position: relative; overflow: hidden; padding: 72px 0 84px; }
+.hero::before, .hero::after { content: ""; position: absolute; border-radius: 50%; filter: blur(60px); z-index: -1; }
+.hero::before { width: 520px; height: 520px; background: rgba(255, 111, 165, .28); top: -160px; right: -80px; }
+.hero::after { width: 420px; height: 420px; background: rgba(159, 134, 255, .22); bottom: -200px; left: -120px; }
+.hero .wrap { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.hero .lede { margin-left: auto; margin-right: auto; }
+.hero .actions, .hero .tags { justify-content: center; }
+.pill { display: inline-flex; gap: 8px; align-items: center; padding: 6px 14px; border-radius: 999px; background: #fff;
+  border: 1.5px solid var(--line); font-size: 13.5px; font-weight: 700; color: var(--pink-d); }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 4px rgba(55, 196, 173, .18); }
+.kicker { margin: 22px 0 4px; font-size: 18px; font-weight: 700; color: var(--muted); letter-spacing: .08em; }
+h1 { margin: 0; font-size: clamp(54px, 7.4vw, 92px); line-height: 1; font-weight: 900; letter-spacing: -.01em;
+  background: linear-gradient(100deg, var(--pink) 10%, var(--lilac) 55%, var(--sky)); -webkit-background-clip: text; background-clip: text;
+  color: transparent; filter: drop-shadow(0 6px 0 #fff) drop-shadow(0 10px 18px rgba(229, 80, 140, .25)); }
+.lede { margin: 22px 0 30px; font-size: 18px; line-height: 1.9; max-width: 30em; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 13px 26px; border-radius: 999px; font-weight: 800; font-size: 16px;
+  color: var(--ink); background: #fff; border: 2px solid var(--line); transition: transform .15s, box-shadow .15s; }
+.btn:hover { text-decoration: none; transform: translateY(-2px); box-shadow: var(--shadow); }
+.btn.go { color: #fff; border-color: transparent; background: linear-gradient(100deg, var(--pink), var(--lilac));
+  box-shadow: 0 12px 26px -10px rgba(229, 80, 140, .7); }
+.tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.tags span { font-size: 13px; font-weight: 700; color: var(--muted); padding: 3px 12px; border-radius: 999px; background: rgba(255, 255, 255, .7); border: 1px dashed #e9c6d8; }
+.art { position: relative; margin: 56px 0 0; width: min(100%, 1040px); perspective: 1400px; }
+.win { border-radius: 16px; background: #fff; overflow: hidden; border: 1.5px solid var(--line); box-shadow: 0 30px 70px -34px rgba(59, 47, 74, .55); }
+.win .bar { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; background: #fdf3f8; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 700; color: var(--muted); }
+.win .bar i { width: 10px; height: 10px; border-radius: 50%; background: #ffb3cf; }
+.win .bar i:nth-child(2) { background: #ffd98a; } .win .bar i:nth-child(3) { background: #9de3d4; }
+.win .bar span { margin-left: 8px; }
+.win img { width: 100%; height: auto; }
+.art .win { transform: rotateX(10deg); transform-origin: 50% 100%; transition: transform 1s cubic-bezier(.2, .8, .2, 1); }
+.art.in .win { transform: rotateX(0deg); animation: hover 7s ease-in-out 1s infinite; }
+@keyframes hover { 50% { translate: 0 -8px; } }
+.sticker { position: absolute; display: flex; align-items: center; gap: 8px; padding: 9px 15px; border-radius: 16px; background: #fff;
+  font-size: 14px; font-weight: 800; box-shadow: 0 14px 28px -14px rgba(59, 47, 74, .45); border: 2px solid #fff; animation: bob 5s ease-in-out infinite; }
+.sticker b { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #fff; font-size: 13px; }
+.sticker small { color: var(--muted); font-weight: 600; }
+.s1 { top: 16%; left: -34px; } .s1 b { background: var(--mint); }
+.s2 { bottom: 18%; left: -48px; animation-delay: -1.6s; } .s2 b { background: var(--pink); }
+.s3 { bottom: -18px; right: 6%; animation-delay: -3.2s; } .s3 b { background: var(--lilac); }
+.spark { position: absolute; color: var(--pink); font-size: 26px; animation: twinkle 3.6s ease-in-out infinite; }
+.k1 { top: -24px; right: 12%; } .k2 { top: 40%; right: -40px; font-size: 18px; color: var(--sky); animation-delay: -1.2s; }
+.k3 { top: -30px; left: 22%; font-size: 16px; color: var(--lilac); animation-delay: -2.4s; }
 
-/* the world behind the window: a portal over a floor grid */
-.stage { position: relative; height: 520px; perspective: 1400px; }
-.floor { position: absolute; left: -30%; right: -30%; bottom: -40px; height: 420px; transform: rotateX(74deg); transform-origin: 50% 100%;
-  background-image: linear-gradient(rgba(63, 230, 216, .28) 1px, transparent 1px), linear-gradient(90deg, rgba(63, 230, 216, .28) 1px, transparent 1px);
-  background-size: 56px 56px; -webkit-mask-image: radial-gradient(ellipse 50% 80% at 50% 70%, #000 20%, transparent 70%); mask-image: radial-gradient(ellipse 50% 80% at 50% 70%, #000 20%, transparent 70%); }
-.portal { position: absolute; left: 50%; top: 46%; width: 470px; height: 470px; translate: -50% -50%; border-radius: 50%;
-  background: radial-gradient(circle, rgba(63, 230, 216, .22) 0 52%, rgba(63, 230, 216, 0) 70%); }
-.portal::before { content: ""; position: absolute; inset: 0; border-radius: 50%; padding: 6px;
-  background: conic-gradient(from 0deg, var(--portal), var(--blue), var(--purple), var(--portal));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
-  filter: drop-shadow(0 0 18px rgba(63, 230, 216, .55)); animation: spin 18s linear infinite; }
-.portal::after { content: ""; position: absolute; inset: 18px; border-radius: 50%; border: 1px dashed rgba(63, 230, 216, .35); }
-@keyframes spin { to { transform: rotate(1turn); } }
-.stage .plate.p1 { position: absolute; left: 50%; top: 4px; translate: -50% 0; --rank: var(--portal); font-size: 14px; }
+/* the gallery: pages turned by a tab, an arrow, a dot, a swipe, or by themselves */
+.tour { max-width: 1040px; margin: 0 auto; }
+.tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 22px; }
+.tabs button { font: inherit; font-size: 15px; font-weight: 800; color: var(--muted); background: #fff; border: 1.5px solid var(--line); border-radius: 999px;
+  padding: 8px 18px; cursor: pointer; transition: color .2s, background .2s, transform .15s; }
+.tabs button:hover { color: var(--pink-d); }
+.tabs button.on { color: #fff; border-color: transparent; background: linear-gradient(100deg, var(--pink), var(--lilac)); box-shadow: 0 10px 22px -12px rgba(229, 80, 140, .8); }
+.stage { position: relative; perspective: 1600px; }
+.track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; scrollbar-width: none; }
+.track::-webkit-scrollbar { display: none; }
+.slide { flex: 0 0 100%; margin: 0; padding: 6px 6px 4px; scroll-snap-align: center; text-align: center;
+  transition: transform .7s cubic-bezier(.2, .8, .2, 1), opacity .7s; transform: scale(.92) rotateY(-8deg); opacity: .4; }
+.slide.on { transform: none; opacity: 1; }
+.slide figcaption { margin-top: 16px; color: var(--muted); font-size: 15.5px; }
+.slide figcaption b { display: block; color: var(--ink); font-size: 19px; margin-bottom: 2px; }
+.nav { position: absolute; top: 42%; z-index: 2; width: 46px; height: 46px; border-radius: 50%; border: 1.5px solid var(--line); background: rgba(255, 255, 255, .94);
+  color: var(--pink-d); font-size: 28px; line-height: 1; cursor: pointer; box-shadow: 0 10px 22px -14px rgba(59, 47, 74, .6); transition: transform .15s; }
+.nav:hover { transform: scale(1.08); } .nav.prev { left: -24px; } .nav.next { right: -24px; }
+.dots { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
+.dots i { width: 8px; height: 8px; border-radius: 99px; background: #f0cfe0; cursor: pointer; transition: width .3s, background .3s; }
+.dots i.on { width: 26px; background: var(--pink); }
 
-/* the program, drawn small */
-.app { position: absolute; left: 50%; top: 50%; width: 540px; translate: -50% -46%; transform: rotateY(-14deg) rotateX(4deg);
-  border-radius: 12px; overflow: hidden; background: #14151f; border: 1px solid rgba(255, 255, 255, .12);
-  box-shadow: 0 40px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(63, 230, 216, .15), 0 0 60px rgba(63, 230, 216, .12); font-family: var(--cjk); }
-.app .bar { height: 28px; display: flex; align-items: center; padding: 0 10px; gap: 8px; background: #191b27; border-bottom: 1px solid #2e3247; font-size: 11px; color: #c9cbe0; }
-.app .bar .wc { margin-left: auto; display: flex; gap: 14px; color: #8b8fa6; font-size: 11px; }
-.app .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #2e3247; }
-.app .head .s { flex: 1; height: 18px; border-radius: 9px; background: #0f1018; border: 1px solid #2e3247; }
-.app .head .b { height: 18px; width: 44px; border-radius: 5px; background: #282b3d; }
-.app .body { display: grid; grid-template-columns: 96px 1fr; }
-.app .side { padding: 8px; border-right: 1px solid #2e3247; display: flex; flex-direction: column; gap: 5px; font-size: 10px; color: #9a9eb5; }
-.app .side b { color: #6c7088; font-weight: 600; font-size: 9px; margin-top: 4px; }
-.app .side span { display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px; }
-.app .side span.on { background: rgba(255, 90, 106, .14); color: #eceef6; }
-.app .side i { width: 6px; height: 6px; border-radius: 50%; }
-.app .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px; }
-.app .card { border-radius: 7px; background: #1f2231; overflow: hidden; border: 1px solid #2a2e42; }
-.app .cv { height: 62px; position: relative; }
-.app .cv::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 70% 30%, rgba(255, 255, 255, .25), transparent 40%); }
-.app .t { font-size: 9.5px; font-weight: 600; color: #eceef6; padding: 5px 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.app .t em { font-style: normal; background: #ff5a6a; color: #fff; border-radius: 3px; padding: 0 3px; margin-right: 3px; font-size: 8.5px; }
-.app .c { display: flex; gap: 3px; padding: 0 6px 6px; }
-.app .c span { font-size: 8px; color: #c78bff; background: rgba(199, 139, 255, .12); border-radius: 3px; padding: 0 3px; }
-.app .c i { margin-left: auto; font-style: normal; font-size: 8.5px; font-weight: 600; color: #eceef6; font-family: var(--latin); }
-.app .head .tabs { display: flex; flex: none; padding: 2px; border-radius: 10px; background: #0f1018; border: 1px solid #2e3247; }
-.app .head .tabs span { font-size: 9px; line-height: 14px; padding: 0 7px; border-radius: 7px; color: #9a9eb5; }
-.app .head .tabs span.on { background: #282b3d; color: #eceef6; }
-.app .side span.chips { display: flex; flex-wrap: wrap; gap: 3px; padding: 0; }
-.app .side .chips em { font-style: normal; font-size: 8.5px; line-height: 13px; padding: 0 5px; border-radius: 7px; border: 1px solid #2e3247; background: #1f2231; color: #9a9eb5; }
-.app .side .chips em.on { border-color: rgba(255, 90, 106, .6); background: rgba(255, 90, 106, .14); color: #eceef6; }
-.app .cv .bds { position: absolute; left: 4px; top: 4px; display: flex; gap: 3px; z-index: 1; }
-.app .cv .bds span { font-size: 7.5px; line-height: 11px; padding: 0 4px; border-radius: 3px; font-weight: 600; }
-.app .cv .bds .own { background: #10241f; color: #5ee0c5; border: 1px solid rgba(94, 224, 197, .45); }
-.app .cv .bds .buy { background: #ff5a6a; color: #fff; }
-.app .cv .pg { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; z-index: 1; display: flex; align-items: center; justify-content: flex-end; padding: 0 5px; background: rgba(14, 15, 24, .78); }
-.app .cv .pg i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(63, 208, 166, .45); }
-.app .cv .pg b { position: relative; font-size: 7.5px; font-weight: 600; color: #eceef6; font-family: var(--latin); }
-.stage .plate.p2 { position: absolute; right: 0; bottom: 58px; --rank: var(--orange); }
-.stage .plate.p3 { position: absolute; left: -2%; top: 92px; --rank: var(--green); }
+/* things come up as they scroll into view (with JavaScript only: without it, everything is simply there) */
+.js .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .7s cubic-bezier(.2, .8, .2, 1); transition-delay: var(--d, 0s); }
+.js .reveal.in { opacity: 1; transform: none; }
+
+/* presses, and the stars of a download button */
+.btn:active, .tabs button:active, .nav:active { transform: translateY(1px) scale(.96); transition-duration: .05s; }
+.burst { position: fixed; z-index: 50; pointer-events: none; font-size: 16px; animation: fly .8s cubic-bezier(.15, .7, .3, 1) forwards; }
+@keyframes fly { from { transform: translate(-50%, -50%) scale(.4); opacity: 1; }
+  to { transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) scale(1) rotate(var(--r)); opacity: 0; } }
+
+/* folding, on a phone: a long list shows its first cards */
+.btn.more { display: none; margin: 18px auto 0; }
+@keyframes bob { 50% { transform: translateY(-8px); } }
+@keyframes twinkle { 50% { opacity: .35; transform: scale(.8) rotate(20deg); } }
 
 /* sections */
-section { padding: 88px 0; }
-.sh { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 30px; }
-.sh h2 { margin: 0; font-size: 34px; line-height: 1.2; }
-.sh p { margin: 0; color: var(--muted); }
+section { padding: 84px 0; }
+section.band { background: linear-gradient(180deg, rgba(253, 239, 245, .9), rgba(253, 239, 245, .6)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.sh { text-align: center; max-width: 700px; margin: 0 auto 44px; }
+.eyebrow { display: inline-block; font-size: 13px; font-weight: 800; letter-spacing: .28em; color: var(--pink); }
+.sh h2 { margin: 6px 0 0; font-size: clamp(30px, 4vw, 40px); line-height: 1.3; font-weight: 900; letter-spacing: .04em; }
+.sh h2::after { content: ""; display: block; width: 56px; height: 6px; margin: 14px auto 0; border-radius: 6px; background: linear-gradient(90deg, var(--pink), var(--lilac)); }
+.sh p { margin: 16px 0 0; color: var(--muted); font-size: 16.5px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.card { position: relative; background: var(--card); border: 1.5px solid var(--line); border-radius: 22px; padding: 26px 26px 24px;
+  box-shadow: 0 10px 24px -20px rgba(59, 47, 74, .5); transition: transform .18s, box-shadow .18s, border-color .18s; }
+.card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--t) 45%, white); }
+.card .ic { display: inline-grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; color: var(--t);
+  background: color-mix(in srgb, var(--t) 14%, white); }
+.card h3 { margin: 16px 0 6px; font-size: 18px; font-weight: 800; letter-spacing: .02em; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.8; }
 
-/* features: tiles like the in-game quick menu */
-.qm { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.tile { position: relative; padding: 22px 22px 20px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); }
-.tile .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 14px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
-.tile.wide { grid-column: 1 / -1; }
-.tile h3 { margin: 0 0 6px; font-size: 18px; }
-.tile p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+/* flow */
+.flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; counter-reset: step; }
+.step { position: relative; background: #fff; border-radius: 22px; padding: 30px 24px 24px; border: 1.5px solid var(--line); }
+.step::before { counter-increment: step; content: "0" counter(step); position: absolute; top: -18px; left: 22px; padding: 4px 14px; border-radius: 999px;
+  font-weight: 900; font-size: 15px; color: #fff; background: linear-gradient(100deg, var(--pink), var(--lilac)); box-shadow: 0 8px 16px -8px rgba(229, 80, 140, .8); }
+.step h3 { margin: 4px 0 6px; font-size: 22px; font-weight: 900; }
+.step p { margin: 0; color: var(--muted); font-size: 15px; }
 
-/* steps: a real sequence */
-.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: rgba(13, 16, 40, .6); }
-.step { padding: 24px 26px; display: flex; gap: 16px; align-items: flex-start; }
-.step + .step { border-left: 1px solid var(--line); }
-.step .n { font-family: var(--latin); font-size: 30px; font-weight: 700; line-height: 1; color: var(--portal); min-width: 26px; }
-.step h3 { margin: 0 0 4px; font-size: 17px; }
-.step p { margin: 0; color: var(--muted); font-size: 14.5px; }
-.steps.four { grid-template-columns: repeat(4, 1fr); }
-.steps.four .step { flex-direction: column; gap: 10px; padding: 26px 24px 24px; }
-.steps.four .step h3 { font-size: 20px; }
-.steps.four .step .n { font-size: 15px; color: var(--faint); min-width: 0; }
+/* download */
+.dl { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.get { position: relative; overflow: hidden; background: #fff; border-radius: 26px; padding: 34px; border: 1.5px solid var(--line); box-shadow: 0 16px 40px -28px rgba(59, 47, 74, .55); }
+.get::after { content: "✦"; position: absolute; right: 26px; top: 14px; font-size: 64px; color: color-mix(in srgb, var(--t) 22%, white); }
+.get .ribbon { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 800; color: #fff; background: var(--t); }
+.get h3 { margin: 12px 0 4px; font-size: 26px; font-weight: 900; }
+.get p { margin: 0 0 22px; color: var(--muted); }
+.note { margin-top: 18px; text-align: center; color: var(--muted); font-size: 14.5px; }
+.note a { margin-left: 14px; font-weight: 700; }
 
-/* download: two portals */
-.dl { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-.gate { position: relative; padding: 30px 28px 28px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); overflow: hidden; display: flex; flex-direction: column; }
-.gate .ring { position: absolute; right: -96px; top: -110px; width: 210px; height: 210px; border-radius: 50%;
-  border: 3px solid var(--g); box-shadow: 0 0 40px color-mix(in srgb, var(--g) 45%, transparent), inset 0 0 40px color-mix(in srgb, var(--g) 30%, transparent); opacity: .7; }
-.gate .plate { align-self: flex-start; --rank: var(--g); margin-bottom: 16px; }
-.gate h3 { margin: 0 0 6px; font-size: 24px; }
-.gate p { margin: 0 0 22px; color: var(--muted); max-width: 24em; }
-.gate .row { margin-top: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.gate .size { color: var(--faint); font-size: 14px; font-family: var(--latin); }
-.dlnote { margin-top: 18px; color: var(--muted); font-size: 14.5px; display: flex; flex-wrap: wrap; gap: 6px 22px; }
-.dlnote a { color: var(--portal); }
-#netdisk[hidden] { display: none; }
-
-/* questions */
-.qa { display: grid; gap: 10px; max-width: 820px; }
-.qa details { border: 1px solid var(--line); border-radius: 12px; background: rgba(13, 16, 40, .6); }
-.qa summary { cursor: pointer; padding: 16px 20px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 12px; }
-.qa summary::-webkit-details-marker { display: none; }
-.qa summary::after { content: "+"; margin-left: auto; color: var(--portal); font-size: 20px; line-height: 1; }
-.qa details[open] summary::after { content: "−"; }
-.qa .a { padding: 0 20px 18px; color: var(--muted); }
-.qa code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13.5px; color: var(--text); background: rgba(255, 255, 255, .07); padding: 1px 6px; border-radius: 5px; }
-
-/* community: three ways in */
-.links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.lk { display: flex; align-items: center; gap: 16px; padding: 20px 22px; border-radius: 14px; text-decoration: none; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); transition: border-color .15s, background .15s; }
-.lk:hover { border-color: color-mix(in srgb, var(--c) 60%, transparent); background: rgba(255, 255, 255, .05); }
-.lk .ic { width: 44px; height: 44px; flex: none; border-radius: 12px; display: grid; place-items: center; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
-.lk b { display: block; font-size: 17px; line-height: 1.4; }
-.lk .d { display: block; color: var(--muted); font-size: 14.5px; line-height: 1.55; }
-.lk .arrow { margin-left: auto; color: var(--faint); }
-.lk:hover .arrow { color: var(--c); }
-
-/* the other program of the family */
-.sib { position: relative; overflow: hidden; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 26px; align-items: center; padding: 30px 28px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); }
-.sib .ring { position: absolute; right: -96px; top: -110px; width: 210px; height: 210px; border-radius: 50%; border: 3px solid var(--yellow); box-shadow: 0 0 40px color-mix(in srgb, var(--yellow) 45%, transparent), inset 0 0 40px color-mix(in srgb, var(--yellow) 30%, transparent); opacity: .55; }
-.sib > img { width: 88px; height: 88px; border-radius: 22px; background: #efe6d9; }
-.sib h3 { margin: 10px 0 4px; font-size: 24px; line-height: 1.25; }
-.sib h3 small { display: block; font-size: 15px; font-weight: 500; color: var(--yellow); }
-.sib p { margin: 0 0 14px; color: var(--muted); max-width: 40em; }
-.sib .meta { margin-top: 0; }
-.sib .actions { position: relative; flex-direction: column; align-items: stretch; }
-.sib .actions .btn { justify-content: center; }
-
-footer { border-top: 1px solid var(--line); padding: 34px 0 48px; color: var(--faint); font-size: 14px; }
-footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; }
-footer a { color: var(--muted); text-decoration: none; }
-footer a:hover { color: var(--text); }
-footer .note { flex-basis: 100%; font-size: 13px; }
+/* community, faq, sibling */
+.links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.lk { display: flex; gap: 14px; align-items: center; background: #fff; border: 1.5px solid var(--line); border-radius: 20px; padding: 18px 20px; color: var(--ink); transition: transform .15s, box-shadow .15s; }
+.lk:hover { text-decoration: none; transform: translateY(-3px); box-shadow: var(--shadow); }
+.lk .ic { flex: none; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; color: var(--t); background: color-mix(in srgb, var(--t) 14%, white); }
+.lk b { display: block; font-size: 16px; }
+.lk span.d { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.qa { max-width: 820px; margin: 0 auto; display: grid; gap: 12px; }
+details { background: #fff; border: 1.5px solid var(--line); border-radius: 18px; padding: 0 22px; }
+summary { list-style: none; cursor: pointer; padding: 17px 0; font-weight: 800; display: flex; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; color: #fff; background: var(--pink); font-weight: 900; line-height: 1; transition: transform .2s; }
+details[open] summary::after { transform: rotate(45deg); }
+details .a { padding: 0 0 18px; color: var(--muted); font-size: 15px; }
+code { font-family: Consolas, monospace; font-size: .92em; background: var(--band); padding: 1px 6px; border-radius: 6px; color: var(--ink); }
+.sib { display: grid; grid-template-columns: auto 1fr auto; gap: 26px; align-items: center; background: #fff; border-radius: 26px; padding: 30px; border: 1.5px solid var(--line); }
+.sib img { width: 84px; height: 84px; border-radius: 20px; }
+.sib h3 { margin: 0 0 4px; font-size: 22px; font-weight: 900; }
+.sib p { margin: 0; color: var(--muted); }
+footer { padding: 34px 0 46px; color: var(--muted); font-size: 14px; text-align: center; }
+footer .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; margin-bottom: 10px; }
+footer .fine { font-size: 12.5px; line-height: 1.8; }
 
 @media (max-width: 960px) {
-  .hero .wrap { grid-template-columns: 1fr; min-height: 0; max-height: none; padding-bottom: 40px; }
-  .stage { height: 420px; }
-  .portal { width: 380px; height: 380px; }
-  .app { width: 440px; }
-  .qm { grid-template-columns: 1fr 1fr; }
-  .steps { grid-template-columns: 1fr; }
-  .step + .step { border-left: 0; border-top: 1px solid var(--line); }
-  .steps.four { grid-template-columns: 1fr 1fr; }
-  .steps.four .step + .step { border-top: 0; }
-  .steps.four .step:nth-child(even) { border-left: 1px solid var(--line); }
-  .steps.four .step:nth-child(n+3) { border-top: 1px solid var(--line); }
-  .links { grid-template-columns: 1fr; }
-  .sib { grid-template-columns: auto minmax(0, 1fr); }
-  .sib .actions { grid-column: 1 / -1; flex-direction: row; }
+  .hero .wrap { grid-template-columns: 1fr; gap: 48px; }
+  .grid, .links { grid-template-columns: 1fr 1fr; }
+  .flow { grid-template-columns: 1fr 1fr; row-gap: 34px; }
+  nav a:not(.keep):not(.gh) { display: none; }
 }
-@media (max-width: 640px) {
+@media (max-width: 620px) {
+  .js .grid.fold:not(.open) > .card:nth-child(n+5) { display: none; }
+  .js .grid.fold:not(.open) + .btn.more { display: flex; }
+  .nav { display: none; }
+  .tabs button { font-size: 13.5px; padding: 6px 13px; }
+  .art { margin-top: 40px; }
+  .s1, .s2, .k2 { display: none; } .s3 { bottom: -22px; font-size: 12.5px; padding: 6px 11px; }
   .wrap { padding: 0 16px; }
-  .top nav a:not(.gh):not(.keep) { display: none; }
-  .sib { grid-template-columns: 1fr; padding: 24px 20px; }
-  .sib > img { width: 64px; height: 64px; border-radius: 16px; }
-  .sib .actions { flex-direction: column; }
-  .family .full { display: none; }
-  .stage { height: 330px; }
-  .portal { width: 300px; height: 300px; }
-  .app { width: 330px; transform: none; translate: -50% -48%; }
-  .app .body { grid-template-columns: 1fr; }
-  .app .side { display: none; }
-  .stage .plate.p2, .stage .plate.p3 { display: none; }
-  .qm, .dl { grid-template-columns: 1fr; }
-  .steps.four { grid-template-columns: 1fr; }
-  .steps.four .step:nth-child(even) { border-left: 0; }
-  .steps.four .step + .step { border-top: 1px solid var(--line); }
-  section { padding: 64px 0; }
-  .sh h2 { font-size: 28px; }
-  .btn { height: 46px; padding: 0 18px; }
+  .hero { padding: 40px 0 64px; }
+  .grid, .links, .dl, .flow { grid-template-columns: 1fr; }
+  section { padding: 60px 0; }
+  .sib { grid-template-columns: 1fr; text-align: center; justify-items: center; }
+  .s2 { left: -6px; } .s1 { left: -4px; } .k2 { display: none; }
+  .brand small { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  .portal::before { animation: none; }
+  .sticker, .spark, .art.in .win { animation: none; } html, .track { scroll-behavior: auto; }
+  .js .reveal { opacity: 1; transform: none; transition: none; } .slide, .art .win { transition: none; transform: none; }
 }
 </style>
 </head>
 <body>
-<div class="sky" aria-hidden="true"></div>
-
-<header class="top">
-  <div class="wrap">
-    <a class="family" href="../" title="MioVRC 首页"><img src="../assets/icons/app_icon_mio.png" alt="Mio"><span class="full">MioVRC</span><span class="sep full">/</span><span>MioVRCA</span></a>
-    <nav>
-      <a href="#flow">流程</a>
-      <a href="#features">功能</a>
-      <a href="#oneclick">一键改模</a>
-      <a href="#ai">AI 改模</a>
-      <a href="#download">下载</a>
-      <a href="#faq">常见问题</a>
-      <a class="keep" href="#community">交流群</a>
-      <a class="gh" href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>GitHub</a>
-    </nav>
-  </div>
-</header>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../"><img src="../assets/icons/app_icon_mio.png" alt="">MioVRCA<small>· VRChat 改模素材管理</small></a>
+  <nav>
+    <a href="#tour">截图</a><a href="#features">功能</a><a href="#oneclick">一键改模</a><a href="#ai">AI 改模</a>
+    <a href="#social">社区</a><a href="#faq">常见问题</a><a class="keep" href="#download">下载</a>
+    <a class="gh" href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>GitHub</a>
+  </nav>
+</div></header>
 
 <main>
-<section class="hero" aria-labelledby="title">
-  <div class="wrap">
-    <div>
-      <span class="plate" style="--rank: var(--portal)">免费开源<small>Windows</small></span>
-      <h1 id="title"><span class="mio">VRChat 素材托管工具</span>MioVRCA</h1>
-      <p class="lede">MioVRCA 是给 VRChat 改模玩家用的素材管理工具。在软件里逛 Booth 和闲鱼、下单、和卖家聊天；买到的素材和网盘分享直接下载、自动解压，一键导入 Unity 工程。</p>
-      <div class="actions">
-        <a class="btn go" id="heroDl" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">
-          <svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>下载<span class="v" data-ver></span></a>
-        <a class="btn" href="#flow">看看怎么用</a>
-        <a class="btn" id="heroVideo" href="https://www.bilibili.com/video/BV1WGpc6YE31/" target="_blank" rel="noopener" title="在哔哩哔哩观看：VRC 改模素材流水线工具—MioVRCA">
-          <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10.2 8.4v7.2l6-3.6z"/></svg>宣传视频</a>
-      </div>
-      <div class="meta"><span>免费</span><span>开源</span><span>Windows 10 / 11</span><span>数据只存在本机</span></div>
+<section class="hero"><div class="wrap">
+  <div>
+    <span class="pill"><i></i>免费 · 开源 · Windows 10 / 11</span>
+    <p class="kicker">VRChat 改模素材管理工具</p>
+    <h1>MioVRCA</h1>
+    <p class="lede">逛 Booth 和闲鱼、下载素材、导入 Unity、穿到模型上，在一个软件里完成。不会 Unity 也能做出自己的模型。</p>
+    <div class="actions">
+      <a class="btn go" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest/download/MioVRC_AssetManager-setup.exe"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg>免费下载</a>
+      <a class="btn" href="https://www.bilibili.com/video/BV1WGpc6YE31/" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10.2 8.4v7.2l6-3.6z"/></svg>看介绍视频</a>
     </div>
-
-    <div class="stage" aria-hidden="true">
-      <div class="floor"></div>
-      <div class="portal"></div>
-      <span class="plate p1">MioVRCA<small data-ver></small></span>
-      <div class="app">
-        <div class="bar">MioVRCA<span class="wc"><span>—</span><span>☐</span><span>✕</span></span></div>
-        <div class="head"><span class="tabs"><span>素材库</span><span class="on">Booth</span><span>闲鱼</span></span><span class="s"></span><span class="b"></span></div>
-        <div class="body">
-          <div class="side">
-            <b>分类</b>
-            <span class="chips"><em class="on">衣服</em><em class="on">头发</em><em>配饰</em><em>妆容</em><em>手势</em></span>
-            <b>适配素体</b>
-            <span class="chips"><em class="on">Lumi</em><em>Hana</em><em>Mira</em></span>
-            <b>风格</b>
-            <span class="chips"><em class="on">可爱</em><em>JK</em><em>女仆</em></span>
-          </div>
-          <div class="grid">
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff7aa8,#7b5cff)"><span class="bds"><span class="own">素材库已有</span><span class="buy">已购</span></span></div><div class="t">Starlight Dress</div><div class="c"><span>Lumi</span><span>Hana</span><i>¥1,500</i></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ffb547,#ff5a6a)"><span class="bds"><span class="buy">已购</span></span><span class="pg"><i style="width:68%"></i><b>68%</b></span></div><div class="t">Twin Tail Hair</div><div class="c"><span>Lumi</span><i>¥800</i></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#3fe6d8,#2f8cff)"></div><div class="t">Sailor Uniform</div><div class="c"><span>Lumi</span><span>+3</span><i>¥2,200</i></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#9a6bff,#2f8cff)"></div><div class="t">Night Kimono</div><div class="c"><span>Lumi</span><i>¥1,800</i></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#43d17a,#3fe6d8)"></div><div class="t">Bob Hair Set</div><div class="c"><span>Lumi</span><i>¥600</i></div></div>
-            <div class="card"><div class="cv" style="background:linear-gradient(135deg,#ff8a4c,#ffb547)"></div><div class="t">Cat Ear Hoodie</div><div class="c"><span>Lumi</span><i>¥1,200</i></div></div>
-          </div>
-        </div>
-      </div>
-      <span class="plate p2">已购<small>下载中 68%</small></span>
-      <span class="plate p3">一键导入<small>已进 Unity 工程</small></span>
-    </div>
+    <div class="tags"><span>数据只存在本机</span><span>一键改模</span><span>AI 验收</span><span>中文 / English / 日本語</span></div>
   </div>
-</section>
+  <figure class="art">
+    <div class="win"><div class="bar"><i></i><i></i><i></i><span>MioVRCA</span></div><picture><source srcset="../assets/images/vrca-hero.webp" type="image/webp"><img src="../assets/images/vrca-hero.jpg" alt="MioVRCA 素材库" width="1600" height="665"></picture></div>
+    <span class="sticker s1"><b>✓</b>已购<small>下载中 68%</small></span>
+    <span class="sticker s2"><b>↧</b>一键导入<small>已进 Unity</small></span>
+    <span class="sticker s3"><b>✦</b>一键改模<small>穿好了</small></span>
+    <span class="spark k1">✦</span><span class="spark k2">✦</span><span class="spark k3">✦</span>
+  </figure>
+</div></section>
 
-<section id="flow" aria-labelledby="w-title" style="padding-bottom:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="w-title">从找素材到用上</h2><p>不用在浏览器、网盘和文件夹之间来回切。</p></div>
-    <div class="steps four">
-      <div class="step"><span class="n">1</span><div><h3>找</h3><p>Booth 页点选分类、素体、风格标签，可以多选，不用猜日文关键词；闲鱼直接搜。买过的、素材库里已有的会标出来。</p></div></div>
-      <div class="step"><span class="n">2</span><div><h3>买</h3><p>商品页、购物车、和卖家聊天都在软件里，登录保存在本机，不用切到浏览器。</p></div></div>
-      <div class="step"><span class="n">3</span><div><h3>下载</h3><p>Booth、Gumroad 已购点一下就下载；闲鱼卖家发来的网盘分享收进来，登录百度网盘后在软件里直接下载。压缩包自动解压，下完自动入库。</p></div></div>
-      <div class="step"><span class="n">4</span><div><h3>用</h3><p>选好 Unity 工程点「一键导入」：PSD 包、分卷一起解压，unitypackage 直接进工程，再到「流水线」把衣服、头发、道具装到模型上、做好菜单。没有工程的话一键建一个。哪些在用、作者更新了，都会标出来。</p></div></div>
-    </div>
+<section id="flow" class="band"><div class="wrap">
+  <header class="sh"><span class="eyebrow">✦ HOW IT WORKS</span><h2>从找素材到用上</h2><p>不用在浏览器、网盘和文件夹之间来回切。</p></header>
+  <div class="flow">
+    <div class="step"><h3>找</h3><p>Booth 按分类、素体、风格多选，不用猜日文关键词；闲鱼直接搜。买过的、已有的都会标出来。</p></div>
+    <div class="step"><h3>买</h3><p>商品页、购物车、和卖家聊天都在软件里，登录只保存在本机。</p></div>
+    <div class="step"><h3>下载</h3><p>已购点一下就下载，网盘分享登录后直接下载，压缩包自动解压入库。</p></div>
+    <div class="step"><h3>用</h3><p>一键导入 Unity 工程，再用「一键改模」穿到模型上、做好菜单。</p></div>
   </div>
-</section>
+</div></section>
 
-<section id="features" aria-labelledby="f-title">
-  <div class="wrap">
-    <div class="sh"><h2 id="f-title">能做什么</h2><p>素材越买越多，找起来越来越难。</p></div>
-    <div class="qm">
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></svg></div>
-        <h3>逛 Booth</h3><p>分类、素体、风格标签多选，按人气、新上架、价格排序。卡片标出「已购」「素材库已有」，也能只看还没有的。</p>
-      </div>
-      <div class="tile" style="--c: var(--yellow)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
-        <h3>闲鱼</h3><p>在软件里搜索、登录、和卖家聊天、下单，也可以改用默认浏览器。闲鱼页面用独立的内嵌浏览器，软件不控制它，也不保存登录。卖家发来的网盘分享，复制后一键收进素材库。</p>
-      </div>
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg></div>
-        <h3>已购一键下载</h3><p>同步 Booth 和 Gumroad 已购，没下载的点一下就下载。压缩包自动解压，日文文件名不乱码，下完自动入库。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/><path d="M12 10v6m0 0-2.5-2.5M12 16l2.5-2.5"/></svg></div>
-        <h3>网盘直接下载</h3><p>收进来的百度网盘分享，登录后在软件里直接下载、解压、入库，不用开网盘客户端。分享里东西多，可以只勾要的那几个；断了接着下。卖家把很多素材打成一个总包时，解压后自动拆成每个素材一张卡片。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></div>
-        <h3>一键导入工程</h3><p>选好 Unity 工程点一下：PSD 包、分卷、带密码的压缩包一起解压，unitypackage 直接写进 Assets，已有的就地更新。</p>
-      </div>
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></div>
-        <h3>自动整理</h3><p>认出 unitypackage、压缩包和解压后的文件夹，分好类、标出适配素体，同款合并成一张卡片；还能看出哪个素材用在哪个工程里。搜索可以组合条件：「贴图 /发型 /服装 -眼睛」就是有贴图、有发型或服装、没有眼睛。「工程」页一个工程一张卡片，点一下用对应版本的 Unity 打开。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></svg></div>
-        <h3>流水线：装素材、做菜单</h3><p>工程里导入过的素材自动列出来，勾上要装的，衣服、头发、配饰、道具各按各的方式装到模型上，再生成菜单开关和图标。装完 AI 会给头像拍照，检查有没有穿模、错位、材质丢失，截图同时给你看。可以用你自己的 AI 账号（DeepSeek、通义千问、智谱 GLM、Kimi、ChatGPT 兼容、Claude 兼容），也可以不用 AI。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="14" width="18" height="5" rx="2.5"/><circle cx="6" cy="16.5" r="1"/><circle cx="12" cy="16.5" r="1"/><circle cx="18" cy="16.5" r="1"/><rect x="6" y="6" width="5" height="6" rx="1"/><rect x="13" y="6" width="5" height="6" rx="1"/></svg></div>
-        <h3>一键创建基础工程</h3><p>起个名字，软件就建好 Unity 2022.3.22f1 的 VRChat 头像工程，VRChat SDK、Modular Avatar、lilToon、Avatar Optimizer、Gesture Manager、VRCFury 一次装齐，还能顺手把素材库里的素体导进去。新工程直接出现在 ALCOM / VCC 的列表里。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></div>
-        <h3>上传前体检</h3><p>上传之前先查一遍：同步参数和 PhysBone 有没有超过上限、有没有丢失的脚本、粉色的材质、过大的贴图，再列出三角面、材质槽、骨骼等各项参数和 VRChat SDK 的性能评级。每一项都告诉你怎么处理，过大的贴图、灯光、丢失的脚本可以一键处理并撤销；结果可以导出成一张报告图片，工程卡片上也能看到。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></div>
-        <h3>装配方案、愿望单、更多</h3><p>流水线的结果可以存成方案，换一个工程或素体一键套用，也能发给朋友。Booth 愿望单每天检查价格，降价提醒，在 Booth 点了「スキ！」的商品也能自动加入。素材有新版时一键下载并更新到工程；整理工具找出重复文件和可清理的压缩包；素材库可以整体迁移到另一台电脑。没有封面的素材自动用 unitypackage 里的预览图当封面；Google Drive、Dropbox 的分享链接可以直接下载入库；关注 Booth 店铺，上新提醒。点 × 收到托盘不退出，流水线跑完、需要你确认时响一声提示音。支持读取 Avatar Explorer 和 KonoAsset 的素材信息，界面可切换 English / 日本語。</p>
-      </div>
-    </div>
-  </div>
-</section>
+<section id="tour"><div class="wrap"><header class="sh"><span class="eyebrow">✦ TAKE A LOOK</span><h2>看看软件里是什么样</h2><p>都是软件里的真实界面。</p></header><div class="tour"><div class="tabs" role="tablist"><button role="tab" data-slide="0" class="on" aria-selected="true">素材库</button><button role="tab" data-slide="1" class="" aria-selected="false">改模篮</button><button role="tab" data-slide="2" class="" aria-selected="false">插件更新</button><button role="tab" data-slide="3" class="" aria-selected="false">依照现有工程创建</button></div><div class="stage"><button class="nav prev" data-step="-1" aria-label="上一张">‹</button><div class="track"><figure class="slide on"><div class="win"><div class="bar"><i></i><i></i><i></i><span>MioVRCA</span></div><picture><source srcset="../assets/images/vrca-library.webp" type="image/webp"><img src="../assets/images/vrca-library.jpg" alt="素材库" width="1600" height="1000" loading="lazy"></picture></div><figcaption><b>素材库</b>买过的、下载的、网盘里的素材整理成卡片，按分类、素体、风格筛选。</figcaption></figure><figure class="slide"><div class="win"><div class="bar"><i></i><i></i><i></i><span>MioVRCA</span></div><picture><source srcset="../assets/images/vrca-basket.webp" type="image/webp"><img src="../assets/images/vrca-basket.jpg" alt="改模篮" width="1600" height="1000" loading="lazy"></picture></div><figcaption><b>改模篮</b>放进素体和衣服，点「一键创建」，得到穿好衣服、做好菜单的模型。</figcaption></figure><figure class="slide"><div class="win"><div class="bar"><i></i><i></i><i></i><span>MioVRCA</span></div><picture><source srcset="../assets/images/vrca-plugins.webp" type="image/webp"><img src="../assets/images/vrca-plugins.jpg" alt="插件更新" width="1600" height="1000" loading="lazy"></picture></div><figcaption><b>插件更新</b>每个工程的插件有没有新版本一目了然，勾选后一键更新。</figcaption></figure><figure class="slide"><div class="win"><div class="bar"><i></i><i></i><i></i><span>MioVRCA</span></div><picture><source srcset="../assets/images/vrca-newproject.webp" type="image/webp"><img src="../assets/images/vrca-newproject.jpg" alt="依照现有工程创建" width="1600" height="1000" loading="lazy"></picture></div><figcaption><b>依照现有工程创建</b>选一个做好的工程，勾选要带过去的插件和文件夹，建一个新的。</figcaption></figure></div><button class="nav next" data-step="1" aria-label="下一张">›</button></div><div class="dots"><i data-slide="0" class="on"></i><i data-slide="1"></i><i data-slide="2"></i><i data-slide="3"></i></div></div></div></section>
+<section id="features"><div class="wrap"><header class="sh"><span class="eyebrow">✦ FEATURES</span><h2>能做什么</h2><p>素材越买越多，找起来越来越难。交给 MioVRCA 整理。</p></header><div class="grid"><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/></svg></span><h3>逛 Booth</h3><p>分类、素体、风格多选筛选，标出「已购」和「素材库已有」，也能只看还没有的。</p></article><article class="card" style="--t: var(--butter)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></span><h3>闲鱼</h3><p>在软件里搜索、和卖家聊天、下单；卖家发来的网盘分享一键收进素材库。</p></article><article class="card" style="--t: var(--peach)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4"/><path d="M5 19h14"/></svg></span><h3>已购一键下载</h3><p>Booth、Gumroad 已购点一下就下载，自动解压入库，日文文件名不乱码。</p></article><article class="card" style="--t: var(--sky)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5z"/><path d="M12 10v6m0 0-2.5-2.5M12 16l2.5-2.5"/></svg></span><h3>网盘直接下载</h3><p>百度网盘分享登录后直接下载，可以只下需要的部分，断了接着下。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></svg></span><h3>一键导入工程</h3><p>压缩包、分卷、PSD 包一起解压，unitypackage 直接进工程，已有的就地更新。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m9 13 2 2 4-4"/></svg></span><h3>自动整理</h3><p>自动分类、标出适配素体，同款合并成一张卡片；看得到哪个素材用在哪个工程里。</p></article><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="14" width="18" height="5" rx="2.5"/><circle cx="6" cy="16.5" r="1"/><circle cx="12" cy="16.5" r="1"/><circle cx="18" cy="16.5" r="1"/><rect x="6" y="6" width="5" height="6" rx="1"/><rect x="13" y="6" width="5" height="6" rx="1"/></svg></span><h3>一键创建基础工程</h3><p>起个名字就建好 VRChat 头像工程，常用插件一次装齐，新工程直接出现在 ALCOM / VCC 里。</p></article><article class="card" style="--t: var(--sky)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></span><h3>上传前体检</h3><p>同步参数、PhysBone、丢失的脚本、粉色材质、过大的贴图一次查完，告诉你怎么处理。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></span><h3>还有更多</h3><p>愿望单降价提醒、店铺上新提醒、素材更新一键下载、素材库整体迁移；界面支持 English / 日本語。</p></article></div></div></section>
+<section id="oneclick" class="band"><div class="wrap"><header class="sh"><span class="eyebrow">✦ ONE CLICK</span><h2>一键改模</h2><p>选好素体和素材，点一次「一键创建」，得到穿好衣服、做好菜单、可以上传的模型。不会 Unity 也能用。</p></header><div class="grid fold"><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 9h16l-1.5 10h-13z"/><path d="M8 9l4-5 4 5"/></svg></span><h3>改模篮</h3><p>把素体、衣服、头发、配饰和功能插件放进改模篮，创建前先告诉你能不能穿。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></span><h3>自动完成</h3><p>新建工程、导入、穿戴、菜单、汉化、检查全部自动完成，也能装进已有的工程。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></span><h3>素体自带的衣服</h3><p>先列出素体原本的衣服，由你决定做成菜单、移除还是保留，不会和新衣服叠在一起。</p></article><article class="card" style="--t: var(--sky)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></span><h3>换素体</h3><p>同系列的素体之间，别的素体版本的衣服和头发也能穿。</p></article><article class="card" style="--t: var(--butter)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="6" y="8" width="12" height="6" rx="2"/><path d="M12 14v7"/></svg></span><h3>功能插件</h3><p>面捕、SPS 等插件放进改模篮就能装好并生效。</p></article><article class="card" style="--t: var(--peach)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/></svg></span><h3>直接上传</h3><p>在结果页直接上传 PC 版，也能一键上传 Quest 版。</p></article><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span><h3>买之前看能不能穿</h3><p>Booth 商品标出「适配你的素体」，以及有多少玩家已经穿上。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg></span><h3>随时撤销</h3><p>不满意可以退回创建之前，会移走哪些文件先列给你看。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></span><h3>版本提醒</h3><p>改模篮里的素材出了新版本时提醒你，可以直接下载。</p></article></div><button class="btn more" data-unfold>展开全部（9 项）</button></div></section>
+<section id="ai"><div class="wrap"><header class="sh"><span class="eyebrow">✦ AI ASSIST</span><h2>AI 改模</h2><p>用你自己的 AI 账号：装完自己检查、自己修，说一句话就能改。</p></header><div class="grid fold"><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></span><h3>全面验收</h3><p>逐个检查菜单开关、穿模和坐姿，能修的问你一声就修，没改善就自动撤回。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></span><h3>一句话调外观</h3><p>调体型、做表情、出配色，先给你看，再做成菜单。</p></article><article class="card" style="--t: var(--butter)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span><h3>说明书变步骤</h3><p>素材自带的日文说明书整理成中文步骤。</p></article><article class="card" style="--t: var(--sky)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></span><h3>3D 试衣间</h3><p>360° 看模型，衣服、头发和配色点一下就试穿。</p></article><article class="card" style="--t: var(--peach)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></span><h3>照图配装</h3><p>丢一张图，从你的素材库里找出最接近的搭配。</p></article><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg></span><h3>工程时光机</h3><p>改模前自动存一份，一键回到那一刻。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></span><h3>一键 Quest 版</h3><p>按 Android 的上限挑出要保留的部分，并预估评级。</p></article><article class="card" style="--t: var(--peach)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9v6l5-3z"/></svg></span><h3>宣传视频</h3><p>自动拍镜头、卡点、加字幕，导出视频和封面。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="m7 9 2 2-2 2M12 13h4M8 20h8"/></svg></span><h3>外部 AI 接入</h3><p>Claude Code、Codex 等 AI 工具可以直接调用 MioVRCA 查素材、装衣服、做菜单。</p></article></div><button class="btn more" data-unfold>展开全部（9 项）</button></div></section>
+<section id="social" class="band"><div class="wrap"><header class="sh"><span class="eyebrow">✦ COMMUNITY</span><h2>社区</h2><p>发帖、分享作品、关注创作者和私信。手机和电脑浏览器打开 <a href="https://miovrc.net">miovrc.net</a>，和软件共用账号。</p></header><div class="grid"><article class="card" style="--t: var(--butter)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></span><h3>作品与照着装</h3><p>作品附带素材清单和装配方案，一键照着装，缺的素材加入愿望单。</p></article><article class="card" style="--t: var(--sky)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span><h3>求同款</h3><p>发图问「这套是什么、怎么搭」，其他玩家来回答。</p></article><article class="card" style="--t: var(--mint)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M3 20c.5-3 2.5-5 5-5s4.5 2 5 5M11 20c.5-3 2.5-5 5-5s4.5 2 5 5"/></svg></span><h3>素体小组</h3><p>同一个素体的作品汇在一起，每周还有主题活动。</p></article><article class="card" style="--t: var(--peach)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></span><h3>分享方案</h3><p>装配方案一键分享，别人导入就能用。</p></article><article class="card" style="--t: var(--lilac)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M18 4v6m-3-3h6"/></svg></span><h3>私信与通知</h3><p>私信、关注、点赞和回复通知，手机上也能收到。</p></article><article class="card" style="--t: var(--pink)"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><h3>安心使用</h3><p>敏感图片自动遮挡，可以拉黑和举报，随时导出或删除自己的数据。</p></article></div></div></section>
 
-<section id="oneclick" aria-labelledby="oc-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="oc-title">2.0.0：一键改模</h2><p>选好素体和素材，点一次「一键创建」，得到穿戴完成、带菜单、可以上传的模型。不会 Unity 也能用。</p></div>
-    <div class="qm">
-      <div class="tile" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 9h16l-1.5 10h-13z"/><path d="M8 9l4-5 4 5"/></svg></div>
-        <h3>改模篮</h3><p>在素材库把素体、衣服、头发、配饰、表情和功能插件放进「改模篮」。创建前先告诉你能不能穿、同步参数和磁盘空间够不够，有问题先说明原因。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/></svg></div>
-        <h3>一键创建</h3><p>新建工程、导入素材、穿戴、生成菜单、汉化菜单、检查结果，全部自动完成；也可以装进自己已有的工程。电脑上还没有 Unity 时，会先把环境准备好。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></div>
-        <h3>换素体</h3><p>Plum、Chocolat、Chiffon、Lime 这类同系列的素体之间，只有别的素体版本的衣服和头发也能穿，按官方比例适配体型。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5"/><rect x="6" y="8" width="12" height="6" rx="2"/><path d="M12 14v7"/></svg></div>
-        <h3>功能插件</h3><p>面捕、SPS 等插件放进改模篮就能装好并生效，缺少的依赖从素材库补齐。同步参数超过 256 位时自动处理，不用自己删开关。</p>
-      </div>
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></div>
-        <h3>检查与穿模</h3><p>创建完成后给出模型照片、性能评级和每个插件是否生效。穿进身体或脸里的部件可以「修复」「移开」或「移除」，随时能恢复。</p>
-      </div>
-      <div class="tile" style="--c: var(--yellow)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v4h16v-4"/></svg></div>
-        <h3>上传到 VRChat</h3><p>在结果页直接上传，默认仅自己可见；VRChat 账号暂时不能上传时会说明原因。PC 版上传后，还可以一键上传 Quest 版。</p>
-      </div>
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></div>
-        <h3>从 Booth 商品开始</h3><p>粘贴一个 Booth 商品链接，自动配上合适的素体放进改模篮；没买的标「未购买」，可以打开商品页或加入愿望单，还能看到社区里用到它的作品。</p>
-      </div>
-      <div class="tile" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg></div>
-        <h3>新手引导与撤销</h3><p>还没有素体时推荐常用素体，「适配我的素体」只显示能穿的素材。「撤销这次改动」可以退回创建之前，撤销前先列出会移走哪些文件。</p>
-      </div>
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg></div>
-        <h3>版本提醒</h3><p>改模篮里的素材在 Booth 出了新版本时会提示，可以直接下载新版本；面捕暂时不支持当前素体版本时，更新后可以重新应用。</p>
-      </div>
-    </div>
-    <p>出错时直接给出处理按钮，例如「更新插件」「重新连接」「打开 SDK 面板」；结果页的「问 AI」会结合这次创建的结果回答问题。</p>
+<section id="download"><div class="wrap">
+  <header class="sh"><span class="eyebrow">✦ DOWNLOAD</span><h2>下载</h2><p>免费，Windows 10 / 11（64 位）。</p></header>
+  <div class="dl">
+    <div class="get" style="--t: var(--pink)"><span class="ribbon">推荐</span><h3>安装版</h3>
+      <p>有桌面快捷方式，可以在软件里一键更新。卸载时可以选择保留数据。</p>
+      <a class="btn go" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest/download/MioVRC_AssetManager-setup.exe">下载安装版</a></div>
+    <div class="get" style="--t: var(--lilac)"><span class="ribbon">解压就能用</span><h3>便携版</h3>
+      <p>适合放在 U 盘或固定的工具文件夹里，数据保存在程序旁边，整个文件夹带走就行。</p>
+      <a class="btn" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest/download/MioVRC_AssetManager-portable.zip">下载便携版</a></div>
   </div>
-</section>
+  <p class="note">用过「VRC素材库」的，在软件里点更新即可，数据会保留<a href="https://github.com/CokoIya/MioVRC_AssetManager/releases" target="_blank" rel="noopener">更新记录</a><a id="netdisk" hidden target="_blank" rel="noopener">GitHub 下载慢？用百度网盘下载</a></p>
+</div></section>
 
-<section id="social" aria-labelledby="social-title" style="padding-top:0">
-  <div class="wrap">
-<div class="sh"><h2 id="social-title">2.0.1：社区与网页版</h2><p>类似 X 的社区：发帖、分享作品、关注创作者和私信。手机和电脑浏览器可打开 <a href="https://miovrc.net">miovrc.net</a>，与软件共用账号，支持邮箱、Google、Discord 和扫码登录。</p></div>
-    <div class="qm">
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M16 14.3c2.5-.2 4.2 1.4 4.6 4.2"/></svg></div>
-        <h3>邮箱账号与社区服务</h3><p>MioVRCA 自有服务（https://api.miovrc.com）面向国内玩家提供社区。浏览无需登录，发布资料、帖子、作品和方案只需邮箱账号。点击「登录社区」，输入 6 位验证码（10 分钟内有效），首次填写昵称；没收到请查看垃圾邮件。可设置 @用户名，GitHub 关联仅用于认领旧内容。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
-        <h3>首页与发帖</h3><p>首页分「为你推荐」「正在关注」，有新帖子时提示。普通帖子最多 1000 字、4 张图片，支持 @提及、#话题、回复串、转帖和引用，也可点赞、加入书签、查看浏览次数。分享链接可在 QQ、微信中预览，网页上可以「在 MioVRCA 中打开」。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12l-8 8-8-8V4h8z"/><circle cx="8" cy="8" r="1.5"/></svg></div>
-        <h3>探索</h3><p>查看话题趋势，按「热门」「最新」「用户」「媒体」搜索。保留「作品」「图片」「创作者」「装配方案」入口；作品可按素体浏览、筛选有方案或视频，「图片」以瀑布流展示。新人作品、关注的创作者生日和 Booth 店铺上新在这里显示。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M10 6h7v8m-3-3 3 3 3-3"/></svg></div>
-        <h3>个人主页与展示柜</h3><p>主页分「帖子」「回复」「媒体」「作品」，本人另有「喜欢」，有公开素材时显示「展示柜」。可编辑头像、昵称、生日、简介和链接。展示柜选择最多 60 件素材并保存后公开商品编号、名称和店铺，查看时与本机素材库比较，缺少的可加入愿望单。</p>
-      </div>
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 12h18M12 3v18"/></svg></div>
-        <h3>通知与书签</h3><p>通知分「全部」「提及」，显示点赞、转帖、引用、回复、提及和关注，同一帖子的点赞与转帖分别合并显示。书签列表和个人主页的「喜欢」列表仅本人可见，互动数量仍公开，点赞会通知帖子作者。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M18 4v6m-3-3h6"/></svg></div>
-        <h3>私信、拉黑与举报</h3><p>私信可发文字和图片；你关注的人直接进入收件箱，其他人进入「消息请求」，接受前最多发 3 条。「更多」中可关闭新请求或管理拉黑。自己的消息 5 分钟内可撤回，删除会话只隐藏自己一侧历史。帖子、作品、方案、资料和收到的私信均可在软件内举报。</p>
-      </div>
-      <div class="tile" style="--c: var(--yellow)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></div>
-        <h3>作品与照着装</h3><p>作品是带作品卡片的帖子，可上传 1–9 张图片，填写视频链接、素体、同款素材并附带方案。卡片显示已有素材数量，提供「一键克隆」「照着装」「复制使用素材」；一键克隆前先列出已有和缺少的素材。详情可把缺少的素材加入愿望单；素材仍需自行购买和导入，素材库详情也可查看同款社区作品。</p>
-      </div>
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></div>
-        <h3>参考作品与分享方案</h3><p>「我也做了」记录参考关系，原作列出做同款的作品，新作品链接回原作。「保存分享图」生成含作者和素材名单的 PNG 图片。方案在「分享」中点「分享到社区…」即可通过服务发布，在「探索」的「装配方案」中查看和导入，不含素材文件。</p>
-      </div>
-      <div class="tile" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
-        <h3>公开内容与私信隐私</h3><p>公开资料、帖子、回复、作品和方案对外可见，生日和关注列表按设置公开。邮箱不向其他玩家展示，本人账号页仅显示遮盖形式，管理接口也可查看遮盖邮箱。私信未采用端到端加密，服务端保存正文；管理接口只提供被举报消息及前后各两条上下文，不提供任意会话读取入口。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></div>
-        <h3>求同款</h3><p>发图问「这套是什么、怎么搭」，其他玩家用作品或 Booth 商品回答，提问人可以把其中一条设为答案。「探索」里可以看待解决和已解决的。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M3 20c.5-3 2.5-5 5-5s4.5 2 5 5M11 20c.5-3 2.5-5 5-5s4.5 2 5 5"/></svg></div>
-        <h3>素体小组、主题与投票</h3><p>每个素体有自己的小组，汇集用这个素体的作品。每周主题显示在「为你推荐」顶部，点「参加」即可发帖。发帖时可以加 2–4 个选项的投票。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
-        <h3>安全与账号</h3><p>可能敏感的图片会自动标记并遮挡。创作者可以认证自己的 Booth 店铺，名片上显示认证标识。可以导出自己的数据；删除账号有 7 天的反悔期。</p>
-      </div>
-    </div>
-<p>2.0.4 包含此前版本的更新。流水线的 Unity 插件版本为 1.6.8：打开工程后在流水线页点击「更新」，一键创建会自动更新。旧仓库内容仍保留服务副本、GitHub 和 CDN 读取来源；新社区的发布和互动需要社区服务可用。</p>
+<section id="community" class="band"><div class="wrap">
+  <header class="sh"><span class="eyebrow">✦ JOIN US</span><h2>加入交流</h2><p>使用问题、改模交流、新版本通知。</p></header>
+  <div class="links">
+    <a class="lk" style="--t: var(--sky)" href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></span><span><b>QQ 交流群 1077205718</b><span class="d">提问、反馈、看别人怎么改模。</span></span></a>
+    <a class="lk" style="--t: var(--lilac)" href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener"><span class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M18 4v6m-3-3h6"/></svg></span><span><b>Discord</b><span class="d">不用 QQ 的玩家在这里交流。</span></span></a>
+    <a class="lk" style="--t: var(--ink)" href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener"><span class="ic"><svg class="i" viewBox="0 0 24 24" style="width:18px;height:18px"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></span><span><b>GitHub</b><span class="d">源码和更新记录，也可以提问题。</span></span></a>
   </div>
-</section>
+</div></section>
 
-<section id="new" aria-labelledby="n-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="n-title">1.8.1：作品与创作者</h2><p>发布作品、关注创作者；给模型拍一支宣传短视频。</p></div>
-    <div class="qm">
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9v6l5-3z"/></svg></div>
-        <h3>宣传视频</h3><p>流水线页或工程卡片上点「宣传视频」：AI 当导演，让 Unity 拍镜头、按音乐的节拍排分镜，卡点、字幕和渲染由软件完成，不用生成视频的 AI。导出 1080p MP4、封面和 VRChat 缩略图，并写好各平台的标题和简介。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M16 14.3c2.5-.2 4.2 1.4 4.6 4.2"/></svg></div>
-        <h3>社区（实验性）</h3><p>新的「社区」标签：用 GitHub 账号发布名片和作品（封面、视频链接、同款素材、附带的装配方案），关注喜欢的创作者，在「动态」里看他们的新作品和新方案。关注只保存在本机。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M20 12l-8 8-8-8V4h8z"/><circle cx="8" cy="8" r="1.5"/></svg></div>
-        <h3>同款素材</h3><p>作品里的同款素材标出你已有的，没有的一键加入愿望单；Booth 链接在软件里打开，网盘分享直接收进素材库。</p>
-      </div>
-    </div>
-  </div>
-</section>
+<section id="faq"><div class="wrap">
+  <header class="sh"><span class="eyebrow">✦ FAQ</span><h2>常见问题</h2></header>
+  <div class="qa"><details><summary>打开时 Windows 提示「已保护你的电脑」</summary><div class="a">点「更多信息」，再点「仍要运行」。程序没有购买数字签名，所以会有这个提示。</div></details><details><summary>素材库的数据存在哪里？</summary><div class="a">安装版在 <code>%LOCALAPPDATA%\MioVRC_AssetManager</code>，便携版在程序所在的文件夹。只保存在本机。</div></details><details><summary>买东西、聊天会跳到浏览器吗？</summary><div class="a">不会。Booth 和闲鱼的页面都在软件里打开，登录、购买、聊天、下载都在软件里完成；闲鱼也可以改成用默认浏览器打开。</div></details><details><summary>一键导入要先关掉 Unity 吗？</summary><div class="a">不用。Unity 开着的话切回去就会刷新。rar、7z 和分卷压缩包需要电脑上装有解压软件（7-Zip、Bandizip、WinRAR 等），普通 zip 不需要。</div></details><details><summary>下载的素材放在哪里？</summary><div class="a">默认放在 C 盘以外剩余空间最大的磁盘的 <code>MioVRCdownload</code> 文件夹，可以在设置的「下载位置」里修改。</div></details><details><summary>网盘分享里东西很多，能只下一部分吗？</summary><div class="a">能。在素材详情的「网盘内容」里勾选需要的文件，点「下载所选」。以后需要别的，再勾选接着下。</div></details><details><summary>要花钱吗？会改坏我的工程吗？</summary><div class="a">软件免费。不用 AI 也能用；用 AI 时用的是你自己的 AI 账号，费用由服务商收取。所有改动都能撤销，软件不会替你保存场景。</div></details><details><summary>百度网盘下载需要会员吗？</summary><div class="a">普通账号也能下，但百度对非超级会员限速，大文件会很慢；软件不会绕过限速。</div></details><details><summary>Booth、闲鱼、百度网盘的登录安全吗？</summary><div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不经过任何服务器。在设置里可以随时退出、更换账号。</div></details><details><summary>遇到问题怎么反馈？</summary><div class="a">软件右下角有「反馈与建议」，写完直接发给作者。也可以到 <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">QQ 交流群</a>、<a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">Discord</a> 里说，或者在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener">GitHub</a> 提问题。</div></details></div>
+</div></section>
 
-<section id="ai" aria-labelledby="a-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="a-title">1.8.0：AI 帮你改模</h2><p>装完自己检查、自己修，说一句话就能改。用你自己的 AI 账号，DeepSeek 专门优化过。</p></div>
-    <div class="qm">
-      <div class="tile wide" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6l1 3h3v15H5V6h3z"/><path d="M9 13l2 2 4-4"/></svg></div>
-        <h3>全面验收，自动修穿模</h3><p>流水线跑完，菜单里的开关逐个拍照对比，量出身体从衣服里穿出来的地方，再让模型坐下量一次，检查裙子有没有连上大腿的碰撞体。能修的问你一声就修：穿着这件衣服时隐藏被盖住的身体，修完重新量，没改善就自动撤回。原文件不改，Ctrl+Z 能撤销。</p>
-      </div>
-      <div class="tile" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 10h8"/></svg></div>
-        <h3>一句话调外观</h3><p>「腰再细一点」「做一个坏笑的表情」「这条裙子出五个配色」：AI 调形态键（衣服跟着身体变）、做表情开关、复制材质出新配色，先给你看，再做成菜单。</p>
-      </div>
-      <div class="tile" style="--c: var(--yellow)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div>
-        <h3>说明书变步骤</h3><p>素材自带的日文说明书、PDF、说明图，AI 整理成中文步骤，标出哪步流水线已做、哪步 AI 能做、哪步要你手动；AI 能做的可以直接交给它。</p>
-      </div>
-      <div class="tile" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="7" r="3"/><path d="M6 21v-2a6 6 0 0 1 12 0v2"/><path d="M3 12h3M18 12h3"/></svg></div>
-        <h3>3D 试衣间</h3><p>在软件里 360° 看模型，没穿的衣服、头发、配饰和各个配色点一下就试穿，不改场景。</p>
-      </div>
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-8 7"/></svg></div>
-        <h3>照图配装</h3><p>丢一张别人的模型截图或商品图，AI 从你的素材库里找出最接近的衣服、头发和配饰，优先给你的素体做的。</p>
-      </div>
-      <div class="tile" style="--c: var(--portal)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/><path d="M3 4v4h4"/></svg></div>
-        <h3>工程时光机</h3><p>每次改模前自动把模型存一份（带照片），和现在对比，一键回到那一刻；之后导入的素材文件夹可以移到回收站。</p>
-      </div>
-      <div class="tile" style="--c: var(--green)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></div>
-        <h3>一键 Quest 版</h3><p>自动装 VRCQuestTools，按 Android 的硬性上限挑出要保留的骨骼物理，勾选调整、实时看总数，再预估 Android 版的评级。</p>
-      </div>
-      <div class="tile" style="--c: var(--coral)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></svg></div>
-        <h3>方案分享和社区</h3><p>装配方案生成一段分享码，贴进 QQ、微信就能发给朋友；「社区方案」里找别人分享的搭配，显示你已有其中几件素材。每次验收记下的「这件衣服在这个素体上怎么修好」也能分享，大家装同一件衣服时自动套用。</p>
-      </div>
-      <div class="tile" style="--c: var(--yellow)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M9 14l2 2 4-4"/></svg></div>
-        <h3>给素材作者：miovrca.json</h3><p>在素材包里放一份 miovrca.json，玩家装配时按它选对应素体的版本、设置穿着时的形态键、生成部件开关。软件里的「作者工具」可以一键生成。</p>
-      </div>
-      <div class="tile" style="--c: var(--orange)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5h5"/><path d="M17 3h4v4"/></svg></div>
-        <h3>DeepSeek 深度优化</h3><p>按任务设定思考强度，菜单方案用 JSON 模式一次成形；花费按缓存价格折算，节假日不算高峰；素材名和商品说明用它翻译，拿不准的分类和素体由它补判；AI 还能联网查资料。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--purple)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="m7 9 2 2-2 2M12 13h4M8 20h8"/></svg></div>
-        <h3>外部 AI 接入（MCP）</h3><p>Claude Code、Codex、DeepSeek Harness、Cursor 等 AI 工具可以直接调用 MioVRCA：查素材库、导入、装衣服、做菜单、验收、做 Quest 版、用时光机回退。需要确认的操作仍由你在软件里点确认。</p>
-      </div>
-      <div class="tile wide" style="--c: var(--blue)">
-        <div class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 9a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3h-3l-1.5-2h-3L9 16H6a3 3 0 0 1-3-3z"/></svg></div>
-        <h3>不摘头显改模</h3><p>配合 MioVRCT：在 VRChat 里说一句「把头发换成双马尾」，AI 在 Unity 里改好，用 Build &amp; Test 发到游戏里，再用游戏相机拍照确认，回复显示在聊天框；要确认的操作说「确认」就行。</p>
-      </div>
-    </div>
+<section id="more" class="band"><div class="wrap">
+  <div class="sib">
+    <img src="../assets/icons/app_icon_mio.png" alt="">
+    <div><span class="eyebrow">✦ ALSO BY MIO</span><h3>MioVRCT 实时语音翻译</h3>
+      <p>对着麦克风说话，翻译后直接发到 VRChat 聊天框，别人说的话也能翻译给你看。和 MioVRCA 一起用，还能在 VRChat 里说一句话就改好模型。</p></div>
+    <a class="btn" href="https://miovrc.com/">前往 miovrc.com</a>
   </div>
-</section>
-
-<section aria-labelledby="s-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="s-title">开始使用</h2></div>
-    <div class="steps">
-      <div class="step"><span class="n">1</span><div><h3>下载并安装</h3><p>安装版默认装到 C 盘以外的磁盘，不需要管理员权限。</p></div></div>
-      <div class="step"><span class="n">2</span><div><h3>选择文件夹</h3><p>选放素材的文件夹，比如 <span style="font-family:Consolas,monospace">BaiduNetdiskDownload</span>，有 Unity 工程也一起选上。</p></div></div>
-      <div class="step"><span class="n">3</span><div><h3>开始扫描</h3><p>第一次会久一点。之后去「Booth」「闲鱼」页找新素材，买到的直接下载进来，再一键导入工程。</p></div></div>
-    </div>
-  </div>
-</section>
-
-<section id="download" aria-labelledby="d-title" style="padding-top:24px">
-  <div class="wrap">
-    <div class="sh"><h2 id="d-title">下载</h2><p id="relinfo">最新版本见 GitHub 发布页</p></div>
-    <div class="dl">
-      <div class="gate" style="--g: var(--portal)">
-        <span class="ring" aria-hidden="true"></span>
-        <span class="plate">安装版<small data-ver></small></span>
-        <h3>推荐</h3>
-        <p>有桌面快捷方式，可以在软件里一键更新。卸载时可以选择保留数据。</p>
-        <div class="row"><a class="btn go" id="dlSetup" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">下载安装版</a><span class="size" id="szSetup"></span></div>
-      </div>
-      <div class="gate" style="--g: var(--purple)">
-        <span class="ring" aria-hidden="true"></span>
-        <span class="plate">便携版<small data-ver></small></span>
-        <h3>解压就能用</h3>
-        <p>适合放在 U 盘或固定的工具文件夹里。数据保存在程序旁边，整个文件夹带走就行。</p>
-        <div class="row"><a class="btn" id="dlZip" href="https://github.com/CokoIya/MioVRC_AssetManager/releases/latest">下载便携版</a><span class="size" id="szZip"></span></div>
-      </div>
-    </div>
-    <div class="dlnote">
-      <span>需要 Windows 10 / 11（64 位）</span>
-      <span>用过「VRC素材库」的，在软件里点更新即可，数据会保留</span>
-      <a href="https://github.com/CokoIya/MioVRC_AssetManager/releases" target="_blank" rel="noopener">全部版本和更新内容</a>
-      <a id="netdisk" hidden target="_blank" rel="noopener">GitHub 下载慢？用百度网盘下载</a>
-    </div>
-  </div>
-</section>
-
-<section id="community" aria-labelledby="c-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="c-title">加入交流</h2><p>使用问题、改模交流、新版本通知。</p></div>
-    <div class="links">
-      <a class="lk" style="--c: var(--blue)" href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">
-        <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12h5"/></svg></span>
-        <span><b>QQ 交流群 1077205718</b><span class="d">提问、反馈、看别人怎么改模，新版本也在群里通知。</span></span>
-        <svg class="i arrow" viewBox="0 0 24 24"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
-      </a>
-      <a class="lk" style="--c: var(--purple)" href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">
-        <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M7 7h10a3 3 0 0 1 3 3l1 6a2.5 2.5 0 0 1-4.5 1.5L15 16H9l-1.5 1.5A2.5 2.5 0 0 1 3 16l1-6a3 3 0 0 1 3-3z"/><path d="M8 10v3M6.5 11.5h3M15.5 11h.01M17.5 13h.01"/></svg></span>
-        <span><b>Discord</b><span class="d">不用 QQ 的玩家可以在这里交流和反馈。</span></span>
-        <svg class="i arrow" viewBox="0 0 24 24"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
-      </a>
-      <a class="lk" style="--c: var(--portal)" href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">
-        <span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M9 19c-4 1.5-4-2-6-2.5M15 21v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg></span>
-        <span><b>GitHub</b><span class="d">源码、全部版本和更新记录，也可以在这里提问题。</span></span>
-        <svg class="i arrow" viewBox="0 0 24 24"><path d="M5 12h14m0 0-5-5m5 5-5 5"/></svg>
-      </a>
-    </div>
-  </div>
-</section>
-
-<section id="faq" aria-labelledby="q-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="q-title">常见问题</h2></div>
-    <div class="qa">
-      <details><summary>打开时 Windows 提示「已保护你的电脑」</summary>
-        <div class="a">点「更多信息」，再点「仍要运行」。程序没有购买数字签名，所以会有这个提示。</div></details>
-      <details><summary>素材库的数据存在哪里？</summary>
-        <div class="a">安装版在 <code>%LOCALAPPDATA%\MioVRC_AssetManager</code>，便携版在程序所在的文件夹。只保存在本机，不会上传。</div></details>
-      <details><summary>买东西、聊天会跳到浏览器吗？</summary>
-        <div class="a">默认不会。Booth 和闲鱼的页面都在软件里打开，登录、购买、和卖家聊天、下载都在软件里完成。闲鱼页面用的是独立的内嵌浏览器，也可以在「闲鱼」页左侧改成用默认浏览器打开。电脑上没有 WebView2 时，Booth 等页面会开在一个单独的 Edge 或 Chrome 窗口里，闲鱼页面在默认浏览器中打开。</div></details>
-      <details><summary>一键导入要先关掉 Unity 吗？</summary>
-        <div class="a">不用。导入是把文件直接写进工程的 Assets 文件夹，Unity 开着的话切回去就会刷新；没开就等下次打开工程。工程里已有的资源会就地更新，不会多出一份。rar、7z 和分卷压缩包用你电脑上默认的解压软件来解（7-Zip、Bandizip、WinRAR、好压等都行），普通 zip 不需要装。</div></details>
-      <details><summary>下载的素材放在哪里？</summary>
-        <div class="a">没改过设置的话，放在 C 盘以外剩余空间最大的那个盘的 <code>MioVRCdownload</code> 文件夹，优先用你素材文件夹所在的盘；只有 C 盘时放在第一个素材文件夹里。设置 →「下载位置」可以改成别的文件夹。</div></details>
-      <details><summary>网盘分享里东西很多，能只下一部分吗？</summary>
-        <div class="a">能。在素材详情的「网盘内容」里勾选要的文件或文件夹，点「下载所选」，只转存、下载勾选的部分。以后想要别的，再勾选接着下，会放进同一个文件夹。</div></details>
-      <details><summary>工程卡片的「开启封面」会往工程里放什么？</summary>
-        <div class="a">一个只在 Unity 编辑器里运行的小插件（<code>Packages/com.miovrc.projectcard</code>）。打开工程、保存场景时，它给场景里的模型拍一张正面照，存到工程的 <code>UserSettings/MioVRCA</code>，旧的自动删掉。它不改场景，也不会跟模型一起上传；点「关闭封面」就会连照片一起删掉。工程里的插件管理请继续用 VCC 或 ALCOM。</div></details>
-      <details><summary>流水线要花钱吗？会改坏我的工程吗？</summary>
-        <div class="a">软件本身免费。流水线不用 AI 也能跑（按网格名字分组）；用 AI 时用的是你自己的 AI 账号（DeepSeek、通义千问、智谱 GLM、Kimi，或 ChatGPT 兼容、Claude 兼容的服务），费用由服务商按用量收；API Key 加密保存在你的电脑上，只发给你填的接口地址。AI 拍照检查时，头像的截图会发给你选的 AI 服务（看不了图的模型会自动请同一家的看图模型帮它看，也可以另设一个看图模型）；不想发就在「看图」里选「不给 AI 看」，截图只显示给你。AI 的改动都能在 Unity 里按 Ctrl+Z 撤销，软件不会替你保存场景；会删除东西、保存场景的操作要你点「允许」才执行。它会往工程的 <code>Packages</code> 里放两个只在编辑器里运行的插件（流水线插件和开源的 UnitySkills），点「移除」就会删掉。穿戴和菜单需要工程里装着 VRChat SDK 和 Modular Avatar。</div></details>
-      <details><summary>百度网盘下载需要会员吗？</summary>
-        <div class="a">普通账号也能下，但百度对非超级会员限速，大文件会很慢；开通百度网盘超级会员后会快很多，软件不会绕过限速。下载时会先把分享存进你网盘的「MioVRCA」文件夹再下载到电脑，网盘里的这份不会自动删除，不需要可以自己删。</div></details>
-      <details><summary>Booth、闲鱼、百度网盘的登录安全吗？</summary>
-        <div class="a">都在软件内置的页面里登录，登录只保存在你的电脑上，不读取你平时用的浏览器，也不经过任何服务器。登录会长期保留，重启、更新软件后不用重新登录。下载用的登录另外加密保存，只有你的 Windows 账户能读取；在设置里可以随时退出、更换账号。</div></details>
-      <details><summary>遇到问题怎么反馈？</summary>
-        <div class="a">软件右下角有「反馈与建议」，写完直接发给作者。也可以到 <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener" style="color:var(--portal)">QQ 交流群</a>或 <a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener" style="color:var(--portal)">Discord</a> 里说，或者在 <a href="https://github.com/CokoIya/MioVRC_AssetManager/issues" target="_blank" rel="noopener" style="color:var(--portal)">GitHub</a> 提问题。</div></details>
-    </div>
-  </div>
-</section>
-
-<section id="more" aria-labelledby="m-title" style="padding-top:0">
-  <div class="wrap">
-    <div class="sh"><h2 id="m-title">MioVRC 的另一款软件</h2><p>同一位作者做的，也是给 VRChat 玩家用的。</p></div>
-    <div class="sib">
-      <span class="ring" aria-hidden="true"></span>
-      <img src="../assets/icons/app_icon_mio.png" alt="" width="88" height="88">
-      <div>
-        <span class="plate" style="--rank: var(--yellow)">MioVRCT<small>实时语音翻译</small></span>
-        <h3>Mio RealTime Translator<small>让任何游戏都能同声传译</small></h3>
-        <p>对着麦克风说话，识别、翻译后直接发到 VRChat 聊天框；别人说的话也能反向翻译给你看。打字或译文可以读成 AI 语音送进游戏麦克风，不方便开口的玩家也能「说话」。和 MioVRCA 一起用，还能在游戏里说话改模型（不摘头显改模）。</p>
-        <div class="meta"><span>本地语音识别</span><span>多翻译后端</span><span>VRChat 直发</span><span>反向翻译 + 同声传译</span><span>文字输入 + AI 语音阅读</span></div>
-      </div>
-      <div class="actions">
-        <a class="btn go" href="https://miovrc.com/">前往 miovrc.com</a>
-        <a class="btn" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" rel="noopener">GitHub</a>
-      </div>
-    </div>
-  </div>
-</section>
+</div></section>
 </main>
 
-<footer>
-  <div class="wrap">
-    <span>MioVRCA · 作者：<a href="https://vrchat.com/home/user/usr_efddbb43-57ae-44b4-bb4f-51926af40736" target="_blank" rel="noopener">天川澪（VRC 同名）</a></span>
-    <a href="https://miovrc.com/">miovrc.com（Mio 实时翻译）</a>
-    <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">QQ 交流群</a>
-    <a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">Discord</a>
-    <a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://www.bilibili.com/video/BV1WGpc6YE31/" target="_blank" rel="noopener">宣传视频（哔哩哔哩）</a>
-    <span class="note">本工具与 VRChat、BOOTH、pixiv、闲鱼、百度网盘没有关联。</span>
-    <span class="note">源码以 GPL-3.0 或 PolyForm Noncommercial 1.0.0 授权，任选其一（<a href="https://github.com/CokoIya/MioVRC_AssetManager/blob/HEAD/LICENSE.md" target="_blank" rel="noopener">LICENSE.md</a>）。修改后再发布须保留作者署名、标明是修改版，并换用自己的名称和图标。</span>
-  </div>
-</footer>
-
+<footer><div class="wrap">
+  <div class="row"><span>MioVRCA · 作者 <a href="https://vrchat.com/home/user/usr_efddbb43-57ae-44b4-bb4f-51926af40736" target="_blank" rel="noopener">天川澪</a></span>
+    <a href="https://qm.qq.com/q/9wErKBClA4" target="_blank" rel="noopener">QQ 交流群</a><a href="https://discord.gg/CD8NVJwBA" target="_blank" rel="noopener">Discord</a><a href="https://github.com/CokoIya/MioVRC_AssetManager" target="_blank" rel="noopener">GitHub</a><a href="https://www.bilibili.com/video/BV1WGpc6YE31/" target="_blank" rel="noopener">介绍视频</a></div>
+  <div class="fine">本工具与 VRChat、BOOTH、pixiv、闲鱼、百度网盘没有关联。<br>源码以 GPL-3.0 或 PolyForm Noncommercial 1.0.0 授权，任选其一（<a href="https://github.com/CokoIya/MioVRC_AssetManager/blob/HEAD/LICENSE.md" target="_blank" rel="noopener">LICENSE.md</a>）。修改后再发布须保留作者署名、标明是修改版，并换用自己的名称和图标。</div>
+</div></footer>
 <script>
-// Optional: a Baidu netdisk link for players who can't download from GitHub ("" hides the link).
-const NETDISK = "";
-
+document.documentElement.classList.add("js");
 (function () {
-  const REPO = "CokoIya/MioVRC_AssetManager";
-  if (NETDISK) { const n = document.getElementById("netdisk"); n.href = NETDISK; n.hidden = false; }
-  const mb = n => (n / 1048576).toFixed(1) + " MB";
-  const ctl = "AbortController" in window ? new AbortController() : null;
-  if (ctl) setTimeout(() => ctl.abort(), 8000);
-  // the newest release: version and direct download links (the release page stays the fallback)
-  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { signal: ctl ? ctl.signal : undefined, headers: { Accept: "application/vnd.github+json" } })
-    .then(r => r.ok ? r.json() : Promise.reject(r.status))
-    .then(rel => {
-      const ver = (rel.tag_name || "").replace(/^v/i, "");
-      if (ver) document.querySelectorAll("[data-ver]").forEach(el => { el.textContent = (el.tagName === "SMALL" ? "" : " ") + "v" + ver; });
-      const pick = (ext, word) => (rel.assets || []).filter(a => a.name.toLowerCase().endsWith(ext)).sort((a, b) => (b.name.toLowerCase().includes(word)) - (a.name.toLowerCase().includes(word)))[0];
-      const setup = pick(".exe", "setup"), zip = pick(".zip", "portable");
-      if (setup) { document.getElementById("dlSetup").href = setup.browser_download_url; document.getElementById("heroDl").href = setup.browser_download_url; document.getElementById("szSetup").textContent = mb(setup.size); }
-      if (zip) { document.getElementById("dlZip").href = zip.browser_download_url; document.getElementById("szZip").textContent = mb(zip.size); }
-      const d = rel.published_at ? new Date(rel.published_at) : null;
-      if (ver) document.getElementById("relinfo").textContent = "v" + ver + (d ? "，" + (d.getMonth() + 1) + " 月 " + d.getDate() + " 日发布" : "");
-    })
-    .catch(() => {});
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // things come up as they scroll into view, the cards of a row one after another
+  const seen = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); seen.unobserve(e.target); } }), { threshold: .12 });
+  document.querySelectorAll(".sh, .step, .card, .get, .lk, .qa details, .sib, .tour, .art").forEach(el => {
+    el.classList.add("reveal");
+    if (el.matches(".card, .step, .lk, details")) el.style.setProperty("--d", ([...el.parentNode.children].indexOf(el) % 3) * 0.08 + "s");
+    seen.observe(el);
+  });
+  // the gallery: a tab, an arrow, a dot or a swipe turns the page; it turns by itself while it is in view and left alone
+  const track = document.querySelector(".track"), slides = [...document.querySelectorAll(".slide")];
+  const tabs = [...document.querySelectorAll(".tabs button")], dots = [...document.querySelectorAll(".dots i")];
+  let at = 0, busy = false, inView = false, timer = 0;
+  const mark = i => {
+    at = i;
+    slides.forEach((x, j) => x.classList.toggle("on", j === i));
+    tabs.forEach((x, j) => { x.classList.toggle("on", j === i); x.setAttribute("aria-selected", j === i); });
+    dots.forEach((x, j) => x.classList.toggle("on", j === i));
+  };
+  const go = i => { i = (i + slides.length) % slides.length; track.scrollTo({ left: i * track.clientWidth, behavior: still ? "auto" : "smooth" }); mark(i); };
+  function rest() { clearInterval(timer); if (!still) timer = setInterval(() => { if (inView && !busy && !document.hidden) go(at + 1); }, 6000); }
+  tabs.forEach((b, i) => b.addEventListener("click", () => { go(i); rest(); }));
+  dots.forEach((d, i) => d.addEventListener("click", () => { go(i); rest(); }));
+  document.querySelectorAll(".nav").forEach(b => b.addEventListener("click", () => { go(at + +b.dataset.step); rest(); }));
+  let settle = 0;
+  track.addEventListener("scroll", () => { clearTimeout(settle); settle = setTimeout(() => { const i = Math.round(track.scrollLeft / track.clientWidth); if (i !== at && slides[i]) mark(i); }, 80); }, { passive: true });
+  const tour = document.querySelector(".tour");
+  ["pointerenter", "focusin", "touchstart"].forEach(t => tour.addEventListener(t, () => { busy = true; }, { passive: true }));
+  ["pointerleave", "focusout", "touchend"].forEach(t => tour.addEventListener(t, () => { busy = false; }, { passive: true }));
+  new IntersectionObserver(es => { inView = es[0].isIntersecting; }, { threshold: .5 }).observe(tour);
+  rest();
+  // folding, on a phone
+  document.querySelectorAll("[data-unfold]").forEach(b => b.addEventListener("click", () => { b.previousElementSibling.classList.add("open"); b.remove(); }));
+  // a few stars fly out of a download button when it is pressed (the download itself goes on as usual)
+  document.querySelectorAll(".btn.go").forEach(b => b.addEventListener("click", e => {
+    if (still) return;
+    const r = b.getBoundingClientRect(), x = e.clientX || r.left + r.width / 2, y = e.clientY || r.top + r.height / 2;
+    for (let i = 0; i < 9; i++) {
+      const s = document.createElement("span"), a = Math.PI * 2 * i / 9 + Math.random() * .5, d = 46 + Math.random() * 34;
+      s.className = "burst"; s.textContent = "✦";
+      s.style.cssText = `left:${x}px;top:${y}px;--x:${Math.cos(a) * d}px;--y:${Math.sin(a) * d}px;--r:${Math.random() * 180 - 90}deg;color:${["#ff6fa5", "#9f86ff", "#58b4ff", "#f5b83d"][i % 4]}`;
+      document.body.appendChild(s); setTimeout(() => s.remove(), 900);
+    }
+  }));
 })();
+// a Baidu netdisk link for players who cannot download from GitHub ("" hides the link)
+const NETDISK = "";
+if (NETDISK) { const n = document.getElementById("netdisk"); n.href = NETDISK; n.hidden = false; }
 </script>
 </body>
 </html>
