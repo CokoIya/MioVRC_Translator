@@ -507,7 +507,8 @@ class UpdateCheckerTests(unittest.TestCase):
                 self.assertTrue(update_checker._verify_update_manifest(data))
                 info = _parse_update_info(data)
                 self.assertIsNotNone(info)
-                self.assertEqual(info.version, f"v{update_checker.APP_VERSION}")
+                # Website releases can be newer than the public source snapshot.
+                self.assertEqual(info.version, data["version"])
                 self.assertGreater(info.size_bytes or 0, 0)
                 self.assertEqual(len(info.sha256), 64)
 

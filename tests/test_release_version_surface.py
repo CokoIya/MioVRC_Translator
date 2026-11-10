@@ -8,6 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_RELEASE_VERSION = "1.5.1"
 EXPECTED_WINDOWS_NUMERIC_VERSION = "1.5.1.0"
+# Official installers and the website are published independently of public app sources.
+EXPECTED_WEBSITE_VERSION = "1.6.4"
 
 
 def _read(relative_path: str) -> str:
@@ -29,7 +31,7 @@ def _resource_tuple_version(text: str, field: str) -> str:
     return ".".join(match.groups())
 
 
-def test_release_version_is_consistent_across_build_and_current_docs() -> None:
+def test_public_source_build_and_website_release_versions() -> None:
     version_source = _read("src/version.py")
     app_version = _required_match(
         r'^APP_VERSION\s*=\s*"([^"]+)"',
@@ -79,7 +81,7 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
         == app_version
     )
 
-    version_token = f"v{app_version}"
+    version_token = f"v{EXPECTED_WEBSITE_VERSION}"
     expected_installer = f"MioTranslator-Setup-{version_token}.exe"
     expected_url = (
         "https://github.com/CokoIya/MioVRC_Translator/releases/download/"
@@ -108,32 +110,119 @@ def test_release_version_is_consistent_across_build_and_current_docs() -> None:
 
 def test_release_notes_are_prepared_for_manifest_signing() -> None:
     expected_languages = {"zh-CN", "en", "ja", "ru", "ko"}
-    expected_prefix = f"v{EXPECTED_RELEASE_VERSION}"
 
     # Artifact-derived manifest metadata is finalized and signed only after the
     # production installer exists. Human-authored notes must be ready first
     # because the manifest generator deliberately preserves them.
-    for relative_path in ("mio_update.json", "docs/installer_manifest.json"):
+    for relative_path, release_version in (
+        ("mio_update.json", EXPECTED_RELEASE_VERSION),
+        ("docs/installer_manifest.json", EXPECTED_WEBSITE_VERSION),
+    ):
+        expected_prefix = f"v{release_version}"
         manifest = json.loads(_read(relative_path))
+        assert manifest["version"] == expected_prefix
         assert str(manifest["notes"]).startswith(expected_prefix)
         localized = manifest["notes_i18n"]
         assert set(localized) == expected_languages
         assert all(str(note).startswith(expected_prefix) for note in localized.values())
 
 
-def test_v150_website_prioritizes_vr_in_every_language() -> None:
+WEBSITE_LOCALES = ("zh-CN", "en", "ja", "ru", "ko")
+
+
+def _website_translations(website: str) -> dict[str, dict[str, str]]:
+    table = re.search(r"const translations = \{\n(.*?)\n    \};", website, flags=re.DOTALL)
+    assert table is not None, "Missing website translations table"
+    # re.split with a capture group yields [prefix, locale, body, locale, body, ...].
+    parts = re.split(r"^      '?(zh-CN|en|ja|ru|ko)'?: \{$", table.group(1), flags=re.MULTILINE)
+    return {
+        locale: dict(re.findall(r"\b([A-Za-z]\w*): '((?:[^'\\]|\\.)*)'", body))
+        for locale, body in zip(parts[1::2], parts[2::2])
+    }
+
+
+def _website_screen_sizes(website: str) -> dict[str, tuple[int, int]]:
+    block = _required_match(r"const SCREEN_SIZES = \{([^}]*)\};", website, label="SCREEN_SIZES").group(1)
+    return {
+        scene: (int(width), int(height))
+        for scene, width, height in re.findall(r"'?([\w-]+)'?: \[(\d+), (\d+)\]", block)
+    }
+
+
+def test_website_presents_the_classic_release_in_every_language() -> None:
     website = _read("docs/index.html")
-    for field in ("hero-eyebrow", "hero-sub", "spotlight-kicker"):
-        localized = re.findall(rf"'{field}': '([^\n]+)',", website)
-        assert len(localized) == 5
-        assert all("VR" in value for value in localized)
-    assert 'id="feature-1-title">截图翻译与独立语言' in website
-    assert 'id="feature-2-title">稳定字幕与可搬移面板' in website
-    assert 'id="feature-3-title">手腕书签、记录与扫码' in website
-    assert "松开后保持显示" in website
-    assert "仅保留于本次会话" in website
-    assert "v1.4.1" not in website
-    assert "SteamVR" in _read("docs/downloads/index.html")
+    translations = _website_translations(website)
+    assert tuple(translations) == WEBSITE_LOCALES
+    keys = set(translations["zh-CN"])
+    assert len(keys) > 100
+    version_token = f"v{EXPECTED_WEBSITE_VERSION}"
+    for locale, copy in translations.items():
+        assert set(copy) == keys, f"{locale} website copy has different keys"
+        assert all(value.strip() for value in copy.values()), f"{locale} has empty website copy"
+        for key in ("description", "heroBadge", "downloadIntro"):
+            assert version_token in copy[key], f"{locale}.{key} does not name {version_token}"
+        for key in ("description", "feature3Body", "guide5Title"):
+            assert "SteamVR" in copy[key], f"{locale}.{key} no longer mentions SteamVR"
+        assert "v1.3.8.5" in copy["olderNote"]
+
+    # The classic (Qt) app is the product again and carries the name MioVRCT. The shelved
+    # Electron edition is not offered: its MioVRCT-Setup-1.6.x installers remove the classic app.
+    downloads = _read("docs/downloads/index.html")
+    for page in (website, downloads):
+        assert "MioVRCT-Setup" not in page
+        assert "MioVRCT" in page
+    for locale, copy in translations.items():
+        assert copy["pageTitle"].startswith("MioVRCT"), locale
+        assert "Mio RealTime Translator" not in " ".join(copy.values()), locale
+    assert "SteamVR" in downloads
+
+    release = _required_match(r"const RELEASE = \{([^}]*)\};", website, label="RELEASE block").group(1)
+    fields = dict(re.findall(r"(\w+): '([^']*)'", release))
+    expected_installer = f"MioTranslator-Setup-{version_token}.exe"
+    assert fields["version"] == EXPECTED_WEBSITE_VERSION
+    assert fields["file"] == expected_installer
+    assert fields["url"] == (
+        "https://github.com/CokoIya/MioVRC_Translator/releases/download/"
+        f"{version_token}/{expected_installer}"
+    )
+    assert re.fullmatch(r"\d+ MiB", fields["sizeLabel"])
+
+    # The download works without JavaScript: the static markup carries the same release.
+    anchor = _required_match(r'<a[^>]*id="download-direct-link"[^>]*>', website, label="download link").group(0)
+    assert f'href="{fields["url"]}"' in anchor
+    assert f'download="{expected_installer}"' in anchor
+    assert f'<span data-release="version">{version_token}</span>' in website
+    assert f'<span data-release="sizeLabel">{fields["sizeLabel"]}</span>' in website
+
+
+def test_website_screenshots_exist_for_every_language_and_theme() -> None:
+    website = _read("docs/index.html")
+    sizes = _website_screen_sizes(website)
+    scenes = set(re.findall(r'data-scene="([\w-]+)"', website))
+    assert scenes and scenes <= set(sizes)
+    for tag in re.findall(r'<img[^>]*data-scene="[\w-]+"[^>]*>', website):
+        scene = _required_match(r'data-scene="([\w-]+)"', tag, label="scene").group(1)
+        width = int(_required_match(r'\swidth="(\d+)"', tag, label=f"{scene} width").group(1))
+        height = int(_required_match(r'\sheight="(\d+)"', tag, label=f"{scene} height").group(1))
+        assert (width, height) == sizes[scene], f"static size of {scene} differs from SCREEN_SIZES"
+
+    screens = REPO_ROOT / "docs" / "assets" / "screens"
+    manifest = json.loads((screens / "manifest.json").read_text(encoding="utf-8"))
+    for locale in WEBSITE_LOCALES:
+        for theme in ("dark", "light"):
+            listed = manifest[locale][theme]
+            assert set(listed) == scenes, f"{locale}/{theme} screenshots are stale or missing"
+            for scene in scenes:
+                assert (screens / locale / theme / f"{scene}.webp").is_file()
+                width, height = sizes[scene]
+                image_width = listed[scene]["width"]
+                image_height = listed[scene]["height"]
+                # Window shots are stored at 2x for sharp text, headset panels at native size;
+                # either way the page box keeps the picture's aspect ratio (within a pixel).
+                assert image_width in (width, 2 * width), f"{locale}/{theme}/{scene} width"
+                assert abs(image_height * width - height * image_width) <= image_width, (
+                    f"{locale}/{theme}/{scene} aspect ratio"
+                )
 
 
 def test_release_build_preserves_existing_dist_outputs() -> None:
@@ -160,7 +249,7 @@ def test_public_build_excludes_private_vr_modules() -> None:
         assert f'"{module}"' not in spec
 
 
-def test_current_release_docs_describe_single_installer_and_custom_relays() -> None:
+def test_current_release_docs_describe_single_installer() -> None:
     for relative_path in (
         "docs/README.zh-CN.md",
         "docs/README.en.md",
@@ -173,20 +262,20 @@ def test_current_release_docs_describe_single_installer_and_custom_relays() -> N
     website = _read("docs/index.html")
     assert "Base URL and Model are automatically locked" not in website
     assert "Base URL 与 Model 将按后端自动锁定" not in website
-    assert "compatible relays keep custom Base URLs" in website
-    assert "兼容中继的自定义 Base URL" in website
-    for field in (
-        "download-sub",
-        "download-card-body",
-        "download-release-note",
-        "download-model-text",
-        "download-model-note",
-        "download-qq-1-text",
-        "download-qq-2-text",
-        "download-community-note",
+    translations = _website_translations(website)
+    for key in (
+        "downloadTitle",
+        "downloadIntro",
+        "downloadNote",
+        "downloadButton",
+        "releaseNotes",
+        "qq1",
+        "qq2",
+        "communityNote",
+        "olderNote",
     ):
-        assert f'id="{field}"' in website
-        assert website.count(f"'{field}':") == 5
+        assert f'data-i18n="{key}"' in website
+        assert all(translations[locale].get(key) for locale in WEBSITE_LOCALES), key
     for removed_field in (
         "download-checksum",
         "download-signature",

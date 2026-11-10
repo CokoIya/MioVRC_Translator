@@ -1,2048 +1,775 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-  <title>Mio RealTime Translator v1.5.1 · SteamVR</title>
-  <meta name="description" content="Mio v1.5.1：SteamVR 双手取景翻译、二维码、手腕书签、双向聊天记录和固定朝向字幕，保留原有翻译、ASR 与 TTS 服务。" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f4f2">
+  <title>MioVRCT · VRChat 实时语音翻译</title>
+  <meta name="description" content="MioVRCT v1.6.4：为 VRChat 而做的免费实时语音翻译。双向翻译、悬浮窗、SteamVR 头显字幕、手腕面板、取景翻译与 AI 朗读。">
+  <link rel="canonical" href="https://miovrc.com/">
+  <link rel="icon" type="image/png" href="assets/icons/app_icon_mio.png">
+  <link rel="apple-touch-icon" href="assets/icons/app_icon_mio.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="MioVRCT">
+  <meta property="og:title" content="MioVRCT · VRChat 实时语音翻译">
+  <meta property="og:description" content="说你的语言，聊同一个世界。免费、GPL 开源，支持桌面与 SteamVR。">
+  <meta property="og:url" content="https://miovrc.com/">
+  <meta property="og:image" content="https://miovrc.com/assets/screens/en/dark/main.webp">
+  <meta property="og:image:width" content="2048">
+  <meta property="og:image:height" content="1416">
+  <meta property="og:image:alt" content="MioVRCT real-time conversation window">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="MioVRCT · Real-time voice translation for VRChat">
+  <meta name="twitter:description" content="Speak your language. Share the conversation. Free and GPL open source, for desktop and SteamVR.">
+  <meta name="twitter:image" content="https://miovrc.com/assets/screens/en/dark/main.webp">
+  <script>
+    // Apply the saved appearance before the first paint. Storage may be unavailable.
+    try {
+      const preference = localStorage.getItem('mio-site-theme') || 'system';
+      document.documentElement.dataset.theme = ['light', 'dark'].includes(preference)
+        ? preference : (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    } catch (_) {}
+  </script>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
-      --acc1: #00e5ff;
-      --acc2: #ff4fd8;
-      --acc3: #b7ff2a;
-      --acc4: #ffb84d;
-      --bg: #030304;
-      --panel: rgba(8, 10, 13, 0.72);
-      --card: rgba(255, 255, 255, 0.06);
-      --bdr: rgba(255, 255, 255, 0.16);
-      --txt1: #f4f6ff;
-      --txt2: #c4c9d8;
-      --txt3: #858c9f;
-      --rad: 8px;
-      --maxw: 1040px;
-      --shadow: 0 26px 70px rgba(0, 0, 0, 0.5);
-    }
-
-    html {
-      font-family: "Avenir Next", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB",
-                   "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
-      background: var(--bg);
-      color: var(--txt1);
-      -webkit-font-smoothing: antialiased;
-      scroll-behavior: smooth;
-    }
-
-    body {
-      min-height: 100vh;
-      overflow-y: auto;
-      scroll-behavior: smooth;
-      background: var(--bg);
-      color: var(--txt1);
-      overflow-x: hidden;
-    }
-
-    body::before,
-    body::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      display: none;
-    }
-
-    body::before {
-      z-index: -2;
-      background: url('./assets/icons/Mio_1.png') center / cover no-repeat;
-      transform: scale(1.06);
-      opacity: 0.6;
-      filter: brightness(0.72) saturate(1.02);
-    }
-
-    body::after {
-      z-index: -1;
-      background:
-        linear-gradient(115deg, rgba(0, 229, 255, 0.08), transparent 34%),
-        linear-gradient(245deg, rgba(255, 79, 216, 0.07), transparent 30%),
-        linear-gradient(180deg, rgba(3, 3, 4, 0.1) 0%, rgba(3, 3, 4, 0.5) 100%);
-    }
-
-    body::-webkit-scrollbar {
-      width: 10px;
-    }
-
-    body::-webkit-scrollbar-track {
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    body::-webkit-scrollbar-thumb {
-      background: rgba(123, 109, 242, 0.45);
-      border-radius: 999px;
-      border: 2px solid transparent;
-      background-clip: padding-box;
-    }
-
-    .page-backdrop,
-    .page-backdrop-image,
-    .page-backdrop-grid,
-    .page-backdrop-circuit,
-    .page-backdrop-scrim,
-    .page-backdrop-scan {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-    }
-
-    .page-backdrop { z-index: 0; }
-    .page-backdrop-image {
-      background-image: url('./assets/icons/Mio_1.png');
-      background-repeat: no-repeat;
-      background-position: right 2vw center;
-      background-size: min(58vw, 820px) auto;
-      opacity: 0.55;
-      filter: saturate(0.92) contrast(1.04);
-    }
-    .page-backdrop-grid {
-      background-image:
-        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
-      background-size: 58px 58px;
-      opacity: 0.18;
-      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.7));
-    }
-    .page-backdrop-circuit {
-      background:
-        linear-gradient(90deg, transparent 0 18%, rgba(0, 229, 255, 0.18) 18.15%, transparent 18.3% 64%, rgba(255, 184, 77, 0.12) 64.15%, transparent 64.3%),
-        linear-gradient(0deg, transparent 0 28%, rgba(255, 79, 216, 0.14) 28.1%, transparent 28.22% 72%, rgba(183, 255, 42, 0.1) 72.1%, transparent 72.22%);
-      background-size: 420px 260px;
-      opacity: 0.22;
-      transform: skewY(-7deg) translateY(-6vh);
-      mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.8), transparent 78%);
-    }
-    .page-backdrop-scrim {
-      background:
-        linear-gradient(90deg, rgba(3, 3, 4, 0.98) 0%, rgba(3, 3, 4, 0.82) 38%, rgba(3, 3, 4, 0.32) 70%, rgba(3, 3, 4, 0.74) 100%),
-        linear-gradient(180deg, rgba(3, 3, 4, 0.05) 0%, rgba(3, 3, 4, 0.22) 48%, rgba(3, 3, 4, 0.88) 100%);
-    }
-    .page-backdrop-scan {
-      background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 7px);
-      opacity: 0.08;
-      mix-blend-mode: screen;
-    }
-
-    nav {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 240;
-      height: 64px;
-      background: rgba(5, 6, 12, 0);
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-      border-bottom: 1px solid rgba(255, 255, 255, 0);
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 32px;
-      gap: 24px;
-      transition: background-color .28s ease, border-bottom-color .28s ease, backdrop-filter .28s ease, -webkit-backdrop-filter .28s ease;
-    }
-    .nav-logo {
-      display: flex; align-items: center; gap: 12px;
-      text-decoration: none;
-      color: inherit;
-      flex-shrink: 0;
-    }
-    .nav-logo-img {
-      width: 30px; height: 30px; border-radius: 9px;
-      object-fit: cover;
-      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
-    }
-    .nav-logo-text {
-      font-size: 16px; font-weight: 700; letter-spacing: 0;
-      background: linear-gradient(90deg, var(--acc1), var(--acc2), var(--acc3));
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    nav ul { list-style: none; display: flex; align-items: center; gap: 30px; margin-left: auto; }
-    nav ul li a {
-      font-size: 13px; color: var(--txt3); text-decoration: none;
-      transition: color .22s ease, opacity .22s ease;
-    }
-    nav ul li a:hover, nav ul li a.active { color: var(--txt1); }
-    .nav-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
-    .lang-switcher {
-      height: 34px; border-radius: 999px;
-      border: 1px solid var(--bdr);
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--txt2); padding: 0 14px; font-size: 13px; outline: none;
-      cursor: pointer; transition: border-color .22s ease, color .22s ease;
-    }
-    .lang-switcher:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); }
-    .lang-switcher option { background: #0f111a; color: var(--txt1); }
-
-    .fp-dots {
-      position: fixed; right: 22px; top: 50%; transform: translateY(-50%);
-      z-index: 260; display: flex; flex-direction: column; gap: 12px;
-      pointer-events: auto;
-    }
-    .fp-dot {
-      position: relative;
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      border: none;
-      background: transparent;
-      cursor: pointer;
-    }
-        .fp-dot::before {
-      content: '';
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      transform: translate(-50%, -50%);
-      background: rgba(255, 255, 255, 0.34);
-      border: 1px solid rgba(255, 255, 255, 0.28);
-      transition: all .22s ease;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
-    }
-    .fp-dot:hover::before { background: rgba(255, 255, 255, 0.62); transform: translate(-50%, -50%) scale(1.08); }
-    .fp-dot.active::before {
-      background: var(--acc3);
-      border-color: rgba(255, 255, 255, 0.36);
-      transform: translate(-50%, -50%) scale(1.08);
-      box-shadow: 0 0 0 7px rgba(183, 255, 42, 0.14), 0 0 18px rgba(0, 229, 255, 0.26);
-    }
-
-    .eyebrow {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 14px; border-radius: 999px;
-      border: 1px solid rgba(0, 229, 255, 0.24);
-      background: rgba(0, 229, 255, 0.07);
-      color: #d7fbff; margin-bottom: 16px;
-      font-size: 11.5px; font-weight: 700; letter-spacing: 0;
-      text-transform: uppercase;
-      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
-    }
-    .sec-title {
-      font-size: 52px; font-weight: 800;
-      line-height: 1.08; text-align: center; color: var(--txt1);
-      margin-bottom: 12px; letter-spacing: 0;
-      text-shadow: 0 10px 40px rgba(0, 0, 0, 0.28);
-    }
-    .sec-sub {
-      font-size: 15px; color: var(--txt2); text-align: center;
-      width: min(100%, 650px); line-height: 1.76; margin-bottom: 40px;
-    }
-    
-    .grad-text {
-      background: linear-gradient(120deg, var(--acc1) 0%, var(--acc2) 48%, var(--acc3) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .hero-wordmark {
-      display: inline-block;
-      line-height: 1.1;
-      padding: 0 .04em .16em;
-      margin: 0 -.04em .06em;
-      text-rendering: geometricPrecision;
-      overflow: visible;
-    }
-    #hero {
-      z-index: 1;
-      justify-content: center;
-      align-items: flex-start;
-      text-align: left;
-      overflow: hidden;
-      padding-left: max(32px, 8vw);
-      padding-right: max(32px, 8vw);
-    }
-    #hero::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      z-index: 0;
-      background:
-        linear-gradient(90deg, rgba(3, 3, 4, 0.92), rgba(3, 3, 4, 0.56) 54%, rgba(3, 3, 4, 0.18)),
-        repeating-linear-gradient(90deg, transparent 0 130px, rgba(255, 255, 255, 0.035) 130px 131px, transparent 131px 260px);
-    }
-    .hero-bg {
-      position: absolute;
-      inset: 0;
-      z-index: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(115deg, transparent 0 35%, rgba(0, 229, 255, 0.14) 35.1%, transparent 35.5% 61%, rgba(255, 79, 216, 0.1) 61.1%, transparent 61.45%),
-        linear-gradient(180deg, transparent 0 72%, rgba(183, 255, 42, 0.08) 72.1%, transparent 72.35%);
-      opacity: 0.72;
-    }
-    .signal-canvas {
-      position: absolute;
-      inset: 0;
-      z-index: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-      pointer-events: none;
-      mix-blend-mode: screen;
-    }
-    .hero-stage {
-      position: absolute;
-      inset: 92px max(28px, 7vw) 64px auto;
-      width: min(45vw, 580px);
-      z-index: 1;
-      pointer-events: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0.94;
-    }
-    .signal-core {
-      position: relative;
-      width: min(36vw, 420px);
-      aspect-ratio: 1;
-      display: grid;
-      place-items: center;
-      transform: perspective(900px) rotateX(58deg) rotateZ(-18deg);
-      transform-style: preserve-3d;
-    }
-    .signal-core::before,
-    .signal-core::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border: 1px solid rgba(0, 229, 255, 0.35);
-      transform: rotate(45deg);
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 0 38px rgba(0, 229, 255, 0.12);
-    }
-    .signal-core::after {
-      inset: 15%;
-      border-color: rgba(255, 79, 216, 0.4);
-      transform: rotate(45deg) translateZ(42px);
-      box-shadow: 0 0 42px rgba(255, 79, 216, 0.14);
-    }
-    .signal-core img {
-      width: 82px;
-      height: 82px;
-      border-radius: var(--rad);
-      object-fit: cover;
-      transform: rotateZ(18deg) rotateX(-58deg) translateZ(64px);
-      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.22);
-    }
-    .signal-lane {
-      position: absolute;
-      height: 1px;
-      width: 72%;
-      left: 14%;
-      background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.82), rgba(183, 255, 42, 0.62), transparent);
-      transform-origin: center;
-      animation: lane-pulse 3.4s linear infinite;
-      opacity: 0.72;
-    }
-    .signal-lane.l1 { top: 28%; transform: rotate(0deg); }
-    .signal-lane.l2 { top: 50%; transform: rotate(90deg); animation-delay: -1.1s; }
-    .signal-lane.l3 { top: 72%; transform: rotate(0deg); animation-delay: -2.2s; }
-    @keyframes lane-pulse {
-      0% { clip-path: inset(0 100% 0 0); opacity: 0; }
-      20% { opacity: 0.85; }
-      60% { clip-path: inset(0 0 0 0); }
-      100% { clip-path: inset(0 0 0 100%); opacity: 0; }
-    }
-    .hero-inner {
-      position: relative;
-      z-index: 2;
-      width: min(100%, 690px);
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      padding: 0 12px;
-      border-radius: 0;
-      background: transparent;
-      border: none;
-      box-shadow: none;
-      backdrop-filter: none;
-      -webkit-backdrop-filter: none;
-    }
-
-    .hero-icon-wrap {
-      display: flex; justify-content: center; margin-bottom: 14px;
-      flex-shrink: 0;
-    }
-    .hero-icon {
-      width: 72px; height: 72px; border-radius: var(--rad);
-      object-fit: cover;
-      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.08);
-      animation: icon-float 4.2s ease-in-out infinite;
-    }
-    @keyframes icon-float {
-      0%,100% { transform: translateY(0); }
-      50% { transform: translateY(-10px); }
-    }
-
-    .hero-eyebrow {
-      display: inline-flex; align-items: center; gap: 8px;
-      font-size: 11.5px; font-weight: 700; letter-spacing: 0;
-      text-transform: uppercase; color: #e4fdff;
-      border: 1px solid rgba(0, 229, 255, 0.28);
-      background: rgba(3, 3, 4, 0.42);
-      padding: 6px 18px; border-radius: 999px; margin-bottom: 16px;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-    }
-    .hero-title {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.02em;
-      font-size: 76px; font-weight: 900;
-      line-height: 1.05; letter-spacing: 0;
-      color: #ffffff; margin-bottom: 16px;
-      text-shadow: 0 20px 60px rgba(0, 0, 0, 0.46);
-      overflow: visible;
-    }
-    .hero-title-main { display: block; }
-    .hero-sub {
-      font-size: 17px;
-      color: rgba(244, 246, 255, 0.9);
-      width: min(100%, 680px);
-      margin: 0 0 24px;
-      line-height: 1.76;
-      text-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
-    }
-    .hero-cta { display: flex; gap: 14px; justify-content: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
-    .hero-impact {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      width: min(100%, 650px);
-      margin: 0 0 22px;
-    }
-    .hero-impact-item {
-      min-height: 78px;
-      padding: 13px 15px;
-      border-radius: var(--rad);
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background:
-        linear-gradient(110deg, rgba(0, 229, 255, 0.12), rgba(255, 79, 216, 0.06)),
-        rgba(8, 10, 13, 0.66);
-      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(14px) saturate(125%);
-      -webkit-backdrop-filter: blur(14px) saturate(125%);
-      text-align: left;
-    }
-    .hero-impact-title {
-      display: block;
-      margin-bottom: 5px;
-      font-size: 13.5px;
-      font-weight: 850;
-      color: #ffffff;
-      line-height: 1.28;
-      text-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
-    }
-    .hero-impact-body {
-      display: block;
-      font-size: 11.5px;
-      line-height: 1.58;
-      color: rgba(244, 246, 255, 0.78);
-    }
-    .hero-tutorial {
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      min-height: 38px; padding: 0 22px; border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: linear-gradient(180deg, rgba(18, 24, 40, 0.76), rgba(12, 16, 28, 0.64));
-      color: rgba(247, 249, 255, 0.96); text-decoration: none;
-      font-size: 12.5px; font-weight: 700;
-      box-shadow: 0 12px 30px rgba(5, 6, 12, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-      margin: -2px 0 16px;
-      transition: all .22s ease;
-    }
-    .hero-tutorial:hover {
-      border-color: rgba(255, 255, 255, 0.28);
-      color: #fff;
-      transform: translateY(-2px);
-    }
-    .btn-primary,
-    .btn-ghost {
-      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
-      position: relative;
-      min-height: 52px; min-width: 158px; padding: 0 30px;
-      border-radius: 999px; font-size: 14.5px; font-weight: 700;
-      border: 1px solid transparent;
-      text-decoration: none; transition: all .22s ease; white-space: nowrap;
-      overflow: hidden;
-      isolation: isolate;
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
-    }
-    .btn-primary::before,
-    .btn-ghost::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      z-index: -1;
-    }
-    .btn-primary {
-      color: #fff;
-      border-color: rgba(255, 255, 255, 0.14);
-      box-shadow: 0 14px 34px rgba(0, 229, 255, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-    }
-    .btn-primary::before {
-      background: linear-gradient(120deg, #00b7ff 0%, #ff4fd8 58%, #b7ff2a 140%);
-    }
-    .btn-primary:hover { opacity: .96; transform: translateY(-2px); box-shadow: 0 18px 40px rgba(0, 229, 255, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.18); }
-    .btn-ghost {
-      color: rgba(247, 249, 255, 0.96);
-      border-color: rgba(255, 255, 255, 0.18);
-      text-decoration: none;
-      box-shadow: 0 12px 30px rgba(5, 6, 12, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    }
-    .btn-ghost::before {
-      background: linear-gradient(180deg, rgba(18, 24, 40, 0.76), rgba(12, 16, 28, 0.64));
-    }
-    .btn-ghost:hover {
-      border-color: rgba(255, 255, 255, 0.28);
-      color: #fff;
-      transform: translateY(-2px);
-      box-shadow: 0 16px 36px rgba(5, 6, 12, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-    }
-    .hero-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      min-height: 40px; font-size: 12.5px; font-weight: 600; color: rgba(244, 246, 255, 0.96);
-      padding: 0 18px; border-radius: 999px;
-      border: 1px solid rgba(255, 255, 255, 0.16);
-      background: linear-gradient(180deg, rgba(14, 18, 31, 0.76), rgba(10, 14, 25, 0.64));
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
-      margin-bottom: 10px;
-    }
-    .hero-badge svg { color: #98e1ff; }
-    .hero-credit {
-      font-size: 12px;
-      line-height: 1.5;
-      color: rgba(244, 246, 255, 0.72);
-      text-shadow: 0 1px 8px rgba(0, 0, 0, 0.34);
-    }
-    .scroll-hint {
-      position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
-      display: flex; flex-direction: column; align-items: center; gap: 6px;
-      font-size: 10.5px; color: var(--txt3); letter-spacing: 0;
-      text-transform: uppercase; animation: hint-bob 2.2s ease-in-out infinite;
-      z-index: 1;
-    }
-    .scroll-hint svg { opacity: .7; }
-    @keyframes hint-bob { 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(8px)} }
-
-    #features,
-    #guide,
-    #download {
-      backdrop-filter: blur(12px) saturate(118%);
-      -webkit-backdrop-filter: blur(12px) saturate(118%);
-    }
-    #features {
-      z-index: 2;
-      background:
-        linear-gradient(180deg, rgba(3, 3, 4, 0.62) 0%, rgba(7, 8, 10, 0.78) 100%),
-        linear-gradient(120deg, rgba(0, 229, 255, 0.08), transparent 44%);
-    }
-    .features-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
-      width: min(100%, var(--maxw));
-    }
-    .feature-spotlight {
-      width: min(100%, var(--maxw));
-      display: grid;
-      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-      gap: 18px;
-      align-items: center;
-      margin-bottom: 18px;
-      padding: 24px 26px;
-      border-radius: var(--rad);
-      border: 1px solid rgba(0, 229, 255, 0.28);
-      background:
-        linear-gradient(135deg, rgba(0, 229, 255, 0.14), rgba(255, 79, 216, 0.08)),
-        rgba(8, 10, 13, 0.72);
-      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(20px) saturate(125%);
-      -webkit-backdrop-filter: blur(20px) saturate(125%);
-    }
-    .feature-spotlight-kicker {
-      margin-bottom: 8px;
-      font-size: 11px;
-      font-weight: 850;
-      letter-spacing: 0;
-      text-transform: uppercase;
-      color: #d8fbff;
-    }
-    .feature-spotlight h3 {
-      margin: 0;
-      font-size: 32px;
-      line-height: 1.18;
-      color: #fff;
-      letter-spacing: 0;
-    }
-    .feature-spotlight p:last-child {
-      margin: 0;
-      color: rgba(244, 246, 255, 0.84);
-      font-size: 14px;
-      line-height: 1.76;
-    }
-    .feature-card {
-      background:
-        linear-gradient(145deg, rgba(0, 229, 255, 0.08), transparent 44%),
-        rgba(8, 10, 13, 0.68);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: var(--rad); padding: 24px 22px;
-      transition: transform .24s ease, border-color .24s ease, box-shadow .24s ease;
-      opacity: 1; transform: translateY(0);
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
-      backdrop-filter: blur(18px) saturate(120%);
-      -webkit-backdrop-filter: blur(18px) saturate(120%);
-    }
-    .feature-card.visible {
-      opacity: 1; transform: translateY(0);
-    }
-    .feature-card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(0, 229, 255, .34);
-      box-shadow: 0 28px 60px rgba(0, 0, 0, .44);
-    }
-    .feat-icon {
-      width: 46px; height: 46px; border-radius: var(--rad);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 22px; margin-bottom: 14px;
-      background: linear-gradient(135deg, rgba(0, 229, 255, .18), rgba(255, 184, 77, .12));
-      border: 1px solid rgba(255, 255, 255, .06);
-    }
-    .feature-card h3 {
-      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-      font-size: 15px; font-weight: 700; margin-bottom: 8px; color: var(--txt1);
-    }
-    .feature-card p { font-size: 13px; color: var(--txt2); line-height: 1.7; }
-    .dev-badge {
-      display: inline-flex; align-items: center; height: 20px;
-      padding: 0 8px; border-radius: 999px;
-      font-size: 11px; font-weight: 900; line-height: 1;
-      color: #17100a;
-      background: linear-gradient(135deg, #ffe17a, #ff8f6b);
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, .18), 0 8px 22px rgba(255, 143, 107, .22);
-    }
-
-    #guide {
-      z-index: 3;
-      background:
-        linear-gradient(180deg, rgba(5, 5, 7, 0.68), rgba(3, 3, 4, 0.82)),
-        linear-gradient(70deg, transparent, rgba(255, 79, 216, 0.08), transparent 74%);
-    }
-    .guide-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px;
-      width: min(100%, var(--maxw));
-    }
-    .guide-step {
-      display: flex; gap: 14px; align-items: flex-start;
-      padding: 18px 18px 17px; border-radius: var(--rad);
-      background:
-        linear-gradient(135deg, rgba(255, 79, 216, 0.08), transparent 48%),
-        rgba(8, 10, 13, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      opacity: 1; transform: translateY(0);
-      transition: opacity .45s ease, transform .45s ease, border-color .24s ease;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
-      backdrop-filter: blur(18px) saturate(120%);
-      -webkit-backdrop-filter: blur(18px) saturate(120%);
-    }
-    .guide-step.visible { opacity: 1; transform: translateY(0); }
-    .guide-step:hover { border-color: rgba(183, 255, 42, .32); transform: translateY(-2px); }
-    .step-num {
-      flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 800;
-      background: #eaff6f;
-      color: #080a0d;
-      box-shadow: 0 12px 26px rgba(183, 255, 42, 0.18);
-    }
-    .step-body h4 { font-size: 14.5px; font-weight: 700; margin-bottom: 6px; color: var(--txt1); }
-    .step-body p { font-size: 13px; color: var(--txt2); line-height: 1.72; }
-    .step-body code {
-      display: inline-flex; margin-top: 8px;
-      font-size: 12px; padding: 0 11px; min-height: 32px; border-radius: 999px;
-      background: rgba(45, 198, 239, .08); border: 1px solid rgba(45, 198, 239, .18);
-      color: #d7f8ff; font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-      align-items: center;
-    }
-    .guide-step.full { grid-column: 1 / -1; }
-
-    #download {
-      background:
-        linear-gradient(180deg, rgba(3, 3, 4, 0.74), rgba(3, 3, 4, 0.9)),
-        linear-gradient(120deg, rgba(255, 184, 77, 0.08), transparent 46%);
-      z-index: 4;
-    }
-    .dl-cards {
-      display: grid; gap: 18px; width: min(100%, var(--maxw));
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      margin-bottom: 18px;
-    }
-    .dl-card {
-      background:
-        linear-gradient(135deg, rgba(255, 184, 77, 0.08), transparent 44%),
-        rgba(8, 10, 13, 0.72);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: var(--rad); padding: 26px 24px 22px;
-      opacity: 1; transform: translateY(0);
-      transition: opacity .5s ease, transform .5s ease, border-color .24s ease;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
-      backdrop-filter: blur(18px) saturate(120%);
-      -webkit-backdrop-filter: blur(18px) saturate(120%);
-    }
-    .dl-card.visible { opacity: 1; transform: translateY(0); }
-    .dl-card:hover { border-color: rgba(255, 184, 77, .3); transform: translateY(-2px); }
-    .dl-icon-wrap {
-      width: 48px; height: 48px; border-radius: var(--rad); font-size: 24px;
-      display: flex; align-items: center; justify-content: center;
-      background: linear-gradient(135deg, rgba(255, 184, 77, .2), rgba(0, 229, 255, .12));
-      border: 1px solid rgba(255, 255, 255, .06);
-      margin-bottom: 15px;
-    }
-    .dl-card h3 { font-size: 17px; font-weight: 800; margin-bottom: 8px; color: var(--txt1); }
-    .dl-card p { font-size: 13px; color: var(--txt2); line-height: 1.76; margin-bottom: 16px; }
-    .dl-btns { display: flex; flex-direction: column; gap: 10px; }
-    .btn-dl {
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      padding: 0 16px; min-height: 42px; border-radius: var(--rad);
-      font-size: 13.5px; font-weight: 700; text-decoration: none;
-      transition: all .22s ease; cursor: pointer;
-    }
-    .btn-dl.prim {
-      background: linear-gradient(120deg, var(--acc1), var(--acc2), var(--acc4));
-      color: #fff; border: 1px solid rgba(255, 255, 255, 0.08);
-      box-shadow: 0 12px 28px rgba(0, 229, 255, 0.18);
-    }
-    .btn-dl.prim:hover { opacity: .92; transform: translateY(-2px); box-shadow: 0 16px 34px rgba(0, 229, 255, 0.22); }
-    .btn-dl.sec {
-      background: rgba(255, 255, 255, .04); border: 1px solid var(--bdr);
-      color: var(--txt2);
-    }
-    .btn-dl.sec:hover { border-color: rgba(255, 255, 255, 0.22); color: var(--txt1); transform: translateY(-2px); }
-    .download-community {
-      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px; margin-top: 6px;
-    }
-    .dl-note {
-      font-size: 11.5px; color: var(--txt3); margin-top: 2px; line-height: 1.65;
-      overflow-wrap: anywhere;
-    }
-    .privacy-block {
-      width: min(100%, var(--maxw));
-      background:
-        linear-gradient(120deg, rgba(0, 229, 255, 0.08), transparent 42%),
-        rgba(8, 10, 13, 0.78);
-      border: 1px solid rgba(151, 207, 255, 0.14);
-      border-radius: var(--rad); padding: 20px 22px;
-      display: flex; gap: 14px; align-items: flex-start;
-      opacity: 1; transform: translateY(0);
-      transition: opacity .5s .2s ease, transform .5s .2s ease;
-      box-shadow: 0 22px 54px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-      backdrop-filter: blur(18px) saturate(120%);
-      -webkit-backdrop-filter: blur(18px) saturate(120%);
-      margin-bottom: 22px;
-    }
-    .privacy-block.visible { opacity: 1; transform: translateY(0); }
-    .privacy-block svg {
-      flex-shrink: 0;
-      width: 40px;
-      height: 40px;
-      padding: 10px;
-      margin-top: 0;
-      color: #a7e7ff;
-      border-radius: var(--rad);
-      background: linear-gradient(135deg, rgba(0, 229, 255, 0.22), rgba(183, 255, 42, 0.12));
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-    }
-    .privacy-block h4 { font-size: 15px; font-weight: 800; margin-bottom: 7px; color: #ffffff; }
-    .privacy-block p { font-size: 13.5px; color: rgba(244, 246, 255, 0.92); line-height: 1.82; }
-    .privacy-block strong { color: #ffffff; }
-    .site-footer {
-      width: min(100%, var(--maxw));
-      padding: 18px 0 0;
-      border-top: 1px solid rgba(255, 255, 255, .08);
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-    }
-    .site-footer p { font-size: 11.5px; color: rgba(228, 232, 246, 0.82); text-align: center; line-height: 1.7; text-shadow: 0 4px 18px rgba(0, 0, 0, 0.28); }
-    .site-footer a { color: #c8f7ff; text-decoration: none; }
-    .site-footer a:hover { text-decoration: underline; }
-
-    .fp-section-anchor {
-      display: block;
-      width: 100%;
-      height: 0;
-      pointer-events: none;
-    }
-    .fp-section {
-      position: sticky;
-      top: 0;
-      min-height: 100vh;
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      position: sticky;
-      padding: 104px 32px 70px;
-      isolation: isolate;
-    }
-    .fp-section.section-scrollable {
-      position: relative;
-      top: auto;
-      justify-content: flex-start;
-    }
-    .fp-section.section-scrollable .scroll-hint {
-      display: none;
-    }
-    @media (max-width: 900px) {
-      nav { padding: 0 18px; }
-      nav ul { display: none; }
-      .fp-section { padding-inline: 22px; }
-      #hero {
-        align-items: center;
-        text-align: center;
-        padding-left: 22px;
-        padding-right: 22px;
+      color-scheme: light;
+      --bg: #f4f4f2; --ink: #222; --muted: #62625f; --faint: #71716e;
+      --glass: rgb(255 255 255 / .66); --soft: rgb(255 255 255 / .4);
+      --line: rgb(0 0 0 / .11); --edge: rgb(255 255 255 / .9);
+      --solid: #fafafa; --button: #282828; --button-ink: #fff;
+      --shadow: 0 16px 52px rgb(0 0 0 / .055); --green: #46835b;
+      --max: 1280px; --ease: cubic-bezier(.2,.8,.25,1.15);
+      font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Yu Gothic UI", "Malgun Gothic", system-ui, sans-serif;
+      font-synthesis: none; -webkit-font-smoothing: antialiased;
+      background: var(--bg); color: var(--ink); scroll-behavior: smooth;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark; --bg: #161616; --ink: #f1f1ef; --muted: #b0b0ac; --faint: #989894;
+        --glass: rgb(42 42 42 / .68); --soft: rgb(255 255 255 / .025);
+        --line: rgb(255 255 255 / .12); --edge: rgb(255 255 255 / .07);
+        --solid: #242424; --button: #eeeeeb; --button-ink: #202020;
+        --shadow: 0 16px 52px rgb(0 0 0 / .18); --green: #a6dbb6;
       }
-      #hero::before {
-        background:
-          linear-gradient(180deg, rgba(3, 3, 4, 0.76), rgba(3, 3, 4, 0.5)),
-          repeating-linear-gradient(90deg, transparent 0 92px, rgba(255, 255, 255, 0.035) 92px 93px, transparent 93px 184px);
-      }
-      .page-backdrop-image {
-        background-position: center 18vh;
-        background-size: min(92vw, 620px) auto;
-        opacity: 0.26;
-      }
-      .hero-stage {
-        inset: 78px 0 auto 0;
-        width: 100%;
-        height: 36vh;
-        opacity: 0.42;
-      }
-      .signal-core { width: min(72vw, 360px); }
-      .hero-inner {
-        align-items: center;
-        width: min(100%, 680px);
-      }
-      .hero-title { align-items: center; }
-      .hero-sub { margin-left: auto; margin-right: auto; }
-      .hero-cta { justify-content: center; }
-      .hero-impact { grid-template-columns: 1fr; width: min(100%, 560px); }
-      .hero-impact-item { min-height: auto; text-align: center; }
-      .sec-title { font-size: 40px; }
-      .feature-spotlight h3 { font-size: 28px; }
-      .feature-spotlight { grid-template-columns: 1fr; padding: 22px; }
-      .features-grid, .guide-grid, .dl-cards { grid-template-columns: 1fr; }
-      .download-community { grid-template-columns: 1fr; }
-      .guide-step.full { grid-column: 1; }
-      .fp-dots { right: 12px; }
     }
-    @media (max-height: 820px) {
-      .fp-section { padding-top: 84px; padding-bottom: 46px; }
-      .hero-eyebrow { margin-bottom: 12px; }
-      .hero-title { font-size: 58px; margin-bottom: 10px; }
-      .hero-sub { font-size: 14px; margin-bottom: 18px; line-height: 1.68; }
-      .hero-impact { margin-bottom: 14px; gap: 8px; }
-      .hero-impact-item { min-height: 58px; padding: 10px 12px; }
-      .hero-impact-title { margin-bottom: 0; font-size: 12.5px; }
-      .hero-impact-body { display: none; }
-      .hero-cta { margin-bottom: 12px; }
-      .hero-tutorial { margin-bottom: 10px; }
-      .hero-badge { margin-bottom: 4px; }
-      .scroll-hint { bottom: 14px; }
+    :root[data-theme="dark"] {
+      color-scheme: dark; --bg: #161616; --ink: #f1f1ef; --muted: #b0b0ac; --faint: #989894;
+      --glass: rgb(42 42 42 / .68); --soft: rgb(255 255 255 / .025);
+      --line: rgb(255 255 255 / .12); --edge: rgb(255 255 255 / .07);
+      --solid: #242424; --button: #eeeeeb; --button-ink: #202020;
+      --shadow: 0 16px 52px rgb(0 0 0 / .18); --green: #a6dbb6;
     }
-    @media (max-height: 720px) {
-      .hero-title { font-size: 52px; }
-      .hero-sub { width: min(100%, 620px); }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; }
+    h1, h2, h3, p, figure { margin: 0; }
+    a { color: inherit; text-decoration: none; }
+    button, select { font: inherit; color: inherit; }
+    button, summary, select { cursor: pointer; }
+    button { border: 0; }
+    img { display: block; max-width: 100%; height: auto; }
+    svg { width: 20px; height: 20px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    ::selection { background: var(--ink); color: var(--bg); }
+    :focus-visible { outline: 2px solid var(--ink); outline-offset: 5px; border-radius: 6px; }
+    [hidden] { display: none !important; }
+    .symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .wrap { width: min(var(--max), calc(100% - 96px)); margin-inline: auto; }
+    .section { padding-block: 112px; scroll-margin-top: 96px; }
+    .section + .section { border-top: 1px solid var(--line); }
+    .eyebrow { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .06em; margin-bottom: 20px; }
+    .eyebrow .rule { width: 26px; height: 1px; background: currentColor; }
+    .section-heading { margin-bottom: 56px; }
+    h2 { font-size: clamp(30px, 3.3vw, 42px); letter-spacing: -.045em; line-height: 1.25; font-weight: 600; text-wrap: balance; }
+    .intro { margin-top: 18px; max-width: 600px; font-size: 16px; line-height: 1.8; color: var(--muted); }
+    h3 { font-size: 22px; font-weight: 600; letter-spacing: -.025em; line-height: 1.4; }
+    .glass { background: var(--glass); border: 1px solid var(--line); border-radius: 24px; box-shadow: inset 0 1px var(--edge), var(--shadow); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+    .press { transition: transform 150ms var(--ease), background-color 150ms, border-color 150ms; }
+    @media (hover: hover) { .press:hover { transform: translateY(-2px); } }
+    .press:active { transform: scale(.97); }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 12px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--glass); font-size: 14px; font-weight: 600; line-height: 1.4; text-align: center; }
+    .button.primary { background: var(--button); color: var(--button-ink); border-color: transparent; }
+    .button.small { min-height: 38px; padding: 8px 13px; font-size: 12px; }
+    .button[aria-disabled="true"] { opacity: .65; cursor: wait; }
+    .text-link { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; text-decoration: underline; text-underline-offset: 5px; text-decoration-color: var(--line); }
+    .text-link:hover { text-decoration-color: currentColor; }
+    .skip { position: fixed; top: -80px; left: 20px; z-index: 100; }
+    .skip:focus { top: 16px; }
+    .site-header { position: sticky; top: 0; z-index: 30; border-bottom: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+    .nav-bar { min-height: 76px; display: flex; align-items: center; gap: 24px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 650; letter-spacing: -.04em; white-space: nowrap; }
+    .brand img { width: 29px; height: 29px; border-radius: 8px; }
+    .nav-links { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+    .nav-link { display: inline-flex; padding: 9px 11px; font-size: 12px; font-weight: 500; border-radius: 8px; color: var(--muted); white-space: nowrap; }
+    .nav-link:hover, .nav-link[aria-current="location"] { color: var(--ink); background: var(--soft); }
+    .nav-controls { display: flex; align-items: center; gap: 8px; }
+    .language { min-width: 95px; max-width: 110px; min-height: 36px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 8px; background: transparent; font-size: 12px; }
+    .language option { background: var(--solid); color: var(--ink); }
+    .icon-button { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 9px; background: transparent; }
+    .icon-button svg { width: 17px; height: 17px; }
+    .menu-button { display: none; }
+    .hero { padding-block: 100px 90px; }
+    .hero-grid { display: grid; grid-template-columns: .85fr 1.6fr; align-items: center; gap: 20px; }
+    .hero-visual { width: 100%; min-width: 0; }
+    .hero-copy { padding-bottom: 22px; position: relative; z-index: 2; }
+    .release-pill { display: inline-flex; align-items: center; gap: 9px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; margin-bottom: 26px; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
+    h1 { font-size: clamp(52px, 5.4vw, 76px); line-height: 1.03; letter-spacing: -.065em; font-weight: 620; margin-left: -4px; }
+    .hero-line { margin-top: 25px; font-size: clamp(22px, 2vw, 29px); line-height: 1.5; font-weight: 500; letter-spacing: -.04em; max-width: 420px; text-wrap: balance; }
+    .hero-description { margin-top: 18px; font-size: 15px; line-height: 1.85; color: var(--muted); max-width: 360px; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .privacy-line { display: flex; align-items: flex-start; gap: 7px; font-size: 11px; line-height: 1.8; color: var(--faint); max-width: 370px; margin-top: 22px; }
+    .privacy-line svg { width: 13px; height: 13px; margin-top: 3px; }
+    .hero-demo { position: relative; width: 100%; max-width: 1080px; aspect-ratio: 1.36; margin: 0 auto; }
+    .hero-main { position: absolute; top: 0; left: -2%; width: 97%; max-width: 1024px; }
+    .hero-island { position: absolute; width: 43%; max-width: 360px; aspect-ratio: 544 / 508; right: -1%; bottom: 0; }
+    .hero-frame { position: absolute; inset: 0; width: 100%; opacity: 0; transform: translateY(7px); transition: opacity 380ms ease, transform 380ms ease; }
+    .hero-frame.is-active { opacity: 1; transform: translateY(0); }
+    .demo-caption { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 3px; font-size: 10px; color: var(--faint); }
+    .demo-controls { display: inline-flex; align-items: center; gap: 5px; }
+    .demo-controls button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; }
+    .demo-controls svg { width: 12px; height: 12px; }
+    .demo-counter { font-variant-numeric: tabular-nums; font-size: 10px; }
+    .hero-foot { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 48px; color: var(--faint); font-size: 11px; }
+    .hero-foot span { display: inline-flex; align-items: center; gap: 8px; }
+    .hero-foot svg { width: 13px; height: 13px; }
+    .tour-layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 88px; align-items: start; }
+    .tour-stage { position: sticky; top: 116px; aspect-ratio: 1.2; overflow: hidden; }
+    .tour-slides { position: absolute; inset: 0 0 66px; }
+    .tour-slide { position: absolute; inset: 0; display: grid; align-items: center; justify-items: center; padding: 32px 20px; opacity: 0; transform: translateY(12px); transition: opacity 400ms ease, transform 400ms ease; }
+    .tour-slide.is-active { opacity: 1; transform: translateY(0); z-index: 1; }
+    .tour-slide img { width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; min-height: 0; }
+    .tour-slide.floating img { max-width: 360px; width: 70%; }
+    .tour-slide.headset { background: #101112; padding: 52px 32px 28px; }
+    .headset::before { content: attr(data-headset-label); position: absolute; left: 24px; top: 22px; color: #b5b5b5; font-size: 9px; letter-spacing: .14em; }
+    .headset::after { content: ""; position: absolute; inset: 44px 20px 16px; border: 1px solid rgb(255 255 255 / .08); border-radius: 14px; pointer-events: none; }
+    .stage-caption { position: absolute; bottom: 0; left: 0; right: 0; height: 66px; display: flex; align-items: center; gap: 20px; padding: 20px 24px; border-top: 1px solid var(--line); font-size: 12px; }
+    .stage-count { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+    .stage-progress { display: flex; gap: 5px; margin-left: auto; }
+    .stage-progress i { display: block; width: 13px; height: 3px; background: var(--line); border-radius: 3px; }
+    .stage-progress i.is-active { background: var(--ink); }
+    .feature-step { min-height: 570px; min-height: max(460px, 65vh); display: flex; flex-direction: column; justify-content: center; border-top: 1px solid var(--line); padding-block: 48px; }
+    .feature-step:first-child { border-top: 0; }
+    .step-number { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint); margin-bottom: 22px; }
+    .feature-step h3 { font-size: 28px; letter-spacing: -.04em; }
+    .feature-step p { color: var(--muted); font-size: 15px; line-height: 1.9; margin-top: 16px; max-width: 360px; }
+    .feature-step .step-note { margin-top: 24px; font-size: 11px; color: var(--faint); }
+    .inline-media { display: none; }
+    .also { padding-block: 30px 104px; }
+    .also-heading { font-size: 15px; margin-bottom: 24px; font-weight: 500; color: var(--muted); }
+    .also-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .mini-card { padding: 25px 22px 28px; border-radius: 18px; }
+    .mini-card > svg { margin-bottom: 24px; color: var(--muted); }
+    .mini-card h3 { font-size: 15px; letter-spacing: -.015em; }
+    .mini-card p { margin-top: 10px; font-size: 12px; line-height: 1.9; color: var(--muted); }
+    .guide-layout { display: grid; grid-template-columns: 1fr 1.3fr; gap: 120px; }
+    .guide-aside .text-link { margin-top: 30px; }
+    .guide-list { padding: 0; margin: 0; list-style: none; counter-reset: guide; }
+    .guide-list li { counter-increment: guide; display: grid; grid-template-columns: 32px 1fr; gap: 24px; padding-block: 26px; border-top: 1px solid var(--line); }
+    .guide-list li:first-child { padding-top: 0; border: 0; }
+    .guide-list li::before { content: "0" counter(guide); color: var(--faint); font-size: 11px; padding-top: 5px; }
+    .guide-list h3 { font-size: 17px; }
+    .guide-list p { font-size: 13px; line-height: 1.9; color: var(--muted); margin-top: 9px; }
+    .faq-wrap { max-width: 880px; margin: auto; }
+    .faq .section-heading { margin-bottom: 40px; }
+    details { border-top: 1px solid var(--line); }
+    summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 2px; font-size: 15px; font-weight: 500; line-height: 1.65; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; color: var(--faint); font-size: 22px; line-height: 1; font-weight: 300; transition: transform 220ms ease; flex: 0 0 auto; }
+    details[open] > summary::after { transform: rotate(45deg); }
+    .detail-body { padding: 0 34px 26px 2px; color: var(--muted); font-size: 13px; line-height: 1.95; }
+    .detail-body p + p { margin-top: 12px; }
+    @supports (interpolate-size: allow-keywords) {
+      details { interpolate-size: allow-keywords; }
+      details::details-content { block-size: 0; opacity: 0; overflow: clip; transition: block-size 260ms ease, opacity 220ms ease, content-visibility 260ms allow-discrete; }
+      details[open]::details-content { block-size: auto; opacity: 1; }
     }
-    @media (max-width: 640px) {
-      .hero-title { font-size: 42px; }
-      .hero-sub { font-size: 14.5px; line-height: 1.66; }
-      .hero-impact-body { display: none; }
-      .hero-stage { height: 34vh; opacity: 0.32; }
-      .signal-canvas { opacity: 0.62; }
-      .signal-core img { width: 64px; height: 64px; }
-      .sec-title { font-size: 34px; }
-      .sec-sub { font-size: 14px; margin-bottom: 26px; }
-      .fp-dots { display: none; }
+    .download-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; align-items: stretch; }
+    .download-card { padding: 38px; }
+    .download-brand { display: flex; align-items: center; gap: 15px; margin-bottom: 22px; }
+    .download-brand img { width: 44px; height: 44px; border-radius: 12px; }
+    .download-brand h3 { font-size: 26px; }
+    .download-meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    .download-card p { font-size: 12px; line-height: 1.9; color: var(--muted); }
+    .download-primary { margin-block: 26px 12px; }
+    .download-primary .button { min-height: 48px; }
+    .release-link { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; margin-left: 16px; text-decoration: underline; text-underline-offset: 4px; }
+    .community { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line); }
+    .community-links { display: flex; gap: 8px; margin-bottom: 12px; }
+    .dict-card > svg { width: 28px; height: 28px; margin-bottom: 22px; color: var(--muted); }
+    .dict-card h3 { font-size: 21px; margin-bottom: 14px; }
+    .dict-links { display: flex; align-items: flex-start; flex-direction: column; gap: 17px; margin-block: 26px; }
+    .dict-links .text-link { font-size: 12px; }
+    .older { margin-top: 28px; border-bottom: 1px solid var(--line); }
+    .older summary { font-size: 13px; }
+    .older-links { display: flex; flex-wrap: wrap; gap: 9px; padding-top: 4px; }
+    .older-note { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+    .privacy-block { display: grid; grid-template-columns: 28px 1fr; gap: 18px; padding: 30px 34px; margin-block: 0 64px; border: 1px solid var(--line); border-radius: 18px; background: var(--soft); }
+    .privacy-block > svg { margin-top: 3px; color: var(--muted); }
+    .privacy-block h2 { font-size: 15px; letter-spacing: 0; }
+    .privacy-block p { color: var(--muted); font-size: 12px; line-height: 1.95; margin-top: 10px; max-width: 1000px; }
+    .site-footer { padding-block: 28px 40px; border-top: 1px solid var(--line); }
+    .footer-row { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+    .footer-brand { font-size: 14px; font-weight: 600; letter-spacing: -.02em; }
+    .footer-copy { margin-top: 12px; font-size: 11px; color: var(--faint); line-height: 1.9; max-width: 740px; }
+    .footer-links { display: flex; gap: 22px; font-size: 11px; padding-top: 3px; white-space: nowrap; }
+    .reveal { opacity: 1; transform: none; }
+    @media (prefers-reduced-motion: no-preference) {
+      .motion-ready .reveal { opacity: 0; transform: translateY(12px); transition: opacity 550ms ease var(--delay, 0ms), transform 550ms ease var(--delay, 0ms); }
+      .motion-ready .reveal.is-visible { opacity: 1; transform: translateY(0); }
     }
-    @media (max-width: 480px) {
-      nav { height: 58px; padding: 0 12px; }
-      .nav-logo-text { font-size: 14px; }
-      .lang-switcher { width: 112px; max-width: 112px; padding: 0 10px; }
-      .fp-section { padding-inline: 16px; }
-      .feature-card, .guide-step, .dl-card, .privacy-block { border-radius: var(--rad); }
-      .fp-dots { right: 8px; }
+    @media (min-width: 1800px) { :root { --max: 1360px; } .hero { padding-block: 130px 112px; } }
+    @media (max-width: 1199px) {
+      .nav-bar { gap: 16px; } .nav-link { padding-inline: 8px; font-size: 11px; }
+      .hero-grid { grid-template-columns: .9fr 1.3fr; gap: 10px; }
+      .hero-line { font-size: 25px; } .hero-demo { aspect-ratio: 1.22; }
+      .hero-main { top: 5%; } .hero-island { width: 46%; }
+      .tour-layout { gap: 54px; } .guide-layout { gap: 64px; }
     }
+    @media (max-width: 999px) {
+      .wrap { width: calc(100% - 64px); }
+      .nav-bar { min-height: 68px; } .nav-controls { margin-left: auto; }
+      .menu-button { display: inline-flex; }
+      .nav-links { display: none; position: absolute; top: calc(100% + 8px); left: 32px; right: 32px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--solid); box-shadow: var(--shadow); }
+      .nav-links.is-open { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .nav-link { font-size: 13px; padding: 12px; white-space: normal; }
+      .hero { padding-block: 64px 70px; }
+      .hero-grid { display: flex; flex-direction: column; gap: 28px; }
+      .hero-copy { text-align: center; padding: 0; }
+      h1 { font-size: 70px; }
+      .hero-line { margin-inline: auto; max-width: 600px; font-size: 27px; }
+      .hero-description { max-width: 550px; margin-inline: auto; }
+      .hero-actions, .privacy-line { justify-content: center; } .privacy-line { margin-inline: auto; max-width: 550px; }
+      .hero-demo { max-width: 800px; aspect-ratio: 1.65; }
+      .hero-main { width: 90%; left: 0; top: 0; }
+      .hero-island { width: 35%; right: 0; bottom: -4%; }
+      .demo-caption { margin-top: 18px; }
+      .hero-foot { justify-content: center; margin-top: 36px; }
+      .tour-layout { grid-template-columns: 1.25fr 1fr; gap: 32px; }
+      .tour-stage { top: 96px; aspect-ratio: .95; }
+      .tour-slide { padding-inline: 12px; } .tour-slide.headset { padding-inline: 24px; }
+      .feature-step h3 { font-size: 25px; }
+      .also-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .download-card { padding: 28px; }
+      .release-link { margin: 16px 0 0; display: flex; width: fit-content; }
+    }
+    @media (max-width: 759px) {
+      .wrap { width: calc(100% - 40px); }
+      .section { padding-block: 70px; scroll-margin-top: 88px; }
+      .section-heading { margin-bottom: 36px; }
+      .nav-bar { gap: 10px; min-height: 64px; }
+      .brand { font-size: 17px; gap: 7px; } .brand img { width: 25px; height: 25px; }
+      .nav-controls { gap: 5px; } .language { min-width: 86px; width: 86px; padding-inline: 5px; font-size: 11px; }
+      .icon-button { width: 33px; height: 36px; }
+      .nav-links { left: 20px; right: 20px; }
+      .hero { padding-block: 50px 56px; }
+      .release-pill { margin-bottom: 22px; font-size: 10px; }
+      h1 { font-size: 57px; } .hero-line { font-size: 24px; margin-top: 21px; }
+      .hero-description { font-size: 13px; margin-top: 16px; }
+      .hero-actions { margin-top: 24px; } .button { font-size: 13px; padding: 12px 17px; }
+      .privacy-line { font-size: 10px; max-width: 330px; }
+      .hero-grid { gap: 32px; }
+      .hero-demo { aspect-ratio: 1.4; }
+      .hero-main { width: 100%; left: -3%; }
+      .hero-island { width: 45%; bottom: -3%; right: -2%; }
+      .demo-caption { font-size: 9px; gap: 8px; margin-top: 12px; }
+      .hero-foot { gap: 14px; font-size: 10px; margin-top: 29px; }
+      .tour-layout { display: block; } .tour-stage { display: none; }
+      .feature-step { min-height: auto; padding-block: 35px 42px; }
+      .feature-step:first-child { padding-top: 0; }
+      .step-number { margin-bottom: 14px; } .feature-step h3 { font-size: 26px; }
+      .feature-step p { max-width: 560px; font-size: 14px; margin-top: 12px; }
+      .feature-step .step-note { margin-top: 16px; }
+      .inline-media { display: grid; place-items: center; position: relative; margin-top: 26px; padding: 12px; border-radius: 18px; border: 1px solid var(--line); background: var(--soft); }
+      .inline-media img { width: auto; height: auto; max-height: 500px; object-fit: contain; }
+      .inline-media.floating img { max-width: 320px; width: 80%; }
+      .inline-media.headset { padding: 48px 20px 22px; background: #101112; }
+      .also { padding-block: 8px 64px; }
+      .also-grid { gap: 12px; } .mini-card { padding: 22px 18px; }
+      .mini-card > svg { margin-bottom: 18px; } .mini-card h3 { font-size: 14px; }
+      .mini-card p { font-size: 11px; }
+      .guide-layout { display: block; } .guide-aside { margin-bottom: 40px; }
+      .guide-list li { gap: 15px; grid-template-columns: 24px 1fr; }
+      summary { font-size: 14px; padding-block: 21px; gap: 16px; }
+      .detail-body { font-size: 12px; padding-right: 15px; }
+      .download-grid { grid-template-columns: 1fr; }
+      .download-card { padding: 26px; }
+      .download-brand h3 { font-size: 24px; }
+      .privacy-block { margin-bottom: 45px; padding: 24px 20px; grid-template-columns: 20px 1fr; gap: 12px; }
+      .privacy-block p { font-size: 11px; }
+      .footer-row { flex-direction: column; gap: 20px; }
+      .site-footer { padding-bottom: 32px; }
+    }
+    @media (max-width: 379px) { .wrap { width: calc(100% - 32px); } .brand { font-size: 16px; } .brand img { width: 23px; height: 23px; } .nav-bar { gap: 6px; } h1 { font-size: 52px; } .also-grid { grid-template-columns: 1fr; } }
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      *, *::before, *::after {
-        animation: none !important;
-        transition: none !important;
-      }
-      .signal-canvas { display: none; }
+      *, *::before, *::after, details::details-content { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+      .press:hover, .press:active, .reveal { transform: none !important; }
+      .reveal { opacity: 1 !important; }
     }
+    @media (prefers-reduced-transparency: reduce) { .glass, .site-header { background: var(--solid); backdrop-filter: none; -webkit-backdrop-filter: none; } }
   </style>
 </head>
 <body>
-  <div class="page-backdrop" aria-hidden="true">
-    <div class="page-backdrop-image"></div>
-    <div class="page-backdrop-circuit"></div>
-    <div class="page-backdrop-grid"></div>
-    <div class="page-backdrop-scrim"></div>
-    <div class="page-backdrop-scan"></div>
-  </div>
-
-<!-- NAV -->
-<nav>
-  <a class="nav-logo" href="#" onclick="scrollToSection(0);return false;">
-    <img class="nav-logo-img" src="./assets/icons/app_icon_mio.png" alt="Mio" />
-    <span class="nav-logo-text">Mio Translator</span>
-  </a>
-  <ul>
-    <li><a id="nav-intro" href="#" onclick="scrollToSection(0);return false;">介绍</a></li>
-    <li><a id="nav-features" href="#" onclick="scrollToSection(1);return false;">功能</a></li>
-    <li><a id="nav-guide" href="#" onclick="scrollToSection(2);return false;">使用说明</a></li>
-    <li><a id="nav-download" href="#" onclick="scrollToSection(3);return false;">下载</a></li>
-    <li><a id="nav-github" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></li>
-    <li><a id="nav-miovrca" href="/vrca/">MioVRCA</a></li>
-  </ul>
-  <div class="nav-right">
-    <select id="lang-switcher" class="lang-switcher" aria-label="Language">
-      <option value="zh-CN">简体中文</option>
-      <option value="en">English</option>
-      <option value="ja">日本語</option>
-      <option value="ru">Русский</option>
-      <option value="ko">한국어</option>
-    </select>
-  </div>
-</nav>
-
-<!-- DOT NAV -->
-<div class="fp-dots" aria-label="Section navigation" role="navigation">
-  <button class="fp-dot active" data-i="0" aria-label="Hero"></button>
-  <button class="fp-dot" data-i="1" aria-label="Features"></button>
-  <button class="fp-dot" data-i="2" aria-label="Guide"></button>
-  <button class="fp-dot" data-i="3" aria-label="Download"></button>
-</div>
-
-<!-- 0: HERO -->
-<section class="fp-section" id="hero">
-  <div class="hero-bg" aria-hidden="true"></div>
-  <canvas id="mio-signal-canvas" class="signal-canvas" aria-hidden="true"></canvas>
-  <div class="hero-stage" aria-hidden="true">
-    <div class="signal-core">
-      <span class="signal-lane l1"></span>
-      <span class="signal-lane l2"></span>
-      <span class="signal-lane l3"></span>
-      <img src="./assets/icons/app_icon_mio.png" alt="" />
-    </div>
-  </div>
-  <div class="hero-inner">
-    <div class="hero-eyebrow">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg>
-      <span id="hero-eyebrow">v1.5.1 · Mio VR手势</span>
-    </div>
-    <h1 class="hero-title">
-      <span class="grad-text hero-wordmark">Mio</span>
-      <span class="hero-title-main">RealTime Translator</span>
-    </h1>
-    <p class="hero-sub" id="hero-sub">戴着头显，也能取景翻译、扫描二维码、查看双向聊天记录。<br>SteamVR 手势操作与固定朝向字幕，让译文留在你看得清的位置；Mio 原有翻译、ASR 和 TTS 服务继续保留。</p>
-    <div class="hero-impact" aria-label="Core capabilities">
-      <div class="hero-impact-item">
-        <span class="hero-impact-title" id="hero-impact-1-title">双手取景，直接翻译</span>
-        <span class="hero-impact-body" id="hero-impact-1-body">用手柄框选画面，单独设置截图语言，结果保留为可搬移面板。</span>
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6zM8 12l3 3 5-6"/></symbol>
+    <symbol id="i-system" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10Z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="3"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4z"/></symbol>
+    <symbol id="i-language" viewBox="0 0 24 24"><path d="M3 5h12M9 3v2m4 0c0 7-8 12-10 12M5 8c1 4 4 6 7 7m1 6 4-11 4 11m-6.5-4h5"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5v16M3 3c4-1 7 0 9 2 2-2 5-3 9-2v16c-4-1-7 0-9 2-2-2-5-3-9-2z"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5m8-10 5 5-5 5M14 4l-4 16"/></symbol>
+    <symbol id="i-headset" viewBox="0 0 24 24"><path d="M5 7h14l2 10h-6l-3-3-3 3H3zM8 7l1-3h6l1 3"/><path d="M7 11h1m8 0h1"/></symbol>
+  </defs></svg>
+  <a class="skip button primary" href="#main" data-i18n="skip">跳到正文</a>
+  <header class="site-header">
+    <nav class="nav-bar wrap" aria-label="主导航" data-label="navLabel">
+      <a class="brand press" href="#home"><img src="assets/icons/app_icon_mio.png" alt="" width="29" height="29" decoding="async">MioVRCT</a>
+      <div class="nav-links" id="nav-links">
+        <a class="nav-link press" href="#features" data-i18n="navFeatures">功能</a>
+        <a class="nav-link press" href="#guide" data-i18n="navGuide">使用说明</a>
+        <a class="nav-link press" href="#faq" data-i18n="navFaq">常见问题</a>
+        <a class="nav-link press" href="#download" data-i18n="navDownload">下载</a>
+        <a class="nav-link press" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a class="nav-link press" href="/vrca/">MioVRCA ↗</a>
       </div>
-      <div class="hero-impact-item">
-        <span class="hero-impact-title" id="hero-impact-2-title">字幕不再追着视线跑</span>
-        <span class="hero-impact-body" id="hero-impact-2-body">固定朝向阅读，自由转头；需要时点击“移到眼前”重新定位。</span>
+      <div class="nav-controls">
+        <select class="language" id="lang-switcher" aria-label="网站语言" data-label="languageLabel">
+          <option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option><option value="ja" lang="ja">日本語</option><option value="ru" lang="ru">Русский</option><option value="ko" lang="ko">한국어</option>
+        </select>
+        <button class="icon-button press" id="theme-toggle" type="button" aria-label="主题：跟随系统" title="主题：跟随系统"><svg aria-hidden="true"><use href="#i-system"/></svg></button>
+        <button class="icon-button press menu-button" id="menu-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="展开导航" data-label="menuLabel"><svg aria-hidden="true"><use href="#i-menu"/></svg></button>
       </div>
-      <div class="hero-impact-item">
-        <span class="hero-impact-title" id="hero-impact-3-title">抬腕回看，不摘头显</span>
-        <span class="hero-impact-body" id="hero-impact-3-body">手腕书签、自己与对方的转译记录，集中在本次会话面板中。</span>
-      </div>
-    </div>
-    <div class="hero-cta">
-      <a id="hero-download" href="#" onclick="scrollToSection(3);return false;" class="btn-primary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        立即下载
-      </a>
-      <a id="hero-source" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" class="btn-ghost">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
-        查看源码
-      </a>
-    </div>
-    <a id="hero-tutorial" class="hero-tutorial" href="https://www.bilibili.com/video/BV1SPDTBhEdK/?share_source=copy_web&vd_source=9902314fcc4f4815dd6d12f4d7fa82e2" target="_blank" rel="noopener">
-      视频教学
-    </a>
-    <div class="hero-badge">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-      <span id="privacy-badge">无项目自有云服务 · VR 记录仅在本次会话保留</span>
-    </div>
-    <p class="hero-credit">背景图为天川 澪「みお」</p>
-  </div>
-  <div class="scroll-hint" onclick="scrollToSection(1)" style="cursor:pointer">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-    <span id="scroll-hint-text">向下滚动</span>
-  </div>
-</section>
-
-<!-- 1: FEATURES -->
-<section class="fp-section" id="features">
-  <p class="eyebrow" id="features-eyebrow">功能特性</p>
-  <h2 class="sec-title" id="features-title">为头显里的交流而适配</h2>
-  <p class="sec-sub" id="features-sub">先看懂眼前的文字，再接上跨语言对话。VR 与桌面共享 Mio 服务，不需要安装 VRHandsFrame。</p>
-  <div class="feature-spotlight">
-    <div>
-      <p class="feature-spotlight-kicker" id="spotlight-kicker">Mio VR手势 · SteamVR</p>
-      <h3 id="spotlight-title">取景、翻译、阅读，都在 VR 里完成</h3>
-    </div>
-    <p id="spotlight-body">双手按住握持键（手柄侧面的按键）取景；左扳机切换模式，右扳机截取或加入书签。靠近结果面板按握持键搬移，双手握持缩放。保留原有多翻译后端、语音识别与 AI 语音阅读。</p>
-  </div>
-  <div class="features-grid">
-    <div class="feature-card">
-      <div class="feat-icon">📷</div>
-      <h3 id="feature-1-title">截图翻译与独立语言</h3>
-      <p id="feature-1-body">拍照、翻译、二维码三种模式；原文与译文语言独立设置，不影响语音翻译。预览固定在截取位置，转头也能继续阅读。</p>
-    </div>
-    <div class="feature-card">
-      <div class="feat-icon">🥽</div>
-      <h3 id="feature-2-title">稳定字幕与可搬移面板</h3>
-      <p id="feature-2-body">实时字幕默认固定朝向，随实际位置平移但不随转头旋转。“移到眼前”一键召回，也可切换为跟随头部。</p>
-    </div>
-    <div class="feature-card">
-      <div class="feat-icon">🔖</div>
-      <h3 id="feature-3-title">手腕书签、记录与扫码</h3>
-      <p id="feature-3-body">按住左扳机并抬腕打开书签，松开后保持显示；回看自己与对方的转译。扫码只显示链接，点击后才打开。</p>
-    </div>
-    <div class="feature-card">
-      <div class="feat-icon">🔄</div>
-      <h3 id="feature-4-title">反向翻译 + 同声传译</h3>
-      <p id="feature-4-body">反向翻译可识别对方语音并显示译文；开启语音阅读后，译文还能通过 MixLine 虚拟麦克风实时读给游戏里的其他玩家。不是只给 VRC，只要游戏能选麦克风，就能搭出同声传译。</p>
-    </div>
-    <div class="feature-card">
-      <div class="feat-icon">✏️</div>
-      <h3 id="feature-5-title">文字输入 + AI 语音阅读</h3>
-      <p id="feature-5-body">输入文字可以翻译、发送到 VRC，也可以直接用 AI 声音朗读。无言势、口障或不方便开麦的玩家，可以用自己选择的声线把想说的话传进游戏语音。</p>
-    </div>
-    <div class="feature-card">
-      <div class="feat-icon">🔒</div>
-      <h3 id="feature-6-title">隐私优先</h3>
-      <p id="feature-6-body">VR 书签和转译记录仅保留于本次会话；图片需明确保存才写入本地。在线识别、翻译和语音合成按所选服务发送内容。</p>
-    </div>
-  </div>
-</section>
-
-<!-- 2: GUIDE -->
-<section class="fp-section" id="guide">
-  <p class="eyebrow" id="guide-eyebrow">使用说明</p>
-  <h2 class="sec-title" id="guide-title">五步开始使用</h2>
-  <p class="sec-sub" id="guide-sub">完成服务配置后，启动 SteamVR 并启用 Mio 的 VR 功能；桌面模式仍可单独使用。</p>
-  <div class="guide-grid">
-    <div class="guide-step">
-      <div class="step-num">1</div>
-      <div class="step-body">
-        <h4 id="guide-step-1-title">下载并安装</h4>
-        <p id="guide-step-1-body">点击下方「立即下载安装」按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。</p>
-      </div>
-    </div>
-    <div class="guide-step">
-      <div class="step-num">2</div>
-      <div class="step-body">
-        <h4 id="guide-step-2-title">配置翻译后端</h4>
-        <p id="guide-step-2-body">启动 MioTranslator.exe，点击右上角 ⚙ 设置，填写你的 API Key。官方服务会自动填入推荐 Base URL 与 Model；兼容中继的自定义 Base URL、请求头和 Model ID 可编辑并会原样保留。</p>
-      </div>
-    </div>
-    <div class="guide-step">
-      <div class="step-num">3</div>
-      <div class="step-body">
-        <h4 id="guide-step-3-title">设置游戏输入</h4>
-        <p id="guide-step-3-body">VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：</p>
-        <code>Options → OSC → Enable</code>
-      </div>
-    </div>
-    <div class="guide-step">
-      <div class="step-num">4</div>
-      <div class="step-body">
-        <h4 id="guide-step-4-title">启动 SteamVR 与 Mio VR</h4>
-        <p id="guide-step-4-body">确认头显和手柄追踪正常，在 Mio 中启用 VR 字幕／截图翻译。按需下载本地语音模型；在线识别无需本地模型。</p>
-      </div>
-    </div>
-    <div class="guide-step full">
-      <div class="step-num">5</div>
-      <div class="step-body">
-        <h4 id="guide-step-5-title">打开教学，开始取景</h4>
-        <p id="guide-step-5-body">在 Mio VR 仪表板查看教学，设置截图的原文／译文语言。双手按住握持键取景，按住左扳机并抬腕打开书签；字幕可用“移到眼前”重新定位。</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- 3: DOWNLOAD -->
-<section class="fp-section" id="download">
-  <p class="eyebrow" id="download-eyebrow">下载</p>
-  <h2 class="sec-title" id="download-title">新版下载</h2>
-  <p class="sec-sub" id="download-sub">v1.5.1 主打 SteamVR 适配：双手取景翻译、二维码、手腕书签、双向聊天记录与固定朝向字幕。保留原有翻译／ASR／TTS 服务。v1.3.8.5 及更早版本请手动安装。</p>
-  <div class="dl-cards">
-    <div class="dl-card">
-      <div class="dl-icon-wrap">⬇️</div>
-      <h3 id="download-card-title">Mio RealTime Translator</h3>
-      <p id="download-card-body">Windows x64 · v1.5.1 正式版 · 411.2 MiB / 431.2 MB · SteamVR 手势与字幕 · 桌面功能保留</p>
-      <p class="dl-note" id="download-release-note">安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。</p>
-      <div class="dl-btns">
-        <a href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.1/MioTranslator-Setup-v1.5.1.exe"
-           download="MioTranslator-Setup-v1.5.1.exe"
-           id="download-direct-link" class="btn-dl prim">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span id="download-button-text">下载安装包</span>
-        </a>
-        <a href="#"
-           id="download-model-link" class="btn-dl sec">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.009-.866-.014-1.7-2.782.605-3.369-1.343-3.369-1.343-.455-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.004.071 1.532 1.033 1.532 1.033.892 1.53 2.341 1.088 2.91.833.092-.647.35-1.088.636-1.338-2.221-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .839-.269 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.295 2.747-1.026 2.747-1.026.546 1.378.203 2.397.1 2.65.64.7 1.028 1.595 1.028 2.688 0 3.848-2.338 4.695-4.566 4.943.359.31.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .269.18.58.688.481A10.019 10.019 0 0022 12.017C22 6.484 17.523 2 12 2z"/></svg>
-          <span id="download-model-text">Beta版下载</span>
-        </a>
-        <p class="dl-note" id="download-model-note">暂无测试版提供，当前请使用 v1.5.1 正式版安装包。</p>
-        <div class="download-community">
-          <a href="https://qm.qq.com/q/BB1z8mldeM" target="_blank" rel="noopener" class="btn-dl sec">
-            <span id="download-qq-1-text">QQ 1 群</span>
-          </a>
-          <a href="https://qm.qq.com/q/TrkJ0MSz4G" target="_blank" rel="noopener" class="btn-dl sec">
-            <span id="download-qq-2-text">QQ 2 群</span>
-          </a>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero wrap" id="home" aria-labelledby="hero-title">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <div class="release-pill"><span class="status-dot"></span><span data-i18n="heroBadge">为 VRChat 而做 · v1.6.4</span></div>
+          <h1 id="hero-title">MioVRCT</h1>
+          <p class="hero-line" data-i18n="heroLine">说你的语言，聊同一个世界。</p>
+          <p class="hero-description" data-i18n="heroDescription">你说的话，译成对方能读懂的聊天框文字；对方的声音，也能实时译回你的语言。</p>
+          <div class="hero-actions">
+            <a class="button primary press" href="#download"><svg aria-hidden="true"><use href="#i-download"/></svg><span data-i18n="navDownload">下载</span></a>
+            <a class="button press" href="https://www.bilibili.com/video/BV1SPDTBhEdK/?share_source=copy_web&amp;vd_source=9902314fcc4f4815dd6d12f4d7fa82e2" target="_blank" rel="noopener noreferrer"><svg aria-hidden="true"><use href="#i-play"/></svg><span data-i18n="tutorial">视频教学</span></a>
+          </div>
+          <p class="privacy-line"><svg aria-hidden="true"><use href="#i-shield"/></svg><span data-i18n="heroPrivacy">没有项目自有云服务，在线服务由你选择。</span></p>
         </div>
-        <p class="dl-note" id="download-community-note">下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。</p>
+        <div class="hero-visual">
+          <figure class="hero-demo" id="hero-demo" aria-label="主窗口与悬浮窗会话演示" data-label="demoLabel">
+            <img class="hero-main" data-scene="main" src="assets/screens/zh-CN/dark/main.webp" width="1354" height="933" decoding="async" loading="eager" fetchpriority="high" alt="MioVRCT 主窗口中的双向翻译对话" data-alt="mainAlt">
+            <div class="hero-island">
+              <img class="hero-frame is-active" data-scene="island-1" src="assets/screens/zh-CN/dark/island-1.webp" width="654" height="583" decoding="async" loading="eager" alt="悬浮窗：收到对方的第一句译文" data-alt="frame1Alt">
+              <img class="hero-frame" data-scene="island-2" src="assets/screens/zh-CN/dark/island-2.webp" width="654" height="583" decoding="async" loading="eager" alt="悬浮窗：我的话已识别并翻译" data-alt="frame2Alt" aria-hidden="true">
+              <img class="hero-frame" data-scene="island-3" src="assets/screens/zh-CN/dark/island-3.webp" width="654" height="583" decoding="async" loading="eager" alt="悬浮窗：收到对方的下一句话" data-alt="frame3Alt" aria-hidden="true">
+              <img class="hero-frame" data-scene="island-4" src="assets/screens/zh-CN/dark/island-4.webp" width="654" height="583" decoding="async" loading="eager" alt="悬浮窗：我的下一句也已识别并翻译" data-alt="frame4Alt" aria-hidden="true">
+              <img class="hero-frame" data-scene="island-5" src="assets/screens/zh-CN/dark/island-5.webp" width="654" height="583" decoding="async" loading="eager" alt="悬浮窗：完整的双向翻译会话" data-alt="islandAlt" aria-hidden="true">
+            </div>
+          </figure>
+          <div class="demo-caption"><span data-i18n="demoCaption">真实界面 · 示例对话</span><div class="demo-controls"><span class="demo-counter" id="demo-counter" aria-hidden="true">01 / 05</span><button class="press" id="demo-toggle" type="button" aria-label="暂停演示"><svg aria-hidden="true"><use href="#i-pause"/></svg></button></div></div>
+        </div>
       </div>
-    </div>
-    <div class="dl-card">
-      <div class="dl-icon-wrap">📖</div>
-      <h3 id="download-dict-title">ASR 官方词典</h3>
-      <p id="download-dict-body">这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。</p>
-      <div class="dl-btns">
-        <a href="./dictionaries/" target="_blank" rel="noopener" class="btn-dl sec">
-          <span id="download-dict-module-text">打开词典页面</span>
-        </a>
-        <a href="./dictionaries/asr_dictionary_manifest.json" target="_blank" rel="noopener" class="btn-dl sec">
-          <span id="download-dict-manifest-text">查看更新清单</span>
-        </a>
-        <a href="./dictionaries/asr_terms.official.json" target="_blank" rel="noopener" class="btn-dl sec">
-          <span id="download-dict-json-text">下载词典文件</span>
-        </a>
-        <p class="dl-note" id="download-dict-note">软件里的“更新词典”会从这里获取官方词典。</p>
+      <div class="hero-foot"><span><svg aria-hidden="true"><use href="#i-system"/></svg>Windows x64</span><span><svg aria-hidden="true"><use href="#i-headset"/></svg>SteamVR</span><span><svg aria-hidden="true"><use href="#i-code"/></svg><span data-i18n="freeGpl">免费 · GPL 开源</span></span></div>
+    </section>
+
+    <section class="section wrap" id="features" aria-labelledby="features-title">
+      <div class="section-heading reveal"><p class="eyebrow"><span class="rule"></span><span data-i18n="navFeatures">功能</span></p><h2 id="features-title" data-i18n="featuresTitle">从桌面，到你眼前。</h2><p class="intro" data-i18n="featuresIntro">把翻译放在顺手的地方，让注意力留给眼前的人。</p></div>
+      <div class="tour-layout">
+        <div class="tour-stage glass" aria-label="功能截图" data-label="stageLabel">
+          <div class="tour-slides">
+            <figure class="tour-slide is-active" data-tour="0"><img data-scene="main" src="assets/screens/zh-CN/dark/main.webp" width="1354" height="933" loading="lazy" decoding="async" alt="MioVRCT 主窗口中的双向翻译对话" data-alt="mainAlt"></figure>
+            <figure class="tour-slide floating" data-tour="1" aria-hidden="true"><img data-scene="island-5" src="assets/screens/zh-CN/dark/island-5.webp" width="654" height="583" loading="lazy" decoding="async" alt="悬浮窗：完整的双向翻译会话" data-alt="islandAlt"></figure>
+            <figure class="tour-slide headset" data-tour="2" data-headset-label="STEAMVR / 头显视图" aria-hidden="true"><img data-scene="vr-caption" src="assets/screens/zh-CN/dark/vr-caption.webp" width="1200" height="245" loading="lazy" decoding="async" alt="SteamVR 头显里的原文和翻译字幕" data-alt="captionAlt"></figure>
+            <figure class="tour-slide headset" data-tour="3" data-headset-label="STEAMVR / 头显视图" aria-hidden="true"><img data-scene="vr-wrist" src="assets/screens/zh-CN/dark/vr-wrist.webp" width="1280" height="1120" loading="lazy" decoding="async" alt="手腕面板中的双向翻译历史记录" data-alt="wristAlt"></figure>
+            <figure class="tour-slide headset" data-tour="4" data-headset-label="STEAMVR / 头显视图" aria-hidden="true"><img data-scene="vr-result" src="assets/screens/zh-CN/dark/vr-result.webp" width="1000" height="820" loading="lazy" decoding="async" alt="SteamVR 取景翻译的结果面板" data-alt="resultAlt"></figure>
+            <figure class="tour-slide" data-tour="5" aria-hidden="true"><img data-scene="settings-voice" src="assets/screens/zh-CN/dark/settings-voice.webp" width="1354" height="933" loading="lazy" decoding="async" alt="设置中的 AI 朗读服务与声音选项" data-alt="voiceAlt"></figure>
+          </div>
+          <div class="stage-caption"><span class="stage-count" id="stage-count">01 / 06</span><span id="stage-title" data-i18n="feature1Title">实时互译</span><div class="stage-progress" aria-hidden="true"><i class="is-active"></i><i></i><i></i><i></i><i></i><i></i></div></div>
+        </div>
+        <div class="tour-steps">
+          <article class="feature-step" data-step="0"><div class="reveal"><div class="step-number">01 / 06</div><h3 data-i18n="feature1Title">实时互译</h3><p data-i18n="feature1Body">你说中文，聊天框就能显示对方的语言。对方说的话，也能实时译回中文，来回聊天都跟得上。</p><p class="step-note" data-i18n="feature1Note">麦克风 → 对方的语言　·　对方的声音 → 你的语言</p></div><figure class="inline-media"><img data-scene="main" src="assets/screens/zh-CN/dark/main.webp" width="1354" height="933" loading="lazy" decoding="async" alt="MioVRCT 主窗口中的双向翻译对话" data-alt="mainAlt"></figure></article>
+          <article class="feature-step" data-step="1"><div class="reveal"><div class="step-number">02 / 06</div><h3 data-i18n="feature2Title">悬浮窗</h3><p data-i18n="feature2Body">打开悬浮窗，把翻译留在游戏旁边。窗口大小和透明度都能调；看对方的译文，也能确认自己的话有没有识别对。</p><p class="step-note" data-i18n="feature2Note">少占一点屏幕，多留一点空间。</p></div><figure class="inline-media floating"><img data-scene="island-5" src="assets/screens/zh-CN/dark/island-5.webp" width="654" height="583" loading="lazy" decoding="async" alt="悬浮窗：完整的双向翻译会话" data-alt="islandAlt"></figure></article>
+          <article class="feature-step" data-step="2"><div class="reveal"><div class="step-number">03 / 06</div><h3 data-i18n="feature3Title">头显字幕</h3><p data-i18n="feature3Body">戴着头显，也能直接看到译文。用控制器射线操作 Mio 面板，还可以让 Mio 随 SteamVR 一起启动。</p><p class="step-note" data-i18n="feature3Note">字幕跟着你，聊天不用切回桌面。</p></div><figure class="inline-media headset" data-headset-label="STEAMVR / 头显视图"><img data-scene="vr-caption" src="assets/screens/zh-CN/dark/vr-caption.webp" width="1200" height="245" loading="lazy" decoding="async" alt="SteamVR 头显里的原文和翻译字幕" data-alt="captionAlt"></figure></article>
+          <article class="feature-step" data-step="3"><div class="reveal"><div class="step-number">04 / 06</div><h3 data-i18n="feature4Title">手腕面板</h3><p data-i18n="feature4Body">抬起手腕，回看双方刚刚说过的话。原文和译文放在一起，不用摘下头显，也不用担心漏看一句。</p><p class="step-note" data-i18n="feature4Note">本次会话的双向记录，抬手就能看。</p></div><figure class="inline-media headset" data-headset-label="STEAMVR / 头显视图"><img data-scene="vr-wrist" src="assets/screens/zh-CN/dark/vr-wrist.webp" width="1280" height="1120" loading="lazy" decoding="async" alt="手腕面板中的双向翻译历史记录" data-alt="wristAlt"></figure></article>
+          <article class="feature-step" data-step="4"><div class="reveal"><div class="step-number">05 / 06</div><h3 data-i18n="feature5Title">取景翻译</h3><p data-i18n="feature5Body">用双手控制器框住世界里的路牌、菜单或说明，拍下来就能翻译。照片、文字和二维码，按需要切换。</p><p class="step-note" data-i18n="feature5Note">看不懂的地方，框一下。</p></div><figure class="inline-media headset" data-headset-label="STEAMVR / 头显视图"><img data-scene="vr-result" src="assets/screens/zh-CN/dark/vr-result.webp" width="1000" height="820" loading="lazy" decoding="async" alt="SteamVR 取景翻译的结果面板" data-alt="resultAlt"></figure></article>
+          <article class="feature-step" data-step="5"><div class="reveal"><div class="step-number">06 / 06</div><h3 data-i18n="feature6Title">AI 朗读</h3><p data-i18n="feature6Body">用喜欢的 AI 声音读出译文，支持 VOICEVOX 和云端语音等服务。搭配 MixLine 虚拟麦克风，让游戏里的人也能听到；不想开口时，打字也能聊。</p><p class="step-note" data-i18n="feature6Note">你的表达，也可以有另一种声音。</p></div><figure class="inline-media"><img data-scene="settings-voice" src="assets/screens/zh-CN/dark/settings-voice.webp" width="1354" height="933" loading="lazy" decoding="async" alt="设置中的 AI 朗读服务与声音选项" data-alt="voiceAlt"></figure></article>
+        </div>
       </div>
-    </div>
-  </div>
-  <div class="privacy-block">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-    <div>
-      <h4 id="privacy-title">隐私声明</h4>
-      <p id="privacy-body">本项目没有自有翻译云服务器。在线 ASR、翻译和 TTS 会按你的选择向对应服务商发送必要内容。<br>VR 书签与转译记录保留于本次会话；图片只有点击保存后才写入本地。请勿将会话书签视为永久备份。</p>
-    </div>
-  </div>
-  <footer class="site-footer">
-    <p id="footer-main">制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 官方版本免费 · 桌面版 GPL 开源 · VR 实现另行维护 · 品牌受保护 · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a></p>
-    <p id="footer-sub">VR 记录仅保留于本次会话；在线服务的数据处理遵循所选服务商政策。</p>
-  </footer>
-</section>
+    </section>
 
-<script>
-  const sections = Array.from(document.querySelectorAll('.fp-section'));
-  const sectionAnchors = sections.map((section, index) => {
-    const anchor = document.createElement('span');
-    anchor.className = 'fp-section-anchor';
-    anchor.setAttribute('aria-hidden', 'true');
-    anchor.dataset.i = String(index);
-    section.parentNode.insertBefore(anchor, section);
-    return anchor;
-  });
-  const dots = Array.from(document.querySelectorAll('.fp-dot'));
-  const navBar = document.querySelector('nav');
-  const navLinks = [
-    document.getElementById('nav-intro'),
-    document.getElementById('nav-features'),
-    document.getElementById('nav-guide'),
-    document.getElementById('nav-download')
-  ];
+    <section class="also wrap" aria-labelledby="also-title">
+      <h2 class="also-heading reveal" id="also-title" data-i18n="alsoTitle">还有这些，替你想到了。</h2>
+      <div class="also-grid">
+        <article class="mini-card glass reveal" style="--delay:0ms"><svg aria-hidden="true"><use href="#i-globe"/></svg><h3 data-i18n="also1Title">免费翻译，自动换路线</h3><p data-i18n="also1Body">在中国大陆，Edge 接口不可用时，自动切换到 Bing 官网路线（cn.bing.com）。</p></article>
+        <article class="mini-card glass reveal" style="--delay:60ms"><svg aria-hidden="true"><use href="#i-chip"/></svg><h3 data-i18n="also2Title">本地模型，按需下载</h3><p data-i18n="also2Body">可以选本地语音识别。用在线服务时，不必先下载本地模型。</p></article>
+        <article class="mini-card glass reveal" style="--delay:120ms"><svg aria-hidden="true"><use href="#i-language"/></svg><h3 data-i18n="also3Title">5 种界面语言</h3><p data-i18n="also3Body">简体中文、English、日本語、Русский、한국어，换成熟悉的语言再开始。</p></article>
+        <article class="mini-card glass reveal" style="--delay:180ms"><svg aria-hidden="true"><use href="#i-shield"/></svg><h3 data-i18n="also4Title">记录只留在本次会话</h3><p data-i18n="also4Body">VR 记录和书签不做永久保存；图片只有在你点击保存后才写入本地。</p></article>
+      </div>
+    </section>
 
-  let activeSectionIndex = -1;
+    <section class="section wrap" id="guide" aria-labelledby="guide-title">
+      <div class="guide-layout">
+        <div class="guide-aside reveal"><p class="eyebrow"><span class="rule"></span><span data-i18n="navGuide">使用说明</span></p><h2 id="guide-title" data-i18n="guideTitle">几步，开始聊天。</h2><p class="intro" data-i18n="guideIntro">先把翻译跑起来，再慢慢调成适合自己的样子。</p><a class="text-link press" href="https://www.bilibili.com/video/BV1SPDTBhEdK/?share_source=copy_web&amp;vd_source=9902314fcc4f4815dd6d12f4d7fa82e2" target="_blank" rel="noopener noreferrer"><span data-i18n="tutorialLong">跟着视频设置（Bilibili）</span><svg aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
+        <ol class="guide-list">
+          <li class="reveal"><div><h3 data-i18n="guide1Title">下载并安装 MioVRCT</h3><p data-i18n="guide1Body">下载 Windows x64 安装包，按提示安装，然后打开程序。</p></div></li>
+          <li class="reveal"><div><h3 data-i18n="guide2Title">选择语音识别和翻译服务</h3><p data-i18n="guide2Body">在设置里选择服务、输入语言和目标语言。免费选项不用填密钥，也能开始用。</p></div></li>
+          <li class="reveal"><div><h3 data-i18n="guide3Title">开启 VRChat OSC</h3><p data-i18n="guide3Body">在 VRChat 中打开 Options → OSC → Enable。MioVRCT 设置里的“发送翻译到聊天框”默认已开启。</p></div></li>
+          <li class="reveal"><div><h3 data-i18n="guide4Title">需要 AI 朗读？接上 MixLine</h3><p data-i18n="guide4Body">把朗读声音送进 MixLine 虚拟麦克风，再在游戏里选择这个麦克风。不需要朗读可以跳过。</p></div></li>
+          <li class="reveal"><div><h3 data-i18n="guide5Title">戴头显时，开启 SteamVR 功能</h3><p data-i18n="guide5Body">在设置里开启头显功能。建议同时打开“随 SteamVR 启动”，下次进 VR 就能一起启动。</p></div></li>
+        </ol>
+      </div>
+    </section>
 
-  function syncSectionScrollability() {
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    const overflowTolerance = 96;
+    <section class="section wrap faq" id="faq" aria-labelledby="faq-title">
+      <div class="faq-wrap">
+        <div class="section-heading reveal"><p class="eyebrow"><span class="rule"></span><span data-i18n="navFaq">常见问题</span></p><h2 id="faq-title" data-i18n="faqTitle">遇到一点小问题？</h2></div>
+        <details><summary><span data-i18n="faq1Title">免费翻译（Bing）用不了？</span></summary><div class="detail-body"><p data-i18n="faq1Body">MioVRCT 现在会自动回退到 Bing 官网路线。如果仍然失败，检查代理或 VPN 的设置，或者换一个翻译服务再试。</p></div></details>
+        <details><summary><span data-i18n="faq2Title">先开 SteamVR 再开程序就卡住？</span></summary><div class="detail-body"><p data-i18n="faq2Body">部分电脑会遇到 SteamVR 端无响应的问题。MioVRCT 会继续翻译，并显示“SteamVR 没有响应”。建议打开“随 SteamVR 启动”。</p><p data-i18n="faq2More">确认 Steam、SteamVR、VRChat 没有设置为管理员运行或兼容模式；逐个禁用 SteamVR 附加组件，并关闭 RTSS、录屏工具等叠加层注入程序后再试。</p></div></details>
+        <details><summary><span data-i18n="faq3Title">聊天框没有字？</span></summary><div class="detail-body"><p data-i18n="faq3Body">先在 VRChat 中开启 Options → OSC → Enable。点 Mio 主窗口里的“VRChat 开关”，可以查看分步说明。</p></div></details>
+        <details><summary><span data-i18n="faq4Title">怎么让游戏里的人听到 AI 朗读？</span></summary><div class="detail-body"><p data-i18n="faq4Body">用 MixLine 把 MioVRCT 的朗读声音送进虚拟麦克风，然后在 VRChat 的麦克风设置里选中它。</p></div></details>
+        <details><summary><span data-i18n="faq5Title">本地模型要下载吗？</span></summary><div class="detail-body"><p data-i18n="faq5Body">用在线服务不需要下载本地模型。想用本地语音识别或本地语音时，再到设置里按需下载。</p></div></details>
+        <details><summary><span data-i18n="faq6Title">我的数据会上传吗？</span></summary><div class="detail-body"><p data-i18n="faq6Body">项目没有自有云服务。在线语音识别、翻译和 AI 朗读会把必要内容发给你选择的服务商，按该服务商的政策处理。VR 记录只在本次会话保留。</p></div></details>
+      </div>
+    </section>
 
-    sections.forEach((section) => {
-      const shouldUnlock = section.scrollHeight > viewportHeight + overflowTolerance;
-      section.classList.toggle('section-scrollable', shouldUnlock);
-    });
-  }
-  function scrollToSection(index) {
-    const target = sections[index];
-    const anchor = sectionAnchors[index];
-    if (!target || !anchor) return;
+    <section class="section wrap" id="download" aria-labelledby="download-title">
+      <div class="section-heading reveal"><p class="eyebrow"><span class="rule"></span><span data-i18n="navDownload">下载</span></p><h2 id="download-title" data-i18n="downloadTitle">下一个世界，一起聊。</h2><p class="intro" data-i18n="downloadIntro">MioVRCT v1.6.4：熟悉的经典界面回来了，并包含 1.6 以来的全部修复。桌面和 SteamVR，都准备好了。</p></div>
+      <div class="download-grid">
+        <article class="download-card glass reveal">
+          <div class="download-brand"><img src="assets/icons/app_icon_mio.png" alt="" width="44" height="44" loading="lazy" decoding="async"><div><h3>MioVRCT</h3><div class="download-meta">Windows x64 · <span data-release="version">v1.6.4</span> · <span data-release="sizeLabel">413 MiB</span></div></div></div>
+          <p data-i18n="downloadNote">安装包不捆绑本地语音模型，使用时可在设置里按需下载。</p>
+          <div class="download-primary"><a class="button primary press" id="download-direct-link" href="https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.6.4/MioTranslator-Setup-v1.6.4.exe" download="MioTranslator-Setup-v1.6.4.exe"><svg aria-hidden="true"><use href="#i-download"/></svg><span id="download-button-text" data-i18n="downloadButton">下载安装包</span></a><a class="release-link press" href="https://github.com/CokoIya/MioVRC_Translator/releases" target="_blank" rel="noopener noreferrer"><span data-i18n="releaseNotes">GitHub 发布记录</span> ↗</a></div>
+          <div class="community"><div class="community-links"><a class="button small press" href="https://qm.qq.com/q/BB1z8mldeM" target="_blank" rel="noopener noreferrer" data-i18n="qq1">QQ 1 群</a><a class="button small press" href="https://qm.qq.com/q/TrkJ0MSz4G" target="_blank" rel="noopener noreferrer" data-i18n="qq2">QQ 2 群</a></div><p data-i18n="communityNote">下载走 GitHub。如果速度太慢，可以加 QQ 群，从群文件下载；群里也有图文教学。</p></div>
+        </article>
+        <article class="download-card dict-card glass reveal" style="--delay:60ms"><svg aria-hidden="true"><use href="#i-book"/></svg><h3 data-i18n="dictTitle">ASR 官方词典</h3><p data-i18n="dictBody">官方识别词典和更新文件。只有你手动打开或更新时才会访问。</p><div class="dict-links"><a class="text-link press" href="./dictionaries/" target="_blank" rel="noopener noreferrer"><span data-i18n="dictPage">打开词典页面</span> ↗</a><a class="text-link press" href="./dictionaries/asr_dictionary_manifest.json" target="_blank" rel="noopener noreferrer"><span data-i18n="dictManifest">查看更新清单</span> ↗</a><a class="text-link press" href="./dictionaries/asr_terms.official.json" target="_blank" rel="noopener noreferrer"><span data-i18n="dictFile">下载词典文件</span> ↗</a></div><p data-i18n="dictNote">软件里的“更新词典”会从这里获取官方词典。</p></article>
+      </div>
+      <details class="older"><summary><span data-i18n="olderTitle">历史版本</span></summary><div class="detail-body"><p class="older-note" data-i18n="olderNote">v1.3.8.5 及更早版本无法自动更新，请下载上面的安装包手动安装。</p><div class="older-links"><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases/tag/v1.5.1" target="_blank" rel="noopener noreferrer">v1.5.1</a><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases/tag/v1.5.0" target="_blank" rel="noopener noreferrer">v1.5.0</a><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases/tag/v1.4.1" target="_blank" rel="noopener noreferrer">v1.4.1</a><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases/tag/v1.4.0" target="_blank" rel="noopener noreferrer">v1.4.0</a><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases/tag/v1.3.9.3" target="_blank" rel="noopener noreferrer">v1.3.9.3</a><a class="button small press" href="https://github.com/CokoIya/MioVRC_Translator/releases" target="_blank" rel="noopener noreferrer" data-i18n="allReleases">全部版本 ↗</a></div></div></details>
+    </section>
+    <aside class="privacy-block wrap" aria-labelledby="privacy-title"><svg aria-hidden="true"><use href="#i-shield"/></svg><div><h2 id="privacy-title" data-i18n="privacyTitle">关于你的数据</h2><p data-i18n="privacyBody">MioVRCT 没有项目自有的翻译云服务器。在线语音识别、翻译和 AI 朗读会按你的选择，向对应服务商发送必要内容。VR 书签与翻译记录只保留于本次会话；图片只有点击保存后才写入本地。请勿将会话书签当作永久备份。</p></div></aside>
+  </main>
+  <footer class="site-footer wrap"><div class="footer-row"><div><a class="footer-brand press" href="#home">MioVRCT</a><p class="footer-copy"><span data-i18n="footerMaker">由 VRChat 玩家 酒寄 みお 制作。</span><br><span data-i18n="footerLicense">官方版本免费 · GPL 开源 · MioVRCT 品牌受保护</span><br><span data-i18n="footerPrivacy">在线服务的数据处理遵循你所选服务商的政策。</span></p></div><div class="footer-links"><a class="press" href="/vrca/">MioVRCA ↗</a><a class="press" href="https://github.com/CokoIya/MioVRC_Translator" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div></div></footer>
 
-    const top = anchor.getBoundingClientRect().top + window.scrollY;
-    window.scrollTo({
-      top,
-      behavior: 'smooth'
-    });
-  }
+  <script>
+    // RELEASE: update at publish time
+    const RELEASE = {
+      version: '1.6.4',
+      file: 'MioTranslator-Setup-v1.6.4.exe',
+      url: 'https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.6.4/MioTranslator-Setup-v1.6.4.exe',
+      sizeLabel: '413 MiB',
+    };
 
-  window.scrollToSection = scrollToSection;
+    const translations = {
+      'zh-CN': {
+        pageTitle: 'MioVRCT · VRChat 实时语音翻译',
+        description: 'MioVRCT v1.6.4：为 VRChat 而做的免费实时语音翻译。双向翻译、悬浮窗、SteamVR 头显字幕、手腕面板、取景翻译与 AI 朗读。',
+        skip: '跳到正文', navLabel: '主导航', languageLabel: '网站语言', menuLabel: '展开或收起导航',
+        navFeatures: '功能', navGuide: '使用说明', navFaq: '常见问题', navDownload: '下载',
+        themeSystem: '主题：跟随系统（点击切换浅色）', themeLight: '主题：浅色（点击切换深色）', themeDark: '主题：深色（点击跟随系统）',
+        heroBadge: '为 VRChat 而做 · v1.6.4', heroLine: '说你的语言，聊同一个世界。',
+        heroDescription: '你说的话，译成对方能读懂的聊天框文字；对方的声音，也能实时译回你的语言。',
+        tutorial: '视频教学', heroPrivacy: '没有项目自有云服务，在线服务由你选择。', freeGpl: '免费 · GPL 开源',
+        demoLabel: '主窗口与悬浮窗会话演示', demoCaption: '真实界面 · 示例对话', demoPause: '暂停演示', demoPlay: '播放演示', demoStatic: '已减少动态效果：显示完整会话', stageLabel: '功能截图', headsetLabel: 'STEAMVR / 头显视图',
+        mainAlt: 'MioVRCT 主窗口中的双向翻译对话', frame1Alt: '悬浮窗：收到对方的第一句译文', frame2Alt: '悬浮窗：我的话已识别并翻译', frame3Alt: '悬浮窗：收到对方的下一句话', frame4Alt: '悬浮窗：我的下一句也已识别并翻译', islandAlt: '悬浮窗：完整的双向翻译会话', captionAlt: 'SteamVR 头显里的原文和翻译字幕', wristAlt: '手腕面板中的双向翻译历史记录', resultAlt: 'SteamVR 取景翻译的结果面板', voiceAlt: '设置中的 AI 朗读服务与声音选项',
+        featuresTitle: '从桌面，到你眼前。', featuresIntro: '把翻译放在顺手的地方，让注意力留给眼前的人。',
+        feature1Title: '实时互译', feature1Body: '你说中文，聊天框就能显示对方的语言。对方说的话，也能实时译回中文，来回聊天都跟得上。', feature1Note: '麦克风 → 对方的语言　·　对方的声音 → 你的语言',
+        feature2Title: '悬浮窗', feature2Body: '打开悬浮窗，把翻译留在游戏旁边。窗口大小和透明度都能调；看对方的译文，也能确认自己的话有没有识别对。', feature2Note: '少占一点屏幕，多留一点空间。',
+        feature3Title: '头显字幕', feature3Body: '戴着头显，也能直接看到译文。用控制器射线操作 Mio 面板，还可以让 Mio 随 SteamVR 一起启动。', feature3Note: '字幕跟着你，聊天不用切回桌面。',
+        feature4Title: '手腕面板', feature4Body: '抬起手腕，回看双方刚刚说过的话。原文和译文放在一起，不用摘下头显，也不用担心漏看一句。', feature4Note: '本次会话的双向记录，抬手就能看。',
+        feature5Title: '取景翻译', feature5Body: '用双手控制器框住世界里的路牌、菜单或说明，拍下来就能翻译。照片、文字和二维码，按需要切换。', feature5Note: '看不懂的地方，框一下。',
+        feature6Title: 'AI 朗读', feature6Body: '用喜欢的 AI 声音读出译文，支持 VOICEVOX 和云端语音等服务。搭配 MixLine 虚拟麦克风，让游戏里的人也能听到；不想开口时，打字也能聊。', feature6Note: '你的表达，也可以有另一种声音。',
+        alsoTitle: '还有这些，替你想到了。', also1Title: '免费翻译，自动换路线', also1Body: '在中国大陆，Edge 接口不可用时，自动切换到 Bing 官网路线（cn.bing.com）。', also2Title: '本地模型，按需下载', also2Body: '可以选本地语音识别。用在线服务时，不必先下载本地模型。', also3Title: '5 种界面语言', also3Body: '简体中文、English、日本語、Русский、한국어，换成熟悉的语言再开始。', also4Title: '记录只留在本次会话', also4Body: 'VR 记录和书签不做永久保存；图片只有在你点击保存后才写入本地。',
+        guideTitle: '几步，开始聊天。', guideIntro: '先把翻译跑起来，再慢慢调成适合自己的样子。', tutorialLong: '跟着视频设置（Bilibili）',
+        guide1Title: '下载并安装 MioVRCT', guide1Body: '下载 Windows x64 安装包，按提示安装，然后打开程序。', guide2Title: '选择语音识别和翻译服务', guide2Body: '在设置里选择服务、输入语言和目标语言。免费选项不用填密钥，也能开始用。', guide3Title: '开启 VRChat OSC', guide3Body: '在 VRChat 中打开 Options → OSC → Enable。MioVRCT 设置里的“发送翻译到聊天框”默认已开启。', guide4Title: '需要 AI 朗读？接上 MixLine', guide4Body: '把朗读声音送进 MixLine 虚拟麦克风，再在游戏里选择这个麦克风。不需要朗读可以跳过。', guide5Title: '戴头显时，开启 SteamVR 功能', guide5Body: '在设置里开启头显功能。建议同时打开“随 SteamVR 启动”，下次进 VR 就能一起启动。',
+        faqTitle: '遇到一点小问题？', faq1Title: '免费翻译（Bing）用不了？', faq1Body: 'MioVRCT 现在会自动回退到 Bing 官网路线。如果仍然失败，检查代理或 VPN 的设置，或者换一个翻译服务再试。', faq2Title: '先开 SteamVR 再开程序就卡住？', faq2Body: '部分电脑会遇到 SteamVR 端无响应的问题。MioVRCT 会继续翻译，并显示“SteamVR 没有响应”。建议打开“随 SteamVR 启动”。', faq2More: '确认 Steam、SteamVR、VRChat 没有设置为管理员运行或兼容模式；逐个禁用 SteamVR 附加组件，并关闭 RTSS、录屏工具等叠加层注入程序后再试。', faq3Title: '聊天框没有字？', faq3Body: '先在 VRChat 中开启 Options → OSC → Enable。点 Mio 主窗口里的“VRChat 开关”，可以查看分步说明。', faq4Title: '怎么让游戏里的人听到 AI 朗读？', faq4Body: '用 MixLine 把 MioVRCT 的朗读声音送进虚拟麦克风，然后在 VRChat 的麦克风设置里选中它。', faq5Title: '本地模型要下载吗？', faq5Body: '用在线服务不需要下载本地模型。想用本地语音识别或本地语音时，再到设置里按需下载。', faq6Title: '我的数据会上传吗？', faq6Body: '项目没有自有云服务。在线语音识别、翻译和 AI 朗读会把必要内容发给你选择的服务商，按该服务商的政策处理。VR 记录只在本次会话保留。',
+        downloadTitle: '下一个世界，一起聊。', downloadIntro: 'MioVRCT v1.6.4：熟悉的经典界面回来了，并包含 1.6 以来的全部修复。桌面和 SteamVR，都准备好了。', downloadNote: '安装包不捆绑本地语音模型，使用时可在设置里按需下载。', downloadButton: '下载安装包', downloadLoading: '正在开始下载…', releaseNotes: 'GitHub 发布记录', qq1: 'QQ 1 群', qq2: 'QQ 2 群', communityNote: '下载走 GitHub。如果速度太慢，可以加 QQ 群，从群文件下载；群里也有图文教学。', dictTitle: 'ASR 官方词典', dictBody: '官方识别词典和更新文件。只有你手动打开或更新时才会访问。', dictPage: '打开词典页面', dictManifest: '查看更新清单', dictFile: '下载词典文件', dictNote: '软件里的“更新词典”会从这里获取官方词典。', olderTitle: '历史版本', olderNote: 'v1.3.8.5 及更早版本无法自动更新，请下载上面的安装包手动安装。', allReleases: '全部版本 ↗',
+        privacyTitle: '关于你的数据', privacyBody: 'MioVRCT 没有项目自有的翻译云服务器。在线语音识别、翻译和 AI 朗读会按你的选择，向对应服务商发送必要内容。VR 书签与翻译记录只保留于本次会话；图片只有点击保存后才写入本地。请勿将会话书签当作永久备份。', footerMaker: '由 VRChat 玩家 酒寄 みお 制作。', footerLicense: '官方版本免费 · GPL 开源 · MioVRCT 品牌受保护', footerPrivacy: '在线服务的数据处理遵循你所选服务商的政策。',
+      },
+      en: {
+        pageTitle: 'MioVRCT · Real-time voice translation for VRChat',
+        description: 'MioVRCT v1.6.4: free real-time voice translation for VRChat. Two-way translation, a floating window, SteamVR captions, a wrist panel, screenshot translation and AI voices.',
+        skip: 'Skip to content', navLabel: 'Main navigation', languageLabel: 'Site language', menuLabel: 'Toggle navigation',
+        navFeatures: 'Features', navGuide: 'Get started', navFaq: 'FAQ', navDownload: 'Download',
+        themeSystem: 'Theme: system (switch to light)', themeLight: 'Theme: light (switch to dark)', themeDark: 'Theme: dark (follow system)',
+        heroBadge: 'Made for VRChat · v1.6.4', heroLine: 'Your language. A shared conversation.',
+        heroDescription: 'Speak your language; others read the translation in the chatbox. Hear them speak, and see their words translated back into yours.',
+        tutorial: 'Video guide', heroPrivacy: 'No project-owned cloud. You choose your online providers.', freeGpl: 'Free · GPL open source',
+        demoLabel: 'Conversation demo in the main and floating windows', demoCaption: 'Actual interface · Sample conversation', demoPause: 'Pause demo', demoPlay: 'Play demo', demoStatic: 'Reduced motion: showing the full conversation', stageLabel: 'Feature screenshots', headsetLabel: 'STEAMVR / HEADSET VIEW',
+        mainAlt: 'Two-way translated conversation in the MioVRCT main window', frame1Alt: 'Floating window: the first translated line arrives', frame2Alt: 'Floating window: my sentence is recognised and translated', frame3Alt: 'Floating window: the next reply arrives', frame4Alt: 'Floating window: my next sentence is translated too', islandAlt: 'Floating window with the full two-way conversation', captionAlt: 'Original speech and translated subtitles in SteamVR', wristAlt: 'Two-way translation history in the wrist panel', resultAlt: 'Screenshot translation result in SteamVR', voiceAlt: 'AI voice providers and voice options in Settings',
+        featuresTitle: 'From your desktop to your headset.', featuresIntro: 'Keep translations within reach, and your attention on the people with you.',
+        feature1Title: 'Translate both ways', feature1Body: 'Your speech appears in the VRChat chatbox in their language. Their voice is translated back into yours, so you can follow both sides of the conversation.', feature1Note: 'Your mic → their language · Their voice → yours',
+        feature2Title: 'A floating window', feature2Body: 'Open the floating window to keep translations beside your game. Resize it and adjust its opacity. Read their replies and check that your own speech was recognised correctly.', feature2Note: 'A little less window. A little more room.',
+        feature3Title: 'In-headset captions', feature3Body: 'Read translations right inside your SteamVR headset. Use your controller pointer on Mio panels, and set Mio to start with SteamVR.', feature3Note: 'Keep the conversation in view.',
+        feature4Title: 'Your wrist, your history', feature4Body: 'Lift your wrist to revisit both sides of the conversation. Originals and translations sit together, without taking your headset off.', feature4Note: 'This session’s conversation, a glance away.',
+        feature5Title: 'Frame it. Translate it.', feature5Body: 'Use both controllers to frame a sign, menu or instructions in the world. Capture and translate it, with photo, text and QR modes to choose from.', feature5Note: 'For the words you find along the way.',
+        feature6Title: 'Give translations a voice', feature6Body: 'Read translations aloud with VOICEVOX, cloud voices and other AI voice services. Route the audio through a MixLine virtual mic for others to hear. Prefer not to speak? Type instead.', feature6Note: 'Another way to make yourself heard.',
+        alsoTitle: 'A few more things, taken care of.', also1Title: 'Free translation, with fallback', also1Body: 'In mainland China, MioVRCT switches to Bing’s own site route (cn.bing.com) when the Edge endpoint is blocked.', also2Title: 'Local models are optional', also2Body: 'Choose local speech recognition if you like. Online services work without downloading a local model first.', also3Title: 'Five interface languages', also3Body: 'Simplified Chinese, English, Japanese, Russian and Korean. Start in a language you know.', also4Title: 'History stays in this session', also4Body: 'VR history and bookmarks are temporary. Images are written to disk only when you choose to save them.',
+        guideTitle: 'A few steps. Then say hello.', guideIntro: 'Get translation running first. Make it your own as you go.', tutorialLong: 'Follow the video guide (Bilibili)',
+        guide1Title: 'Download and install MioVRCT', guide1Body: 'Download the Windows x64 installer, follow the prompts and open the app.', guide2Title: 'Choose speech and translation services', guide2Body: 'Pick your providers, input language and target language in Settings. Free options work without an API key.', guide3Title: 'Enable VRChat OSC', guide3Body: 'In VRChat, go to Options → OSC → Enable. “Send translation to chatbox” is already on by default in MioVRCT’s settings.', guide4Title: 'Want read-aloud? Connect MixLine', guide4Body: 'Route the voice output to a MixLine virtual microphone, then select that mic in the game. Skip this if you don’t need read-aloud.', guide5Title: 'Enable SteamVR headset features', guide5Body: 'Turn on headset features in Settings. Enable “Start with SteamVR” to launch them together next time.',
+        faqTitle: 'Need a little help?', faq1Title: 'Free translation (Bing) isn’t working?', faq1Body: 'MioVRCT now falls back to Bing’s own site route automatically. If it still fails, check your proxy or VPN settings, or try another translation provider.', faq2Title: 'The app stalls when SteamVR is already open?', faq2Body: 'On some PCs, SteamVR can stop responding. MioVRCT keeps translating and shows “SteamVR is not responding”. Try enabling “Start with SteamVR”.', faq2More: 'Make sure Steam, SteamVR and VRChat are not set to run as administrator or in compatibility mode. Disable SteamVR add-ons one at a time, and close overlay injectors such as RTSS and recording tools.', faq3Title: 'Nothing appears in the chatbox?', faq3Body: 'In VRChat, turn on Options → OSC → Enable. The “OSC” button in Mio’s main window opens a step-by-step guide.', faq4Title: 'How can others hear the AI voice in-game?', faq4Body: 'Use MixLine to route MioVRCT’s voice output into a virtual microphone. Select that microphone in VRChat’s audio settings.', faq5Title: 'Do I have to download local models?', faq5Body: 'Not for online services. Download models in Settings when you want to use local speech recognition or local voices.', faq6Title: 'Is my data uploaded?', faq6Body: 'There is no project-owned cloud. Online speech recognition, translation and AI voices send necessary content to the providers you select, under their policies. VR history stays in the current session.',
+        downloadTitle: 'See you in the next world.', downloadIntro: 'MioVRCT v1.6.4: the familiar classic interface is back, with every fix since 1.6. Ready for desktop and SteamVR.', downloadNote: 'Local speech models are not bundled. Download them in Settings when you need them.', downloadButton: 'Download installer', downloadLoading: 'Starting download…', releaseNotes: 'GitHub releases', qq1: 'QQ group 1', qq2: 'QQ group 2', communityNote: 'Downloads use GitHub. If it’s slow, the QQ groups offer installer files and illustrated setup guides.', dictTitle: 'Official ASR dictionary', dictBody: 'Official recognition terms and update files. Accessed only when you open them or request an update.', dictPage: 'Open dictionary page', dictManifest: 'View update manifest', dictFile: 'Download dictionary file', dictNote: 'The app’s “Update dictionary” action retrieves the official dictionary here.', olderTitle: 'Older versions', olderNote: 'v1.3.8.5 and earlier cannot update themselves. Install the package above manually.', allReleases: 'All releases ↗',
+        privacyTitle: 'About your data', privacyBody: 'MioVRCT has no project-owned translation cloud. Online speech recognition, translation and AI voices send necessary content to your chosen providers. VR bookmarks and translation history stay in the current session; images are saved locally only when you ask. Session bookmarks are not permanent backups.', footerMaker: 'Made by VRChat player 酒寄 みお.', footerLicense: 'Free official builds · GPL open source · MioVRCT brand protected', footerPrivacy: 'Online data handling follows your chosen providers’ policies.',
+      },
+      ja: {
+        pageTitle: 'MioVRCT · VRChat のリアルタイム音声翻訳',
+        description: 'MioVRCT v1.6.4：VRChat 向けの無料リアルタイム音声翻訳。双方向翻訳、フローティングウィンドウ、SteamVR 字幕、手首パネル、画像翻訳、AI 読み上げに対応。',
+        skip: '本文へ移動', navLabel: 'メインナビゲーション', languageLabel: 'サイトの言語', menuLabel: 'メニューを開閉',
+        navFeatures: '機能', navGuide: '使い方', navFaq: 'よくある質問', navDownload: 'ダウンロード',
+        themeSystem: 'テーマ：システム（ライトに切り替え）', themeLight: 'テーマ：ライト（ダークに切り替え）', themeDark: 'テーマ：ダーク（システム設定に切り替え）',
+        heroBadge: 'VRChat のために · v1.6.4', heroLine: '言葉が違っても、同じ会話を。',
+        heroDescription: '自分の言葉で話すと、相手の言語でチャットボックスに表示。相手の声も、自分の言語にリアルタイムで翻訳します。',
+        tutorial: '解説動画', heroPrivacy: '独自クラウドはありません。オンラインサービスは自分で選べます。', freeGpl: '無料 · GPL オープンソース',
+        demoLabel: 'メイン画面とフローティングウィンドウの会話デモ', demoCaption: '実際の画面 · 会話サンプル', demoPause: 'デモを一時停止', demoPlay: 'デモを再生', demoStatic: '動きを抑える設定：会話の最終フレームを表示', stageLabel: '機能のスクリーンショット', headsetLabel: 'STEAMVR / ヘッドセット内の表示',
+        mainAlt: 'MioVRCT のメイン画面に表示された双方向の翻訳', frame1Alt: 'フローティングウィンドウ：相手の最初の訳文', frame2Alt: 'フローティングウィンドウ：自分の発話の認識と翻訳が完了', frame3Alt: 'フローティングウィンドウ：相手からの次の返答', frame4Alt: 'フローティングウィンドウ：自分の次の発話も翻訳済み', islandAlt: 'フローティングウィンドウの双方向の会話', captionAlt: 'SteamVR 内の原文と翻訳字幕', wristAlt: '手首パネルに表示された双方向の翻訳履歴', resultAlt: 'SteamVR の画像翻訳結果パネル', voiceAlt: '設定画面の AI 読み上げサービスと音声の選択',
+        featuresTitle: 'デスクトップから、目の前へ。', featuresIntro: '見やすい場所に翻訳を。目の前の人との時間を大切に。',
+        feature1Title: 'リアルタイムで双方向翻訳', feature1Body: '自分の声を相手の言語に訳して、VRChat のチャットボックスへ。相手の声も自分の言語に訳すので、会話の流れについていけます。', feature1Note: '自分の声 → 相手の言語 · 相手の声 → 自分の言語',
+        feature2Title: 'フローティングウィンドウ', feature2Body: 'フローティングウィンドウを開いて、ゲームのそばに翻訳を表示。サイズと透明度を調整できます。相手の訳文も、自分の発話が正しく認識されたかも確認できます。', feature2Note: '画面を広く、会話を身近に。',
+        feature3Title: 'ヘッドセット内の字幕', feature3Body: 'SteamVR のヘッドセット内に翻訳を表示。コントローラーのポインターで Mio パネルを操作でき、SteamVR と一緒に Mio を起動する設定も使えます。', feature3Note: 'デスクトップに戻らず、そのまま会話。',
+        feature4Title: '手首パネル', feature4Body: '手首を上げるだけで、お互いの発言を振り返れます。原文と訳文を並べて表示。ヘッドセットを外す必要はありません。', feature4Note: 'このセッションの会話履歴を、手元に。',
+        feature5Title: '囲んで翻訳', feature5Body: '両手のコントローラーで、ワールドの看板やメニュー、説明を囲んで撮影・翻訳。写真・テキスト・QR のモードを切り替えられます。', feature5Note: '読めない言葉に出会ったら、囲むだけ。',
+        feature6Title: 'AI 読み上げ', feature6Body: 'VOICEVOX やクラウド音声など、好きな AI 音声で訳文を読み上げ。MixLine の仮想マイクに流せば、ゲーム内の相手にも届きます。声を出したくないときは、文字入力でも話せます。', feature6Note: '伝え方に、もうひとつの選択肢を。',
+        alsoTitle: 'こんなところも、使いやすく。', also1Title: '無料翻訳の経路を自動切り替え', also1Body: '中国本土で Edge の接続先が使えない場合、Bing 公式サイト経由（cn.bing.com）に自動で切り替えます。', also2Title: 'ローカルモデルは任意', also2Body: 'ローカル音声認識も選べます。オンラインサービスなら、モデルを先にダウンロードする必要はありません。', also3Title: '5 言語のインターフェース', also3Body: '簡体字中国語・英語・日本語・ロシア語・韓国語。使い慣れた言語で始められます。', also4Title: '履歴はセッション内だけ', also4Body: 'VR の履歴とブックマークは一時的なものです。画像は保存を選んだときだけ、ローカルに書き込みます。',
+        guideTitle: '準備ができたら、話しかけよう。', guideIntro: 'まずは翻訳を動かして、少しずつ自分に合う設定に。', tutorialLong: '動画で設定を見る（Bilibili）',
+        guide1Title: 'MioVRCT をダウンロード・インストール', guide1Body: 'Windows x64 用インストーラーをダウンロードし、案内に沿ってインストールして起動します。', guide2Title: '音声認識と翻訳のサービスを選ぶ', guide2Body: '設定でサービス、入力言語、翻訳先の言語を選びます。無料の選択肢なら API キーなしで使い始められます。', guide3Title: 'VRChat の OSC を有効にする', guide3Body: 'VRChat で Options → OSC → Enable を選択します。MioVRCT の設定「翻訳をチャットボックスへ送信」は最初からオンになっています。', guide4Title: '読み上げを使うなら MixLine を設定', guide4Body: '読み上げ音声を MixLine の仮想マイクに送り、ゲーム側でそのマイクを選びます。読み上げが不要なら省略できます。', guide5Title: 'SteamVR のヘッドセット機能を有効にする', guide5Body: '設定でヘッドセット機能をオンにします。「SteamVR と一緒に起動」も有効にすると、次回から一緒に起動できます。',
+        faqTitle: '困ったときは、ここから。', faq1Title: '無料翻訳（Bing）が使えないときは？', faq1Body: 'MioVRCT は Bing 公式サイト経由に自動で切り替えます。それでも失敗する場合は、プロキシや VPN の設定を確認するか、別の翻訳サービスを試してください。', faq2Title: 'SteamVR を先に起動すると固まる？', faq2Body: '一部の PC では SteamVR 側が応答しなくなることがあります。MioVRCT は翻訳を続け、「SteamVR が応答しません」と表示します。「SteamVR と一緒に起動」を有効にしてみてください。', faq2More: 'Steam・SteamVR・VRChat が管理者として実行、または互換モードに設定されていないか確認してください。SteamVR のアドオンをひとつずつ無効にし、RTSS や録画ツールなどのオーバーレイを挿入するソフトを終了して試してください。', faq3Title: 'チャットボックスに文字が出ない？', faq3Body: 'VRChat で Options → OSC → Enable を有効にしてください。Mio のメイン画面の「OSC」ボタンから、設定の手順を確認できます。', faq4Title: 'AI 音声をゲーム内の相手に聞かせるには？', faq4Body: 'MixLine で MioVRCT の読み上げ音声を仮想マイクに送り、VRChat の音声設定でそのマイクを選びます。', faq5Title: 'ローカルモデルのダウンロードは必須？', faq5Body: 'オンラインサービスでは不要です。ローカル音声認識やローカル音声を使いたいときに、設定からダウンロードしてください。', faq6Title: 'データはアップロードされる？', faq6Body: '独自クラウドはありません。オンライン音声認識・翻訳・AI 読み上げは、選択した事業者に必要な内容を送信し、その事業者の方針に従って処理されます。VR の履歴は現在のセッション内だけに保持されます。',
+        downloadTitle: '次のワールドで、話そう。', downloadIntro: 'MioVRCT v1.6.4。おなじみの従来の画面が戻り、1.6 以降の修正もすべて入っています。デスクトップでも、SteamVR でも。', downloadNote: 'ローカル音声モデルは同梱していません。必要なときに設定からダウンロードできます。', downloadButton: 'インストーラーをダウンロード', downloadLoading: 'ダウンロードを開始中…', releaseNotes: 'GitHub のリリース', qq1: 'QQ グループ 1', qq2: 'QQ グループ 2', communityNote: 'ダウンロード元は GitHub です。速度が遅い場合は、QQ グループ内のファイルをご利用ください。画像付きの設定ガイドもあります。', dictTitle: 'ASR 公式辞書', dictBody: '公式の認識用辞書と更新ファイルです。手動で開くか、更新を実行したときだけアクセスします。', dictPage: '辞書ページを開く', dictManifest: '更新マニフェストを見る', dictFile: '辞書ファイルをダウンロード', dictNote: 'アプリの「辞書を更新」は、ここから公式辞書を取得します。', olderTitle: '過去のバージョン', olderNote: 'v1.3.8.5 以前は自動更新できません。上のインストーラーを手動でインストールしてください。', allReleases: 'すべてのリリース ↗',
+        privacyTitle: 'データの取り扱いについて', privacyBody: 'MioVRCT に独自の翻訳クラウドサーバーはありません。オンライン音声認識・翻訳・AI 読み上げは、選んだ事業者に必要な内容を送信します。VR のブックマークと翻訳履歴は現在のセッション内だけに保持され、画像は保存を選んだときだけローカルに書き込まれます。セッションのブックマークは恒久的なバックアップではありません。', footerMaker: 'VRChat プレイヤー 酒寄 みお が制作。', footerLicense: '公式版は無料 · GPL オープンソース · MioVRCT のブランドは保護されています', footerPrivacy: 'オンラインでのデータ処理には、選択した事業者の方針が適用されます。',
+      },
+      ru: {
+        pageTitle: 'MioVRCT · Перевод речи в VRChat в реальном времени',
+        description: 'MioVRCT v1.6.4 — бесплатный перевод речи для VRChat: перевод в обе стороны, плавающее окно, субтитры SteamVR, панель на запястье, перевод снимков и озвучивание.',
+        skip: 'К содержимому', navLabel: 'Основная навигация', languageLabel: 'Язык сайта', menuLabel: 'Открыть или закрыть меню',
+        navFeatures: 'Возможности', navGuide: 'Как начать', navFaq: 'Вопросы', navDownload: 'Скачать',
+        themeSystem: 'Тема: системная (включить светлую)', themeLight: 'Тема: светлая (включить тёмную)', themeDark: 'Тема: тёмная (следовать системе)',
+        heroBadge: 'Для игроков VRChat · v1.6.4', heroLine: 'Разные языки. Общий разговор.',
+        heroDescription: 'Говорите на своём языке — собеседник прочитает перевод в чате. Его речь тоже переводится для вас в реальном времени.',
+        tutorial: 'Видеоурок', heroPrivacy: 'У проекта нет своего облака. Онлайн-сервисы выбираете вы.', freeGpl: 'Бесплатно · Открытый код GPL',
+        demoLabel: 'Пример разговора в главном и плавающем окнах', demoCaption: 'Интерфейс приложения · Пример разговора', demoPause: 'Приостановить показ', demoPlay: 'Продолжить показ', demoStatic: 'Анимация отключена: показан весь разговор', stageLabel: 'Скриншоты возможностей', headsetLabel: 'STEAMVR / ВИД В ШЛЕМЕ',
+        mainAlt: 'Перевод разговора в обе стороны в главном окне MioVRCT', frame1Alt: 'Плавающее окно: первая переведённая реплика', frame2Alt: 'Плавающее окно: моя реплика распознана и переведена', frame3Alt: 'Плавающее окно: следующий ответ собеседника', frame4Alt: 'Плавающее окно: моя следующая реплика тоже переведена', islandAlt: 'Плавающее окно с полным переводом разговора', captionAlt: 'Исходная речь и переведённые субтитры в SteamVR', wristAlt: 'История перевода в обе стороны на панели запястья', resultAlt: 'Панель с результатом перевода снимка в SteamVR', voiceAlt: 'Выбор голосов и сервисов озвучивания в настройках',
+        featuresTitle: 'С рабочего стола — прямо в шлем.', featuresIntro: 'Перевод всегда под рукой. Больше внимания тем, кто рядом.',
+        feature1Title: 'Перевод в обе стороны', feature1Body: 'Ваша речь появляется в чате VRChat на языке собеседника. Его голос переводится на ваш язык — так проще следить за разговором.', feature1Note: 'Ваш голос → его язык · Его голос → ваш язык',
+        feature2Title: 'Плавающее окно', feature2Body: 'Откройте плавающее окно, чтобы видеть перевод рядом с игрой. Меняйте его размер и прозрачность. Читайте ответы и проверяйте, правильно ли распознаны ваши слова.', feature2Note: 'Меньше окна. Больше места для игры.',
+        feature3Title: 'Субтитры в шлеме', feature3Body: 'Читайте перевод прямо в шлеме SteamVR. Управляйте панелями Mio указателем контроллера и запускайте Mio вместе со SteamVR.', feature3Note: 'Разговаривайте, не возвращаясь на рабочий стол.',
+        feature4Title: 'Панель на запястье', feature4Body: 'Поднимите запястье, чтобы перечитать реплики обоих участников. Оригиналы и переводы рядом — снимать шлем не нужно.', feature4Note: 'История текущего сеанса — одним взглядом.',
+        feature5Title: 'Выделите и переведите', feature5Body: 'Двумя контроллерами выделите вывеску, меню или инструкцию в мире. Сделайте снимок и получите перевод. Доступны режимы фото, текста и QR-кодов.', feature5Note: 'Для незнакомых слов по пути.',
+        feature6Title: 'Озвучивание перевода', feature6Body: 'Озвучивайте перевод через VOICEVOX, облачные голоса и другие голосовые сервисы. Передайте звук в виртуальный микрофон MixLine, чтобы вас услышали в игре. Не хочется говорить? Можно писать.', feature6Note: 'Ещё один способ быть услышанным.',
+        alsoTitle: 'Ещё несколько удобных деталей.', also1Title: 'Резервный маршрут Bing', also1Body: 'В материковом Китае при блокировке сервиса Edge приложение автоматически переходит на сайт Bing (cn.bing.com).', also2Title: 'Локальные модели — по желанию', also2Body: 'Можно выбрать локальное распознавание речи. Для онлайн-сервисов скачивать модель заранее не нужно.', also3Title: 'Интерфейс на пяти языках', also3Body: 'Упрощённый китайский, английский, японский, русский и корейский. Начните на знакомом языке.', also4Title: 'История только на время сеанса', also4Body: 'История VR и закладки хранятся временно. Изображения записываются на диск только по вашей команде.',
+        guideTitle: 'Пара настроек — и можно общаться.', guideIntro: 'Сначала запустите перевод, а затем настройте всё под себя.', tutorialLong: 'Настройка по видео (Bilibili)',
+        guide1Title: 'Скачайте и установите MioVRCT', guide1Body: 'Скачайте установщик для Windows x64, следуйте подсказкам и откройте приложение.', guide2Title: 'Выберите сервисы речи и перевода', guide2Body: 'В настройках выберите сервисы, язык ввода и язык перевода. Бесплатные варианты работают без API-ключа.', guide3Title: 'Включите OSC в VRChat', guide3Body: 'В VRChat откройте Options → OSC → Enable. В настройках MioVRCT параметр «Отправлять в Chatbox» уже включён по умолчанию.', guide4Title: 'Для озвучивания подключите MixLine', guide4Body: 'Направьте озвучивание в виртуальный микрофон MixLine и выберите его в игре. Если озвучивание не нужно, пропустите этот шаг.', guide5Title: 'Включите функции SteamVR', guide5Body: 'Включите функции шлема в настройках и отметьте «Запускать вместе со SteamVR», чтобы в следующий раз они открылись одновременно.',
+        faqTitle: 'Нужна небольшая помощь?', faq1Title: 'Не работает бесплатный перевод Bing?', faq1Body: 'MioVRCT автоматически переключается на маршрут через сайт Bing. Если это не помогло, проверьте настройки прокси или VPN либо выберите другой сервис перевода.', faq2Title: 'Приложение зависает, если SteamVR уже запущен?', faq2Body: 'На некоторых ПК перестаёт отвечать сам SteamVR. MioVRCT продолжает переводить и показывает, что SteamVR не отвечает. Попробуйте включить «Запускать вместе со SteamVR».', faq2More: 'Убедитесь, что Steam, SteamVR и VRChat не запускаются от имени администратора или в режиме совместимости. Отключайте дополнения SteamVR по одному. Закройте программы, внедряющие оверлеи: RTSS, средства записи и подобные.', faq3Title: 'В чате не появляется текст?', faq3Body: 'Включите Options → OSC → Enable в VRChat. Кнопка «OSC» в главном окне Mio открывает пошаговую инструкцию.', faq4Title: 'Как дать другим услышать озвучивание в игре?', faq4Body: 'Направьте звук MioVRCT в виртуальный микрофон через MixLine. Затем выберите этот микрофон в звуковых настройках VRChat.', faq5Title: 'Обязательно скачивать локальные модели?', faq5Body: 'Для онлайн-сервисов — нет. Скачайте модели в настройках, когда захотите использовать локальное распознавание или локальные голоса.', faq6Title: 'Мои данные куда-то отправляются?', faq6Body: 'У проекта нет своего облака. Онлайн-распознавание, перевод и озвучивание отправляют нужные данные выбранным вами поставщикам по их правилам. История VR остаётся только в текущем сеансе.',
+        downloadTitle: 'До встречи в следующем мире.', downloadIntro: 'MioVRCT v1.6.4: привычный классический интерфейс вернулся, со всеми исправлениями с версии 1.6. Для рабочего стола и SteamVR.', downloadNote: 'Локальные речевые модели не входят в установщик. При необходимости скачайте их в настройках.', downloadButton: 'Скачать установщик', downloadLoading: 'Начинаем загрузку…', releaseNotes: 'Релизы на GitHub', qq1: 'Группа QQ 1', qq2: 'Группа QQ 2', communityNote: 'Файлы загружаются с GitHub. Если скорость низкая, в группах QQ есть установщики и инструкции с иллюстрациями.', dictTitle: 'Официальный словарь ASR', dictBody: 'Официальные термины для распознавания и файлы обновлений. Доступ к ним происходит только при открытии или ручном обновлении.', dictPage: 'Открыть страницу словаря', dictManifest: 'Посмотреть манифест обновлений', dictFile: 'Скачать файл словаря', dictNote: 'Команда обновления словаря в приложении загружает его отсюда.', olderTitle: 'Предыдущие версии', olderNote: 'Версии v1.3.8.5 и старше не обновляются сами. Установите пакет выше вручную.', allReleases: 'Все релизы ↗',
+        privacyTitle: 'О ваших данных', privacyBody: 'У MioVRCT нет собственного облака для перевода. Онлайн-распознавание, перевод и озвучивание отправляют необходимые данные выбранным вами поставщикам. Закладки VR и история перевода хранятся только в текущем сеансе; изображения сохраняются локально лишь по вашей команде. Закладки сеанса не заменяют постоянную резервную копию.', footerMaker: 'Создано игроком VRChat 酒寄 みお.', footerLicense: 'Официальные версии бесплатны · Открытый код GPL · Бренд MioVRCT защищён', footerPrivacy: 'Обработка данных онлайн регулируется правилами выбранных вами поставщиков.',
+      },
+      ko: {
+        pageTitle: 'MioVRCT · VRChat 실시간 음성 번역',
+        description: 'MioVRCT v1.6.4: VRChat을 위한 무료 실시간 음성 번역. 양방향 번역, 플로팅 창, SteamVR 자막, 손목 패널, 화면 번역, AI 음성 읽기를 지원합니다.',
+        skip: '본문으로 이동', navLabel: '주 메뉴', languageLabel: '사이트 언어', menuLabel: '메뉴 열기 또는 닫기',
+        navFeatures: '기능', navGuide: '사용 방법', navFaq: '자주 묻는 질문', navDownload: '다운로드',
+        themeSystem: '테마: 시스템 설정 (라이트로 전환)', themeLight: '테마: 라이트 (다크로 전환)', themeDark: '테마: 다크 (시스템 설정으로 전환)',
+        heroBadge: 'VRChat을 위해 · v1.6.4', heroLine: '언어가 달라도, 대화는 함께.',
+        heroDescription: '내 말은 상대방 언어로 번역해 채팅창에 보내고, 상대방의 목소리도 내 언어로 실시간 번역해 보여 줍니다.',
+        tutorial: '영상 가이드', heroPrivacy: '프로젝트 자체 클라우드는 없어요. 온라인 서비스는 직접 선택합니다.', freeGpl: '무료 · GPL 오픈 소스',
+        demoLabel: '메인 창과 플로팅 창의 대화 데모', demoCaption: '실제 앱 화면 · 예시 대화', demoPause: '데모 일시 정지', demoPlay: '데모 재생', demoStatic: '동작 줄이기: 완성된 대화를 표시합니다', stageLabel: '기능 스크린샷', headsetLabel: 'STEAMVR / 헤드셋 화면',
+        mainAlt: 'MioVRCT 메인 창의 양방향 번역 대화', frame1Alt: '플로팅 창: 상대방의 첫 번역문 도착', frame2Alt: '플로팅 창: 내 말의 인식과 번역 완료', frame3Alt: '플로팅 창: 상대방의 다음 답변 도착', frame4Alt: '플로팅 창: 내 다음 말도 번역 완료', islandAlt: '플로팅 창에 표시된 전체 양방향 대화', captionAlt: 'SteamVR 헤드셋의 원문 및 번역 자막', wristAlt: '손목 패널에 표시된 양방향 번역 기록', resultAlt: 'SteamVR 화면 번역 결과 패널', voiceAlt: '설정의 AI 음성 서비스 및 목소리 선택 화면',
+        featuresTitle: '데스크톱에서, 눈앞까지.', featuresIntro: '번역은 보기 편한 곳에 두고, 눈앞의 사람에게 집중하세요.',
+        feature1Title: '실시간 양방향 번역', feature1Body: '내 목소리를 상대방 언어로 번역해 VRChat 채팅창에 표시합니다. 상대방의 말도 내 언어로 번역하니, 대화의 흐름을 따라갈 수 있어요.', feature1Note: '내 목소리 → 상대방 언어 · 상대방 목소리 → 내 언어',
+        feature2Title: '플로팅 창', feature2Body: '플로팅 창을 열어 게임 옆에 번역을 띄워 두세요. 창 크기와 투명도를 조절할 수 있어요. 상대방의 번역문을 읽고, 내 말이 제대로 인식됐는지도 확인하세요.', feature2Note: '화면은 조금 덜 가리고, 공간은 더 넓게.',
+        feature3Title: '헤드셋 자막', feature3Body: 'SteamVR 헤드셋 안에서 바로 번역을 읽으세요. 컨트롤러 포인터로 Mio 패널을 조작하고, SteamVR과 함께 Mio를 시작하도록 설정할 수 있어요.', feature3Note: '데스크톱으로 돌아가지 않고 이어 가는 대화.',
+        feature4Title: '손목 패널', feature4Body: '손목을 들어 서로 나눈 말을 다시 확인하세요. 원문과 번역문이 함께 표시돼 헤드셋을 벗을 필요가 없어요.', feature4Note: '이번 세션의 양방향 대화 기록을 한눈에.',
+        feature5Title: '영역 지정 번역', feature5Body: '양손 컨트롤러로 월드 속 표지판이나 메뉴, 안내문을 감싸 촬영하고 번역하세요. 사진, 텍스트, QR 모드를 필요에 맞게 선택할 수 있어요.', feature5Note: '읽기 어려운 글자는 영역을 잡아 보세요.',
+        feature6Title: 'AI 음성 읽기', feature6Body: 'VOICEVOX, 클라우드 음성 등 원하는 AI 목소리로 번역문을 읽어 줍니다. MixLine 가상 마이크로 보내면 게임 속 상대방도 들을 수 있어요. 말하기 어려울 때는 글로 대화해도 좋아요.', feature6Note: '내 말을 전하는 또 다른 방법.',
+        alsoTitle: '이런 부분도 챙겼어요.', also1Title: '무료 번역 경로 자동 전환', also1Body: '중국 본토에서 Edge 접속이 차단되면 Bing 공식 사이트 경로(cn.bing.com)로 자동 전환합니다.', also2Title: '로컬 모델은 필요할 때만', also2Body: '로컬 음성 인식도 선택할 수 있어요. 온라인 서비스를 쓴다면 모델을 미리 받을 필요가 없습니다.', also3Title: '5개 언어로 쓰는 앱', also3Body: '중국어 간체, 영어, 일본어, 러시아어, 한국어. 익숙한 언어로 시작하세요.', also4Title: '기록은 현재 세션에만', also4Body: 'VR 기록과 북마크는 임시로 보관해요. 이미지는 직접 저장을 선택할 때만 로컬에 기록합니다.',
+        guideTitle: '몇 단계만 거치면, 대화 시작.', guideIntro: '먼저 번역을 켜 보고, 쓰면서 나에게 맞게 조절해 보세요.', tutorialLong: '영상으로 설정하기 (Bilibili)',
+        guide1Title: 'MioVRCT 다운로드 및 설치', guide1Body: 'Windows x64 설치 파일을 내려받아 안내에 따라 설치한 뒤 앱을 여세요.', guide2Title: '음성 인식과 번역 서비스 선택', guide2Body: '설정에서 서비스와 입력 언어, 번역할 언어를 선택하세요. 무료 옵션은 API 키 없이도 사용할 수 있어요.', guide3Title: 'VRChat OSC 활성화', guide3Body: 'VRChat에서 Options → OSC → Enable을 켜세요. MioVRCT 설정의 ‘Chatbox로 전송’은 처음부터 켜져 있어요.', guide4Title: '음성 읽기를 쓴다면 MixLine 연결', guide4Body: '읽어 주는 소리를 MixLine 가상 마이크로 보내고, 게임에서 그 마이크를 선택하세요. 음성 읽기가 필요 없다면 건너뛰어도 돼요.', guide5Title: 'SteamVR 헤드셋 기능 켜기', guide5Body: '설정에서 헤드셋 기능을 켜세요. ‘SteamVR과 함께 시작’도 켜 두면 다음부터 함께 실행됩니다.',
+        faqTitle: '조금 막히는 부분이 있나요?', faq1Title: '무료 번역(Bing)이 안 되나요?', faq1Body: 'MioVRCT는 이제 Bing 공식 사이트 경로로 자동 전환합니다. 그래도 실패한다면 프록시나 VPN 설정을 확인하거나 다른 번역 서비스를 선택해 보세요.', faq2Title: 'SteamVR을 먼저 켜면 앱이 멈추나요?', faq2Body: '일부 PC에서는 SteamVR 쪽에서 응답이 멈추는 문제가 생깁니다. MioVRCT는 번역을 계속하면서 ‘SteamVR이 응답하지 않습니다’를 표시해요. ‘SteamVR과 함께 시작’을 켜 보세요.', faq2More: 'Steam, SteamVR, VRChat이 관리자 권한이나 호환성 모드로 실행되도록 설정되어 있지 않은지 확인하세요. SteamVR 애드온을 하나씩 끄고, RTSS나 녹화 도구처럼 오버레이를 삽입하는 프로그램을 종료한 뒤 다시 시도하세요.', faq3Title: '채팅창에 글자가 안 나오나요?', faq3Body: 'VRChat에서 Options → OSC → Enable을 켜세요. Mio 메인 창의 ‘OSC’ 버튼을 누르면 단계별 안내를 볼 수 있어요.', faq4Title: '게임 속 상대방에게 AI 음성을 들려주려면?', faq4Body: 'MixLine으로 MioVRCT의 음성을 가상 마이크에 보낸 다음, VRChat 오디오 설정에서 그 마이크를 선택하세요.', faq5Title: '로컬 모델을 꼭 받아야 하나요?', faq5Body: '온라인 서비스에는 필요하지 않아요. 로컬 음성 인식이나 로컬 목소리를 쓰고 싶을 때 설정에서 내려받으면 됩니다.', faq6Title: '내 데이터가 업로드되나요?', faq6Body: '프로젝트 자체 클라우드는 없습니다. 온라인 음성 인식, 번역, AI 음성 읽기는 선택한 제공업체로 필요한 내용을 보내며 해당 업체의 정책에 따라 처리됩니다. VR 기록은 현재 세션에만 남아요.',
+        downloadTitle: '다음 월드에서, 함께 이야기해요.', downloadIntro: 'MioVRCT v1.6.4, 익숙한 기존 화면이 돌아왔고 1.6 이후의 모든 수정이 들어 있어요. 데스크톱과 SteamVR에서 만나 보세요.', downloadNote: '로컬 음성 모델은 설치 파일에 포함되지 않습니다. 필요할 때 설정에서 내려받으세요.', downloadButton: '설치 파일 다운로드', downloadLoading: '다운로드 시작 중…', releaseNotes: 'GitHub 릴리스', qq1: 'QQ 그룹 1', qq2: 'QQ 그룹 2', communityNote: '다운로드는 GitHub를 이용합니다. 속도가 느리다면 QQ 그룹 파일에서 설치 파일과 그림이 포함된 설정 가이드를 받을 수 있어요.', dictTitle: 'ASR 공식 사전', dictBody: '공식 인식 사전과 업데이트 파일입니다. 직접 열거나 업데이트할 때만 접근합니다.', dictPage: '사전 페이지 열기', dictManifest: '업데이트 목록 보기', dictFile: '사전 파일 다운로드', dictNote: '앱의 ‘사전 업데이트’는 여기에서 공식 사전을 가져옵니다.', olderTitle: '이전 버전', olderNote: 'v1.3.8.5 이하 버전은 자동 업데이트가 되지 않아요. 위의 설치 파일로 직접 설치하세요.', allReleases: '모든 릴리스 ↗',
+        privacyTitle: '내 데이터는 어떻게 처리되나요?', privacyBody: 'MioVRCT에는 프로젝트 자체 번역 클라우드 서버가 없습니다. 온라인 음성 인식, 번역, AI 음성 읽기는 선택한 제공업체로 필요한 내용을 보냅니다. VR 북마크와 번역 기록은 현재 세션에만 보관되며, 이미지는 저장을 선택할 때만 로컬에 기록합니다. 세션 북마크를 영구 백업으로 사용하지 마세요.', footerMaker: 'VRChat 플레이어 酒寄 みお 제작.', footerLicense: '공식 버전 무료 · GPL 오픈 소스 · MioVRCT 브랜드 보호', footerPrivacy: '온라인 데이터 처리에는 선택한 제공업체의 정책이 적용됩니다.',
+      },
+    };
 
-  function setActiveSection(index) {
-    if (index === activeSectionIndex || index < 0 || index >= sections.length) return;
-    activeSectionIndex = index;
-    dots.forEach((dot, dotIndex) => dot.classList.toggle('active', dotIndex === index));
-    navLinks.forEach((link, linkIndex) => {
-      if (link) link.classList.toggle('active', linkIndex === index);
-    });
-  }
+    // All supplied locales/themes have identical geometry. Values from screens/manifest.json, at half size.
+    const SCREEN_SIZES = {
+      main: [1354, 933], 'island-1': [654, 583], 'island-2': [654, 583],
+      'island-3': [654, 583], 'island-4': [654, 583], 'island-5': [654, 583],
+      'vr-caption': [1200, 245], 'vr-wrist': [1280, 1120], 'vr-result': [1000, 820], 'settings-voice': [1354, 933],
+    };
+    const storage = {
+      getItem(key) { try { return localStorage.getItem(key); } catch (_) { return null; } },
+      setItem(key, value) { try { localStorage.setItem(key, value); } catch (_) {} },
+    };
+    const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    let currentLanguage = 'zh-CN';
+    let themePreference = storage.getItem('mio-site-theme') || 'system';
+    if (!['system', 'light', 'dark'].includes(themePreference)) themePreference = 'system';
+    let activeStep = 0;
+    let downloadBusy = false;
+    const frames = [...document.querySelectorAll('.hero-frame')];
+    let demoFrame = reducedMotion.matches ? 4 : 0;
+    let demoVisible = false;
+    let demoPaused = false;
+    let demoTimer;
 
-
-  function updateNavBar() {
-    if (!navBar) return;
-    const progress = Math.max(0, Math.min(window.scrollY / Math.max(window.innerHeight * 0.35, 1), 1));
-    const alpha = (0.56 * progress).toFixed(3);
-    const borderAlpha = (0.08 * progress).toFixed(3);
-    const blur = (18 * progress).toFixed(2);
-    navBar.style.backgroundColor = `rgba(5, 6, 12, ${alpha})`;
-    navBar.style.borderBottomColor = `rgba(255, 255, 255, ${borderAlpha})`;
-    if (progress > 0.01) {
-      const filterValue = `saturate(150%) blur(${blur}px)`;
-      navBar.style.backdropFilter = filterValue;
-      navBar.style.webkitBackdropFilter = filterValue;
-    } else {
-      navBar.style.backdropFilter = 'none';
-      navBar.style.webkitBackdropFilter = 'none';
-    }
-  }
-  function getActiveSectionIndex() {
-    const navHeight = navBar ? navBar.offsetHeight : 0;
-    const threshold = navHeight + 12;
-
-    for (let index = sections.length - 1; index >= 0; index -= 1) {
-      const rect = sections[index].getBoundingClientRect();
-      if (rect.top <= threshold && rect.bottom > threshold) {
-        return index;
-      }
-    }
-
-    let closestIndex = 0;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    sections.forEach((section, index) => {
-      const rect = section.getBoundingClientRect();
-      const distance = Math.abs(rect.top - threshold);
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closestIndex = index;
-      }
-    });
-    return closestIndex;
-  }
-
-  let ticking = false;
-  function updateSectionState() {
-    setActiveSection(getActiveSectionIndex());
-    updateNavBar();
-    ticking = false;
-  }
-
-  window.addEventListener('scroll', () => {
-    if (ticking) return;
-    ticking = true;
-    window.requestAnimationFrame(updateSectionState);
-  }, { passive: true });
-
-  window.addEventListener('resize', () => {
-    syncSectionScrollability();
-    updateSectionState();
-  }, { passive: true });
-  dots.forEach((dot, index) => {
-    dot.addEventListener('click', () => scrollToSection(index));
-  });
-
-  window.addEventListener('keydown', (event) => {
-    const tagName = document.activeElement && document.activeElement.tagName;
-    const isTyping = tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
-    if (isTyping) return;
-
-    if (event.key === 'ArrowDown' || event.key === 'PageDown') {
-      event.preventDefault();
-      scrollToSection(Math.min(activeSectionIndex + 1, sections.length - 1));
-    }
-
-    if (event.key === 'ArrowUp' || event.key === 'PageUp') {
-      event.preventDefault();
-      scrollToSection(Math.max(activeSectionIndex - 1, 0));
-    }
-  });
-
-  function initSignalCanvas() {
-    const canvas = document.getElementById('mio-signal-canvas');
-    if (!canvas) return;
-
-    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const ctx = canvas.getContext('2d', { alpha: true });
-    if (!ctx) return;
-
-    let width = 0;
-    let height = 0;
-    let dpr = 1;
-    let rafId = 0;
-
-    const colors = ['#00e5ff', '#ff4fd8', '#b7ff2a', '#ffb84d'];
-    const lanes = Array.from({ length: 9 }, (_, index) => ({
-      baseY: 0.18 + index * 0.082,
-      amp: 18 + (index % 3) * 10,
-      phase: index * 0.72,
-      speed: 0.00028 + index * 0.000035,
-      color: colors[index % colors.length],
-    }));
-    const pulses = Array.from({ length: 38 }, (_, index) => ({
-      lane: index % lanes.length,
-      offset: (index * 0.137) % 1,
-      speed: 0.00011 + (index % 5) * 0.000025,
-      size: 1.4 + (index % 4) * 0.55,
-      color: colors[(index + 1) % colors.length],
-    }));
-
-    function resizeSignalCanvas() {
-      const rect = canvas.getBoundingClientRect();
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = Math.max(1, Math.floor(rect.width));
-      height = Math.max(1, Math.floor(rect.height));
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-
-    function lanePoint(lane, progress, time) {
-      const x = width * (-0.08 + progress * 1.18);
-      const centerPull = Math.sin(progress * Math.PI);
-      const y = height * lane.baseY
-        + Math.sin(progress * Math.PI * 2 + lane.phase + time * lane.speed) * lane.amp
-        + centerPull * height * 0.08;
-      return { x, y };
-    }
-
-    function drawSignalFrame(now) {
-      ctx.clearRect(0, 0, width, height);
-      ctx.globalCompositeOperation = 'source-over';
-
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.055)';
-      for (let x = 0; x < width; x += 58) {
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, height);
-        ctx.stroke();
-      }
-      for (let y = 0; y < height; y += 58) {
-        ctx.beginPath();
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(width, y + 0.5);
-        ctx.stroke();
-      }
-
-      ctx.globalCompositeOperation = 'lighter';
-      lanes.forEach((lane, laneIndex) => {
-        ctx.beginPath();
-        for (let step = 0; step <= 74; step += 1) {
-          const progress = step / 74;
-          const point = lanePoint(lane, progress, now);
-          if (step === 0) ctx.moveTo(point.x, point.y);
-          else ctx.lineTo(point.x, point.y);
-        }
-        ctx.lineWidth = laneIndex % 3 === 0 ? 1.8 : 1.15;
-        ctx.strokeStyle = lane.color + (laneIndex % 2 === 0 ? '88' : '66');
-        ctx.stroke();
+    function activeTheme() { return themePreference === 'system' ? (systemTheme.matches ? 'dark' : 'light') : themePreference; }
+    function dictionary() { return translations[currentLanguage]; }
+    function updateImages() {
+      const base = `assets/screens/${currentLanguage}/${activeTheme()}/`;
+      document.querySelectorAll('img[data-scene]').forEach(img => {
+        const scene = img.dataset.scene;
+        const [width, height] = SCREEN_SIZES[scene];
+        img.width = width; img.height = height;
+        img.style.maxWidth = `min(100%, ${width}px)`;
+        const source = `${base}${scene}.webp`;
+        if (img.getAttribute('src') !== source) img.src = source;
       });
-
-      pulses.forEach((pulse) => {
-        const lane = lanes[pulse.lane];
-        const progress = (pulse.offset + now * pulse.speed) % 1;
-        const point = lanePoint(lane, progress, now);
-        const alpha = Math.sin(progress * Math.PI);
-        ctx.fillStyle = pulse.color + Math.floor(80 + alpha * 150).toString(16).padStart(2, '0');
-        ctx.beginPath();
-        ctx.arc(point.x, point.y, pulse.size + alpha * 1.4, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      const coreX = width * 0.72;
-      const coreY = height * 0.47;
-      ctx.strokeStyle = 'rgba(183, 255, 42, 0.28)';
-      ctx.lineWidth = 1;
-      for (let r = 56; r <= 178; r += 38) {
-        ctx.beginPath();
-        ctx.rect(coreX - r, coreY - r * 0.52, r * 2, r * 1.04);
-        ctx.stroke();
-      }
-
-      const waveY = height * 0.82;
-      ctx.beginPath();
-      for (let x = 0; x <= width; x += 8) {
-        const progress = x / Math.max(width, 1);
-        const y = waveY
-          + Math.sin(progress * 28 + now * 0.003) * 7
-          + Math.sin(progress * 73 - now * 0.0022) * 4;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = 'rgba(255, 184, 77, 0.34)';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-
-      if (!reducedMotionQuery.matches) {
-        rafId = window.requestAnimationFrame(drawSignalFrame);
-      }
     }
-
-    function startSignalCanvas() {
-      window.cancelAnimationFrame(rafId);
-      resizeSignalCanvas();
-      if (reducedMotionQuery.matches) {
-        drawSignalFrame(0);
-      } else {
-        rafId = window.requestAnimationFrame(drawSignalFrame);
-      }
+    function updateThemeControl() {
+      const label = dictionary()[`theme${themePreference[0].toUpperCase()}${themePreference.slice(1)}`];
+      const button = document.getElementById('theme-toggle');
+      button.setAttribute('aria-label', label); button.title = label;
+      button.querySelector('use').setAttribute('href', `#i-${themePreference === 'light' ? 'sun' : themePreference === 'dark' ? 'moon' : 'system'}`);
     }
-
-    window.addEventListener('resize', startSignalCanvas, { passive: true });
-    if (typeof reducedMotionQuery.addEventListener === 'function') {
-      reducedMotionQuery.addEventListener('change', startSignalCanvas);
+    function applyTheme() {
+      document.documentElement.dataset.theme = activeTheme();
+      document.querySelector('meta[name="theme-color"]').content = activeTheme() === 'dark' ? '#161616' : '#f4f4f2';
+      updateThemeControl(); updateImages();
     }
-    startSignalCanvas();
-  }
-
-  initSignalCanvas();
-
-  const translations = {
-    'zh-CN': {
-      pageTitle: 'Mio RealTime Translator v1.5.1 · SteamVR',
-      'nav-intro': '介绍',
-      'nav-features': '功能',
-      'nav-guide': '使用说明',
-      'nav-download': '下载',
-      'nav-github': 'GitHub',
-      'nav-miovrca': 'MioVRCA',
-      'hero-eyebrow': 'v1.5.1 · Mio VR手势',
-      'hero-sub': '戴着头显，也能取景翻译、扫描二维码、查看双向聊天记录。<br>SteamVR 手势操作与固定朝向字幕，让译文留在你看得清的位置；Mio 原有翻译、ASR 和 TTS 服务继续保留。',
-      'hero-impact-1-title': '双手取景，直接翻译',
-      'hero-impact-1-body': '用手柄框选画面，单独设置截图语言，结果保留为可搬移面板。',
-      'hero-impact-2-title': '字幕不再追着视线跑',
-      'hero-impact-2-body': '固定朝向阅读，自由转头；需要时点击“移到眼前”重新定位。',
-      'hero-impact-3-title': '抬腕回看，不摘头显',
-      'hero-impact-3-body': '手腕书签、自己与对方的转译记录，集中在本次会话面板中。',
-      'hero-download': '立即下载',
-      'hero-source': '查看源码',
-      'hero-tutorial': '视频教学',
-      'privacy-badge': '无项目自有云服务 · VR 记录仅在本次会话保留',
-      'scroll-hint-text': '向下滚动',
-      'features-eyebrow': '功能特性',
-      'features-title': '为头显里的交流而适配',
-      'features-sub': '先看懂眼前的文字，再接上跨语言对话。VR 与桌面共享 Mio 服务，不需要安装 VRHandsFrame。',
-      'spotlight-kicker': 'Mio VR手势 · SteamVR',
-      'spotlight-title': '取景、翻译、阅读，都在 VR 里完成',
-      'spotlight-body': '双手按住握持键（手柄侧面的按键）取景；左扳机切换模式，右扳机截取或加入书签。靠近结果面板按握持键搬移，双手握持缩放。保留原有多翻译后端、语音识别与 AI 语音阅读。',
-      'feature-1-title': '截图翻译与独立语言',
-      'feature-1-body': '拍照、翻译、二维码三种模式；原文与译文语言独立设置，不影响语音翻译。预览固定在截取位置，转头也能继续阅读。',
-      'feature-2-title': '稳定字幕与可搬移面板',
-      'feature-2-body': '实时字幕默认固定朝向，随实际位置平移但不随转头旋转。“移到眼前”一键召回，也可切换为跟随头部。',
-      'feature-3-title': '手腕书签、记录与扫码',
-      'feature-3-body': '按住左扳机并抬腕打开书签，松开后保持显示；回看自己与对方的转译。扫码只显示链接，点击后才打开。',
-      'feature-4-title': '反向翻译 + 同声传译',
-      'feature-4-body': '反向翻译可识别对方语音并显示译文；开启语音阅读后，译文还能通过 MixLine 虚拟麦克风实时读给游戏里的其他玩家。不是只给 VRC，只要游戏能选麦克风，就能搭出同声传译。',
-      'feature-5-title': '文字输入 + AI 语音阅读',
-      'feature-5-body': '输入文字可以翻译、发送到 VRC，也可以直接用 AI 声音朗读。无言势、口障或不方便开麦的玩家，可以用自己选择的声线把想说的话传进游戏语音。',
-      'feature-6-title': '隐私优先',
-      'feature-6-body': 'VR 书签和转译记录仅保留于本次会话；图片需明确保存才写入本地。在线识别、翻译和语音合成按所选服务发送内容。',
-      'guide-eyebrow': '使用说明',
-      'guide-title': '五步开始使用',
-      'guide-sub': '完成服务配置后，启动 SteamVR 并启用 Mio 的 VR 功能；桌面模式仍可单独使用。',
-      'guide-step-1-title': '下载并安装',
-      'guide-step-1-body': '点击下方“立即下载安装”按钮，下载并运行安装程序，安装完成后直接打开 <strong style="color:#f0f0fa;">MioTranslator.exe</strong> 即可。',
-      'guide-step-2-title': '配置翻译后端',
-      'guide-step-2-body': '启动 MioTranslator.exe，点击右上角设置，填写你的 API Key。官方服务会自动填入推荐 Base URL 与 Model；兼容中继的自定义 Base URL、请求头和 Model ID 可编辑并会原样保留。',
-      'guide-step-3-title': '设置游戏输入',
-      'guide-step-3-body': 'VRChat 聊天框发送需要开启 OSC；如果要让游戏听到 AI 语音，请额外安装 MixLine，并在游戏内选择 MixLine 虚拟麦克风。VRChat OSC 路径：',
-      'guide-step-4-title': '启动 SteamVR 与 Mio VR',
-      'guide-step-4-body': '确认头显和手柄追踪正常，在 Mio 中启用 VR 字幕／截图翻译。按需下载本地语音模型；在线识别无需本地模型。',
-      'guide-step-5-title': '打开教学，开始取景',
-      'guide-step-5-body': '在 Mio VR 仪表板查看教学，设置截图的原文／译文语言。双手按住握持键取景，按住左扳机并抬腕打开书签；字幕可用“移到眼前”重新定位。',
-      'download-eyebrow': '下载',
-      'download-title': '新版下载',
-      'download-sub': 'v1.5.1 主打 SteamVR 适配：双手取景翻译、二维码、手腕书签、双向聊天记录与固定朝向字幕。保留原有翻译／ASR／TTS 服务。v1.3.8.5 及更早版本请手动安装。',
-      'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.5.1 正式版 · 411.2 MiB / 431.2 MB · SteamVR 手势与字幕 · 桌面功能保留',
-      'download-release-note': '安装包不捆绑 SenseVoice、Whisper 或 TTS 语音模型，首次使用本地功能时按需下载。GPU 支持会检测 NVIDIA 驱动，并可自动安装 CUDA 版 PyTorch。',
-      'download-button-text': '下载安装包',
-      'download-button-loading': '正在准备安装包...',
-      'download-model-text': 'Beta版下载',
-      'download-model-note': '暂无测试版提供，当前请使用 v1.5.1 正式版安装包。',
-      'download-qq-1-text': 'QQ 1 群',
-      'download-qq-2-text': 'QQ 2 群',
-      'download-community-note': '下载走的是 GitHub，如果下载速度过慢，请加 QQ 群群文件下载。群文件包含图文版教学。',
-      'download-releases-text': '暂无测试版提供',
-      'download-releases-loading': '暂无测试版提供',
-      'download-releases-note': 'v1.5.1 是当前正式版手动下载，当前暂无测试版提供。',
-      'download-dict-title': 'ASR 官方词典',
-      'download-dict-body': '这里提供官方识别词典和更新文件。平时不会联网，只有你手动点开时才会访问。',
-      'download-dict-module-text': '打开词典页面',
-      'download-dict-manifest-text': '查看更新清单',
-      'download-dict-json-text': '下载词典文件',
-      'download-dict-note': '软件里的“更新词典”会从这里获取官方词典。',
-      'privacy-title': '隐私声明',
-      'privacy-body': '本项目没有自有翻译云服务器。在线 ASR、翻译和 TTS 会按你的选择向对应服务商发送必要内容。<br>VR 书签与转译记录保留于本次会话；图片只有点击保存后才写入本地。请勿将会话书签视为永久备份。',
-      'footer-main': '制作者：VRC 玩家 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 官方版本免费 · 桌面版 GPL 开源 · VR 实现另行维护 · 品牌受保护 · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
-      'footer-sub': 'VR 记录仅保留于本次会话；在线服务的数据处理遵循所选服务商政策。'
-    },
-    en: {
-      pageTitle: 'Mio RealTime Translator v1.5.1 · SteamVR',
-      'nav-intro': 'Overview',
-      'nav-features': 'Features',
-      'nav-guide': 'Guide',
-      'nav-download': 'Download',
-      'nav-github': 'GitHub',
-      'nav-miovrca': 'MioVRCA',
-      'hero-eyebrow': 'v1.5.1 · Mio VR Gestures',
-      'hero-sub': 'Frame and translate text, scan QR codes and review both sides of a conversation without removing your headset.<br>SteamVR gestures and fixed-heading captions keep text readable, with the same Mio translation, ASR and TTS services.',
-      'hero-impact-1-title': 'Frame it. Translate it.',
-      'hero-impact-1-body': 'Select an area with your controllers, choose separate screenshot languages and keep a movable result panel.',
-      'hero-impact-2-title': 'Captions that stay put',
-      'hero-impact-2-body': 'Turn your head freely; use “Move in front” whenever you want to recenter.',
-      'hero-impact-3-title': 'Review from your wrist',
-      'hero-impact-3-body': 'Wrist bookmarks and your own and others’ translated lines stay available for the current session.',
-      'hero-download': 'Download Now',
-      'hero-source': 'View Source',
-      'hero-tutorial': 'Video Guide',
-      'privacy-badge': 'No first-party cloud · VR history stays in the current session',
-      'scroll-hint-text': 'Scroll down',
-      'features-eyebrow': 'Features',
-      'features-title': 'Built for conversations in VR',
-      'features-sub': 'Read the scene, then join the conversation. VR and desktop use Mio services; VRHandsFrame is not required.',
-      'spotlight-kicker': 'Mio VR Gestures · SteamVR',
-      'spotlight-title': 'Frame, translate and read inside VR',
-      'spotlight-body': 'Hold both grip buttons (on the controller sides) to frame an area. Use the left trigger for modes and the right for capture or bookmarks. Grab panels up close and resize with both hands. Existing translation backends, ASR and AI voice reading remain available.',
-      'feature-1-title': 'Screenshot translation',
-      'feature-1-body': 'Photo, translation and QR modes with independent source and target languages. Captured previews stay anchored so you can turn your head to read.',
-      'feature-2-title': 'Stable captions and panels',
-      'feature-2-body': 'Live captions follow physical movement, not head rotation, by default. “Move in front” recenters them; head-follow mode is also available.',
-      'feature-3-title': 'Wrist history and QR links',
-      'feature-3-body': 'Hold the left trigger and raise your wrist to open bookmarks; release to keep them open. Review both sides of a conversation. QR links open only after a click.',
-      'feature-4-title': 'Reverse Translation + Interpretation',
-      'feature-4-body': 'Reverse translation transcribes other players and pins the translation. Turn on voice reading and the translated line can be spoken through MixLine as a virtual microphone. It is not just for VRC: any game with mic selection can get an interpretation flow.',
-      'feature-5-title': 'Text Input + AI Voice Reading',
-      'feature-5-body': 'Type a line, translate it, send it to VRC, or read it aloud with an AI voice. Non-speaking, speech-impaired, or no-mic players can use a chosen voice to say what they want in game chat.',
-      'feature-6-title': 'Privacy First',
-      'feature-6-body': 'VR bookmarks and translated history stay in the current session; images are written locally only when saved explicitly. Online ASR, translation and TTS send content to your selected provider.',
-      'guide-eyebrow': 'Guide',
-      'guide-title': 'Get started in five steps',
-      'guide-sub': 'Configure your services, start SteamVR and enable Mio VR. Desktop mode remains available on its own.',
-      'guide-step-1-title': 'Download and install',
-      'guide-step-1-body': 'Click the button below to download the installer. Run it, then launch <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
-      'guide-step-2-title': 'Configure your translation backend',
-      'guide-step-2-body': 'Launch MioTranslator.exe, open Settings, and enter your API Key. Official services fill recommended Base URLs and models automatically; compatible relays keep custom Base URLs, headers, and model IDs editable and preserve them exactly.',
-      'guide-step-3-title': 'Set up game input',
-      'guide-step-3-body': 'VRChat chatbox sending still needs OSC. To make a game hear AI speech, install MixLine separately and select the MixLine virtual microphone in the game. VRChat OSC path:',
-      'guide-step-4-title': 'Start SteamVR and Mio VR',
-      'guide-step-4-body': 'Check headset and controller tracking, then enable VR captions / screenshot translation in Mio. Local speech models download on demand; online ASR needs no local model.',
-      'guide-step-5-title': 'Open the tutorial and frame',
-      'guide-step-5-body': 'Use the VR dashboard tutorial and set screenshot languages. Hold both side grip buttons to frame; hold the left trigger and raise your wrist for bookmarks. Use “Move in front” to recenter captions.',
-      'download-eyebrow': 'Download',
-      'download-title': 'Release Downloads',
-      'download-sub': 'v1.5.1 brings SteamVR framing, screenshot translation, QR links, wrist bookmarks, bidirectional history and fixed-heading captions. Existing translation / ASR / TTS services remain. v1.3.8.5 and earlier require manual installation.',
-      'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.5.1 Release · 411.2 MiB / 431.2 MB · SteamVR gestures and captions · Desktop features retained',
-      'download-release-note': 'The installer does not bundle SenseVoice, Whisper, or TTS voice models. Local models download on demand. GPU support checks the NVIDIA driver and can automatically install CUDA PyTorch.',
-      'download-button-text': 'Download Installer',
-      'download-button-loading': 'Preparing installer...',
-      'download-model-text': 'Download Beta',
-      'download-model-note': 'No beta build is available right now. Please use the v1.5.1 release installer.',
-      'download-qq-1-text': 'QQ Group 1',
-      'download-qq-2-text': 'QQ Group 2',
-      'download-community-note': 'Downloads are hosted on GitHub. If the download is slow, join a QQ group and use the group files, which include a picture-based guide.',
-      'download-releases-text': 'No Beta Available',
-      'download-releases-loading': 'No beta available',
-      'download-releases-note': 'v1.5.1 is the current release download. No beta build is available right now.',
-      'download-dict-title': 'ASR Official Dictionary',
-      'download-dict-body': 'Official recognition terms and update files are provided here. The app only connects when you open these links manually.',
-      'download-dict-module-text': 'Open Dictionary Page',
-      'download-dict-manifest-text': 'View Update List',
-      'download-dict-json-text': 'Download Dictionary File',
-      'download-dict-note': 'The in-app Update Dictionary action reads from this official source.',
-      'privacy-title': 'Privacy Notice',
-      'privacy-body': 'There is no project-owned translation cloud. Online ASR, translation and TTS send necessary content to the providers you choose.<br>VR bookmarks and translated history stay in the current session; images are written locally only when explicitly saved. Session bookmarks are not permanent backups.',
-      'footer-main': 'Created by VRC player <strong style="color:#f0f0fa;">酒寄 みお</strong> · Free official builds · GPL desktop source · separately maintained VR implementation · protected brand · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
-      'footer-sub': 'VR history is session-only; online data processing follows your selected provider’s policy.'
-    },
-    ja: {
-      pageTitle: 'Mio RealTime Translator v1.5.1 · SteamVR',
-      'nav-intro': '紹介',
-      'nav-features': '機能',
-      'nav-guide': '使い方',
-      'nav-download': 'ダウンロード',
-      'nav-github': 'GitHub',
-      'nav-miovrca': 'MioVRCA',
-      'hero-eyebrow': 'v1.5.1 · Mio VRジェスチャー',
-      'hero-sub': 'ヘッドセットを外さず、範囲選択で翻訳、QR 読み取り、双方向の会話履歴を確認。<br>SteamVR の操作と向き固定の字幕で読みやすく。Mio の翻訳・ASR・TTS サービスはそのまま使えます。',
-      'hero-impact-1-title': '両手で囲んで翻訳',
-      'hero-impact-1-body': 'コントローラーで範囲を選び、画像専用の言語を指定。結果パネルは移動できます。',
-      'hero-impact-2-title': '振り向いても読みやすい字幕',
-      'hero-impact-2-body': '字幕の向きを固定し、必要なときに「目の前に移動」で再配置。',
-      'hero-impact-3-title': '手首から履歴を確認',
-      'hero-impact-3-body': 'ブックマークと自分・相手の翻訳履歴を、現在のセッション内で確認できます。',
-      'hero-download': '今すぐダウンロード',
-      'hero-source': 'ソースを見る',
-      'hero-tutorial': '動画チュートリアル',
-      'privacy-badge': '独自クラウドなし · VR 履歴は現在のセッション内のみ',
-      'scroll-hint-text': 'スクロール',
-      'features-eyebrow': '機能',
-      'features-title': 'VR の会話に合わせた操作',
-      'features-sub': '目の前の文字も、相手の言葉も。VR とデスクトップは Mio のサービスを利用し、VRHandsFrame の導入は不要です。',
-      'spotlight-kicker': 'Mio VRジェスチャー · SteamVR',
-      'spotlight-title': '範囲選択から翻訳・閲覧まで VR 内で',
-      'spotlight-body': '両手のグリップボタン（コントローラー側面）で範囲を選択。左トリガーでモード切替、右で撮影やブックマーク。近くでパネルをつかみ、両手で拡大縮小できます。既存の翻訳・音声認識・読み上げも利用できます。',
-      'feature-1-title': '画像翻訳と専用の言語設定',
-      'feature-1-body': '写真・翻訳・QR の 3 モード。原文と訳文の言語は音声翻訳と別に設定でき、プレビューは撮影位置に固定されます。',
-      'feature-2-title': '向き固定の字幕とパネル',
-      'feature-2-body': '字幕は実際の移動には追従し、頭の回転には追従しないのが既定です。「目の前に移動」で再配置でき、頭部追従にも切り替えられます。',
-      'feature-3-title': '手首の履歴と QR リンク',
-      'feature-3-body': '左トリガーを押しながら手首を上げると開き、離しても表示を維持。自分と相手の翻訳を確認できます。QR リンクはクリック後に開きます。',
-      'feature-4-title': '逆翻訳 + 同時通訳',
-      'feature-4-body': '逆翻訳で相手の声を認識して訳文を表示できます。音声読み上げをオンにすると、訳文を MixLine 仮想マイクで他のプレイヤーへ読み上げます。VRC だけでなく、マイクを選べるゲームなら同時通訳の流れを作れます。',
-      'feature-5-title': 'テキスト入力 + AI 音声読み上げ',
-      'feature-5-body': '入力した文章を翻訳して VRC に送ったり、AI 音声で読み上げたりできます。声を出しにくい人やマイクを使いにくい人も、選んだ声線でゲーム内に言葉を届けられます。',
-      'feature-6-title': 'プライバシー優先',
-      'feature-6-body': 'VR ブックマークと翻訳履歴はセッション内のみ保持。画像は明示的な保存時だけ書き込みます。オンライン処理では選択した事業者へ内容を送信します。',
-      'guide-eyebrow': '使い方',
-      'guide-title': '5 ステップで開始',
-      'guide-sub': 'サービスを設定し、SteamVR と Mio の VR 機能を有効にしてください。デスクトップ単独でも利用できます。',
-      'guide-step-1-title': 'ダウンロードしてインストール',
-      'guide-step-1-body': '下のボタンからインストーラーを取得し、実行してください。インストール後、<strong style="color:#f0f0fa;">MioTranslator.exe</strong> を起動します。',
-      'guide-step-2-title': '翻訳バックエンドを設定',
-      'guide-step-2-body': 'MioTranslator.exe を起動し、設定から API Key を入力してください。公式サービスでは推奨 Base URL とモデルが自動入力されます。互換リレーではカスタム Base URL、ヘッダー、モデル ID を編集でき、入力値がそのまま保持されます。',
-      'guide-step-3-title': 'ゲーム入力を設定',
-      'guide-step-3-body': 'VRChat のチャットボックス送信には OSC が必要です。AI 音声をゲームに聞かせる場合は MixLine を別途インストールし、ゲーム側で MixLine 仮想マイクを選択してください。VRChat の OSC パス：',
-      'guide-step-4-title': 'SteamVR と Mio VR を起動',
-      'guide-step-4-body': '頭と両手の追跡を確認し、Mio で VR 字幕／画像翻訳を有効にします。ローカル音声モデルは必要時に取得し、オンライン認識には不要です。',
-      'guide-step-5-title': 'チュートリアルを開いて範囲選択',
-      'guide-step-5-body': 'VR ダッシュボードの説明を読み、画像の原文・訳文言語を設定。両側面ボタンで範囲選択、左トリガー＋手首上げでブックマーク。字幕は「目の前に移動」で再配置できます。',
-      'download-eyebrow': 'ダウンロード',
-      'download-title': 'リリース版ダウンロード',
-      'download-sub': 'v1.5.1 は SteamVR に対応：両手の画像翻訳、QR、手首ブックマーク、双方向履歴、向き固定字幕。従来の翻訳・ASR・TTS を維持します。v1.3.8.5 以前は手動インストールが必要です。',
-      'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.5.1 正式版 · 411.2 MiB / 431.2 MB · SteamVR 操作と字幕 · デスクトップ機能も継続',
-      'download-release-note': 'インストーラーには SenseVoice、Whisper、TTS 音声モデルは同梱していません。ローカルモデルは必要時にダウンロードします。GPU サポートは NVIDIA ドライバーを確認し、CUDA 版 PyTorch を自動インストールできます。',
-      'download-button-text': 'インストーラーをダウンロード',
-      'download-button-loading': '準備中...',
-      'download-model-text': 'beta 版をダウンロード',
-      'download-model-note': '現在 beta 版は提供していません。v1.5.1 正式版インストーラーをご利用ください。',
-      'download-qq-1-text': 'QQ 1 群',
-      'download-qq-2-text': 'QQ 2 群',
-      'download-community-note': 'ダウンロードは GitHub 経由です。遅い場合は QQ グループに参加し、グループファイルからダウンロードしてください。画像付きガイドも含まれています。',
-      'download-releases-text': 'beta 版なし',
-      'download-releases-loading': 'beta 版なし',
-      'download-releases-note': 'v1.5.1 が現在の正式版ダウンロードです。beta 版は提供していません。',
-      'download-dict-title': 'ASR 公式辞書',
-      'download-dict-body': '公式認識辞書と更新ファイルを提供しています。手動で開いたときだけアクセスします。',
-      'download-dict-module-text': '辞書ページを開く',
-      'download-dict-manifest-text': '更新リストを確認',
-      'download-dict-json-text': '辞書ファイルをダウンロード',
-      'download-dict-note': 'アプリ内の「辞書を更新」はここから公式辞書を取得します。',
-      'privacy-title': 'プライバシーについて',
-      'privacy-body': 'プロジェクト独自の翻訳クラウドはありません。オンライン ASR・翻訳・TTS は選択した事業者へ必要な内容を送信します。<br>VR 履歴とブックマークは現在のセッション内のみ保持し、画像は保存操作時のみ書き込みます。恒久的なバックアップではありません。',
-      'footer-main': '制作者：VRC プレイヤー <strong style="color:#f0f0fa;">酒寄 みお</strong> · 公式ビルド無料 · デスクトップ版 GPL ソース · VR 実装は別途管理 · ブランド保護 · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
-      'footer-sub': 'VR 履歴はセッション内のみ。オンライン処理には選択した事業者のポリシーが適用されます。'
-    },
-    ru: {
-      pageTitle: 'Mio RealTime Translator v1.5.1 · SteamVR',
-      'nav-intro': 'Обзор',
-      'nav-features': 'Функции',
-      'nav-guide': 'Инструкция',
-      'nav-download': 'Скачать',
-      'nav-github': 'GitHub',
-      'nav-miovrca': 'MioVRCA',
-      'hero-eyebrow': 'v1.5.1 · Жесты Mio VR',
-      'hero-sub': 'Выделяйте текст, переводите снимки, сканируйте QR и читайте обе стороны диалога, не снимая шлем.<br>Жесты SteamVR и субтитры с фиксированным направлением используют прежние сервисы перевода, ASR и TTS Mio.',
-      'hero-impact-1-title': 'Выделить и перевести',
-      'hero-impact-1-body': 'Выберите область контроллерами, задайте языки снимков отдельно и сохраните результат на перемещаемой панели.',
-      'hero-impact-2-title': 'Субтитры не бегут за взглядом',
-      'hero-impact-2-body': 'Свободно поворачивайте голову; кнопка «Перед глазами» возвращает субтитры в поле зрения.',
-      'hero-impact-3-title': 'История на запястье',
-      'hero-impact-3-body': 'Закладки и переводы ваших реплик и речи собеседника доступны в текущем сеансе.',
-      'hero-download': 'Скачать',
-      'hero-source': 'Исходный код',
-      'hero-tutorial': 'Видеоинструкция',
-      'privacy-badge': 'Без собственного облака · История VR только в сеансе',
-      'scroll-hint-text': 'Прокрутите вниз',
-      'features-eyebrow': 'Возможности',
-      'features-title': 'Общение прямо в VR',
-      'features-sub': 'Читайте текст вокруг и общайтесь. VR и рабочий стол используют сервисы Mio; установка VRHandsFrame не нужна.',
-      'spotlight-kicker': 'Жесты Mio VR · SteamVR',
-      'spotlight-title': 'Выделение, перевод и чтение в шлеме',
-      'spotlight-body': 'Удерживайте боковые кнопки хвата обоих контроллеров для рамки. Левый курок меняет режим, правый делает снимок или закладку. Панели можно брать вблизи и масштабировать двумя руками. Прежние сервисы перевода, ASR и озвучивания сохранены.',
-      'feature-1-title': 'Перевод снимков',
-      'feature-1-body': 'Фото, перевод и QR с отдельными языками оригинала и перевода. Предпросмотр закреплён в точке снимка и не поворачивается за головой.',
-      'feature-2-title': 'Стабильные субтитры',
-      'feature-2-body': 'По умолчанию субтитры следуют за перемещением, но не за поворотами головы. «Перед глазами» меняет направление; режим следования за головой также доступен.',
-      'feature-3-title': 'Закладки, история и QR',
-      'feature-3-body': 'Удерживайте левый курок и поднимите запястье; после отпускания панель остаётся открытой. Читайте обе стороны диалога. QR-ссылки открываются только по нажатию.',
-      'feature-4-title': 'Обратный перевод + синхронный режим',
-      'feature-4-body': 'Обратный перевод распознаёт речь других игроков и показывает перевод. Если включить озвучивание, перевод будет произнесён через виртуальный микрофон MixLine. Это не только для VRC: любая игра с выбором микрофона может получить поток синхронного перевода.',
-      'feature-5-title': 'Текстовый ввод + AI-озвучивание',
-      'feature-5-body': 'Введите фразу, переведите её, отправьте в VRC или озвучьте AI-голосом. Игроки, которым трудно говорить или неудобно включать микрофон, могут выбрать голос и передать свои слова в игровой голосовой чат.',
-      'feature-6-title': 'Приватность прежде всего',
-      'feature-6-body': 'Закладки и переводы VR хранятся только в текущем сеансе. Изображения записываются лишь при явном сохранении. Онлайн-сервисы получают необходимые данные у выбранного провайдера.',
-      'guide-eyebrow': 'Инструкция',
-      'guide-title': 'Старт за пять шагов',
-      'guide-sub': 'Настройте сервисы, запустите SteamVR и включите Mio VR. Режим рабочего стола работает отдельно.',
-      'guide-step-1-title': 'Скачайте и установите',
-      'guide-step-1-body': 'Нажмите кнопку ниже, чтобы скачать установщик. Запустите его, затем откройте <strong style="color:#f0f0fa;">MioTranslator.exe</strong>.',
-      'guide-step-2-title': 'Настройте переводческий бэкенд',
-      'guide-step-2-body': 'Запустите MioTranslator.exe, откройте настройки и введите API Key. Для официальных сервисов рекомендуемые Base URL и модели заполняются автоматически; у совместимых реле пользовательские Base URL, заголовки и ID моделей остаются редактируемыми и сохраняются без изменений.',
-      'guide-step-3-title': 'Настройте вход в игре',
-      'guide-step-3-body': 'Для отправки в чатбокс VRChat нужен OSC. Чтобы игра слышала AI-голос, отдельно установите MixLine и выберите виртуальный микрофон MixLine в игре. Путь OSC в VRChat:',
-      'guide-step-4-title': 'Запустите SteamVR и Mio VR',
-      'guide-step-4-body': 'Проверьте отслеживание шлема и контроллеров, включите VR-субтитры / перевод снимков. Локальные голосовые модели загружаются по запросу; онлайн-ASR не требует моделей.',
-      'guide-step-5-title': 'Откройте обучение и выделите область',
-      'guide-step-5-body': 'Задайте языки снимков в панели VR. Для рамки удерживайте обе боковые кнопки, для закладок — левый курок и поднимите запястье. Кнопка «Перед глазами» возвращает субтитры.',
-      'download-eyebrow': 'Скачать',
-      'download-title': 'Загрузки релиза',
-      'download-sub': 'v1.5.1: адаптация SteamVR, перевод выделенной области, QR, закладки на запястье, история обеих сторон и фиксированное направление субтитров. Сервисы перевода / ASR / TTS сохранены. Для v1.3.8.5 и старше нужна ручная установка.',
-      'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · Релиз v1.5.1 · 411.2 MiB / 431.2 MB · Жесты и субтитры SteamVR · Функции рабочего стола сохранены',
-      'download-release-note': 'Установщик не включает модели SenseVoice, Whisper или голоса TTS. Локальные модели загружаются по требованию. Поддержка GPU проверяет драйвер NVIDIA и может автоматически установить CUDA PyTorch.',
-      'download-button-text': 'Скачать установщик',
-      'download-button-loading': 'Подготовка установщика...',
-      'download-model-text': 'Скачать beta',
-      'download-model-note': 'Beta-версия сейчас недоступна. Используйте установщик v1.5.1.',
-      'download-qq-1-text': 'QQ группа 1',
-      'download-qq-2-text': 'QQ группа 2',
-      'download-community-note': 'Загрузка идёт через GitHub. Если скорость низкая, вступите в QQ-группу и скачайте файл из группы; там также есть инструкция с изображениями.',
-      'download-releases-text': 'Beta недоступна',
-      'download-releases-loading': 'Beta недоступна',
-      'download-releases-note': 'v1.5.1 — текущий выпуск для скачивания. Beta-версия сейчас недоступна.',
-      'download-dict-title': 'Официальный словарь ASR',
-      'download-dict-body': 'Здесь размещены официальные термины распознавания и файлы обновлений. Приложение обращается к ним только при ручном открытии.',
-      'download-dict-module-text': 'Открыть страницу словаря',
-      'download-dict-manifest-text': 'Посмотреть список обновлений',
-      'download-dict-json-text': 'Скачать файл словаря',
-      'download-dict-note': 'Команда «Обновить словарь» в приложении берёт официальный словарь отсюда。',
-      'privacy-title': 'Конфиденциальность',
-      'privacy-body': 'У проекта нет собственного облака перевода. Онлайн-ASR, перевод и TTS отправляют необходимые данные выбранным вами провайдерам.<br>История VR и закладки существуют только в текущем сеансе; изображения записываются при явном сохранении. Закладки не являются постоянной резервной копией.',
-      'footer-main': 'Автор: игрок VRC <strong style="color:#f0f0fa;">酒寄 みお</strong> · Free official builds · GPL desktop source · separately maintained VR implementation · protected brand · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
-      'footer-sub': 'История VR хранится в сеансе; обработка онлайн-данных регулируется политикой выбранного провайдера.'
-    },
-    ko: {
-      pageTitle: 'Mio RealTime Translator v1.5.1 · SteamVR',
-      'nav-intro': '소개',
-      'nav-features': '기능',
-      'nav-guide': '가이드',
-      'nav-download': '다운로드',
-      'nav-github': 'GitHub',
-      'nav-miovrca': 'MioVRCA',
-      'hero-eyebrow': 'v1.5.1 · Mio VR 제스처',
-      'hero-sub': '헤드셋을 벗지 않고 영역 번역, QR 스캔, 양방향 대화 기록을 확인하세요.<br>SteamVR 제스처와 방향 고정 자막으로 편하게 읽으면서 기존 Mio 번역·ASR·TTS 서비스를 그대로 사용합니다.',
-      'hero-impact-1-title': '두 손으로 지정하고 번역',
-      'hero-impact-1-body': '컨트롤러로 영역을 고르고 스크린샷 전용 언어를 설정하세요. 결과 패널은 옮길 수 있습니다.',
-      'hero-impact-2-title': '시선을 따라 돌지 않는 자막',
-      'hero-impact-2-body': '자유롭게 고개를 돌리고, 필요하면 ‘눈앞으로 이동’으로 다시 배치하세요.',
-      'hero-impact-3-title': '손목에서 기록 확인',
-      'hero-impact-3-body': '손목 북마크와 나·상대방의 번역 기록을 현재 세션에서 확인합니다.',
-      'hero-download': '지금 다운로드',
-      'hero-source': '소스 보기',
-      'hero-tutorial': '동영상 가이드',
-      'privacy-badge': '자체 클라우드 없음 · VR 기록은 현재 세션에만 유지',
-      'scroll-hint-text': '아래로 스크롤',
-      'features-eyebrow': '기능',
-      'features-title': 'VR 속 대화를 위한 구성',
-      'features-sub': '눈앞의 글부터 상대방의 말까지. VR과 데스크톱은 Mio 서비스를 사용하며 VRHandsFrame 설치는 필요 없습니다.',
-      'spotlight-kicker': 'Mio VR 제스처 · SteamVR',
-      'spotlight-title': '영역 선택부터 번역과 읽기까지 VR에서',
-      'spotlight-body': '양쪽 컨트롤러의 측면 잡기 버튼을 누르고 영역을 지정합니다. 왼쪽 트리거로 모드를 바꾸고 오른쪽으로 캡처하거나 북마크합니다. 가까이서 패널을 잡고 양손으로 크기를 조절하세요. 기존 번역·음성 인식·AI 읽기도 유지됩니다.',
-      'feature-1-title': '스크린샷 번역과 별도 언어',
-      'feature-1-body': '사진·번역·QR 모드와 독립적인 원문/번역 언어 설정. 미리보기는 캡처 위치에 고정되어 고개를 돌려 읽을 수 있습니다.',
-      'feature-2-title': '안정적인 자막과 패널',
-      'feature-2-body': '기본 자막은 실제 위치 이동만 따르고 머리 회전은 따르지 않습니다. ‘눈앞으로 이동’으로 재배치하거나 머리 추적 모드로 바꿀 수 있습니다.',
-      'feature-3-title': '손목 기록과 QR 링크',
-      'feature-3-body': '왼쪽 트리거를 누르고 손목을 올리면 열리며, 놓아도 유지됩니다. 나와 상대방의 번역을 다시 보세요. QR 링크는 클릭해야 열립니다.',
-      'feature-4-title': '역번역 + 동시통역',
-      'feature-4-body': '역번역은 상대 목소리를 인식해 번역을 오버레이에 보여줍니다. 음성 읽기를 켜면 번역문을 MixLine 가상 마이크로 다른 플레이어에게 읽어 줍니다. VRC만이 아니라, 마이크를 선택할 수 있는 게임이면 동시통역 흐름을 만들 수 있습니다.',
-      'feature-5-title': '텍스트 입력 + AI 음성 읽기',
-      'feature-5-body': '문장을 입력해 번역하고 VRC로 보내거나 AI 음성으로 읽을 수 있습니다. 말하기 어렵거나 마이크를 켜기 힘든 플레이어도 선택한 음색으로 게임 음성 채팅에 말을 전할 수 있습니다.',
-      'feature-6-title': '프라이버시 우선',
-      'feature-6-body': 'VR 북마크와 번역 기록은 현재 세션에만 유지하며 이미지는 직접 저장할 때만 기록합니다. 온라인 ASR·번역·TTS는 선택한 제공업체에 내용을 전송합니다.',
-      'guide-eyebrow': '가이드',
-      'guide-title': '5단계로 시작',
-      'guide-sub': '서비스를 설정하고 SteamVR과 Mio VR을 켜세요. 데스크톱 모드도 단독 사용 가능합니다.',
-      'guide-step-1-title': '다운로드 후 설치',
-      'guide-step-1-body': '아래 버튼으로 설치 파일을 받은 뒤 실행하세요. 설치 후 <strong style="color:#f0f0fa;">MioTranslator.exe</strong>를 실행하면 됩니다.',
-      'guide-step-2-title': '번역 백엔드 설정',
-      'guide-step-2-body': 'MioTranslator.exe를 실행하고 설정에서 API Key를 입력하세요. 공식 서비스는 권장 Base URL과 모델을 자동으로 채웁니다. 호환 릴레이에서는 사용자 지정 Base URL, 헤더, 모델 ID를 편집할 수 있으며 입력값을 그대로 유지합니다.',
-      'guide-step-3-title': '게임 입력 설정',
-      'guide-step-3-body': 'VRChat 채팅박스 전송에는 OSC가 필요합니다. 게임에서 AI 음성을 듣게 하려면 MixLine을 별도로 설치하고 게임 안에서 MixLine 가상 마이크를 선택하세요. VRChat OSC 경로:',
-      'guide-step-4-title': 'SteamVR과 Mio VR 시작',
-      'guide-step-4-body': '헤드셋과 컨트롤러 추적을 확인하고 Mio에서 VR 자막/스크린샷 번역을 켭니다. 로컬 음성 모델은 필요할 때 다운로드하며 온라인 ASR은 모델이 필요 없습니다.',
-      'guide-step-5-title': '튜토리얼을 열고 영역 선택',
-      'guide-step-5-body': 'VR 대시보드에서 사용법과 스크린샷 언어를 확인하세요. 양쪽 측면 버튼으로 영역을 선택하고 왼쪽 트리거를 누르며 손목을 올려 북마크를 엽니다. ‘눈앞으로 이동’으로 자막을 재배치합니다.',
-      'download-eyebrow': '다운로드',
-      'download-title': '릴리스 다운로드',
-      'download-sub': 'v1.5.1은 SteamVR 영역 번역, QR, 손목 북마크, 양방향 기록과 방향 고정 자막을 제공합니다. 기존 번역/ASR/TTS 서비스를 유지합니다. v1.3.8.5 이하는 수동 설치가 필요합니다.',
-      'download-card-title': 'Mio RealTime Translator',
-      'download-card-body': 'Windows x64 · v1.5.1 정식판 · 411.2 MiB / 431.2 MB · SteamVR 제스처와 자막 · 데스크톱 기능 유지',
-      'download-release-note': '설치 파일에는 SenseVoice, Whisper, TTS 음성 모델이 포함되지 않습니다. 로컬 모델은 필요할 때 다운로드됩니다. GPU 지원은 NVIDIA 드라이버를 확인하고 CUDA PyTorch를 자동 설치할 수 있습니다.',
-      'download-button-text': '설치 파일 다운로드',
-      'download-button-loading': '준비 중...',
-      'download-model-text': 'Beta 다운로드',
-      'download-model-note': '현재 제공 중인 Beta 버전은 없습니다. v1.5.1 정식 설치 파일을 사용해 주세요.',
-      'download-qq-1-text': 'QQ 1 그룹',
-      'download-qq-2-text': 'QQ 2 그룹',
-      'download-community-note': '다운로드는 GitHub를 통해 진행됩니다. 속도가 느리면 QQ 그룹에 참여해 그룹 파일에서 다운로드하세요. 이미지 가이드도 포함되어 있습니다.',
-      'download-releases-text': 'Beta 없음',
-      'download-releases-loading': 'Beta 없음',
-      'download-releases-note': 'v1.5.1이 현재 제공되는 정식 다운로드입니다. Beta 버전은 제공되지 않습니다.',
-      'download-dict-title': 'ASR 공식 사전',
-      'download-dict-body': '공식 인식 사전과 업데이트 파일을 제공합니다. 사용자가 수동으로 열 때만 접근합니다.',
-      'download-dict-module-text': '사전 페이지 열기',
-      'download-dict-manifest-text': '업데이트 목록 보기',
-      'download-dict-json-text': '사전 파일 다운로드',
-      'download-dict-note': '앱의 ‘사전 업데이트’ 기능은 여기서 공식 사전을 가져옵니다.',
-      'privacy-title': '개인정보 안내',
-      'privacy-body': '프로젝트 자체 번역 클라우드는 없습니다. 온라인 ASR·번역·TTS는 선택한 제공업체에 필요한 내용을 전송합니다.<br>VR 기록과 북마크는 현재 세션에만 유지되며 이미지는 직접 저장해야 기록됩니다. 세션 북마크는 영구 백업이 아닙니다.',
-      'footer-main': '제작자: VRC 플레이어 <strong style="color:#f0f0fa;">酒寄 みお</strong> · 공식 빌드 무료 · 데스크톱 GPL 소스 · VR 구현 별도 관리 · 브랜드 보호 · <a href="/vrca/">MioVRCA</a> · <a href="https://github.com/CokoIya/MioVRC_Translator" target="_blank">GitHub</a>',
-      'footer-sub': 'VR 기록은 세션에만 유지되며 온라인 데이터 처리에는 선택한 제공업체의 정책이 적용됩니다.'
+    function applyLanguage(language, persist = true) {
+      currentLanguage = translations[language] ? language : 'en';
+      const dict = dictionary();
+      document.documentElement.lang = currentLanguage;
+      document.title = dict.pageTitle;
+      document.querySelector('meta[name="description"]').content = dict.description;
+      for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) document.querySelector(selector).content = dict.pageTitle;
+      for (const selector of ['meta[property="og:description"]', 'meta[name="twitter:description"]']) document.querySelector(selector).content = dict.description;
+      document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = dict[el.dataset.i18n]; });
+      document.querySelectorAll('[data-label]').forEach(el => { el.setAttribute('aria-label', dict[el.dataset.label]); });
+      document.querySelectorAll('[data-alt]').forEach(el => { el.alt = dict[el.dataset.alt]; });
+      document.querySelectorAll('[data-headset-label]').forEach(el => { el.dataset.headsetLabel = dict.headsetLabel; });
+      document.querySelector('meta[property="og:image:alt"]').content = dict.mainAlt;
+      document.getElementById('lang-switcher').value = currentLanguage;
+      document.getElementById('stage-title').textContent = dict[`feature${activeStep + 1}Title`];
+      if (downloadBusy) document.getElementById('download-button-text').textContent = dict.downloadLoading;
+      if (persist) storage.setItem('mio-site-lang', currentLanguage);
+      updateThemeControl(); updateDemoControl(); updateImages();
     }
-  };
+    // Saved choice, else the browser language. No IP/geolocation lookups (owner decision 2026-11-04).
+    function detectInitialLanguage() {
+      const saved = storage.getItem('mio-site-lang');
+      if (saved && translations[saved]) return saved;
+      const browserLanguage = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
+      if (browserLanguage.startsWith('zh')) return 'zh-CN';
+      if (browserLanguage.startsWith('ja')) return 'ja';
+      if (browserLanguage.startsWith('ko')) return 'ko';
+      if (browserLanguage.startsWith('ru')) return 'ru';
+      return 'en';
+    }
+    document.getElementById('lang-switcher').addEventListener('change', event => applyLanguage(event.target.value));
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      const modes = ['system', 'light', 'dark'];
+      themePreference = modes[(modes.indexOf(themePreference) + 1) % modes.length];
+      storage.setItem('mio-site-theme', themePreference); applyTheme();
+    });
+    systemTheme.addEventListener('change', () => { if (themePreference === 'system') applyTheme(); });
 
-  const htmlKeys = new Set([
-    'hero-sub',
-    'feature-5-title',
-    'guide-step-1-body',
-    'guide-step-2-body',
-    'guide-step-3-body',
-    'guide-step-4-body',
-    'guide-step-5-body',
-    'privacy-body',
-    'footer-main'
-  ]);
-
-  function applyLanguage(language) {
-    const dict = translations[language] || translations.en;
-    document.title = dict.pageTitle || 'Mio RealTime Translator';
-    document.documentElement.lang = language;
-
-    Object.entries(dict).forEach(([key, value]) => {
-      if (key === 'pageTitle') return;
-      const element = document.getElementById(key);
-      if (!element) return;
-      if (htmlKeys.has(key)) {
-        element.innerHTML = value;
-      } else {
-        element.textContent = value;
-      }
+    function showDemoFrame(index) {
+      demoFrame = index;
+      frames.forEach((frame, i) => { frame.classList.toggle('is-active', i === index); frame.setAttribute('aria-hidden', String(i !== index)); });
+      document.getElementById('demo-counter').textContent = `${String(index + 1).padStart(2, '0')} / 05`;
+    }
+    function updateDemoControl() {
+      const button = document.getElementById('demo-toggle');
+      button.hidden = reducedMotion.matches;
+      button.setAttribute('aria-label', dictionary()[demoPaused ? 'demoPlay' : 'demoPause']);
+      button.querySelector('use').setAttribute('href', demoPaused ? '#i-play' : '#i-pause');
+      document.getElementById('hero-demo').title = reducedMotion.matches ? dictionary().demoStatic : '';
+    }
+    function scheduleDemo() {
+      clearTimeout(demoTimer);
+      if (reducedMotion.matches || document.hidden || !demoVisible || demoPaused) return;
+      demoTimer = setTimeout(() => { showDemoFrame((demoFrame + 1) % frames.length); scheduleDemo(); }, demoFrame === 4 ? 2600 : 1600);
+    }
+    new IntersectionObserver(entries => { demoVisible = entries[0].isIntersecting; scheduleDemo(); }, { threshold: .15 }).observe(document.getElementById('hero-demo'));
+    document.addEventListener('visibilitychange', scheduleDemo);
+    document.getElementById('demo-toggle').addEventListener('click', () => { demoPaused = !demoPaused; updateDemoControl(); scheduleDemo(); });
+    reducedMotion.addEventListener('change', () => {
+      if (reducedMotion.matches) showDemoFrame(4);
+      updateDemoControl(); scheduleDemo();
     });
 
-    const switcher = document.getElementById('lang-switcher');
-    if (switcher) switcher.value = language;
-    localStorage.setItem('mio-site-lang', language);
-  }
-
-  function detectInitialLanguage() {
-    const saved = localStorage.getItem('mio-site-lang');
-    if (saved && translations[saved]) return saved;
-
-    const browserLanguage = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
-    if (browserLanguage.startsWith('zh')) return 'zh-CN';
-    if (browserLanguage.startsWith('ja')) return 'ja';
-    if (browserLanguage.startsWith('ko')) return 'ko';
-    if (browserLanguage.startsWith('ru')) return 'ru';
-    return 'en';
-  }
-
-  const switcher = document.getElementById('lang-switcher');
-  if (switcher) {
-    switcher.addEventListener('change', (event) => {
-      applyLanguage(event.target.value);
-      syncSectionScrollability();
-      updateSectionState();
-    });
-  }
-
-  const REGION_CACHE_KEY = 'mio-country-v1';
-  const REGION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-  const GEO_LOOKUP_TIMEOUT_MS = 1800;
-  const GEO_LOOKUP_ENDPOINTS = [
-    {
-      url: 'https://api.country.is/',
-      country: (payload) => payload && payload.country,
-    },
-    {
-      url: 'https://ipapi.co/json/',
-      country: (payload) => payload && payload.country_code,
-    },
-    {
-      url: 'https://ipwho.is/',
-      country: (payload) => payload && payload.country_code,
-    },
-  ];
-
-  function normalizeCountryCode(code) {
-    return String(code || '').trim().toUpperCase();
-  }
-
-  function readCachedCountryCode() {
-    try {
-      const cached = JSON.parse(localStorage.getItem(REGION_CACHE_KEY) || '{}');
-      if (!cached || Date.now() - Number(cached.time || 0) > REGION_CACHE_TTL_MS) return '';
-      return normalizeCountryCode(cached.country);
-    } catch (_error) {
-      return '';
+    const steps = [...document.querySelectorAll('[data-step]')];
+    const slides = [...document.querySelectorAll('[data-tour]')];
+    const stageTicks = [...document.querySelectorAll('.stage-progress i')];
+    function setActiveStep(index) {
+      activeStep = index;
+      slides.forEach((slide, i) => { slide.classList.toggle('is-active', i === index); slide.setAttribute('aria-hidden', String(i !== index)); });
+      stageTicks.forEach((tick, i) => tick.classList.toggle('is-active', i === index));
+      document.getElementById('stage-count').textContent = `${String(index + 1).padStart(2, '0')} / 06`;
+      document.getElementById('stage-title').textContent = dictionary()[`feature${index + 1}Title`];
     }
-  }
+    const stepObserver = new IntersectionObserver(entries => {
+      entries.filter(entry => entry.isIntersecting).forEach(entry => setActiveStep(Number(entry.target.dataset.step)));
+    }, { rootMargin: '-35% 0px -40% 0px', threshold: 0 });
+    steps.forEach(step => stepObserver.observe(step));
 
-  function writeCachedCountryCode(country) {
-    try {
-      localStorage.setItem(REGION_CACHE_KEY, JSON.stringify({
-        country: normalizeCountryCode(country),
-        time: Date.now(),
-      }));
-    } catch (_error) {
-      // Ignore storage errors; the default GitHub link remains usable.
+    if ('IntersectionObserver' in window) {
+      document.documentElement.classList.add('motion-ready');
+      const revealObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('is-visible'); revealObserver.unobserve(entry.target); } });
+      }, { threshold: .08 });
+      document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
     }
-  }
-
-  async function fetchJsonWithTimeout(url, timeoutMs) {
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        cache: 'no-store',
+    const menu = document.getElementById('nav-links');
+    const menuToggle = document.getElementById('menu-toggle');
+    function closeMenu() { menu.classList.remove('is-open'); menuToggle.setAttribute('aria-expanded', 'false'); }
+    menuToggle.addEventListener('click', () => { const open = menu.classList.toggle('is-open'); menuToggle.setAttribute('aria-expanded', String(open)); });
+    menu.addEventListener('click', event => { if (event.target.closest('a')) closeMenu(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && menu.classList.contains('is-open')) { closeMenu(); menuToggle.focus(); } });
+    document.addEventListener('click', event => { if (!event.target.closest('.nav-bar')) closeMenu(); });
+    const sectionObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) document.querySelectorAll('.nav-link[href^="#"]').forEach(link => {
+          if (link.hash === `#${entry.target.id}`) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current');
+        });
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.json();
-    } finally {
-      window.clearTimeout(timeoutId);
+    }, { rootMargin: '-15% 0px -65% 0px' });
+    document.querySelectorAll('main > section[id]').forEach(section => sectionObserver.observe(section));
+
+    document.querySelectorAll('[data-release]').forEach(el => { el.textContent = (el.dataset.release === 'version' ? 'v' : '') + RELEASE[el.dataset.release]; });
+    const directDownloadLink = document.getElementById('download-direct-link');
+    directDownloadLink.href = RELEASE.url;
+    directDownloadLink.download = RELEASE.file;
+    function triggerDirectDownload(url, filename = '') {
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = filename; anchor.style.display = 'none';
+      document.body.appendChild(anchor); anchor.click();
+      window.setTimeout(() => anchor.remove(), 1000);
     }
-  }
-
-  async function detectCountryCode() {
-    const cached = readCachedCountryCode();
-    if (cached) return cached;
-
-    for (const endpoint of GEO_LOOKUP_ENDPOINTS) {
-      try {
-        const payload = await fetchJsonWithTimeout(endpoint.url, GEO_LOOKUP_TIMEOUT_MS);
-        const country = normalizeCountryCode(endpoint.country(payload));
-        if (country) {
-          writeCachedCountryCode(country);
-          return country;
-        }
-      } catch (_error) {
-        // Try the next provider. If all fail, downloads stay on GitHub.
-      }
-    }
-    return '';
-  }
-
-  function languageFromCountryCode(country) {
-    const code = normalizeCountryCode(country);
-    if (['CN', 'TW', 'HK', 'MO', 'SG'].includes(code)) return 'zh-CN';
-    if (code === 'JP') return 'ja';
-    if (code === 'KR') return 'ko';
-    if (['RU', 'BY', 'KZ'].includes(code)) return 'ru';
-    return '';
-  }
-
-  async function applyInitialLanguageFromRegion() {
-    if (localStorage.getItem('mio-site-lang')) return;
-    const country = await detectCountryCode();
-    const language = languageFromCountryCode(country);
-    if (language && translations[language] && !localStorage.getItem('mio-site-lang')) {
-      applyLanguage(language);
-      syncSectionScrollability();
-      updateSectionState();
-    }
-  }
-
-  function triggerDirectDownload(url, filename = '') {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.style.display = 'none';
-    document.body.appendChild(anchor);
-    anchor.click();
-    window.setTimeout(() => anchor.remove(), 1000);
-  }
-
-  const directDownloadLink = document.getElementById('download-direct-link');
-  const directDownloadText = document.getElementById('download-button-text');
-
-  if (directDownloadLink && directDownloadText) {
-    directDownloadLink.addEventListener('click', async (event) => {
+    directDownloadLink.addEventListener('click', event => {
       event.preventDefault();
-      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
-      const dict = translations[currentLanguage] || translations.en;
-      const originalText = dict['download-button-text'] || directDownloadText.textContent;
-      const loadingText = dict['download-button-loading'] || originalText;
-
-      directDownloadLink.style.pointerEvents = 'none';
-      directDownloadText.textContent = loadingText;
-
-      const directDownloadUrl = directDownloadLink.getAttribute('href') || '';
-      if (directDownloadUrl) {
-        triggerDirectDownload(directDownloadUrl, directDownloadLink.getAttribute('download') || '');
-      }
-
+      if (downloadBusy) return;
+      downloadBusy = true;
+      directDownloadLink.setAttribute('aria-disabled', 'true');
+      directDownloadLink.setAttribute('aria-busy', 'true');
+      document.getElementById('download-button-text').textContent = dictionary().downloadLoading;
+      triggerDirectDownload(RELEASE.url, RELEASE.file);
       window.setTimeout(() => {
-        directDownloadLink.style.pointerEvents = '';
-        directDownloadText.textContent = originalText;
+        downloadBusy = false;
+        directDownloadLink.removeAttribute('aria-disabled'); directDownloadLink.removeAttribute('aria-busy');
+        document.getElementById('download-button-text').textContent = dictionary().downloadButton;
       }, 2200);
     });
-  }
 
-  const betaDownloadLink = document.getElementById('download-model-link');
-
-  if (betaDownloadLink) {
-    betaDownloadLink.addEventListener('click', (event) => {
-      event.preventDefault();
-      alert('暂无测试版提供');
-    });
-  }
-
-  const releaseDownloadLink = document.getElementById('download-releases-link');
-  const releaseDownloadText = document.getElementById('download-releases-text');
-
-  if (releaseDownloadLink && releaseDownloadText) {
-    releaseDownloadLink.addEventListener('click', (event) => {
-      event.preventDefault();
-      const currentLanguage = localStorage.getItem('mio-site-lang') || detectInitialLanguage();
-      const dict = translations[currentLanguage] || translations.en;
-      const originalText = dict['download-releases-text'] || releaseDownloadText.textContent;
-      const loadingText = dict['download-releases-loading'] || originalText;
-
-      releaseDownloadLink.style.pointerEvents = 'none';
-      releaseDownloadText.textContent = loadingText;
-
-      window.setTimeout(() => {
-        releaseDownloadLink.style.pointerEvents = '';
-        releaseDownloadText.textContent = originalText;
-      }, 1400);
-    });
-  }
-
-  applyLanguage(detectInitialLanguage());
-  applyInitialLanguageFromRegion();
-  syncSectionScrollability();
-  updateSectionState();
-</script>
+    showDemoFrame(demoFrame);
+    // Not persisted: the browser language keeps deciding until the visitor picks a language.
+    applyLanguage(detectInitialLanguage(), false);
+    applyTheme();
+  </script>
 </body>
 </html>

@@ -1,0 +1,532 @@
+{
+  "zh-CN": {
+    "dark": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 104836
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 32204
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 43318
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 54416
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 64276
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 64276
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 110676
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 34524
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 45388
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 10194
+      }
+    },
+    "light": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 95982
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 31622
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 42820
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 53788
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 63276
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 63276
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 102470
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 34524
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 45388
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 10194
+      }
+    }
+  },
+  "en": {
+    "dark": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 97372
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 31644
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 42322
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 54602
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59554
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59554
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 113930
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 33478
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 47006
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 11298
+      }
+    },
+    "light": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 89856
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 31186
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 41860
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 53644
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59358
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59358
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 105296
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 33478
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 47006
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 11298
+      }
+    }
+  },
+  "ja": {
+    "dark": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 100602
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 31998
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 43790
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 56124
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 64354
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 64354
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 128864
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 33522
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 46754
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 11240
+      }
+    },
+    "light": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 92134
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 31956
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 43210
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 55170
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 63298
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 63298
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 106414
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 33522
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 46754
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 11240
+      }
+    }
+  },
+  "ru": {
+    "dark": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 108562
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 34216
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 44356
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 56734
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59972
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59972
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 123014
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 30362
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 49940
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 14006
+      }
+    },
+    "light": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 98886
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 33934
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 43710
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 55794
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 58890
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 58890
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 116548
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 245,
+        "bytes": 30362
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 49940
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 14006
+      }
+    }
+  },
+  "ko": {
+    "dark": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 91484
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 28940
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 39748
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 50304
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59094
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 59094
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 92412
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 246,
+        "bytes": 30066
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 39062
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 10676
+      }
+    },
+    "light": {
+      "main": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 83680
+      },
+      "island-1": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 28502
+      },
+      "island-2": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 39244
+      },
+      "island-3": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 49976
+      },
+      "island-4": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 58242
+      },
+      "island-5": {
+        "width": 1308,
+        "height": 1166,
+        "bytes": 58242
+      },
+      "settings-voice": {
+        "width": 2708,
+        "height": 1866,
+        "bytes": 85712
+      },
+      "vr-caption": {
+        "width": 1200,
+        "height": 246,
+        "bytes": 30066
+      },
+      "vr-wrist": {
+        "width": 1280,
+        "height": 1120,
+        "bytes": 39062
+      },
+      "vr-result": {
+        "width": 1000,
+        "height": 820,
+        "bytes": 10676
+      }
+    }
+  }
+}

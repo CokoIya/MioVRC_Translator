@@ -194,7 +194,8 @@ def test_public_release_key_catalog_matches_compiled_trust_configuration() -> No
     from src import version
 
     catalog = json.loads(_read("docs/release_signing_keys.json"))
-    assert catalog["active_release"] == f"v{version.APP_VERSION}"
+    manifest = json.loads(_read("docs/installer_manifest.json"))
+    assert catalog["active_release"] == manifest["version"]
     assert catalog["active_manifest_key_id"] == version.UPDATE_MANIFEST_PUBLIC_KEY_ID
     assert catalog["active_installer_key_id"] == version.INSTALLER_SIGNATURE_KEY_ID
 

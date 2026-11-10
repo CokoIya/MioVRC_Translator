@@ -1,25 +1,25 @@
 {
-  "version": "v1.5.1",
-  "installer_name": "MioTranslator-Setup-v1.5.1.exe",
-  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.5.1/MioTranslator-Setup-v1.5.1.exe",
-  "size_bytes": 431198244,
-  "sha256": "7523d206af76fd89ccaba964b9c820976824f546e123eb88a7aa13ee3b945988",
+  "version": "v1.6.4",
+  "installer_name": "MioTranslator-Setup-v1.6.4.exe",
+  "installer_url": "https://github.com/CokoIya/MioVRC_Translator/releases/download/v1.6.4/MioTranslator-Setup-v1.6.4.exe",
+  "size_bytes": 432596883,
+  "sha256": "7e434129d2a2463c68d24f6bed58771701a1f4b6ee8fa94dd522f1c52aa62bdf",
   "installer_signature_algorithm": "ed25519",
   "installer_signature_key_id": "mio-installer-ed25519-v2",
-  "installer_signature": "405b8577f02c666f701e63e347c2c3a8765e9f6ec5631ea3ece150da7091b571814558bfc54ac6fe8ae960d13eb1905ea03eebb2061d2f860761a37afe051a08",
-  "notes": "v1.5.1 packages existing SteamVR shutdown cleanup and Style-Bert-VITS2 multilingual fixes. Full Mio VR Gestures and existing translation, ASR and TTS services remain. Release preparation changes only version and packaging files.",
+  "installer_signature": "0c19115f78e3543481e5336f91764122eb75a972345ba2e711cc562705c9888bb1d4c9ac97ac0c2bff0e1df2a8b414fa1671fa73afe1836d8eb3d4531e24780a",
+  "notes": "v1.6.4 brings back the classic interface, and the app is now called MioVRCT (formerly Mio RealTime Translator). Setup uninstalls the 1.6.0-1.6.3 new-interface edition automatically and keeps settings, models and history; new installs go to a non-system drive and existing installs are updated in place. A new \"Receive via OSCQuery\" option lets Mio share VRChat OSC with face/eye-tracking apps (off by default). Includes every fix since 1.6: SteamVR controller pointer and headset panels, the hang when started after SteamVR, Bing free translation switching routes in mainland China, dark eye-friendly headset panels, and many stability and security fixes from two audits.",
   "notes_i18n": {
-    "zh-CN": "v1.5.1 打包现有 SteamVR 退出清理及 Style-Bert-VITS2 多语言修复；保留完整 Mio VR手势与原有翻译、ASR、TTS 服务。本次发布准备仅更新版本与打包文件。",
-    "en": "v1.5.1 packages existing SteamVR shutdown cleanup and Style-Bert-VITS2 multilingual fixes. Full Mio VR Gestures and existing translation, ASR and TTS services remain. Release preparation changes only version and packaging files.",
-    "ja": "v1.5.1 は既存の SteamVR 終了処理と Style-Bert-VITS2 多言語修正を収録します。Mio VRジェスチャーと翻訳・ASR・TTS を維持し、リリース準備ではバージョンと配布用ファイルのみ更新します。",
-    "ru": "v1.5.1 включает уже подготовленные исправления завершения SteamVR и многоязычного Style-Bert-VITS2. Жесты Mio VR, перевод, ASR и TTS сохранены. Подготовка выпуска меняет только версию и файлы сборки.",
-    "ko": "v1.5.1은 기존 SteamVR 종료 정리 및 Style-Bert-VITS2 다국어 수정 사항을 포함합니다. Mio VR 제스처와 번역·ASR·TTS는 유지되며 출시 준비에서는 버전과 패키징 파일만 변경합니다."
+    "zh-CN": "v1.6.4 恢复经典界面，软件名统一为 MioVRCT（原名 Mio RealTime Translator）。安装时会自动卸载 1.6.0-1.6.3 的新界面版，设置、模型和记录都会保留；新安装默认放在非系统盘，已安装的在原位置升级。新增“用 OSCQuery 接收”开关，可与面捕、眼追软件共用 VRChat OSC（默认关闭）。包含 1.6 以来的全部修复：SteamVR 手柄指针和头显面板失灵、先开 SteamVR 再开程序卡住、Bing 免费翻译在国内自动切换线路、头显面板改为深色护眼配色，以及两轮审计的大量稳定性和安全修复。",
+    "en": "v1.6.4 brings back the classic interface, and the app is now called MioVRCT (formerly Mio RealTime Translator). Setup uninstalls the 1.6.0-1.6.3 new-interface edition automatically and keeps settings, models and history; new installs go to a non-system drive and existing installs are updated in place. A new \"Receive via OSCQuery\" option lets Mio share VRChat OSC with face/eye-tracking apps (off by default). Includes every fix since 1.6: SteamVR controller pointer and headset panels, the hang when started after SteamVR, Bing free translation switching routes in mainland China, dark eye-friendly headset panels, and many stability and security fixes from two audits.",
+    "ja": "v1.6.4 で従来の画面に戻し、アプリ名を MioVRCT（旧称 Mio RealTime Translator）に統一しました。インストール時に 1.6.0-1.6.3 の新しい画面版を自動でアンインストールし、設定・モデル・履歴は残ります。新規インストールはシステム以外のドライブが既定で、既存のインストールは同じ場所で更新されます。フェイス/アイトラッキングのアプリと VRChat OSC を共用できる「OSCQuery で受信」オプションを追加しました（既定はオフ）。1.6 以降の修正をすべて含みます：SteamVR のコントローラーポインターとヘッドセットパネル、SteamVR の後に起動すると固まる問題、中国本土での Bing 無料翻訳の経路切り替え、目に優しいダークなヘッドセットパネル、2 回の監査による多数の安定性・セキュリティ修正。",
+    "ru": "v1.6.4 возвращает классический интерфейс, а приложение теперь называется MioVRCT (ранее Mio RealTime Translator). Установщик автоматически удаляет версию 1.6.0-1.6.3 с новым интерфейсом, сохраняя настройки, модели и историю; новая установка по умолчанию идёт на несистемный диск, а существующая обновляется на месте. Новый параметр «Приём через OSCQuery» позволяет делить VRChat OSC с приложениями отслеживания лица и глаз (по умолчанию выключен). Включены все исправления с версии 1.6: указатель контроллеров и панели SteamVR, зависание при запуске после SteamVR, смена маршрута бесплатного перевода Bing в материковом Китае, тёмные щадящие глаза панели в шлеме и множество исправлений стабильности и безопасности по итогам двух аудитов.",
+    "ko": "v1.6.4는 기존 화면으로 돌아왔고, 앱 이름은 MioVRCT(이전 이름 Mio RealTime Translator)로 통일했습니다. 설치할 때 1.6.0-1.6.3 새 화면 버전을 자동으로 제거하며 설정, 모델, 기록은 유지됩니다. 새로 설치하면 시스템 드라이브가 아닌 드라이브가 기본이고, 기존 설치는 같은 위치에서 업데이트됩니다. 페이스/아이 트래킹 앱과 VRChat OSC를 함께 쓸 수 있는 ‘OSCQuery로 수신’ 옵션을 추가했습니다(기본은 꺼짐). 1.6 이후의 모든 수정이 포함됩니다: SteamVR 컨트롤러 포인터와 헤드셋 패널, SteamVR 뒤에 실행하면 멈추는 문제, 중국 본토에서 Bing 무료 번역 경로 자동 전환, 눈이 편한 어두운 헤드셋 패널, 두 차례 감사에 따른 다수의 안정성·보안 수정."
   },
   "model_runtime_dir": "%LOCALAPPDATA%\\Mio RealTime Translator\\runtime_models\\iic--SenseVoiceSmall",
   "app_exe": "MioTranslator.exe",
   "homepage_url": "https://miovrc.com",
-  "published_at": "2026-10-15T15:30:31+09:00",
+  "published_at": "2026-11-10T16:18:57+09:00",
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "5f2c905ccc9c0fa3eaf0dfe109caf53e59918ca0397d92b7075a05599b9c386388537f16e865c5307deb7fb35d4883778b224efbb9a8c8f95840adfbe6a20907"
+  "signature": "017d34cccbbcba53b26b9de4af9fb560d7930cb22b614abc0a560e0813fe57d66201f1447a278183a50b5f38abc032ad914bbf078017077bacbf0b5ac270790b"
 }
