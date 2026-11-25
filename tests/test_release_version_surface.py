@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_RELEASE_VERSION = "1.5.1"
 EXPECTED_WINDOWS_NUMERIC_VERSION = "1.5.1.0"
 # Official installers and the website are published independently of public app sources.
-EXPECTED_WEBSITE_VERSION = "1.6.4"
+EXPECTED_WEBSITE_VERSION = "1.6.6"
 
 
 def _read(relative_path: str) -> str:
