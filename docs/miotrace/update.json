@@ -1,16 +1,16 @@
 {
-  "version": "0.15.0",
+  "version": "0.15.1",
   "installer": {
-    "url": "https://github.com/CokoIya/MioTrace/releases/download/v0.15.0/MioTrace-Setup-v0.15.0.exe",
-    "size": 32247856,
-    "sha256": "27295d9e107b2b7a37595af56c9400ceed4745d1e3defd1685eaa4088fc22bd9"
+    "url": "https://github.com/CokoIya/MioTrace/releases/download/v0.15.1/MioTrace-Setup-v0.15.1.exe",
+    "size": 32247689,
+    "sha256": "7a2ff831e8ccbfd390d71266ab0b0ca12fd729de081a9e8a651838ed4f907b66"
   },
   "notes": {
-    "zh-CN": "v0.15.0：新增初次使用指引（可从「关于」再次打开）；修正追踪驱动的若干问题。首个发给测试者的版本。",
-    "en": "v0.15.0: a first-use guide (reopen it from About); tracking driver fixes. The first version sent to testers.",
-    "ja": "v0.15.0：初回利用ガイドを追加（「About」から再表示できます）。トラッキングドライバーの不具合を修正。テスター向け初の配布版です。"
+    "zh-CN": "v0.15.1：修正追踪驱动在若干边界情况下的问题，日常使用更稳。",
+    "en": "v0.15.1: tracking driver edge-case fixes for steadier everyday use.",
+    "ja": "v0.15.1：トラッキングドライバーの境界ケースの不具合を修正し、日常利用がより安定しました。"
   },
   "signature_algorithm": "ed25519",
   "signature_key_id": "mio-update-ed25519-v2",
-  "signature": "62254f0c0600a8bf8f17f6f37eb13fa48669f1ecd392902e470dc9ac3aa9e415d58fc70833b30d2367662d850d39472b3c622bed4355e2fe4e08a99690d54d0b"
+  "signature": "7a1158d2dbd0e4ff9dabb4e89e4bcaa8015c1169a5f7ef4f63855544dca1fb79c1b5c9229da70ba7e9061ff553eb87d2285381ee5ddeab4145b6f131c8ad0c06"
 }
