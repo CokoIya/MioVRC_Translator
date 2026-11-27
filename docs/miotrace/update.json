@@ -1,0 +1,16 @@
+{
+  "version": "0.14.0",
+  "installer": {
+    "url": "https://github.com/CokoIya/MioTrace/releases/download/v0.14.0/MioTrace-Setup-v0.14.0.exe",
+    "size": 32238605,
+    "sha256": "8f509a631c56afbe351d280b4c8f184baafb029bd431d8b041a2bacebe497971"
+  },
+  "notes": {
+    "zh-CN": "v0.14.0：虚拟追踪器与姿态采集、空间锚点、多语言界面；反馈改经加密中继发送，安装包不再携带任何邮箱账号。",
+    "en": "v0.14.0: virtual trackers and pose capture, space anchors, multilingual UI; feedback now goes through an encrypted relay, no mail account ships in the installer.",
+    "ja": "v0.14.0：仮想トラッカーと姿勢キャプチャ、空間アンカー、多言語UI。フィードバックは暗号化リレー経由になり、インストーラーにメールアカウントは含まれません。"
+  },
+  "signature_algorithm": "ed25519",
+  "signature_key_id": "mio-update-ed25519-v2",
+  "signature": "51e8bdf781cac034e2f7f6df8f4c78a6750f16369ccc3116d087ebb0b57e811f1a5e22293ad0de91b6a16e38fa4c1d17e0ec8d6911746beda5cf7492d2911d0c"
+}
